@@ -71,7 +71,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                 ([array]::IndexOf($ArgumentList, '/fake/root')) -lt ([array]::IndexOf($ArgumentList, '/fake/module')) -and
                 ([array]::IndexOf($ArgumentList, '/fake/module')) -lt ([array]::IndexOf($ArgumentList, '/fake/common')) -and
                 $ArgumentList -contains '--tf-dir' -and
-                -not [string]::IsNullOrWhiteSpace([string]$EnvVars['TF_PLUGIN_CACHE_DIR']) -and
+                [string]::IsNullOrWhiteSpace([string]$EnvVars['TF_PLUGIN_CACHE_DIR']) -and
                 -not [string]::IsNullOrWhiteSpace([string]$EnvVars['MAPOTF_PROVIDER_SCHEMA_CACHE_DIR'])
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
@@ -119,7 +119,7 @@ Describe 'Invoke-AvmTerraformTransform' {
         }
     }
 
-    It 'finishes module targets before scheduling examples with the cache-safe throttle' {
+    It 'finishes module targets before scheduling examples with the requested throttle' {
         $ctx = $script:context
         InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
@@ -147,13 +147,13 @@ Describe 'Invoke-AvmTerraformTransform' {
             Should -Invoke Invoke-AvmParallel -Exactly 2 -ParameterFilter {
                 $FunctionName -eq 'Invoke-AvmMapotfTransformTarget' -and
                 $InputObject.Count -eq 2 -and
-                $ThrottleLimit -eq 1
+                $ThrottleLimit -eq 4
             }
             $script:transformBatches.ToArray() | Should -Be @('root,module', 'example,example')
         }
     }
 
-    It 'uses a serial target throttle when Terraform has a shared plugin cache' {
+    It 'unsets an ambient shared plugin cache for parallel targets' {
         $ctx = $script:context
         InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
@@ -167,7 +167,6 @@ Describe 'Invoke-AvmTerraformTransform' {
                     }
                 }
                 Mock Resolve-AvmMapotfConfigDir { "/fake/$ProfileName" }
-                Mock Get-AvmTerraformPluginCachePath { '/fake/plugin-cache' }
                 Mock Get-AvmTerraformTransformTarget {
                     @(
                         [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
@@ -180,7 +179,8 @@ Describe 'Invoke-AvmTerraformTransform' {
                 Invoke-AvmTerraformTransform -Context $C -ThrottleLimit 4 | Out-Null
 
                 Should -Invoke Invoke-AvmParallel -Exactly 2 -ParameterFilter {
-                    $ThrottleLimit -eq 1
+                    $ThrottleLimit -eq 4 -and
+                    [string]::IsNullOrWhiteSpace([string]$Argument.EnvVars.TF_PLUGIN_CACHE_DIR)
                 }
             }
             finally {
