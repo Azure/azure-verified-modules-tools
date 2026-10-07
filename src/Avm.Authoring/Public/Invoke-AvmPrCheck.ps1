@@ -349,7 +349,12 @@ function Invoke-AvmPrCheck {
         }
         catch {
             $stepStatus = 'error'
-            $stepError = $_.Exception.Message
+            $stepError = if ($null -ne $_.ErrorDetails -and -not [string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) {
+                $_.ErrorDetails.Message
+            }
+            else {
+                $_.Exception.Message
+            }
         }
         if ($initializingTerraform) {
             if ($stepStatus -ne 'error') { $stepStatus = 'fail' }

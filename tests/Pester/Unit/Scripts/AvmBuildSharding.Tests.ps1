@@ -188,6 +188,10 @@ Describe 'writes state' {
         $result = Invoke-AvmPesterShardedTier -Tier 'unit' -File @(Get-Item -LiteralPath $probe) -ShardCount 1 6>$null
 
         $result.PassedCount | Should -Be 1
+        @($script:buildMessages | Where-Object { $_ -like '*unit shard 1: estimated cost*Writes.Tests.ps1*' }).Count |
+            Should -Be 1
+        @($script:buildMessages | Where-Object { $_ -like '*unit shard 1:*1 file(s); exit 0*' }).Count |
+            Should -Be 1
         @($script:buildMessages | Where-Object { $_ -like '*unit shard 1 wrote 1 file(s) to its isolated AVM_HOME*' }).Count |
             Should -Be 1
     }

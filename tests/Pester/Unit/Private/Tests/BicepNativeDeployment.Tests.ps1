@@ -344,7 +344,10 @@ Describe 'Bicep native deployment retries' {
                     $mode = if ($script:recoverySequence.Count -gt 0) { $script:recoverySequence.Dequeue() } else { $script:recoveryMode }
                     $document = @{
                         id = $id
-                        properties = @{ provisioningState = $mode; outputs = @{ recovered = @{ value = 'original-output' } } }
+                        properties = @{ provisioningState = 'Succeeded'; outputs = @{ recovered = @{ value = 'original-output' } } }
+                    }
+                    if ($mode -in @('Failed', 'Unknown', 'Canceled', 'Accepted', 'Running', 'Creating', 'Updating')) {
+                        $document.properties.provisioningState = $mode
                     }
                     switch ($mode) {
                         'timeout' { throw [TimeoutException]::new('Read timeout.') }
@@ -354,12 +357,14 @@ Describe 'Bicep native deployment retries' {
                         'missing' { return @{ StatusCode = 404; Content = '{}' } }
                         'wrong group' { $document.id = $id.Replace('/test-mg/', '/foreign-mg/') }
                         'missing ID' { $document.Remove('id') }
+                        'array document' { $document = @($document) }
+                        'array properties' { $document.properties = @($document.properties) }
                         'array ID' { $document.id = @($id) }
                         'array state' { $document.properties.provisioningState = @('Succeeded') }
                         'missing state' { $document.properties.Remove('provisioningState') }
                         'invalid outputs' { $document.properties.outputs = @('not-an-object') }
                     }
-                    return @{ StatusCode = 200; Content = $document | ConvertTo-Json -Depth 6 -Compress }
+                    return @{ StatusCode = 200; Content = ConvertTo-Json -InputObject $document -Depth 6 -Compress }
                 }
             }
         }
@@ -423,6 +428,7 @@ Describe 'Bicep native deployment retries' {
             @{ Recovery = 'Failed'; Outcome = 'Failed' }, @{ Recovery = 'Unknown'; Outcome = 'Unknown' }
             @{ Recovery = 'Canceled'; Outcome = 'Unknown' }, @{ Recovery = 'missing'; Outcome = 'Unknown' }
             @{ Recovery = 'wrong group'; Outcome = 'Unknown' }, @{ Recovery = 'missing ID'; Outcome = 'Unknown' }
+            @{ Recovery = 'array document'; Outcome = 'Unknown' }, @{ Recovery = 'array properties'; Outcome = 'Unknown' }
             @{ Recovery = 'array ID'; Outcome = 'Unknown' }, @{ Recovery = 'array state'; Outcome = 'Unknown' }
             @{ Recovery = 'missing state'; Outcome = 'Unknown' }, @{ Recovery = 'invalid outputs'; Outcome = 'Unknown' }
             @{ Recovery = 'forbidden'; Outcome = 'Unknown' }, @{ Recovery = 'transport'; Outcome = 'Unknown' }

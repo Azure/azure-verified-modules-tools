@@ -137,10 +137,12 @@ Describe 'Invoke-AvmPrCheck' {
             }
         }
 
-        It 'reports an entirely excluded chain as skipped while retaining the version and clean-tree guards' {
-            InModuleScope Avm.Authoring -Parameters @{ Commands = $script:stepCommands } {
-                param($Commands)
-                $result = Invoke-AvmPrCheck -Path root -ExcludeSteps @($Commands.Keys) -StopOnFail
+        It 'reports an entirely excluded <Ecosystem> chain as skipped while retaining the version and clean-tree guards' -ForEach @(
+            @{ Ecosystem = 'terraform' }, @{ Ecosystem = 'bicep' }
+        ) {
+            InModuleScope Avm.Authoring -Parameters @{ Commands = $script:stepCommands; SelectedEcosystem = $Ecosystem } {
+                param($Commands, $SelectedEcosystem)
+                $result = Invoke-AvmPrCheck -Path root -Ecosystem $SelectedEcosystem -ExcludeSteps @($Commands.Keys) -StopOnFail
                 $result.Status | Should -Be 'skipped'
                 $result.Steps | Should -HaveCount 9
                 @($result.Steps | Where-Object Status -ne 'skipped') | Should -HaveCount 0
@@ -148,7 +150,7 @@ Describe 'Invoke-AvmPrCheck' {
                     Should -Invoke $command -Exactly 0
                 }
                 Should -Invoke Initialize-AvmTerraformCommand -Exactly 0
-                @(Get-AvmCommandTool -Command 'pr-check' -Ecosystem terraform -ExcludeSteps @($Commands.Keys)) |
+                @(Get-AvmCommandTool -Command 'pr-check' -Ecosystem $SelectedEcosystem -ExcludeSteps @($Commands.Keys)) |
                     Should -HaveCount 0
                 Should -Invoke Test-AvmModuleVersion -Exactly 1
                 Should -Invoke Assert-AvmGitWorkingTreeClean -Exactly 1 -ParameterFilter { $Path -eq 'root' }
@@ -214,6 +216,7 @@ Describe 'Invoke-AvmPrCheck' {
             @{ Failure = 'configuration error'; Status = 'fail' }
             @{ Failure = 'unsupported error'; Status = 'fail' }
             @{ Failure = 'unexpected error'; Status = 'error' }
+            @{ Failure = 'retry detail'; Status = 'error' }
             @{ Failure = 'failed result'; Status = 'error' }
             @{ Failure = 'skipped result'; Status = 'error' }
             @{ Failure = 'missing result'; Status = 'error' }
@@ -226,6 +229,14 @@ Describe 'Invoke-AvmPrCheck' {
                         'configuration error' { throw [AvmConfigurationException]::new('Invalid initialization configuration.') }
                         'unsupported error' { throw [AvmNotSupportedException]::new('Initialization is unavailable.') }
                         'unexpected error' { throw [InvalidOperationException]::new('Initialization failed.') }
+                        'retry detail' {
+                            $record = [Management.Automation.ErrorRecord]::new(
+                                [AvmProcessException]::new('Raw transport failure.'), 'AVM1020',
+                                [Management.Automation.ErrorCategory]::ConnectionError, $null)
+                            $record.ErrorDetails = [Management.Automation.ErrorDetails]::new(
+                                'Initialization download failed. Run with -Verbose for technical details.')
+                            throw $record
+                        }
                         'failed result' { [pscustomobject]@{ Status = 'fail' } }
                         'skipped result' { [pscustomobject]@{ Status = 'skipped' } }
                         'missing result' { $null }
@@ -236,6 +247,9 @@ Describe 'Invoke-AvmPrCheck' {
                 $result.Status | Should -Be $Expected
                 $result.Steps.Step | Should -Be @('metadata', 'sync')
                 $result.Steps[-1].Error | Should -Match '^Terraform initialization prerequisite failed:'
+                if ($Failure -eq 'retry detail') {
+                    $result.Steps[-1].Error | Should -Be 'Terraform initialization prerequisite failed: Initialization download failed. Run with -Verbose for technical details.'
+                }
                 Should -Invoke Initialize-AvmTerraformCommand -Exactly 1
                 Should -Invoke Invoke-AvmSync -Exactly 0
                 Should -Invoke Invoke-AvmTransform -Exactly 0

@@ -1341,10 +1341,13 @@ This section is the implementation-level expression of the **Security stance** p
 
 ### CI matrix
 
-Every pull request runs Unit coverage and Component tests through
-`ci-tests` on `windows-latest`, `ubuntu-latest`, and `macos-latest`.
-The Windows job has a 30-minute ceiling; Linux and macOS retain 25 minutes.
-Individual test timeouts, test selection and the coverage floor are unchanged.
+Every pull request runs separate Unit and Component matrices on
+`windows-latest`, `ubuntu-latest`, and `macos-latest`. Unit jobs run
+`ci-unit`, or `ci-coverage` on Ubuntu, and include the non-writing generated-doc
+check and layout guards. Coverage is collected once in the Ubuntu unit job.
+Component jobs run `ci-component` independently. Each unit and component job
+has a 25-minute ceiling. Individual test timeouts, test selection and the
+coverage floor are unchanged.
 Lint and workflow-definition tests run in separate Ubuntu jobs. Integration
 runs separately on the same three hosted operating systems.
 
@@ -1435,7 +1438,7 @@ Scheduled and `repository_dispatch` runs cannot enable this override.
 
 - Comment-based help on every public function is the source of truth for command-level docs. A docs job generates `docs/reference/<cmdlet>.md` from it.
 - This repo treats generated public-cmdlet reference pages as part of the checked-in contract. Every public help, parameter, or exported-function change requires `./build.ps1 docs` followed by a commit of the updated Markdown files.
-- `./build.ps1 docs-check` compares the generated content without writing. It is part of `pre-commit`, `ci`, and `ci-tests`, so stale generated Markdown fails local and pull-request validation.
+- `./build.ps1 docs-check` compares the generated content without writing. It is part of `pre-commit`, `ci`, `ci-tests`, `ci-unit`, and `ci-coverage`, so stale generated Markdown fails local and pull-request validation.
 - The generated docs are for both human readers and agent consumers. Each page should document the cmdlet purpose, behaviour, and each parameter's role in plain language. Doc generation must preserve the public help semantics; do not hand-edit generated output to hide drift.
 - `docs/` in this repo holds:
   - `quality-spec.md` — this file and the only normative engineering document.

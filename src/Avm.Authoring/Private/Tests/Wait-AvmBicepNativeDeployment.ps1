@@ -65,7 +65,7 @@ function Wait-AvmBicepNativeDeployment {
             if ($statusCode -ne 200) {
                 throw [AvmProcessException]::new("Status recovery for '$DeploymentId' returned HTTP $statusCode.")
             }
-            $document = ConvertFrom-Json -InputObject ([string]$response.Content) -AsHashtable -ErrorAction Stop
+            $document = ConvertFrom-Json -InputObject ([string]$response.Content) -AsHashtable -NoEnumerate -ErrorAction Stop
             if ($document -isnot [System.Collections.IDictionary] -or
                 $document['id'] -isnot [string] -or $document['id'] -ine $DeploymentId -or
                 $document['properties'] -isnot [System.Collections.IDictionary]) {
