@@ -1,17 +1,18 @@
 # Bicep registry upstream updates
 
-**Status**: in-progress
+**Status**: complete
 **Started**: 2026-10-06
 **Updated**: 2026-10-07
 **Branch**: `jaredfholgate-bicep-upstream-alignment`
 
 ## Outcome
 
-Compare the registry's workflow and tooling changes since the incorporated
-baselines, adopt confirmed gaps in the existing tools workflows and
-Avm.Authoring, and qualify the result without Azure execution or registry
-cutover locally. The user separately approved the existing Azure-authenticated
-hosted CI matrix on 2026-10-07.
+Compared the registry's workflow and tooling changes since the incorporated
+baselines, adopted confirmed gaps in Avm.Authoring and the caller migration
+contract, and qualified the implementation locally and across the existing
+hosted matrix. The user separately approved the existing Azure-authenticated
+Terraform CI jobs on 2026-10-07. No local Azure execution or registry cutover
+was performed.
 
 ## Baselines
 
@@ -40,7 +41,7 @@ hosted CI matrix on 2026-10-07.
 - [x] Implement applicable gaps with focused positive and negative regressions.
 - [x] Run the full local gate, Bicep native acceptance, and shared regressions.
 - [x] Commit, push, and open the new review.
-- [ ] Complete hosted checks, including the Windows job-timeout correction.
+- [x] Complete hosted checks, including the Windows job-timeout correction.
 
 ## Comparison evidence
 
@@ -107,6 +108,8 @@ subjects alone.
 ## Publication and hosted qualification
 
 - Implementation commit: `3b4f6497bd0078b1b22bebb53ecf9d4f3f3a313d`.
+- Qualified source/workflow head: `f1659fb74a7e557537eecf89eae6b2ed07de17ae`,
+  including the Windows job-budget correction.
 - Review: [#235](https://github.com/Azure/azure-verified-modules-tools/pull/235).
 - The [first hosted run](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37590520300)
   passed lint, workflow tests, Linux/macOS coverage and components, all three
@@ -115,17 +118,23 @@ subjects alone.
 - Windows passed all 3,285 unit cases and its 70% coverage floor (73.77%),
   then reached the 25-minute job ceiling during component execution. The three
   completed component shards contained no failures; the fourth was canceled.
-  This is incomplete qualification, not a passing Windows result.
+  That first attempt was incomplete qualification, not a passing Windows result.
 - The [same job on the tools baseline](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37539203280/job/112527757202)
   already took 24 minutes 22 seconds: coverage took 8 minutes 46 seconds and
-  components 14 minutes 58 seconds. The added regression cases exhausted that
-  narrow margin. Raise only the Windows job ceiling to 30 minutes and update
-  its workflow contract assertion; retain every test, per-test timeout, the
-  70% coverage floor, all matrix entries and Linux/macOS ceilings.
+  components 14 minutes 58 seconds. That left too little margin for the
+  expanded suite and runner variance. Raised only the Windows job ceiling to
+  30 minutes and updated its workflow contract assertion; retained every test,
+  per-test timeout, the 70% coverage floor, all matrix entries and Linux/macOS
+  ceilings.
 - The corrected workflow passed all seven focused CI contract cases and a
   fresh `.\build.ps1 pre-commit`: layout, lint, 3,285 unit passes (nine existing
-  skips) and 1,472 component passes (one existing skip). Hosted qualification
-  of the corrected workflow remains pending.
+  skips) and 1,472 component passes (one existing skip).
+- The [corrected-head hosted run](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37597212791)
+  passed every job: lint, workflow tests, all three coverage/component jobs,
+  all three Bicep integration jobs, all six approved Terraform integration
+  jobs, coverage upload and test-result publication. Windows finished in
+  22 minutes 36 seconds. Independent CodeQL analysis, the CodeQL check,
+  aggregate test results and CLA also passed on that exact head.
 
 ## Boundaries and dependencies
 
@@ -137,3 +146,10 @@ Terraform canary evidence applies only to unchanged runtime surfaces.
 Package-owned native validation/defaults and strict explicit overrides remain
 the contract. Registry caller cutover and any team runbook update require
 separate approval.
+
+The new native deployment/retry/cleanup behavior has fixture-based acceptance,
+not new Azure deployment qualification. No full-registry README regeneration,
+registry caller cutover, merge or release was performed. Before a caller cutover,
+the internal Azure-Verified-Modules-Docs runbook should document the two-label
+gate, subscription/matrix identity, deployment/publication locks and cleanup
+recovery; no second-repository change was made here.
