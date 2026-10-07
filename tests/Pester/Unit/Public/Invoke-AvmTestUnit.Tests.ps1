@@ -11,11 +11,6 @@ AfterAll {
 }
 
 Describe 'Invoke-AvmTestUnit' {
-    It 'is exported by the manifest' {
-        (Get-Command Invoke-AvmTestUnit -Module Avm.Authoring -ErrorAction Stop) |
-            Should -Not -BeNullOrEmpty
-    }
-
     It 'is wired into the verb registry as "avm test unit"' {
         $reg = InModuleScope 'Avm.Authoring' { Get-AvmVerbRegistry }
         $entry = $reg | Where-Object { $_.Path.Count -eq 2 -and $_.Path[0] -eq 'test' -and $_.Path[1] -eq 'unit' }
@@ -37,7 +32,7 @@ Describe 'Invoke-AvmTestUnit' {
             }
             Mock Invoke-AvmTerraformTestSuite { [pscustomobject]@{ Status = 'pass' } }
             $run = Invoke-AvmTestUnit -Path $D -Ecosystem terraform -SkipModuleVersionCheck
-            Should -Invoke Test-AvmModuleVersion -Exactly 2 -ParameterFilter { $SkipModuleVersionCheck }
+            Should -Invoke Test-AvmModuleVersion -Exactly 1 -ParameterFilter { $SkipModuleVersionCheck }
             $run
         }
 
@@ -53,7 +48,7 @@ Describe 'Invoke-AvmTestUnit' {
             $ctx = [pscustomobject]@{
                 Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
             }
-            Mock Get-AvmModuleContext { $ctx }
+            Mock Get-AvmModuleContextInternal { $ctx }
             Mock Invoke-AvmTerraformTestSuite {
                 param($Context, $Tier)
                 [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; Tier = $Tier; FilesProcessed = 1; Issues = @() }
@@ -77,7 +72,7 @@ Describe 'Invoke-AvmTestUnit' {
             $ctx = [pscustomobject]@{
                 Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
             }
-            Mock Get-AvmModuleContext { $ctx }
+            Mock Get-AvmModuleContextInternal { $ctx }
             Mock Invoke-AvmTerraformTestSuite { throw 'should not be called' }
             Mock Invoke-AvmBicepTestUnit {
                 [pscustomobject]@{ Engine = 'bicep'; Status = 'pass'; RunsPassed = 1; Issues = @() }
@@ -97,7 +92,7 @@ Describe 'Invoke-AvmTestUnit' {
 
     It 'forwards an explicit compliance opt-in and rejects an empty suite path' {
         InModuleScope 'Avm.Authoring' {
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{ Kind = 'bicep-module'; Root = 'module'; Ecosystem = 'bicep' }
             }
             Mock Invoke-AvmBicepTestUnit {
@@ -115,13 +110,13 @@ Describe 'Invoke-AvmTestUnit' {
 
     It 'rejects options belonging to the other ecosystem instead of ignoring them' {
         InModuleScope 'Avm.Authoring' {
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{ Kind = 'bicep-module'; Root = 'module'; Ecosystem = 'bicep' }
             }
             { Invoke-AvmTestUnit -NoInit } |
                 Should -Throw -ExceptionType ([AvmConfigurationException]) -ExpectedMessage '*Terraform*'
 
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{ Kind = 'terraform-module-repo'; Root = 'module'; Ecosystem = 'terraform' }
             }
             { Invoke-AvmTestUnit -Tag 'unit' } |
@@ -131,13 +126,13 @@ Describe 'Invoke-AvmTestUnit' {
         }
     }
 
-    It 'forwards -Ecosystem to Get-AvmModuleContext' {
+    It 'forwards -Ecosystem to Get-AvmModuleContextInternal' {
         $dir = Join-Path $TestDrive ("eco-fwd-unit-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
             $script:eco = $null
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 param($Path, $Ecosystem)
                 $script:eco = $Ecosystem
                 [pscustomobject]@{

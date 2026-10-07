@@ -22,19 +22,42 @@ function Get-AvmBicepPublicationTargetVersion {
             "Module '$($Scope.ModuleRelativePath)' has an invalid major.minor version for publication.")
     }
     $path = "$($Scope.ModuleRelativePath)/version.json"
-    $tree = Invoke-AvmProcess -FilePath $GitState.GitPath -WorkingDirectory $GitState.RepositoryRoot `
-        -ArgumentList @('ls-tree', '-z', $GitState.BaseSha, '--', $path) -TimeoutSec 15
-    $previous = $null
-    if ($tree.StdOut.Length -gt 0) {
-        $entry = [regex]::Match($tree.StdOut, '^(?:100644|100755) blob [0-9a-f]{40,64}\t(?<path>[^\0]+)\0\z')
-        if (-not $entry.Success -or $entry.Groups['path'].Value -cne $path) {
-            throw [AvmConfigurationException]::new(
-                "The upstream version file for '$($Scope.ModuleRelativePath)' is not a regular version.json.")
+    $remoteFiles = $null -ne $GitState.PSObject.Properties['RemoteFiles']
+    $oldContent = $null
+    if ($remoteFiles) {
+        $oldFile = Get-AvmBicepPublicationFile -Path $path -GitState $GitState
+        if ($oldFile.Exists) { $oldContent = $oldFile.Content }
+        foreach ($file in @(Get-ChildItem -LiteralPath $Scope.Path -Recurse -File |
+                    Where-Object { $_.Name -cin @('main.json', 'version.json') })) {
+            if ($file.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                throw [AvmConfigurationException]::new("Publication data must be a regular file: '$($file.FullName)'.")
+            }
+            $relativePath = [System.IO.Path]::GetRelativePath($GitState.RepositoryRoot, $file.FullName).Replace('\', '/')
+            $baseline = Get-AvmBicepPublicationFile -Path $relativePath -GitState $GitState
+            $current = [System.IO.File]::ReadAllText($file.FullName).Replace("`r`n", "`n")
+            if (-not $baseline.Exists -or $current -cne $baseline.Content.Replace("`r`n", "`n")) {
+                $null = $GitState.ChangedPaths.Add($relativePath)
+            }
         }
-        $old = Invoke-AvmProcess -FilePath $GitState.GitPath -WorkingDirectory $GitState.RepositoryRoot `
-            -ArgumentList @('show', "$($GitState.BaseSha):$path") -TimeoutSec 15
+    }
+    else {
+        $tree = Invoke-AvmProcess -FilePath $GitState.GitPath -WorkingDirectory $GitState.RepositoryRoot `
+            -ArgumentList @('ls-tree', '-z', $GitState.BaseSha, '--', $path) -TimeoutSec 15
+        if ($tree.StdOut.Length -gt 0) {
+            $entry = [regex]::Match($tree.StdOut, '^(?:100644|100755) blob [0-9a-f]{40,64}\t(?<path>[^\0]+)\0\z')
+            if (-not $entry.Success -or $entry.Groups['path'].Value -cne $path) {
+                throw [AvmConfigurationException]::new(
+                    "The upstream version file for '$($Scope.ModuleRelativePath)' is not a regular version.json.")
+            }
+            $old = Invoke-AvmProcess -FilePath $GitState.GitPath -WorkingDirectory $GitState.RepositoryRoot `
+                -ArgumentList @('show', "$($GitState.BaseSha):$path") -TimeoutSec 15
+            $oldContent = $old.StdOut
+        }
+    }
+    $previous = $null
+    if ($null -ne $oldContent) {
         try {
-            $data = $old.StdOut | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+            $data = $oldContent | ConvertFrom-Json -AsHashtable -ErrorAction Stop
         }
         catch [System.Management.Automation.RuntimeException] {
             throw [AvmConfigurationException]::new(
@@ -61,7 +84,7 @@ function Get-AvmBicepPublicationTargetVersion {
         $upstream = 'https://github.com/Azure/bicep-registry-modules.git'
         $tags = Invoke-AvmProcess -FilePath $GitState.GitPath -WorkingDirectory $GitState.RepositoryRoot `
             -ArgumentList @('ls-remote', '--tags', $upstream, "$($Scope.ModuleRelativePath)/$Version.*") `
-            -TimeoutSec 30 -IgnoreExitCode `
+            -TimeoutSec 30 -IgnoreExitCode -RetryNetworkFailure `
             -EnvVars @{ GIT_TERMINAL_PROMPT = '0'; GCM_INTERACTIVE = 'Never' }
         if ($tags.ExitCode -ne 0) {
             throw [AvmConfigurationException]::new(

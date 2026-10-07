@@ -16,6 +16,8 @@ Describe 'Get-AvmBicepApiSpecList' -Tag 'Unit' {
             $script:apiStatus = 200
             $script:apiBody = '{"Microsoft.Storage":{"storageAccounts":["2023-05-01"]}}'
             $script:apiResponseUri = $null
+            Mock Wait-AvmRetryDelay { }
+            Mock Write-Warning { }
             Mock Invoke-WebRequest {
                 [pscustomobject]@{
                     StatusCode = $script:apiStatus

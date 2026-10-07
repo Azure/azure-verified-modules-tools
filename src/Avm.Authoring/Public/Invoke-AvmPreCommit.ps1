@@ -116,6 +116,10 @@ function Invoke-AvmPreCommit {
         Skip the managed-files release lookup and sync against whatever ref the
         normal precedence resolves. Forwarded only to the Terraform sync step.
 
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
+
     .OUTPUTS
         pscustomobject with:
           - Path        : the resolved module root
@@ -178,10 +182,9 @@ function Invoke-AvmPreCommit {
     $startTime = [datetime]::UtcNow
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
-    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem `
-        -SkipModuleVersionCheck:$SkipModuleVersionCheck
+    $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
     Write-AvmLog ("pre-commit: module root = {0}; ecosystem = {1}" -f $context.Root, $context.Ecosystem) -Level Verbose | Out-Null
-    $null = Resolve-AvmCommandTool -Command 'pre-commit' -Ecosystem $context.Ecosystem -AllowPathFallback:$AllowPathFallback
+    $null = Resolve-AvmCommandTool -Command 'pre-commit' -Ecosystem $context.Ecosystem -ModuleRoot $context.Root -AllowPathFallback:$AllowPathFallback
 
     $stepDefs = if ($context.Ecosystem -eq 'terraform') {
         @(

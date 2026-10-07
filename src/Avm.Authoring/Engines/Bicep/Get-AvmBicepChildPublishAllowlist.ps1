@@ -9,7 +9,7 @@ function Get-AvmBicepChildPublishAllowlist {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    $relative = 'utilities/pipelines/staticValidation/compliance/helper/child-module-publish-allowed-list.json'
+    $relative = '.avm/child-module-publish-allowed-list.json'
     $path = $RepositoryRoot
     $segments = $relative.Split('/')
     for ($index = 0; $index -lt $segments.Count; $index++) {

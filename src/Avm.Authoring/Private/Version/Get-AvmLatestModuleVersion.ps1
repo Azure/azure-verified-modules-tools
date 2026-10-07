@@ -24,11 +24,17 @@ function Get-AvmLatestModuleVersion {
     }
 
     Write-AvmLog 'module version lookup: querying PowerShell Gallery for Avm.Authoring' -Level Verbose
+    # The check is advisory and runs for every top-level command, so it uses the
+    # smaller retry budget to keep offline runs responsive.
     $resources = @(
-        Find-PSResource `
-            -Name 'Avm.Authoring' `
-            -Repository 'PSGallery' `
-            -ErrorAction Stop |
+        Invoke-AvmRetry -RetryActivity 'PowerShell Gallery version lookup' `
+            -RetryMaxAttempts (Get-AvmNetworkRetryPolicy).AdvisoryMaxAttempts -RetryQuiet `
+            -RetryAction {
+            Find-PSResource `
+                -Name 'Avm.Authoring' `
+                -Repository 'PSGallery' `
+                -ErrorAction Stop
+        } |
             Where-Object { $null -ne $_ }
     )
     if ($resources.Count -eq 0) {

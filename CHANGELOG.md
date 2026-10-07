@@ -129,6 +129,38 @@ section when cutting a release.
   The unused random provider declaration is removed when telemetry was its
   only use, and the generated TFLint ignore no longer produces an author
   warning; other inline ignores still warn.
+- `avm check convention` for Bicep now runs its rules as a packaged Pester
+  suite (`Resources/bicep/conventions`), so it, and therefore Bicep
+  `pre-commit` and `pr-check`, requires Pester 5.5.0 or later. Compilation,
+  Git, API-spec and MCR lookups still happen before the suite starts. Issue
+  codes, severities and lines are unchanged, but issues are grouped by rule
+  rather than interleaved per module. A rule that throws, or a suite that
+  runs fewer checks than expected, is reported as an error issue instead of
+  aborting the command.
+- The Bicep e2e ownership tag, run-ID pattern and convention exemptions now
+  live in `Resources/bicep/settings.json`, and the PowerShell module pins
+  (`powershell-yaml`, `PSRule`, `PSRule.Rules.Azure`) live in the
+  `powerShellModules` section of `Resources/avm.pins.jsonc`. Ownership checks
+  share one helper. Run IDs must now be exactly 32 lowercase hex characters
+  with no trailing newline, and ownership is refused rather than guessed
+  when a resource carries several case-variant owner tags.
+- Network reads now share one bounded retry for transient failures (HTTP
+  408, 429 and 5xx, timeouts and connection resets), with capped exponential
+  backoff, `Retry-After` support and limits in `Resources/network.json`.
+  This covers tool and schema downloads, catalog and registry lookups,
+  `terraform init`, `tflint --init`, the MAPOTF transform, Git fetch, clone
+  and `ls-remote`, GitHub API reads, the PowerShell Gallery update check and
+  `avm update`. Authentication, configuration and not-found errors fail at
+  once; pushes, publishes and deployments are never replayed, and
+  `avm update` checks what is installed before trying again. Set
+  `AVM_NETWORK_RETRY_MAX_ATTEMPTS` (1–10) to change the attempt limit.
+- `avm init` for Terraform reads the repository metadata once instead of
+  twice.
+- The Terraform module scaffold published by `avm init` now deploys an AzAPI
+  virtual network into a supplied `parent_id` and exposes the AzAPI
+  `resource_types`, `retry`, `timeouts` and `ignore_body_changes` inputs.
+  Its default example selects a recommended region with
+  `Azure/avm-utl-regions/azurerm` and names resources with `Azure/avm-utl-naming/azure`.
 - New `metadata.json` files written by `avm init` and `avm metadata initialize`
   list their properties in schema order, starting with `$schema`, whatever the
   order of the supplied values. Existing files are not rewritten.
@@ -363,6 +395,31 @@ section when cutting a release.
   description that matches their metadata-backed prefix declaration, so
   their source passes the convention check without changing the separately
   supported published telemetry form.
+- Bicep e2e now watches the same deployment after a submission timeout instead
+  of failing with an unknown outcome. A recovered failure is retried as a
+  confirmed failure; the timed-out deployment is never resubmitted. Confirmed
+  failures reported with an ARM error summary are also recognised.
+- Bicep e2e relocates an unpinned case to another eligible region after a
+  deployment fails only for regional reasons, matching the registry workflow.
+  It first removes that deployment's resources and records and confirms they
+  are gone; if cleanup cannot confirm this, relocation stops.
+- Bicep e2e registers the module's required Azure features in the selected test
+  subscription before validation, matching the registry workflow. Registry
+  modules read their exact `avm/...` entry from the repository-root
+  `.required-features.json` object, which `avm register-features` now also
+  reads. A failed or pending registration fails the case before any deployment.
+- The Bicep PSRule `subscriptionId` token uses the first subscription in a
+  configured `TEST_SUBSCRIPTION_IDS` pool, matching the registry workflow, and
+  falls back to `VALIDATE_SUBSCRIPTION_ID` only when no pool is set. An invalid
+  pool fails clearly; `localToken_subscriptionId` still overrides both.
+- When Bicep e2e preparation, validation or submission fails, the issue now
+  lists the distinct nested Azure error codes (for example
+  `InvalidTemplateDeployment, AllocationFailed`). Azure messages and raw
+  parameters are still never logged.
+- `-SkipModuleVersionCheck` now takes effect for commands that resolve module
+  context, such as `Invoke-AvmLint`, `Invoke-AvmFormat`, `Invoke-AvmTransform`,
+  `Invoke-AvmTest`, `Invoke-AvmPreCommit` and `Invoke-AvmPrCheck`. They no longer
+  repeat the PowerShell Gallery check without the opt-out.
 - Metadata validation no longer downloads the JSON Schema draft-07 meta-schema.
   Root and child metadata validate offline without changing authored `$schema`
   references or relaxing validation.

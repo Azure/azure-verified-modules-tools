@@ -640,7 +640,7 @@ Describe 'Checked-out authoring source preview' -Tag Component {
             $result = Invoke-AvmPreCommitWithUpgradeRetry -repoId 'avm-res-test' `
                 -repositoryConfigDir 'configuration' -modulePath $source
             $result.Status | Should -BeExactly 'pass'
-            Should -Invoke Test-AvmModuleVersion -ModuleName Avm.Authoring -Exactly 2 -ParameterFilter {
+            Should -Invoke Test-AvmModuleVersion -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
                 $SkipModuleVersionCheck
             }
             Should -Invoke Update-PSResource -Exactly 0

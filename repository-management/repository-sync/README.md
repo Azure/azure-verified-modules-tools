@@ -1,8 +1,9 @@
-# Repository-sync state in TME
+# Repository sync
 
-Repository sync manages GitHub configuration and Azure test identities. Its
-Terraform state can live in TME without moving those identities or changing the
-AzAPI/AzureAD providers' tenant.
+Repository sync manages GitHub configuration and BAMI test identities through
+one Terraform root, one `<repoId>.tfstate`, and one saved plan/apply per
+repository. The GitHub and Azure child modules remain separate for organization.
+The backend in TME uses its own state-only identity; AzAPI/AzureAD use BAMI.
 
 [State infrastructure](../../../infra/README.md) provisions the TME resource
 group, storage account, container, and federated state-only managed identity.
@@ -32,11 +33,9 @@ The sync script passes the complete backend configuration through `terraform ini
 fallback. This works with released Terraform: these workflow variables do not
 require native Terraform support for backend-specific environment variables.
 
-The runtime no longer accepts a state resource-group name. Entra/OIDC access
-uses the standard blob endpoint with `lookup_blob_endpoint=false`, and
-blob-lease recovery uses account/container/blob names. The deployed resource
-group is still needed for bootstrap and management commands, not runtime state
-access.
+The runtime does not accept a state resource-group name. Entra/OIDC access
+uses the standard blob endpoint with `lookup_blob_endpoint=false`. The deployed
+resource group is needed for bootstrap and management, not runtime state access.
 
 Only non-secret identifiers and authentication flags are persisted in backend
 configuration and plans. GitHub provides fresh OIDC tokens for both identities;
@@ -44,12 +43,12 @@ never pass tokens, SAS credentials, or account keys through `-backend-config`.
 The state UAMI trusts the same repository-ID/`avm` environment subject as the
 existing provider UAMI, in its own tenant.
 
-Azure CLI logs in as the state identity for blob-lease recovery. Providers use
+Ordinary sync does not use Azure CLI login or automatic lock repair. Native
+Terraform uses explicit OIDC backend authentication, not CLI fallback. Providers use
 the verified BAMI tenant, administration subscription, and controller from the
 settings bundle; old `ARM_CLIENT_ID`, `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID`
 and legacy subscription/group inputs are no longer source requirements.
-State recovery forwards the
-state subscription explicitly. Keep workflow concurrency at one active run and
+Keep workflow concurrency at one active run and
 do not run another state writer outside that workflow.
 
 Pause this workflow through GitHub's workflow disable control, not a repository
@@ -57,50 +56,55 @@ variable. Disabling stops manual dispatch as well as automatic runs.
 Re-enabling permits scheduled and repository-dispatch applies too; obtain
 approval for that consequence before running manual canaries.
 
-## BAMI candidate identities
+## Unified BAMI ownership
 
 The central `testTenant` default selects BAMI for all repositories discovered by
 Terraform sync, including new and otherwise unlisted repositories. The legacy
 tenant is retired; normal sync explicitly rejects that selection instead of
-accessing an old provider. There is no additional activation variable or
-script parameter. Normal sync requires the
+accessing an old provider. Normal sync requires the
 [complete BAMI bundle](../README.md#test-tenant-selection)
 before cleanup, Terraform, or repository mutations. BAMI apply runs require
 the trusted Tools repository on `refs/heads/main`; manually dispatched
 `plan_only=true` previews can also run from its feature branches. Repository
 creation does not provision or publish test identities.
 
-All BAMI-selected repositories attempt preparation during normal trusted-main
-syncs, including scheduled and repository-dispatch applies. Manual `plan_only` still
-defaults to `true`; `false` permits the existing coupled candidate-identity apply
-and consumer-secret update. Sync does not run module deployment tests.
+The [ordinary root](terraform/main.tf) owns live BAMI objects at `module.bami[0]`
+alongside `module.github`. GitHub repository/owner IDs feed federation, and
+the created identity's client ID feeds GitHub test settings through Terraform
+references. PowerShell and managed-file generation do not need to provision an
+identity first. The eight-field producer and five-field Bicep projection remain
+unchanged. This is not a shared state for all repositories.
 
-The [candidate root](bami-identity/main.tf) reuses the Azure identity module
-only for selected repositories. Each candidate has its own
-`bami-identities/<tenantGuid>/<repoId>.tfstate` key in the **same configured TME
-backend**. The ordinary `<repoId>.tfstate` root now manages GitHub configuration
-only; it consumes the verified candidate tuple instead of executing the retired
-Azure module. Backend keys and `ARM_BACKEND_*` settings are unchanged.
+Manual `plan_only` defaults to `true`. Preview and apply both produce one complete native
+plan, even when a new identity's client ID is unknown. Apply validates that saved
+plan and applies it once. Identity replacements, foreign GitHub ownership,
+unexpected addresses/providers, and unrelated identity deletions are rejected.
+Only the exact permission retirement below is allowed. Failed or uncertain
+operations stop without a second plan/apply, automatic import, force-unlock, or
+blob-lease repair. `-WhatIf` returns before external discovery or file writes.
+Sync does not run module deployment tests.
 
-Plan-only never applies to obtain a client ID. If the candidate ID is still
-unknown or any identity, federation, or membership change is pending, the run
-reports `PendingCandidateIdentity` and leaves the consumer update pending.
-Apply uses only a saved plan checked for the complete bounded identity,
-federation, provider, and group scope. Identity replacements and unrelated
-deletes remain forbidden; only the exact permission migration/revocation
-below is allowed. Failed or uncertain applies do not trigger automatic state
-repair, state imports, or apply retries.
+Discovery, Terraform, GitHub policy changes, managed-file checks, and project
+details are folded in Actions logs. Effective selection, target repository,
+counts, and outcomes remain visible. Native Terraform human-readable output
+is retained in its group; failures close the group and surface redacted native
+diagnostics. Machine plan JSON is private, including failure and timeout paths.
+There is no separate candidate-plan summary.
+Project synchronization requires successful GitHub App token setup. If that
+prerequisite is unavailable, a visible skip notice points to the earlier setup
+failure instead of reporting an unrelated Projects-permission error.
 
-After validation, both paths log an allow-listed candidate-plan summary:
-repository and tenant identifiers, the identity, four federation credentials,
-every configured membership, and bounded migration/revocation actions.
-It includes observed group names/IDs and membership scopes;
-obsolete Owner deletions also show the previous scope, principal, and
-delegation condition. Unknown and sensitive fields are marked explicitly. The summary
-excludes raw plans, state, variables, output documents, and credentials; it
-uploads no artifact.
-This diagnostic grants no approval and changes no cutover gate. A later apply
-generates and validates its own saved plan, not the earlier preview binary.
+## Completed BAMI state consolidation
+
+The [6 October 2026 run](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37429326384)
+completed the one-time consolidation and all 229 ordinary sync workers.
+Ordinary sync now starts after matrix generation without a migration-readiness
+gate. Former split-state blobs, historical ordinary states, `backup.zip` archives,
+and recovery/completion records remain retained. This source cleanup does not
+read, rewrite, or delete those backend objects or reconcile pre-existing overlaps.
+Never resume the old split-state writer or restore stale snapshots blindly.
+
+## Operational prerequisites
 
 Before any operator-approved BAMI run, verify the bootstrap group's Owner
 assignment retains the
@@ -170,7 +174,7 @@ ambiguous, nonsecurity, or directory-dynamic groups that cannot accept individua
 membership updates fail explicitly. Repository sync manages
 only each dedicated test identity's membership edges, never the shared groups'
 complete membership lists or their Azure/directory role assignments.
-The candidate's private `test_group_contract` output exposes only observed
+The root's private `test_group_contract` output exposes only observed
 provider identifiers and allow-listed group metadata, not group members,
 owners, or credentials. `test_identity` and consumer secrets are unchanged.
 
@@ -213,7 +217,7 @@ principal. No live BAMI role or membership is forgotten with
 The separate ordinary-root `retired-identity.tf` forgets only `module.azure`
 state from the already-nonexistent legacy tenant. That explicitly approved
 retirement avoids old resource refresh, data-source reads, and destruction;
-it does not touch the isolated live BAMI identity root or state backend.
+it does not forget live BAMI ownership under `module.bami[0]` or relocate the backend.
 Terraform 1.9+ is required. The local gate proves this with disposable mock
 state: seven original objects produce only `forget` actions, retain their
 before-values, and have no refresh/data-read trace. A seed `command = apply`
@@ -227,7 +231,14 @@ Team operating guidance is maintained in
 Merging source does not authorize a workflow run, apply, variable publication,
 or Fabric activation; coordinate those separately with the bootstrap owner.
 
-## Isolated branch testing
+## Previous TME backend relocation reference
+
+The remaining sections document the earlier backend relocation, not identity
+state consolidation. They do not authorize a new run or provide a cutover
+shortcut. Normal BAMI sync now requires trusted main; do not dispatch this
+source-preparation branch against live state.
+
+### Isolated branch testing (historical)
 
 After an approved snapshot copy, test the migration branch explicitly with all
 five backend variables set for that snapshot, without changing provider settings:
@@ -244,7 +255,7 @@ tracked by the two state copies. Never apply from both copies. A snapshot
 becomes stale if the original sync writes again; copy fresh state during the
 final freeze rather than treating an old test copy as authoritative.
 
-## Cutover (operator only)
+### TME relocation cutover (operator only)
 
 Do not run these commands without approval for the production change. Use
 PowerShell 7.4+, Azure CLI, GitHub CLI, and access to both tenants. The account

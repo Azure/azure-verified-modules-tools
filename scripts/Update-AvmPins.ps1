@@ -36,7 +36,7 @@
     Test-AvmPins by importing the Avm.Authoring module.
 
 .PARAMETER Terraform
-    Terraform version to lock, e.g. '1.15.8'. Skip the terraform tool when
+    Terraform version to lock, e.g. '1.16.5'. Skip the terraform tool when
     omitted.
 
 .PARAMETER Bicep
@@ -73,11 +73,15 @@
     Override the path to avm.pins.jsonc. Defaults to the in-tree copy
     under src/Avm.Authoring/Resources/.
 
+.PARAMETER PowerShellModule
+    Module names and exact versions to download from PowerShell Gallery and
+    checksum-pin, including their declared module dependencies.
+
 .PARAMETER WhatIf
     Show what would change without writing the file.
 
 .EXAMPLE
-    ./scripts/Update-AvmPins.ps1 -Terraform 1.15.8 -Bicep 0.46.1
+    ./scripts/Update-AvmPins.ps1 -Terraform 1.16.5 -Bicep 0.46.1
 
 .EXAMPLE
     ./scripts/Update-AvmPins.ps1 -Terraform 1.9.8
@@ -123,6 +127,9 @@ param(
     [hashtable] $TflintPlugin = @{},
 
     [Parameter()]
+    [hashtable] $PowerShellModule = @{},
+
+    [Parameter()]
     [string] $PinsPath = (Join-Path $PSScriptRoot '..' 'src' 'Avm.Authoring' 'Resources' 'avm.pins.jsonc')
 )
 
@@ -130,8 +137,8 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 if (-not $Terraform -and -not $Bicep -and -not $Tflint -and -not $TerraformDocs -and
-    -not $Conftest -and -not $Mapotf -and -not $PolicyLibrary -and $TflintPlugin.Count -eq 0) {
-    throw "Specify at least one of -Terraform, -Bicep, -Tflint, -TerraformDocs, -Conftest, -Mapotf, -PolicyLibrary <vX.Y.Z> or -TflintPlugin @{ name = 'version' }."
+    -not $Conftest -and -not $Mapotf -and -not $PolicyLibrary -and $TflintPlugin.Count -eq 0 -and $PowerShellModule.Count -eq 0) {
+    throw "Specify a tool version, -PolicyLibrary <vX.Y.Z>, -TflintPlugin @{ name = 'version' }, or -PowerShellModule @{ name = 'version' }."
 }
 
 $PinsPath = (Resolve-Path -LiteralPath $PinsPath).Path
@@ -148,6 +155,8 @@ function script:Read-PinsFile {
 # Platform map shared by every tool entry. Keys are the canonical platform
 # tags used everywhere in the codebase.
 # ----------------------------------------------------------------------
+. (Join-Path -Path $PSScriptRoot -ChildPath 'Import-AvmNetworkRetry.ps1')
+
 $script:platforms = @(
     'windows-amd64'
     'windows-arm64'
@@ -160,7 +169,7 @@ $script:platforms = @(
 function script:Invoke-HttpGet {
     param([Parameter(Mandatory)] [string] $Url)
     Write-Host "  GET $Url" -ForegroundColor DarkGray
-    $response = Invoke-WebRequest -Uri $Url -UseBasicParsing
+    $response = Invoke-AvmRetry -RetryActivity "GET $Url" -RetryAction { Invoke-WebRequest -Uri $Url -UseBasicParsing }
     $content = $response.Content
     if ($content -is [byte[]]) {
         # Some servers (e.g. GitHub release assets) omit a charset header,
@@ -176,12 +185,46 @@ function script:Save-Url {
         [Parameter(Mandatory)] [string] $Destination
     )
     Write-Host "  GET $Url" -ForegroundColor DarkGray
-    Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
+    Invoke-AvmRetry -RetryActivity "GET $Url" -RetryAction { Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing }
 }
 
 function script:Get-FileHashHex {
     param([Parameter(Mandatory)] [string] $Path)
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function script:Get-PowerShellModuleEntry {
+    param(
+        [Parameter(Mandatory)] [ValidatePattern('^[A-Za-z][A-Za-z0-9.-]*$')] [string] $Name,
+        [Parameter(Mandatory)] [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+$')] [string] $Version
+    )
+
+    $temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("avm-module-pin-" + [guid]::NewGuid().ToString('N'))
+    $null = [System.IO.Directory]::CreateDirectory($temporary)
+    try {
+        $package = Join-Path $temporary 'package.zip'
+        script:Save-Url -Url "https://www.powershellgallery.com/api/v2/package/$Name/$Version" -Destination $package
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($package)
+        try {
+            $entry = $archive.GetEntry("$Name.psd1")
+            if ($null -eq $entry) { throw "Package '$Name' has no $Name.psd1 manifest." }
+            $manifestPath = Join-Path $temporary "$Name.psd1"
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $manifestPath)
+        }
+        finally { $archive.Dispose() }
+        $manifest = Import-PowerShellDataFile -LiteralPath $manifestPath
+        if ([version]$manifest.ModuleVersion -ne [version]$Version) {
+            throw "Package '$Name' does not declare requested version '$Version'."
+        }
+        $pin = [ordered]@{ version = $Version; sha256 = script:Get-FileHashHex -Path $package }
+        if ($manifest.ContainsKey('RequiredModules') -and @($manifest.RequiredModules).Count -gt 0) {
+            $pin.dependencies = @($manifest.RequiredModules | ForEach-Object {
+                    if ($_ -is [string]) { $_ } else { $_.ModuleName }
+                } | Sort-Object -CaseSensitive -Unique)
+        }
+        return $pin
+    }
+    finally { Remove-Item -LiteralPath $temporary -Recurse -Force -ProgressAction SilentlyContinue }
 }
 
 # ----------------------------------------------------------------------
@@ -503,7 +546,7 @@ function script:Get-PolicyLibraryPin {
     $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("avm-policy-" + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.tar.gz')
     try {
         Write-Host "  GET $url" -ForegroundColor DarkGray
-        Invoke-WebRequest -Uri $url -OutFile $tempFile -UseBasicParsing -MaximumRedirection 5
+        Invoke-AvmRetry -RetryActivity "GET $url" -RetryAction { Invoke-WebRequest -Uri $url -OutFile $tempFile -UseBasicParsing -MaximumRedirection 5 }
         $sha = (Get-FileHash -LiteralPath $tempFile -Algorithm SHA256).Hash.ToLowerInvariant()
         Write-Host "  sha256 = $sha" -ForegroundColor DarkGray
         return [ordered]@{ ref = $Ref; sha256 = $sha }
@@ -686,15 +729,35 @@ $sorted = @($merged | Sort-Object { [string]$_.name })
 
 if ($PolicyLibrary) {
     $policy = script:Get-PolicyLibraryPin -Ref $PolicyLibrary -Existing $existing.policyLibrary
-    $tail = $tail `
+    $policyPattern = '(?ms)^  "policyLibrary": \{.*?^  \}'
+    $tail = [regex]::Replace($tail, $policyPattern, {
+            param($section)
+            $section.Value `
         -replace '(?m)^(\s*"ref"\s*:\s*)"[^"]*"', ('${1}' + (script:Format-JsonString $policy.ref)) `
         -replace '(?m)^(\s*"sha256"\s*:\s*)"[^"]*"', ('${1}' + (script:Format-JsonString $policy.sha256))
+        })
 }
 
 foreach ($plugin in $TflintPlugin.Keys) {
     $version = [string]$TflintPlugin[$plugin]
-    $pattern = '(?ms)("' + [regex]::Escape($plugin) + '"\s*:\s*)"[^"]*"(?=[^{}]*\}\s*\}?\s*$)'
-    $tail = [regex]::Replace($tail, $pattern, { param($m) $m.Groups[1].Value + (script:Format-JsonString $version) })
+    $pattern = '("' + [regex]::Escape($plugin) + '"\s*:\s*)"[^"]*"'
+    $tail = [regex]::Replace($tail, '(?ms)^  "tflintPlugins": \{.*?^  \}', {
+            param($section)
+            [regex]::Replace($section.Value, $pattern, { param($m) $m.Groups[1].Value + (script:Format-JsonString $version) })
+        })
+}
+
+if ($PowerShellModule.Count -gt 0) {
+    foreach ($name in $PowerShellModule.Keys) {
+        $existing.powerShellModules[$name] = script:Get-PowerShellModuleEntry -Name $name -Version $PowerShellModule[$name]
+    }
+    $modulePins = [ordered]@{}
+    foreach ($name in @($existing.powerShellModules.Keys | Sort-Object -CaseSensitive)) {
+        $modulePins[$name] = $existing.powerShellModules[$name]
+    }
+    $moduleJson = (($modulePins | ConvertTo-Json -Depth 5) -replace "`r`n", "`n") -replace '(?m)^', '  '
+    $replacement = '  "powerShellModules": ' + $moduleJson.TrimStart()
+    $tail = [regex]::Replace($tail, '(?ms)^  "powerShellModules": \{.*?^  \}', { $replacement })
 }
 
 $rendered = script:Format-Pins -Header $header -SchemaVersion $schemaVersion -Tools $sorted -Tail $tail

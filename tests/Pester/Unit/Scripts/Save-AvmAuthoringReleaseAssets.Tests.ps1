@@ -8,8 +8,19 @@ Describe 'Save-AvmAuthoringReleaseAssets.ps1' {
 
         function gh {
             $global:AvmReleaseAssetsTestState.GhCalls += , @($args)
+            $failures = $global:AvmReleaseAssetsTestState.GhTransientFailures
+            if ($failures -gt 0) {
+                $global:AvmReleaseAssetsTestState.GhTransientFailures = $failures - 1
+                $global:LASTEXITCODE = 1
+                Write-Error 'HTTP 502: Bad Gateway (https://api.github.com/)'
+                return
+            }
             $global:LASTEXITCODE = $global:AvmReleaseAssetsTestState.GhExitCode
             $global:AvmReleaseAssetsTestState.ApiResponse
+        }
+
+        function Start-Sleep {
+            $global:AvmReleaseAssetsTestState.Sleeps++
         }
 
         function Invoke-WebRequest {
@@ -22,6 +33,10 @@ Describe 'Save-AvmAuthoringReleaseAssets.ps1' {
             }
             if ($global:AvmReleaseAssetsTestState.DownloadFailure) {
                 throw 'Asset download failed.'
+            }
+            if ($global:AvmReleaseAssetsTestState.DownloadTransientFailures -gt 0) {
+                $global:AvmReleaseAssetsTestState.DownloadTransientFailures--
+                throw [System.Net.Http.HttpRequestException]::new('Connection reset by peer')
             }
 
             $bytes = if ($global:AvmReleaseAssetsTestState.ShortDownload) {
@@ -44,7 +59,10 @@ Describe 'Save-AvmAuthoringReleaseAssets.ps1' {
             GhCalls = @()
             WebCalls = @()
             GhExitCode = 0
+            GhTransientFailures = 0
             DownloadFailure = $false
+            DownloadTransientFailures = 0
+            Sleeps = 0
             ShortDownload = $false
             Assets = @(
                 @{ id = 11; name = 'Avm.Authoring-0.17.1.zip'; state = 'uploaded'; size = 3 }
@@ -120,6 +138,27 @@ Describe 'Save-AvmAuthoringReleaseAssets.ps1' {
         { & $script:scriptPath -ReleaseTag 'v0.17.1' -Repository 'Azure/azure-verified-modules-tools' -ReleaseId 1 -OutputPath $script:outputPath } |
             Should -Throw "*Unable to list release assets for 'v0.17.1'*"
         $global:AvmReleaseAssetsTestState.WebCalls.Count | Should -Be 0
+    }
+
+    It 'retries a transient listing and download failure, repeating only the failed request' {
+        $global:AvmReleaseAssetsTestState.GhTransientFailures = 1
+        $global:AvmReleaseAssetsTestState.DownloadTransientFailures = 1
+
+        & $script:scriptPath -ReleaseTag 'v0.17.1' -Repository 'Azure/azure-verified-modules-tools' -ReleaseId 1 -OutputPath $script:outputPath -WarningAction SilentlyContinue
+
+        $global:AvmReleaseAssetsTestState.GhCalls.Count | Should -Be 2
+        $global:AvmReleaseAssetsTestState.WebCalls.Count | Should -Be 3
+        $global:AvmReleaseAssetsTestState.Sleeps | Should -Be 2
+        (Get-Item -LiteralPath (Join-Path $script:outputPath 'SHA256SUMS')).Length | Should -Be 2
+    }
+
+    It 'does not retry a permanent asset listing failure' {
+        $global:AvmReleaseAssetsTestState.GhExitCode = 1
+
+        { & $script:scriptPath -ReleaseTag 'v0.17.1' -Repository 'Azure/azure-verified-modules-tools' -ReleaseId 1 -OutputPath $script:outputPath } |
+            Should -Throw '*Unable to list release assets*'
+        $global:AvmReleaseAssetsTestState.GhCalls.Count | Should -Be 1
+        $global:AvmReleaseAssetsTestState.Sleeps | Should -Be 0
     }
 
     It 'rejects a truncated asset download' {

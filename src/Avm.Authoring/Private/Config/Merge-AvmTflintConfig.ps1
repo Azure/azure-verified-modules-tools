@@ -111,21 +111,21 @@ function Get-AvmTflintOverrideWarning {
     return $warnings.ToArray()
 }
 
-function Merge-AvmTflintConfig {
-    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Low')]
+function Merge-AvmTflintBlock {
+    [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)]
-        [string] $BasePath,
+        [AllowEmptyString()]
+        [string] $Text,
 
         [Parameter(Mandatory)]
-        [string] $OverridePath,
-
-        [Parameter(Mandatory)]
-        [string] $DestinationPath
+        [AllowEmptyCollection()]
+        [object[]] $Blocks
     )
 
-    $merged = [System.IO.File]::ReadAllText($BasePath)
-    foreach ($overrideBlock in (Get-AvmTflintOverrideBlock -Path $OverridePath)) {
+    $merged = $Text
+    foreach ($overrideBlock in $Blocks) {
         $typePattern = [regex]::Escape($overrideBlock.Type)
         $labelPattern = [regex]::Escape($overrideBlock.Label)
         $blockPattern = "(?ms)^[ \t]*$typePattern[ \t]+`"$labelPattern`"[ \t]*\{(?<body>[^{}]*)\}"
@@ -161,6 +161,84 @@ function Merge-AvmTflintConfig {
         $replacementBlock = $baseMatch.Value.Substring(0, $baseMatch.Groups['body'].Index - $baseMatch.Index) +
         $body + '}'
         $merged = $merged.Remove($baseMatch.Index, $baseMatch.Length).Insert($baseMatch.Index, $replacementBlock)
+    }
+
+    return $merged
+}
+
+function Merge-AvmTflintConfig {
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Low')]
+    param(
+        [Parameter(Mandatory)]
+        [string] $BasePath,
+
+        [Parameter(Mandatory)]
+        [string] $OverridePath,
+
+        [Parameter(Mandatory)]
+        [string] $DestinationPath
+    )
+
+    $baseText = [System.IO.File]::ReadAllText($BasePath)
+    $overrideBlocks = @(Get-AvmTflintOverrideBlock -Path $OverridePath)
+    $merged = Merge-AvmTflintBlock -Text $baseText -Blocks $overrideBlocks
+    $plugins = [regex]::Matches($merged, '(?ms)^[ \t]*plugin[ \t]+"avm"[ \t]*\{(?<body>[^{}]*)\}')
+    $currentPlugin = $false
+    if ($plugins.Count -eq 1) {
+        $body = $plugins[0].Groups['body'].Value
+        $currentPlugin = [regex]::Matches($body, '(?m)^\s*(?:version|source|enabled)\s*=').Count -eq 3 -and
+        $body -cmatch '(?m)^\s*version\s*=\s*"(?:1\.0\.0|1\.2\.0)"\s*$' -and
+        $body -cmatch '(?m)^\s*source\s*=\s*"github\.com/Azure/tflint-ruleset-avm"\s*$' -and
+        $body -cmatch '(?m)^\s*enabled\s*=\s*true\s*$'
+    }
+    if ($currentPlugin) {
+        $legacyRules = [ordered]@{
+            required_output_rmfr7     = 'avm_output_resource_id_required'
+            terraform_output_separate = $null
+        }
+        foreach ($legacyName in $legacyRules.Keys) {
+            $legacyPattern = '(?ms)^[ \t]*rule[ \t]+"' + [regex]::Escape($legacyName) + '"[ \t]*\{(?<body>[^{}]*)\}'
+            $legacy = @($overrideBlocks | Where-Object { $_.Type -ceq 'rule' -and $_.Label -ceq $legacyName })
+            if ([regex]::IsMatch($baseText, $legacyPattern) -or $legacy.Count -ne 1 -or $legacy[0].Attributes.Count -ne 1) {
+                continue
+            }
+            $attribute = $legacy[0].Attributes[0]
+            $disabled = $attribute.Name -ceq 'enabled' -and $attribute.Value.StartsWith('false', [System.StringComparison]::Ordinal) -and
+            (Test-AvmHclTrivia -Text $attribute.Value.Substring(5))
+            if (-not $disabled) {
+                continue
+            }
+
+            $replacementName = $legacyRules[$legacyName]
+            if ($replacementName) {
+                $replacementPattern = '(?ms)^[ \t]*rule[ \t]+"' + [regex]::Escape($replacementName) + '"[ \t]*\{(?<body>[^{}]*)\}'
+                $replacementMatches = [regex]::Matches($merged, $replacementPattern)
+                $replacementOverrides = @($overrideBlocks | Where-Object { $_.Type -ceq 'rule' -and $_.Label -ceq $replacementName })
+                if ($replacementMatches.Count -gt 1 -or $replacementOverrides.Count -gt 1) {
+                    continue
+                }
+                if ($replacementOverrides.Count -eq 1) {
+                    $enabled = @($replacementOverrides[0].Attributes | Where-Object { $_.Name -ceq 'enabled' })
+                    if ($enabled.Count -ne 1 -or -not $enabled[0].Value.StartsWith('false', [System.StringComparison]::Ordinal) -or
+                        -not (Test-AvmHclTrivia -Text $enabled[0].Value.Substring(5))) {
+                        continue
+                    }
+                }
+                $replacement = [pscustomobject]@{
+                    Type       = 'rule'
+                    Label      = $replacementName
+                    Attributes = $legacy[0].Attributes
+                    Text       = $legacy[0].Text.Replace('"' + $legacyName + '"', '"' + $replacementName + '"')
+                }
+                $merged = Merge-AvmTflintBlock -Text $merged -Blocks @($replacement)
+                $message = "tflint: migrated disabled rule '$legacyName' to '$replacementName' from '$OverridePath'; rename the authored override for AVM ruleset 1.0.0."
+            }
+            else {
+                $message = "tflint: omitted obsolete disabled rule '$legacyName' from '$OverridePath'; AVM ruleset 1.0.0 removed it without a replacement. Remove that override."
+            }
+            $merged = [regex]::Replace($merged, $legacyPattern, '')
+            Write-AvmLog $message -Level Warning | Out-Null
+        }
     }
 
     if (-not $PSCmdlet.ShouldProcess($DestinationPath, 'Write merged TFLint config')) {

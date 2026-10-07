@@ -75,7 +75,16 @@ function Update-AvmAuthoring {
             PassThru    = $true
             ErrorAction = 'Stop'
         }
-        $null = Update-PSResource @updateParameters
+        $updateState = @{ Attempt = 0 }
+        $null = Invoke-AvmRetry -RetryActivity 'Avm.Authoring update' -RetryAction {
+            $updateState.Attempt++
+            # A lost response may hide a completed install; check before trying again.
+            if ($updateState.Attempt -gt 1 -and
+                $null -ne (Get-InstalledPSResource -Name 'Avm.Authoring' -Version $latestVersion.ToString() -Scope CurrentUser -ErrorAction SilentlyContinue)) {
+                return
+            }
+            $null = Update-PSResource @updateParameters
+        }
     }
     catch {
         throw [AvmToolException]::new(

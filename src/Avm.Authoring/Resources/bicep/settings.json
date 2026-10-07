@@ -1,0 +1,34 @@
+{
+  "e2e": {
+    "ownershipTag": "avm-e2e-run-id",
+    "runIdPattern": "^[0-9a-f]{32}\\z"
+  },
+  "conventionExemptions": {
+    "e2eIgnoreAllowedModules": [
+      "avm/res/azure-stack-hci/cluster",
+      "avm/res/azure-stack-hci/cluster/deployment-setting",
+      "avm/res/azure-stack-hci/logical-network",
+      "avm/res/azure-stack-hci/marketplace-gallery-image",
+      "avm/res/azure-stack-hci/network-interface",
+      "avm/res/azure-stack-hci/virtual-hard-disk",
+      "avm/res/azure-stack-hci/virtual-machine-instance",
+      "avm/res/cache/redis"
+    ],
+    "defaultsTestOptionalModules": [
+      "avm/res/aad/domain-service"
+    ],
+    "majorVersionAllowedModules": [
+      "avm/res/network/nat-gateway"
+    ],
+    "parameterNameExceptions": [
+      {
+        "modulePathPattern": "avm/res/azure-stack-hci/cluster/deployment-settings*",
+        "parameters": [
+          "bandwidthPercentage_SMB",
+          "priorityValue8021Action_Cluster",
+          "priorityValue8021Action_SMB"
+        ]
+      }
+    ]
+  }
+}

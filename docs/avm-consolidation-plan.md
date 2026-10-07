@@ -477,9 +477,12 @@ Each phase is independently shippable. Phase boundaries are also natural checkpo
   every generated CSV. Validated deprecated, unpublished modules are excluded
   from CSV and JSON with actionable deletion warnings, without deleting source
   or changing the approved MAR mirror. Only their exact implementation identities
-  bypass the source-row removal guard. Other removals, including helper rows,
-  hold back affected outputs by default; an explicit force option
+  bypass the source-row removal guard, alongside valid Bicep submodule rows.
+  Bicep roots, unresolved identities, and other Terraform removals, including
+  helper rows, hold back affected outputs by default; an explicit force option
   permits intentional removals without weakening validation or publication controls.
+  Multi-scope Bicep roots derive lifecycle availability from any published direct
+  scope module while retaining their own registry facts and child statuses.
   Permanent authoring commands never read CSV inputs. The one-off migration
   uses reviewed values outside normal repository sync; ordinary checks
   validate local metadata and warn on missing files during rollout.

@@ -16,6 +16,7 @@ Describe 'Bicep PSRule policy checks' -Tag 'Component' {
     BeforeEach {
         $script:workingRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         Copy-Item -LiteralPath $script:fixtureRoot -Destination $script:workingRoot -Recurse
+        Remove-Item -LiteralPath (Join-Path $script:workingRoot 'utilities' 'pipelines' 'staticValidation' 'psrule') -Recurse -Force
         $script:modulePath = Join-Path $script:workingRoot 'avm' 'res' 'mock' 'widget'
         $script:previousNamePrefix = $env:TOKEN_NAMEPREFIX
         $script:previousLocalNamePrefix = $env:localToken_namePrefix
@@ -28,8 +29,8 @@ Describe 'Bicep PSRule policy checks' -Tag 'Component' {
                 [pscustomobject]@{ Name = 'PSRule (fixture)'; Path = 'fixture' }
             }
             Mock Get-AvmBicepPolicyConfiguration {
-                $folder = Join-Path $RepositoryRoot 'utilities' 'pipelines' `
-                    'staticValidation' 'psrule'
+                $folder = Join-Path $ExecutionContext.SessionState.Module.ModuleBase `
+                    'Resources' 'bicep' 'psrule'
                 [pscustomobject]@{
                     OptionPath = Join-Path $folder 'ps-rule.yaml'
                     RulePath   = Join-Path $folder '.ps-rule'
@@ -111,6 +112,7 @@ Describe 'Bicep PSRule policy checks' -Tag 'Component' {
                 $input.HasMetadata | Should -BeTrue
                 [System.IO.Directory]::Exists($input.Root) | Should -BeFalse
             }
+            Should -Invoke Get-AvmBicepPolicyBaseline -Exactly 4
             Should -Invoke Invoke-AvmBicepPolicyBaseline -Exactly 8
         }
     }
@@ -439,6 +441,30 @@ Describe 'Bicep PSRule policy checks' -Tag 'Component' {
         $result.ToolSource | Should -Be 'not-run'
         $result.Issues.Code | Should -Contain 'avm.bicep.psrule-module'
         $result.Issues.Message | Should -Match 'Install-PSResource'
+    }
+
+    It 'reports known compiler failures verbatim and hides unexpected ones' -TestCases @(
+        @{ Kind = 'tool'; Expected = 'bicep pin is missing' }
+        @{ Kind = 'other'; Expected = 'The pinned Bicep compiler could not be resolved.' }
+    ) {
+        param($Kind, $Expected)
+        InModuleScope 'Avm.Authoring' -Parameters @{ Kind = $Kind } {
+            param($Kind)
+            if ($Kind -eq 'tool') {
+                Mock Resolve-AvmTool { throw [AvmToolException]::new('bicep pin is missing') }
+            }
+            else {
+                Mock Resolve-AvmTool { throw [System.IO.IOException]::new('do-not-echo-this-value') }
+            }
+        }
+        $result = Invoke-AvmCheckPolicy -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'fail'
+        $issue = @($result.Issues | Where-Object Code -eq 'avm.bicep.psrule-compiler')
+        $issue.Count | Should -Be 1
+        $issue[0].Message | Should -BeExactly $Expected
+        InModuleScope 'Avm.Authoring' {
+            Should -Invoke Invoke-AvmBicepPolicyBaseline -Exactly 0
+        }
     }
 
     It 'does not leak PSRule engine exception details and removes its temporary files' {

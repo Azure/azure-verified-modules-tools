@@ -12,9 +12,10 @@ function Invoke-AvmCheckPolicy {
 
         The ecosystem is determined by Get-AvmModuleContext, which honours
         the .avm/context.psd1 override file and the -Ecosystem filter.
-        Bicep policy checks use repository-local ps-rule.yaml and .ps-rule/
-        under utilities/pipelines/staticValidation/psrule. PSRule 2.9.0 and
+        Bicep policy checks use packaged ps-rule.yaml and .ps-rule/ assets
+        under Resources/bicep/psrule. PSRule 2.9.0 and
         PSRule.Rules.Azure 1.47.0 must be installed separately. Set
+        TEST_SUBSCRIPTION_IDS (the first entry is used) or
         VALIDATE_SUBSCRIPTION_ID, VALIDATE_TENANT_ID,
         VALIDATE_MANAGEMENT_GROUP_ID (or ARM_MGMTGROUP_ID), TOKEN_NAMEPREFIX,
         and localToken_* variables for tokens used by the selected tests.
@@ -36,6 +37,10 @@ function Invoke-AvmCheckPolicy {
     .PARAMETER ThrottleLimit
         Maximum number of independent Terraform examples to evaluate at once.
         Defaults to four. Bicep policy checks ignore this value.
+
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
 
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
@@ -69,8 +74,7 @@ function Invoke-AvmCheckPolicy {
 
     Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
-    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem `
-        -SkipModuleVersionCheck:$SkipModuleVersionCheck
+    $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
 
     switch ($context.Ecosystem) {
         'bicep' {

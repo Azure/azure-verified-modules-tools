@@ -44,9 +44,7 @@ permissions:
   id-token: write
   contents: read
 
-# Each repo's Terraform state is a single blob, and a cancelled run leaves its
-# lease behind. Queue overlapping runs rather than cancelling them, so the sync
-# stays the only writer and any lock it does find is genuinely stale.
+# Queue overlapping runs; state locks are never broken automatically.
 concurrency:
   group: repository-sync
   cancel-in-progress: false

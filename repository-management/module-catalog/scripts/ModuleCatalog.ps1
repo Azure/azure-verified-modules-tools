@@ -634,8 +634,18 @@ function New-AvmCatalogBundle {
     $archivedRepositories = Get-AvmCatalogArchivedRepositories -RepositoryRevisions $RepositoryRevisions
     $modules = [System.Collections.Specialized.OrderedDictionary]::new([StringComparer]::Ordinal)
     $canonicalTypes = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $publishedScopeParents = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($item in $Inventory.Items) {
         $null = $canonicalTypes.Add($item.Record.canonicalType)
+        if (-not $Registry.Contains($item.Identity.Key)) {
+            throw [System.IO.InvalidDataException]::new("Registry snapshot is incomplete: $($item.Identity.Key)")
+        }
+        if ($item.Identity.Ecosystem -ceq 'bicep' -and $null -ne $item.Identity.ParentModule -and
+            $item.Identity.ModulePath -cmatch '^avm/(res|ptn|utl)/[^/]+/[^/]+/(rg|sub|mg)-scope$' -and
+            $item.Record.canonicalType -cne 'helper' -and $Registry[$item.Identity.Key].status -ceq 'available') {
+            $parentKey = Get-AvmCatalogKey -Ecosystem bicep -Repository $item.Identity.Repository -ModulePath $item.Identity.ParentModule
+            $null = $publishedScopeParents.Add($parentKey)
+        }
     }
     foreach ($canonical in (Get-AvmCatalogOrdinal -Values @($canonicalTypes))) {
         $modules[$canonical] = [ordered]@{ bicep = @(); terraform = @() }
@@ -643,13 +653,13 @@ function New-AvmCatalogBundle {
     $ownerDefects = [System.Collections.Generic.List[object]]::new()
     foreach ($item in $Inventory.Items) {
         $record = $item.Record
-        if (-not $Registry.Contains($item.Identity.Key)) {
-            throw [System.IO.InvalidDataException]::new("Registry snapshot is incomplete: $($item.Identity.Key)")
-        }
         $record.registry = $Registry[$item.Identity.Key]
-        if ($item.Identity.SourcePending -and $record.registry.status -cne 'not-published') {
+        $hasPublishedScope = $publishedScopeParents.Contains($item.Identity.Key)
+        $isPublished = $record.registry.status -ceq 'available' -or $hasPublishedScope
+        if ($item.Identity.SourcePending -and ($record.registry.status -cne 'not-published' -or $hasPublishedScope)) {
+            $publication = if ($hasPublishedScope) { 'a scoped module is published' } else { "the registry reports it as $($record.registry.status)" }
             throw [System.IO.InvalidDataException]::new(
-                "Module $($item.Identity.Key) has metadata but no source, yet the registry reports it as $($record.registry.status). Only proposed modules may be registered ahead of their source.")
+                "Module $($item.Identity.Key) has metadata but no source, yet $publication. Only proposed modules may be registered ahead of their source.")
         }
         if ($record.ecosystem -eq 'terraform' -and
             (-not $archivedRepositories.ContainsKey($record.repository) -or $archivedRepositories[$record.repository] -isnot [bool])) {
@@ -664,17 +674,14 @@ function New-AvmCatalogBundle {
         $record.moduleStatus = if ($deprecated -or [string]$item.Row['ModuleStatus'] -eq 'Deprecated') {
             'Deprecated'
         }
-        elseif ($record.registry.status -eq 'not-published') {
+        elseif (-not $isPublished) {
             'Proposed'
         }
         elseif ($record.owners.Count -eq 0) {
             'Orphaned'
         }
-        elseif ($record.registry.status -eq 'available') {
-            'Available'
-        }
         else {
-            'Proposed'
+            'Available'
         }
         if ($deprecated) {
             $item.Row['ModuleStatus'] = 'Deprecated'
@@ -693,7 +700,7 @@ function New-AvmCatalogBundle {
             $missingOwners = [System.Collections.Generic.List[string]]::new()
             $ownerProfiles = Resolve-AvmCatalogOwnerProfiles -Owners $record.owners -Cache $GitHub -Missing $missingOwners
             if ($missingOwners.Count -gt 0 -and
-                -not ($record.moduleStatus -ceq 'Deprecated' -and $record.registry.status -ceq 'not-published')) {
+                -not ($record.moduleStatus -ceq 'Deprecated' -and -not $isPublished)) {
                 $ownerDefects.Add([ordered]@{
                         sourceFile = [string]$item.File
                         moduleName = [string]$record.moduleName
@@ -740,7 +747,8 @@ function New-AvmCatalogBundle {
         throw [System.IO.InvalidDataException]::new('Generated module catalog failed its packaged output schema.')
     }
     $excludedItems = @($Inventory.Items | Where-Object {
-            $_.Record.moduleStatus -ceq 'Deprecated' -and $_.Record.registry.status -ceq 'not-published'
+            $_.Record.moduleStatus -ceq 'Deprecated' -and $_.Record.registry.status -ceq 'not-published' -and
+            -not $publishedScopeParents.Contains($_.Identity.Key)
         })
     $excludedModules = @($excludedItems | ForEach-Object { $_.Record })
     $excludedKeys = Get-AvmCatalogExcludedModuleKey -Modules $excludedModules -Configuration $configuration -SchemaPath $SchemaPath
@@ -846,6 +854,33 @@ function New-AvmCatalogBundle {
     }
 }
 
+# Antivirus and indexing services on Windows can briefly lock newly written
+# files, which makes a directory move fail with access denied. Retry only while
+# the staging directory is intact and the destination is still absent.
+function Move-AvmCatalogStagingDirectory {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $Source,
+        [Parameter(Mandatory)][string] $Destination,
+        [ValidateRange(1, 20)][int] $MaxAttempts = 5
+    )
+
+    for ($attempt = 1; ; $attempt++) {
+        try {
+            [System.IO.Directory]::Move($Source, $Destination)
+            return
+        }
+        catch [System.UnauthorizedAccessException], [System.IO.IOException] {
+            if ($attempt -ge $MaxAttempts -or
+                [System.IO.Directory]::Exists($Destination) -or
+                -not [System.IO.Directory]::Exists($Source)) {
+                throw
+            }
+            Start-Sleep -Milliseconds (200 * $attempt)
+        }
+    }
+}
+
 function Write-AvmCatalogBundle {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -883,7 +918,7 @@ function Write-AvmCatalogBundle {
             $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path))
             [System.IO.File]::WriteAllText($path, $Bundle.Files[$relative], [System.Text.UTF8Encoding]::new($false))
         }
-        [System.IO.Directory]::Move($staging, $destination)
+        Move-AvmCatalogStagingDirectory -Source $staging -Destination $destination
     }
     finally {
         if ([System.IO.Directory]::Exists($staging)) {

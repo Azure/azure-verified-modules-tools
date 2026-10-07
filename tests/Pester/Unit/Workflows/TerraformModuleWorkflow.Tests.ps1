@@ -200,7 +200,7 @@ Describe 'CI workflow' {
         $jobBlock | Should -Match 'run: \./build\.ps1 test-workflows'
         $jobBlock | Should -Match 'name: test-results-workflows-ubuntu-latest'
 
-        $script:ci | Should -Match 'needs: \[build, workflows, integration\]'
+        $script:ci | Should -Match 'needs: \[build, workflows, integration, bicep-integration\]'
     }
 
     It 'authenticates tflint plugin downloads so the shared macOS runner egress does not hit the GitHub API rate limit' {
@@ -227,7 +227,28 @@ Describe 'CI workflow' {
     It 'uses the prerequisite installer in every CI test job type' {
         ([regex]::Matches(
                 $script:ci,
-                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 4
+                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 5
+    }
+
+    It 'installs pinned Bicep policy dependencies before integration acceptance only' {
+        $integration = [regex]::Match($script:ci, '(?ms)^  bicep-integration:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        $integration.Success | Should -BeTrue
+        $integration.Value | Should -Match 'Install-AvmBuildPrerequisites\.ps1 -IncludeBicepPolicy -Confirm:\$false'
+        ([regex]::Matches($script:ci, '-IncludeBicepPolicy')).Count | Should -Be 1
+        $integration.Value.IndexOf('-IncludeBicepPolicy') |
+            Should -BeLessThan $integration.Value.IndexOf('./build.ps1 integration')
+    }
+
+    It 'runs Bicep once per OS without cloud credentials and reports every integration group' {
+        $bicep = [regex]::Match($script:ci, '(?ms)^  bicep-integration:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)').Value
+        $terraform = [regex]::Match($script:ci, '(?ms)^  integration:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)').Value
+        $bicep | Should -Match 'os: \[ubuntu-latest, windows-latest, macos-latest\]'
+        $bicep | Should -Match 'integration -IntegrationGroup Bicep'
+        $terraform | Should -Match 'integration -IntegrationGroup Terraform'
+        $bicep | Should -Not -Match 'environment:|id-token:|azure/login|Add-MpPreference|fixture:'
+        $bicep | Should -Match 'if: always\(\)'
+        $bicep | Should -Match 'test-results-bicep-integration-'
+        $script:ci | Should -Match 'needs: \[build, workflows, integration, bicep-integration\]'
     }
 }
 

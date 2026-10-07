@@ -587,8 +587,8 @@ function Invoke-AvmTerraformLint {
             ("The terraform lint engine runs PowerShell hooks only. Refactor these shell hooks to '.ps1': {0}" -f ($shellHooks -join ', ')))
     }
 
-    $tool = Resolve-AvmTool -Name 'tflint' -AllowPathFallback:$AllowPathFallback
-    $terraform = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
+    $tool = Resolve-AvmTool -Name 'tflint' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
+    $terraform = Resolve-AvmTool -Name 'terraform' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
     $baseConfigDir = Resolve-AvmTflintConfigDir
     $sourceScopes = @(
         Get-AvmTflintScope -Root $Context.Root -ConfigDir $baseConfigDir
@@ -679,6 +679,7 @@ function Invoke-AvmTerraformLint {
                 -ArgumentList @('--init', '--config', $scope.Config) `
                 -WorkingDirectory $scope.Dir `
                 -IgnoreExitCode `
+                -RetryNetworkFailure `
                 -StreamOutput:$streamOutput `
                 -Label ('{0}: tflint init' -f $scope.Label)
             if ($init.ExitCode -ne 0) {

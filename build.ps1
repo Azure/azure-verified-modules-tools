@@ -28,7 +28,10 @@ param(
     [Parameter(Position = 0)]
     [string[]] $Tasks = @('.'),
 
-    [string[]] $TestName = @()
+    [string[]] $TestName = @(),
+
+    [ValidateSet('All', 'Bicep', 'Terraform')]
+    [string] $IntegrationGroup = 'All'
 )
 
 Set-StrictMode -Version 3.0
@@ -51,6 +54,6 @@ if (-not (Test-Path -LiteralPath $buildScript)) {
     throw "Build script not found: $buildScript"
 }
 
-$buildArgs = @{ Task = $Tasks; File = $buildScript; TestName = $TestName }
+$buildArgs = @{ Task = $Tasks; File = $buildScript; TestName = $TestName; IntegrationGroup = $IntegrationGroup }
 
 Invoke-Build @buildArgs

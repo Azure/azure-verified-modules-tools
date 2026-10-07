@@ -2,9 +2,8 @@
 # GH_TOKEN
 # TEST_BAMI_* (the eight-field BAMI settings bundle)
 # ARM_BACKEND_* (the separate state-only identity and storage)
-# Must run gh auth login -h "GitHub.com" before running this script
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess)]
 param(
     [switch]$repositoryCreationModeEnabled,
     [string]$stateStorageAccountName = "",
@@ -34,7 +33,7 @@ param(
     [string]$repositorySyncRepositoryId = $env:GITHUB_REPOSITORY_ID
 )
 
-Write-Host "Running repo sync script"
+$ErrorActionPreference = 'Stop'
 
 # Dot-source the cmdlet libs. `$PSScriptRoot` makes this resolution
 # independent of the caller's working directory.
@@ -64,8 +63,6 @@ if (!$repositoryCreationModeEnabled) {
     $null = Resolve-RepositorySyncStateConfiguration -Backend $stateBackend
 }
 
-$env:ARM_USE_AZUREAD = "true"
-
 $issueLog = @()
 
 $moduleName = $repoId
@@ -90,7 +87,7 @@ $selectedTestTenant = if ($repositoryCreationModeEnabled) { 'none' } else { $set
 if (-not $repositoryCreationModeEnabled -and $selectedTestTenant -cne 'bami') {
     throw [System.InvalidOperationException]::new('The legacy test tenant is retired. Normal repository sync requires testTenant bami.')
 }
-if ($selectedTestTenant -ceq 'bami') {
+if ($selectedTestTenant -ceq 'bami' -and $env:GITHUB_ACTIONS -eq 'true') {
     Assert-AvmBamiRepositorySyncRunContext -PlanOnly $planOnly
 }
 $testTenant = if ($repositoryCreationModeEnabled) {
@@ -99,129 +96,43 @@ $testTenant = if ($repositoryCreationModeEnabled) {
 else {
     Resolve-RepositoryTestTenantSettings -TestTenant $selectedTestTenant -BamiValues $bamiSettings
 }
-$repositorySyncContext = if ($repositoryCreationModeEnabled) {
-    $null
-}
-else {
-    Resolve-AvmRepositorySyncFederationContext -RepositoryId $repositorySyncRepositoryId
-}
-Write-Host "$([Environment]::NewLine)Checking $($repoId)"
-
-if(!$skipCleanup) {
-    Clear-TerraformWorkspace -terraformModulePath $terraformModulePath
-}
-
 $repoSplit = $repoUrl.Split("/")
 $orgName = $repoSplit[3]
 $repoName = $repoSplit[4]
 $orgAndRepoName = "$orgName/$repoName"
+if (-not $PSCmdlet.ShouldProcess($orgAndRepoName, ($planOnly ? 'Plan repository sync' : 'Apply repository sync'))) {
+    return [pscustomobject]@{ Status = 'Preview'; Repository = $orgAndRepoName }
+}
 if ($candidateOutputDirectory) {
     Set-RepositorySyncCandidatePhase -Directory $candidateOutputDirectory `
         -Repository $orgAndRepoName -Phase initializing -PlanOnly $planOnly
 }
-
-$candidateSettings = $null
-if ($testTenant.TestTenant -ceq 'bami') {
-    $candidateParameters = @{
-        RepoId = $repoId
-        Repository = $orgAndRepoName
-        BamiValues = $testTenant.Settings
-        Backend = $stateBackend
-        Root = [System.IO.Path]::GetFullPath((Join-Path $terraformModulePath '..' 'bami-identity'))
-        RepositorySyncRepositoryId = $repositorySyncContext.RepositoryId
-        PlanOnly = $planOnly
-        EntraGroupNames = $settings.EntraGroups
+Write-Information "Repository: $orgAndRepoName; plan only: $planOnly; force file update: $($forceFileUpdate.IsPresent)." -InformationAction Continue
+$discovery = Invoke-RepositorySyncLogGroup -Name 'GitHub repository and team discovery' -Action {
+    $context = if ($repositoryCreationModeEnabled) { $null } else {
+        Resolve-AvmRepositorySyncContext -RepoId $repoId -Repository $orgAndRepoName `
+            -RepositorySyncRepositoryId $repositorySyncRepositoryId -PlanOnly $planOnly
     }
-    if ($settings.WorkloadIdentityFederationSubjectClaimOverrides.ContainsKey("jobWorkflowRef")) {
-        $candidateParameters.JobWorkflowRef = $settings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowRef"]
+    $tree = if ($repositoryCreationModeEnabled) { $null } else {
+        Get-RepositoryDefaultBranchTree -orgAndRepoName $orgAndRepoName
     }
-    $candidate = Invoke-AvmBamiRepositoryIdentity @candidateParameters
-    if ($candidate.Status -cne 'Ready') {
-        if ($candidateOutputDirectory) {
-            Set-RepositorySyncCandidatePhase -Directory $candidateOutputDirectory `
-                -Repository $orgAndRepoName -Phase skipped -PlanOnly $planOnly
-        }
-        Write-Warning "${orgAndRepoName}: $($candidate.Status). The consumer update is pending; no repository settings were changed."
-        return $candidate
+    $teams = Resolve-GitHubTeams -orgName $orgName -orgAndRepoName $orgAndRepoName `
+        -teams $settings.Teams -issueLog $issueLog
+    @{
+        Context = $context
+        Tree = $tree
+        Teams = $teams.GithubTeams
+        IssueLog = @($teams.IssueLog)
     }
-    $candidateSettings = $candidate.ConsumerSettings
 }
-Write-Host "$([Environment]::NewLine)<--->" -ForegroundColor Green
-Write-Host "$([Environment]::NewLine)Updating: $orgAndRepoName.$([Environment]::NewLine)" -ForegroundColor Green
-Write-Host "<--->$([Environment]::NewLine)" -ForegroundColor Green
+$repositorySyncContext = $discovery.Context
+$repoTree = $discovery.Tree
+$githubTeams = $discovery.Teams
+$issueLog = @($discovery.IssueLog)
 
-$repoTree = if (!$repositoryCreationModeEnabled) {
-    Get-RepositoryDefaultBranchTree -orgAndRepoName $orgAndRepoName
-} else {
-    $null
-}
-
-# Remove any legacy classic branch-protection rule from the target repo
-# before anything else - every AVM repo must be governed exclusively by
-# the rulesets defined in modules/github/github.rulesets.tf.
-if(!$repositoryCreationModeEnabled) {
-    $branchProtectionResult = Remove-LegacyBranchProtection `
-        -orgAndRepoName $orgAndRepoName `
-        -defaultBranch $repoTree.DefaultBranch `
-        -planOnly $planOnly `
-        -issueLog $issueLog
-    $issueLog = $branchProtectionResult.IssueLog
-}
-
-# Remove any repository-level rulesets that were not created by our
-# Terraform automation. modules/github/github.rulesets.tf owns the three
-# rulesets every AVM repo must have; anything else at the repo scope was
-# added out-of-band and silently shadows / weakens those policies.
-# Org-level rulesets are NOT enumerated (includes_parents=false) and are
-# additionally filtered out by source_type, so the org-wide governance
-# ruleset is never at risk.
-if(!$repositoryCreationModeEnabled -and $repoTree -and $repoTree.Success) {
-    $unmanagedRulesetsResult = Remove-UnmanagedRulesets `
-        -orgAndRepoName $orgAndRepoName `
-        -planOnly $planOnly `
-        -issueLog $issueLog
-    $issueLog = $unmanagedRulesetsResult.IssueLog
-}
-
-# Disable GitHub's CodeQL "default setup" so the only CodeQL workflow on
-# the repo is the advanced-setup `.github/workflows/codeql.yml` we ship
-# via managed files. Default setup spawns a dynamic
-# `dynamic/github-code-scanning/codeql` workflow that (a) duplicates the
-# `/language:actions` SARIF category our managed workflow already covers
-# and (b) cannot satisfy the customized OIDC subject template because its
-# dynamic jobs do not attach to a deployment environment, so it fails on
-# every push. The PATCH is idempotent (no-op if already off).
-if(!$repositoryCreationModeEnabled -and $repoTree -and $repoTree.Success) {
-    $codeQlDefaultSetupResult = Disable-CodeQlDefaultSetup `
-        -orgAndRepoName $orgAndRepoName `
-        -planOnly $planOnly `
-        -issueLog $issueLog
-    $issueLog = $codeQlDefaultSetupResult.IssueLog
-}
-
-$resolveTeamsResult = Resolve-GitHubTeams `
-    -orgName $orgName `
-    -orgAndRepoName $orgAndRepoName `
-    -teams $settings.Teams `
-    -issueLog $issueLog
-$githubTeams = $resolveTeamsResult.GithubTeams
-$issueLog = $resolveTeamsResult.IssueLog
-
-if(!$repositoryCreationModeEnabled) {
-    Write-Host "Checking repository: $orgAndRepoName for existing teams and users."
-    $issueLog = Remove-DirectCollaborators `
-        -orgAndRepoName $orgAndRepoName `
-        -moduleMetaData $moduleMetaData `
-        -planOnly $planOnly `
-        -issueLog $issueLog
-
-    $issueLog = Remove-UnmanagedRepositoryTeams `
-        -orgName $orgName `
-        -orgAndRepoName $orgAndRepoName `
-        -githubTeams $githubTeams `
-        -extraTeamsToIgnore $extraTeamsToIgnore `
-        -planOnly $planOnly `
-        -issueLog $issueLog
+$terraformModulePath = (Resolve-Path -LiteralPath $terraformModulePath).Path
+if (!$skipCleanup) {
+    Clear-TerraformWorkspace -terraformModulePath $terraformModulePath
 }
 
 $terraformVariables = @{
@@ -236,8 +147,9 @@ $terraformVariables = @{
     topics = $settings.Topics
 }
 
-if ($null -ne $candidateSettings) {
-    $terraformVariables["bami_test_settings"] = $candidateSettings
+if ($null -ne $testTenant.Settings) {
+    $terraformVariables["bami_test_settings"] = ConvertTo-AvmRepositoryTerraformSettings -Settings $testTenant.Settings
+    $terraformVariables["entra_group_names"] = @($settings.EntraGroups)
 }
 if ($null -ne $repositorySyncContext) {
     $terraformVariables["repository_sync_repository_id"] = $repositorySyncContext.RepositoryId
@@ -249,46 +161,117 @@ if ($settings.WorkloadIdentityFederationSubjectClaimOverrides.ContainsKey("jobWo
     $terraformVariables["github_job_workflow_ref"] = $settings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowRef"]
 }
 
-$terraformVariables | ConvertTo-Json -Depth 100 | Out-File "$terraformModulePath/terraform.tfvars.json"
+$terraformVariables | ConvertTo-Json -Depth 100 |
+    Set-Content -LiteralPath (Join-Path $terraformModulePath 'terraform.tfvars.json') -Encoding utf8NoBOM
 
-$preTerraformIssueCount = $issueLog.Count
+$environment = Get-RepositorySyncTerraformEnvironment -Root $terraformModulePath -Settings $testTenant.Settings
+$issueLog = @(Invoke-RepositorySyncLogGroup -Name 'Terraform repository configuration and test identity' -Action {
+    $issues = @(Invoke-TerraformInit `
+        -terraformModulePath $terraformModulePath `
+        -repositoryCreationModeEnabled $repositoryCreationModeEnabled.IsPresent `
+        -repoId $repoId `
+        -orgAndRepoName $orgAndRepoName `
+        -stateStorageAccountName $stateStorageAccountName `
+        -stateContainerName $stateContainerName `
+        -stateTenantId $stateTenantId `
+        -stateSubscriptionId $stateSubscriptionId `
+        -stateClientId $stateClientId `
+        -environment $environment `
+        -issueLog $issueLog)
+    $planParameters = @{
+        terraformModulePath = $terraformModulePath
+        repoId = $repoId
+        orgAndRepoName = $orgAndRepoName
+        planOnly = $planOnly
+        resourceTypesThatCannotBeDestroyed = $resourceTypesThatCannotBeDestroyed
+        environment = $environment
+        bamiSettings = $testTenant.Settings
+        entraGroupNames = @($settings.EntraGroups)
+        issueLog = $issues
+    }
+    if ($null -ne $repositorySyncContext) {
+        $planParameters.repository = $repositorySyncContext.Repository
+        $planParameters.repositorySyncRepositoryId = $repositorySyncContext.RepositoryId
+    }
+    if ($settings.WorkloadIdentityFederationSubjectClaimOverrides.ContainsKey('jobWorkflowRef')) {
+        $planParameters.jobWorkflowRef = $settings.WorkloadIdentityFederationSubjectClaimOverrides['jobWorkflowRef']
+    }
+    Invoke-TerraformPlanAndApply @planParameters -Confirm:$false
+})
+Write-Information ($planOnly ? 'Terraform plan completed; nothing applied.' : 'Terraform apply completed.') -InformationAction Continue
 
-$issueLog = Invoke-TerraformInit `
-    -terraformModulePath $terraformModulePath `
-    -repositoryCreationModeEnabled $repositoryCreationModeEnabled.IsPresent `
-    -planOnly $planOnly `
-    -repoId $repoId `
-    -orgAndRepoName $orgAndRepoName `
-    -stateStorageAccountName $stateStorageAccountName `
-    -stateContainerName $stateContainerName `
-    -stateTenantId $stateTenantId `
-    -stateSubscriptionId $stateSubscriptionId `
-    -stateClientId $stateClientId `
-    -issueLog $issueLog
+$candidatePlan = $null
+if (-not $repositoryCreationModeEnabled -and $candidateOutputDirectory) {
+    $arguments = if ($planOnly) {
+        @('show', '-json', (Join-Path $terraformModulePath "$repoId.tfplan"))
+    } else {
+        @('output', '-json')
+    }
+    $candidatePlan = Invoke-RepositorySyncTerraform -Arguments $arguments `
+        -Root $terraformModulePath -Environment $environment -Json
+    if ($planOnly) {
+        $pendingIdentityChanges = @($candidatePlan['resource_changes'] | Where-Object {
+            $_['mode'] -ceq 'managed' -and
+            $_['address'].StartsWith('module.bami[0].', [StringComparison]::Ordinal) -and
+            (@($_['change']['actions']) -join ',') -cne 'no-op'
+        })
+        if ($pendingIdentityChanges.Count -gt 0) {
+            Set-RepositorySyncCandidatePhase -Directory $candidateOutputDirectory `
+                -Repository $orgAndRepoName -Phase skipped -PlanOnly $planOnly
+            Write-Warning "${orgAndRepoName}: PendingCandidateIdentity. Reconcile the test identity before preparing a validation candidate."
+            return [pscustomobject]@{ Status = 'PendingCandidateIdentity'; ConsumerSettings = $null }
+        }
+    } else {
+        $candidatePlan = @{ planned_values = @{ outputs = $candidatePlan } }
+    }
+    $outputs = $candidatePlan['planned_values']['outputs']
+    if ($outputs -isnot [System.Collections.IDictionary] -or
+        $outputs['test_identity'] -isnot [System.Collections.IDictionary] -or
+        $outputs['test_settings'] -isnot [System.Collections.IDictionary] -or
+        $outputs['test_identity']['value'] -isnot [System.Collections.IDictionary] -or
+        $outputs['test_settings']['value'] -isnot [System.Collections.IDictionary]) {
+        throw [System.InvalidOperationException]::new('Candidate preparation requires complete dedicated test identity and settings outputs.')
+    }
+    $verifiedSettings = ConvertTo-AvmBamiConsumerSettings -Identity $outputs['test_identity']['value'] `
+        -Settings $testTenant.Settings -Repository $repositorySyncContext.Repository
+    $expected = ConvertTo-RepositorySyncTestSettings -Settings $verifiedSettings | ConvertTo-Json -Depth 6 -Compress
+    $actual = ConvertTo-RepositorySyncTestSettings -Settings $outputs['test_settings']['value'] | ConvertTo-Json -Depth 6 -Compress
+    if ($actual -cne $expected) {
+        throw [System.InvalidOperationException]::new('Candidate test settings do not match the verified repository identity and configured test subscriptions.')
+    }
+}
 
-$issueLog = Invoke-TerraformPlanAndApply `
-    -terraformModulePath $terraformModulePath `
-    -repoId $repoId `
-    -orgAndRepoName $orgAndRepoName `
-    -planOnly $planOnly `
-    -resourceTypesThatCannotBeDestroyed $resourceTypesThatCannotBeDestroyed `
-    -stateStorageAccountName $stateStorageAccountName `
-    -stateContainerName $stateContainerName `
-    -stateSubscriptionId $stateSubscriptionId `
-    -issueLog $issueLog
+if (!$repositoryCreationModeEnabled) {
+    $issueLog = @(Invoke-RepositorySyncLogGroup -Name 'GitHub policy and access cleanup' -Action {
+        $issues = @((Remove-LegacyBranchProtection `
+            -orgAndRepoName $orgAndRepoName -defaultBranch $repoTree.DefaultBranch `
+            -planOnly $planOnly -issueLog $issueLog).IssueLog)
+        if ($repoTree -and $repoTree.Success) {
+            $issues = @((Remove-UnmanagedRulesets -orgAndRepoName $orgAndRepoName `
+                -planOnly $planOnly -issueLog $issues).IssueLog)
+            $issues = @((Disable-CodeQlDefaultSetup -orgAndRepoName $orgAndRepoName `
+                -planOnly $planOnly -issueLog $issues).IssueLog)
+        }
+        $issues = @(Remove-DirectCollaborators -orgAndRepoName $orgAndRepoName `
+            -moduleMetaData $moduleMetaData -planOnly $planOnly -issueLog $issues)
+        Remove-UnmanagedRepositoryTeams -orgName $orgName -orgAndRepoName $orgAndRepoName `
+            -githubTeams $githubTeams -extraTeamsToIgnore $extraTeamsToIgnore -planOnly $planOnly -issueLog $issues
+    })
+}
 
 # Run the complete authoring pre-commit gauntlet after Terraform succeeds. Managed
 # files are fetched per repository so each one resolves the release tag recorded in
 # its own .avm/managed-files-version.json.
-if(!$repositoryCreationModeEnabled) {
-    if($issueLog.Count -gt $preTerraformIssueCount) {
+if (!$repositoryCreationModeEnabled) {
+    if (@($issueLog | Where-Object { $_.severity -ne 'warning' }).Count -gt 0) {
         if ($candidateOutputDirectory) {
             Set-RepositorySyncCandidatePhase -Directory $candidateOutputDirectory `
                 -Repository $orgAndRepoName -Phase skipped -PlanOnly $planOnly
         }
-        Write-Host "Skipping avm pre-commit for $orgAndRepoName because terraform reported issues for this run." -ForegroundColor Yellow
+        Write-Warning "Skipping file updates for $orgAndRepoName because repository sync reported errors."
     } else {
-        $preCommitResult = Invoke-AvmPreCommitForRepository `
+        $preCommitResult = Invoke-RepositorySyncLogGroup -Name 'Managed files and authoring checks' -Action {
+            Invoke-AvmPreCommitForRepository `
             -orgAndRepoName $orgAndRepoName `
             -repoId $repoId `
             -repositoryConfigDir (Split-Path -Parent (Resolve-Path $repoConfigFilePath).Path) `
@@ -300,32 +283,25 @@ if(!$repositoryCreationModeEnabled) {
             -candidateOutputDirectory $candidateOutputDirectory `
             -authoringModulePath $authoringModulePath `
             -issueLog $issueLog
-        $issueLog = $preCommitResult.IssueLog
-        if ($candidateOutputDirectory -and $preCommitResult.HasChanges) {
-            $arguments = if ($planOnly) {
-                @('show', '-json', "$repoId.tfplan")
-            } else {
-                @('output', '-json')
-            }
-            $response = Invoke-RepositorySyncProcess -Command terraform -Arguments $arguments `
-                -WorkingDirectory $terraformModulePath -TimeoutSec 600
-            if ($response.ExitCode -ne 0) {
-                throw [System.InvalidOperationException]::new(
-                    "Could not read the repository test identity from Terraform: $($response.StdErr)")
-            }
-            $output = ConvertFrom-Json -InputObject $response.StdOut -AsHashtable -Depth 100
-            if (-not $planOnly) {
-                $output = @{ planned_values = @{ outputs = $output } }
-            }
-            Save-RepositorySyncCandidateTestSettings -Plan $output -Directory $candidateOutputDirectory
         }
+        $issueLog = @($preCommitResult.IssueLog)
+        if ($candidateOutputDirectory -and $preCommitResult.HasChanges) {
+            Save-RepositorySyncCandidateTestSettings -Plan $candidatePlan -Directory $candidateOutputDirectory
+        }
+        Write-Information ($preCommitResult.HasChanges ? 'Managed-file changes prepared.' : 'Managed files are unchanged.') -InformationAction Continue
     }
 }
 
-if($issueLog.Count -eq 0) {
-    Write-Host "No issues found for $repoId"
+if ($issueLog.Count -eq 0) {
+    Write-Information "Repository sync completed for $orgAndRepoName." -InformationAction Continue
 } else {
-    Write-Host "Issues found for $repoId"
-    $issueLogJson = ConvertTo-Json $issueLog -Depth 100
-    $issueLogJson | Out-File "$outputDirectory/issue.log.json"
+    ConvertTo-Json -InputObject $issueLog -Depth 100 |
+        Set-Content -LiteralPath (Join-Path $outputDirectory 'issue.log.json') -Encoding utf8NoBOM
+    foreach ($issue in $issueLog) {
+        Write-Warning "$($issue.message)"
+    }
+    if (@($issueLog | Where-Object { $_.severity -ne 'warning' }).Count -gt 0) {
+        throw [System.InvalidOperationException]::new("Repository sync reported errors for $orgAndRepoName; see issue.log.json.")
+    }
 }
+$global:LASTEXITCODE = 0

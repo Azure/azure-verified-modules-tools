@@ -120,14 +120,6 @@ jobs:
           "storage-account=$($state.StorageAccountName)" >> $env:GITHUB_OUTPUT
           "container=$($state.ContainerName)" >> $env:GITHUB_OUTPUT
 
-      # Only state lock recovery uses this CLI login; providers use BAMI settings.
-      - name: Azure login for state (OIDC)
-        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
-        with:
-          client-id: ${{ steps.state-backend.outputs.client-id }}
-          tenant-id: ${{ steps.state-backend.outputs.tenant-id }}
-          subscription-id: ${{ steps.state-backend.outputs.subscription-id }}
-
       - name: Run sync for ${{ inputs.repo_id }}
         run: |
 
@@ -147,7 +139,6 @@ jobs:
           }
           $candidateDirectory = Join-Path $env:RUNNER_TEMP 'avm-sync-candidates' $env:SYNC_REPO_NAME
 
-          Write-Output "Repositories: $repositories"
           Write-Output "Plan Only: $planOnly"
           Write-Output "Force File Update: $forceFileUpdate"
           Write-Output "Avm.Authoring source: $(if ($authoringModulePath) { 'workflow checkout' } else { 'PowerShell Gallery' })"
@@ -169,8 +160,6 @@ jobs:
             $repoMetaData = $repoMetaDataJson | ConvertFrom-Json
           }
 
-          Write-Host "Authenticating gh cli"
-          gh auth login -h "GitHub.com"
           Write-Host "Running repo sync"
           $moduleToLoad = if ($authoringModulePath) { $authoringModulePath } else { 'Avm.Authoring' }
           Import-Module -Name $moduleToLoad -Force -ErrorAction Stop
@@ -181,8 +170,8 @@ jobs:
             -stateTenantId $env:ARM_BACKEND_TENANT_ID `
             -stateSubscriptionId $env:ARM_BACKEND_SUBSCRIPTION_ID `
             -stateClientId $env:ARM_BACKEND_CLIENT_ID `
-            -repoId "${{ inputs.repo_id }}" `
-            -repoUrl "${{ inputs.repo_url }}" `
+            -repoId $env:REPO_ID `
+            -repoUrl $env:REPO_URL `
             -repoMetaData $repoMetaData `
             -outputDirectory "${{ github.workspace }}" `
             -bamiSettings $bamiSettings `
@@ -201,8 +190,6 @@ jobs:
           ARM_BACKEND_CLIENT_ID: ${{ steps.state-backend.outputs.client-id }}
           ARM_BACKEND_STORAGE_ACCOUNT_NAME: ${{ steps.state-backend.outputs.storage-account }}
           ARM_BACKEND_STORAGE_CONTAINER_NAME: ${{ steps.state-backend.outputs.container }}
-          ARM_USE_AZUREAD: true
-          ARM_USE_OIDC: true
           TEST_BAMI_TENANT_ID: ${{ vars.TEST_BAMI_TENANT_ID }}
           TEST_BAMI_CONTROLLER_CLIENT_ID: ${{ vars.TEST_BAMI_CONTROLLER_CLIENT_ID }}
           TEST_BAMI_ADMIN_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_ADMIN_SUBSCRIPTION_ID }}
@@ -212,6 +199,8 @@ jobs:
           TEST_BAMI_BICEP_CLIENT_ID: ${{ vars.TEST_BAMI_BICEP_CLIENT_ID }}
           TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID }}
           REPO_META_DATA_JSON: ${{ inputs.repo_metadata_json }}
+          REPO_ID: ${{ inputs.repo_id }}
+          REPO_URL: ${{ inputs.repo_url }}
 
       - name: Upload prepared candidate
         if: success()
@@ -247,7 +236,7 @@ jobs:
         shell: pwsh
 
       - name: Add repository items to the AVM All Up project
-        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.sync_project_items) }}
+        if: ${{ always() && steps.app-token.outcome == 'success' && steps.app-token.outputs.token != '' && (github.event_name != 'workflow_dispatch' || inputs.sync_project_items) }}
         run: |
 
           $triggerType = "${{ github.event_name }}"
@@ -290,6 +279,13 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
+      - name: Report skipped project synchronization
+        if: ${{ always() && (steps.app-token.outcome != 'success' || steps.app-token.outputs.token == '') && (github.event_name != 'workflow_dispatch' || inputs.sync_project_items) }}
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+        run: |
+          Write-Output 'Project synchronization skipped because GitHub App token setup did not provide a token. See the earlier setup steps for the original failure or skip.'
+
       - name: Upload project sync log JSON
         if: always() && hashFiles('project-sync.log.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -302,14 +298,17 @@ jobs:
         run: |
           $projectSyncLogJson = Get-Content -Path "${{ github.workspace }}/project-sync.log.json" -Raw
           $projectSyncLog = ConvertFrom-Json $projectSyncLogJson
+          $hasError = $false
           $projectSyncLog | ForEach-Object {
             $severity = if ($_.severity) { $_.severity } else { "warning" }
             if ($severity -eq "warning") {
               echo "::warning title=${{ inputs.repo_id }} project sync::$($_.message) Check the log file artifact for ${{ inputs.repo_id }} to see the full details."
             } else {
               echo "::error title=${{ inputs.repo_id }} project sync::$($_.message) Check the log file artifact for ${{ inputs.repo_id }} to see the full details."
+              $hasError = $true
             }
           }
+          if ($hasError) { exit 1 }
         shell: pwsh
 
   validate-candidate:
@@ -369,6 +368,7 @@ jobs:
       - name: Run candidate checks
         shell: pwsh
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           SYNC_REPOSITORY: Azure/${{ inputs.repo_name }}
           CANDIDATE_DIRECTORY: ${{ runner.temp }}/avm-sync-candidates/${{ inputs.repo_name }}
           RECEIPT_DIRECTORY: ${{ runner.temp }}/avm-sync-validation/${{ inputs.repo_name }}

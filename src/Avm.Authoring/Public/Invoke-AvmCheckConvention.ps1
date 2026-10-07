@@ -8,7 +8,7 @@ function Invoke-AvmCheckConvention {
 
           - bicep      -> first-party layout, version, changelog, test-source,
                           compiled ARM, checked-in JSON, workflow, and CODEOWNERS
-                          checks; fails closed until registry parity
+                          checks
           - terraform  -> built-in AVM convention rules
 
         The ecosystem is determined by Get-AvmModuleContext, which honours
@@ -16,6 +16,9 @@ function Invoke-AvmCheckConvention {
         Bicep workflow checks require powershell-yaml 0.4.12, loaded only
         when a module workflow is inspected. Install it separately with
         Install-PSResource; missing or invalid YAML fails the check.
+        Bicep rules run in process as the packaged Pester suite under
+        Resources/bicep/conventions, so Pester 5.5.0 or later must be
+        installed. A rule that throws is reported as an error issue.
 
         Routed by the dispatcher: 'avm check convention'.
 
@@ -38,6 +41,10 @@ function Invoke-AvmCheckConvention {
     .PARAMETER FixableOnly
         Evaluate only rules that declare a deterministic fix. Pre-commit uses
         this with -Fix; standalone checks and pr-check evaluate every rule.
+
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
 
     .OUTPUTS
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
@@ -72,8 +79,7 @@ function Invoke-AvmCheckConvention {
 
     Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
-    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem `
-        -SkipModuleVersionCheck:$SkipModuleVersionCheck
+    $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
 
     switch ($context.Ecosystem) {
         'bicep' {

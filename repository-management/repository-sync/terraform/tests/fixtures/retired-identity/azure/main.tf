@@ -18,7 +18,7 @@ data "azuread_group" "entra_readers" {
 resource "azapi_resource" "identity" {
   type      = "Microsoft.ManagedIdentity/userAssignedIdentities@2023-07-31-preview"
   parent_id = "/subscriptions/${data.azapi_client_config.current.subscription_id}/resourceGroups/retired-fixture"
-  name      = "retired-fixture"
+  name      = "Azure-terraform-azurerm-avm-ptn-example-repo"
   location  = "eastus2"
   body      = {}
 }

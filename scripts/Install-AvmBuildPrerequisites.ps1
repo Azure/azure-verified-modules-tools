@@ -2,6 +2,8 @@
 param(
     [switch] $IncludePSScriptAnalyzer,
 
+    [switch] $IncludeBicepPolicy,
+
     [ValidateRange(1, 10)]
     [int] $MaxAttempts = 3,
 
@@ -12,54 +14,22 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
-function Test-AvmTransientGalleryFailure {
-    param(
-        [Parameter(Mandatory)]
-        [System.Exception] $Exception
-    )
-
-    $detail = $Exception.ToString()
-    return $detail -match '(?i)(no route to host|name or service not known|temporary failure in name resolution|connection (?:refused|reset)|timed? out|too many requests|\b429\b|\b50[234]\b|temporarily unavailable)'
-}
-
-function Invoke-AvmGalleryOperation {
-    param(
-        [Parameter(Mandatory)]
-        [string] $Description,
-
-        [Parameter(Mandatory)]
-        [scriptblock] $Operation
-    )
-
-    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
-        try {
-            & $Operation
-            return
-        }
-        catch {
-            if ($attempt -eq $MaxAttempts -or
-                -not (Test-AvmTransientGalleryFailure -Exception $_.Exception)) {
-                throw
-            }
-
-            $delay = $InitialDelaySeconds * [math]::Pow(2, $attempt - 1)
-            Write-Warning ("$Description failed transiently on attempt $attempt of $MaxAttempts; retrying in $delay seconds.")
-            if ($delay -gt 0) {
-                Start-Sleep -Seconds $delay
-            }
-        }
-    }
-}
+# The module cannot be imported until these prerequisites exist.
+. (Join-Path -Path $PSScriptRoot -ChildPath 'Import-AvmNetworkRetry.ps1')
 
 if (-not (Get-Module -ListAvailable -Name 'Microsoft.PowerShell.PSResourceGet')) {
     if ($PSCmdlet.ShouldProcess('Microsoft.PowerShell.PSResourceGet', 'Install build prerequisite')) {
-        Invoke-AvmGalleryOperation -Description 'Installing Microsoft.PowerShell.PSResourceGet' -Operation {
-            Install-Module `
-                -Name 'Microsoft.PowerShell.PSResourceGet' `
-                -Scope CurrentUser `
-                -Force `
-                -AllowClobber
-        }
+        $null = Invoke-AvmRetry `
+            -RetryActivity 'Installing Microsoft.PowerShell.PSResourceGet' `
+            -RetryMaxAttempts $MaxAttempts `
+            -RetryInitialDelaySeconds $InitialDelaySeconds `
+            -RetryAction {
+                Install-Module `
+                    -Name 'Microsoft.PowerShell.PSResourceGet' `
+                    -Scope CurrentUser `
+                    -Force `
+                    -AllowClobber
+            }
     }
 }
 
@@ -67,16 +37,34 @@ Import-Module 'Microsoft.PowerShell.PSResourceGet' -Force
 
 $packages = [System.Collections.Generic.List[hashtable]]::new()
 $packages.Add(@{ Name = 'InvokeBuild'; Version = '[5.11.0,)' })
-$packages.Add(@{ Name = 'Pester'; Version = '[5.5.0,)' })
-$packages.Add(@{ Name = 'powershell-yaml'; Version = '0.4.12' })
+$pins = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' 'src' 'Avm.Authoring' 'Resources' 'avm.pins.jsonc') -Raw |
+    ConvertFrom-Json -AsHashtable
+$packages.Add(@{ Name = 'Pester'; Version = $pins['powerShellModules']['Pester']['version'] })
+$packages.Add(@{ Name = 'powershell-yaml'; Version = $pins['powerShellModules']['powershell-yaml']['version'] })
 if ($IncludePSScriptAnalyzer) {
     $packages.Add(@{ Name = 'PSScriptAnalyzer'; Version = '[1.21.0,)' })
 }
+if ($IncludeBicepPolicy) {
+    foreach ($name in @('PSRule', 'PSRule.Rules.Azure')) {
+        $packages.Add(@{ Name = $name; Version = $pins['powerShellModules'][$name]['version'] })
+    }
+}
 
 foreach ($package in $packages) {
+    # Ranges stay network-resolved so CI keeps receiving the newest allowed
+    # release; an exact pin that is already installed needs no Gallery request.
+    $isExactPin = $package.Version -notmatch '[\[\(,]'
+    if ($isExactPin -and
+        (Get-InstalledPSResource -Name $package.Name -Version $package.Version -ErrorAction SilentlyContinue)) {
+        Write-Verbose "$($package.Name) $($package.Version) is already installed."
+        continue
+    }
+
     if ($PSCmdlet.ShouldProcess($package.Name, 'Install build prerequisite')) {
-        Invoke-AvmGalleryOperation -Description "Installing $($package.Name)" -Operation {
-            Install-PSResource @package -Scope CurrentUser -TrustRepository
-        }
+        $null = Invoke-AvmRetry `
+            -RetryActivity "Installing $($package.Name)" `
+            -RetryMaxAttempts $MaxAttempts `
+            -RetryInitialDelaySeconds $InitialDelaySeconds `
+            -RetryAction { Install-PSResource @package -Scope CurrentUser -TrustRepository }
     }
 }

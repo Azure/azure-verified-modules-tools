@@ -75,6 +75,12 @@ exception contains rules if {
 
 Describe 'Invoke-AvmTerraformCheckPolicy' {
     BeforeEach {
+        InModuleScope Avm.Authoring {
+            Mock Initialize-AvmTerraformPolicyStage {
+                $null = Invoke-AvmTerraformInit -TerraformPath $TerraformPath -WorkingDirectory $WorkingDirectory `
+                    -EnvVars $EnvVars -NoColor -SkipPluginCacheLock
+            }
+        }
         $script:moduleDir = Join-Path $TestDrive ('tf-mod-' + [guid]::NewGuid().ToString('N'))
         $script:exampleDir = Join-Path $script:moduleDir 'examples' 'default'
         $script:cacheDir = Join-Path $TestDrive ('cache-' + [guid]::NewGuid().ToString('N'))
@@ -195,6 +201,9 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         $probe.Calls[3].Arguments | Should -Be @('show', '-json', 'tfplan')
         foreach ($terraformCall in @($probe.Calls[1], $probe.Calls[2], $probe.Calls[3])) {
             $terraformCall.CacheLockHeld | Should -BeTrue
+            $terraformCall.EnvVars.ARM_SKIP_PROVIDER_REGISTRATION | Should -Be 'true'
+            $terraformCall.EnvVars.ARM_RESOURCE_PROVIDER_REGISTRATIONS | Should -Be 'legacy'
+            $terraformCall.EnvVars.TF_DATA_DIR | Should -BeLike '*policy-stage*data'
         }
         $probe.Calls[4].FilePath | Should -Be '/fake/conftest'
         $probe.Calls[5].FilePath | Should -Be '/fake/conftest'
@@ -202,6 +211,7 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         $probe.Calls[5].CacheLockHeld | Should -BeFalse
         $probe.Calls[6].Arguments[-1] | Should -BeLike '*post.ps1'
         foreach ($policyCall in @($probe.Calls[4], $probe.Calls[5])) {
+            $policyCall.EnvVars.ContainsKey('TF_DATA_DIR') | Should -BeFalse
             $policyCall.Arguments | Should -Contain '--all-namespaces'
             $policyCall.Arguments | Should -Contain '--output'
             $policyCall.Arguments | Should -Contain 'json'

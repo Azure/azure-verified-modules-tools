@@ -11,11 +11,6 @@ AfterAll {
 }
 
 Describe 'Invoke-AvmDocs' {
-    It 'is exported by the manifest' {
-        (Get-Command Invoke-AvmDocs -Module Avm.Authoring -ErrorAction Stop) |
-            Should -Not -BeNullOrEmpty
-    }
-
     It 'is wired into the verb registry as "avm docs"' {
         $reg = InModuleScope 'Avm.Authoring' { Get-AvmVerbRegistry }
         $entry = $reg | Where-Object { $_.Path.Count -eq 1 -and $_.Path[0] -eq 'docs' }
@@ -32,7 +27,7 @@ Describe 'Invoke-AvmDocs' {
             $ctx = [pscustomobject]@{
                 Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
             }
-            Mock Get-AvmModuleContext { $ctx }
+            Mock Get-AvmModuleContextInternal { $ctx }
             Mock Invoke-AvmTerraformDocs {
                 [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; FilesProcessed = 1; Changed = @() }
             }
@@ -56,7 +51,7 @@ Describe 'Invoke-AvmDocs' {
             $ctx = [pscustomobject]@{
                 Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
             }
-            Mock Get-AvmModuleContext { $ctx }
+            Mock Get-AvmModuleContextInternal { $ctx }
             Mock Invoke-AvmBicepDocs {
                 [pscustomobject]@{ Engine = 'bicep'; Status = 'pass'; FilesProcessed = 0; Changed = @() }
             }
@@ -75,7 +70,7 @@ Describe 'Invoke-AvmDocs' {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
@@ -95,7 +90,7 @@ Describe 'Invoke-AvmDocs' {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
@@ -113,7 +108,7 @@ Describe 'Invoke-AvmDocs' {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
@@ -131,7 +126,7 @@ Describe 'Invoke-AvmDocs' {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{ Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep' }
             }
             Mock Invoke-AvmBicepDocs {
@@ -142,7 +137,7 @@ Describe 'Invoke-AvmDocs' {
         }
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{ Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform' }
             }
             Mock Invoke-AvmTerraformDocs { throw 'would rewrite Terraform files' }

@@ -1,0 +1,47 @@
+---
+apiVersion: github.com/microsoft/PSRule/v1
+kind: SuppressionGroup
+metadata:
+  name: "SuppressMin"
+spec:
+  rule:
+    - Azure.Resource.UseTags
+    - Azure.Policy.ExemptionDescriptors
+    - Azure.Policy.Descriptors
+    - Azure.Policy.AssignmentDescriptors
+    - Azure.Cognitive.ManagedIdentity
+    - Azure.Automation.ManagedIdentity
+    - Azure.Automation.AuditLogs
+    - Azure.Automation.PlatformLogs
+    - Azure.EventHub.Firewall
+    - Azure.KeyVault.Logs
+    - Azure.KeyVault.Firewall
+    - Azure.TrafficManager.Endpoints
+    - Azure.TrafficManager.Protocol
+    - Azure.LB.Probe
+    - Azure.ContainerApp.PublicAccess
+    - Azure.VM.AMA
+    - Azure.VM.MaintenanceConfig
+    - Azure.VM.Standalone
+    - Azure.AppService.WebProbe
+    - Azure.AppService.WebProbePath
+    - Azure.AppConfig.GeoReplica
+    - Azure.AppConfig.AuditLogs
+    - Azure.FrontDoor.Probe
+    - Azure.FrontDoor.ProbeMethod
+    - Azure.FrontDoor.ProbePath
+    - Azure.APIM.MultiRegion
+    - Azure.APIM.ManagedIdentity
+    - Azure.AKS.MaintenanceWindow
+    - Azure.ServiceBus.AuditLogs
+    - Azure.SQLMI.MaintenanceWindow
+    - Azure.AppGw.UseHTTPS
+    - Azure.SQL.VAScan
+    - Azure.Log.Replication
+    - Azure.VNG.MaintenanceConfig
+    - Azure.RSV.ReplicationAlert
+    - Azure.ACR.GeoReplica
+  if:
+    name: "."
+    contains:
+      - "min"

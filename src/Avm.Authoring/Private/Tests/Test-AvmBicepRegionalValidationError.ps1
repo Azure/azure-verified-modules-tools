@@ -20,16 +20,7 @@ function Test-AvmBicepRegionalValidationError {
             return $false
         }
     }
-    if ($ErrorRecord.FullyQualifiedErrorId -like 'AvmBicepTemplateValidationFailed*') {
-        $response = $ErrorRecord.TargetObject
-    }
-    else {
-        $message = Get-AvmPropertyValue -InputObject $ErrorRecord.ErrorDetails -Name 'Message'
-        if ($message -isnot [string]) { return $false }
-        try {
-            $response = ConvertFrom-Json -InputObject $message -AsHashtable -NoEnumerate -ErrorAction Stop
-        }
-        catch [System.ArgumentException] { return $false }
-    }
+    $response = Get-AvmBicepErrorResponse -ErrorRecord $ErrorRecord
+    if ($null -eq $response) { return $false }
     return Test-AvmBicepRegionalErrorNode -Node $response
 }

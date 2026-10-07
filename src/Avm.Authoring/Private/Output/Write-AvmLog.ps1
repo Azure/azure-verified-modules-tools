@@ -149,10 +149,10 @@ function Format-AvmDuration {
         return '{0:0.0}s' -f $Duration.TotalSeconds
     }
     if ($Duration.TotalHours -lt 1) {
-        return '{0}m {1:00}s' -f [int]$Duration.TotalMinutes, $Duration.Seconds
+        return '{0}m {1:00}s' -f $Duration.Minutes, $Duration.Seconds
     }
 
-    return '{0}h {1:00}m {2:00}s' -f [int]$Duration.TotalHours, $Duration.Minutes, $Duration.Seconds
+    return '{0}h {1:00}m {2:00}s' -f [math]::Floor($Duration.TotalHours), $Duration.Minutes, $Duration.Seconds
 }
 
 function Format-AvmTimestamp {

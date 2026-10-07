@@ -75,8 +75,12 @@ git clone https://github.com/Azure/azure-verified-modules-tools.git
 Import-Module ./azure-verified-modules-tools/src/Avm.Authoring/Avm.Authoring.psd1
 ```
 
-No Go toolchain is required for any wired engine; the module downloads
-prebuilt release binaries by their pinned SHA256.
+No Go toolchain is required for any wired engine. Binary tools and runtime
+PowerShell packages, including Pester, use the same configured prerequisite
+resolver and cache. Exact installed PowerShell versions can be reused; missing
+packages are acquired without changing user/system module installations.
+See [managed prerequisites and version overrides](../README.md#managed-prerequisites)
+for the optional `.avm/tool-version-overrides.json` file and its checksum warning.
 
 ---
 
@@ -352,8 +356,9 @@ The composition cmdlets and the exact order of engines they call:
   - **Bicep**: `metadata` → `format` → `lint` → `validate` → `docs`
 - **`avm pr-check`** → require a clean `git status --porcelain`, then `metadata` → `sync` → `format` → `transform` → `lint` → `check policy` → `check convention` → `validate` → `docs`
 
-Both chains stop immediately on missing or invalid root or child metadata,
-after resolving managed tools but before changing module files. Create the
+Both chains resolve every applicable binary and PowerShell prerequisite before
+metadata/step 1, retaining the default module-upgrade guard. They stop on missing
+or invalid root or child metadata before changing module files. Create the
 missing files with `avm metadata initialize` before running either chain.
 
 Unit tests remain a separate CI job. Unit, integration, and end-to-end test
@@ -363,6 +368,30 @@ discovered, so optional test tiers never produce a vacuous green result.
 A step that raises `AvmNotSupportedException` is reported as
 `Status='skipped'`; an `AvmConfigurationException` is a hard failure. Pass
 `-StopOnFail` to abort on the first hard failure.
+
+### Automatic provider registration during policy checks
+
+`avm check policy` and the policy step of `avm pr-check` disable automatic
+resource-provider registration for the official AzureRM and AzAPI providers.
+Each example runs in its own copied module tree with a private Terraform data
+directory. After initialization, the tools inspect the installed provider schemas
+and add final override files only in that staging tree, including local and
+downloaded child modules. AzureRM's explicit registration lists are cleared;
+authentication, tenant/subscription settings, features, aliases and inherited
+provider configurations are retained. Child-process environment defaults also
+protect implicit providers and replace contradictory registration flags.
+
+Planning stops if parsing, module isolation, the provider schema or native
+validation prevents enforcement. Policy examples must be backend-free; backend
+and cloud blocks are rejected before initialization. Unset `TF_CLI_ARGS` and
+command-specific `TF_CLI_ARGS_*` for init, providers, validate, plan and show;
+use `.tfvars` or `TF_VAR_*` for inputs instead. Query and state-migration files
+are not supported in policy configurations because their provider settings do
+not follow normal Terraform override precedence.
+
+These safeguards do not change deployment or E2E behavior and do not make
+arbitrary authored hooks or data sources read-only. Policy plans still require
+the appropriate authorization and example inputs.
 
 ---
 
@@ -438,8 +467,8 @@ exactly this status today.
 
 The pinned tool versions live in
 `src/Avm.Authoring/Resources/avm.pins.jsonc`. Today: `terraform`,
-`tflint`, `terraform-docs`, `conftest` (and `bicep` for the unrelated
-Bicep engine).
+`tflint`, `terraform-docs`, `conftest`, `mapotf` and `Pester` for Terraform,
+plus the Bicep compiler and Bicep-specific PowerShell dependencies.
 
 ---
 
@@ -502,6 +531,16 @@ per-scope override. Scope paths are validated and converted to unique hash-named
 staged configs, preventing traversal and sibling collisions. AVM allows only
 this one direct child layer; `avm check convention` rejects nested directories
 that contain Terraform `.tf` source.
+
+With the official AVM 1.0.0 plugin enabled, a sole, unambiguous `enabled = false`
+override for `required_output_rmfr7` is migrated to
+`avm_output_resource_id_required`, preserving the author's exemption. The
+disabled `terraform_output_separate` rule is omitted because it was removed
+without a replacement. Both actions warn and leave authored files unchanged.
+Rename the former override and remove the latter from maintained sources.
+Enabled legacy rules, unknown names, conflicting aliases, extra attributes and
+different plugin versions still reach TFLint and fail normally. Current rule
+attributes and later per-scope overrides retain their usual precedence.
 
 ---
 

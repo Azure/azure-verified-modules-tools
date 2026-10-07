@@ -34,7 +34,8 @@ function New-AvmTestBamiPlan {
         [string[]] $GroupNames = @('avm-test-identity-owners', 'avm-test-entra-readers'),
         [string] $RepositoryOwnerId = '6844498',
         [string] $RepositorySyncRepositoryId = '1239632211',
-        [string] $JobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main'
+        [string] $JobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main',
+        [string] $ModuleAddress = 'module.azure'
     )
 
     $condition = @'
@@ -77,6 +78,7 @@ AND
                 } else { $null }
             }
         }
+
     )
     $groups = @{}
     $number = 8
@@ -189,22 +191,73 @@ AND
             values = @{ object_id = $groups[$groupName]; display_name = $groupName; security_enabled = $true; types = @() }
         }
     }
+    foreach ($item in @($resources) + @($changes)) {
+        $item.address = $item.address.Replace('module.azure.', "$ModuleAddress.")
+        if ($item.ContainsKey('previous_address')) {
+            $item.previous_address = $item.previous_address.Replace('module.azure.', "$ModuleAddress.")
+        }
+        $item.provider_name = $item.type -like 'azapi_*' ? 'registry.terraform.io/azure/azapi' : 'registry.terraform.io/hashicorp/azuread'
+    }
     return @{
         format_version = '1.2'
         errored = $false
         resource_changes = $changes
         planned_values = @{
             root_module = @{ child_modules = @(@{
-                address = 'module.azure'
+                address = $ModuleAddress
                 resources = @($resources | Where-Object { $_['mode'] -ceq 'managed' })
             }) }
             outputs = @{ test_identity = @{ value = $identity } }
         }
         prior_state = @{
             values = @{ root_module = @{ child_modules = @(@{
-                address = 'module.azure'
+                address = $ModuleAddress
                 resources = @($resources | Where-Object { $_['mode'] -ceq 'data' })
             }) } }
         }
     }
+}
+
+function New-AvmTestRepositorySyncPlan {
+    param(
+        [switch] $KnownClient,
+        [switch] $ValidationPending,
+        [switch] $OwnerMigration,
+        [switch] $LegacyMembershipMigration
+    )
+
+    $plan = New-AvmTestBamiPlan -ModuleAddress 'module.bami[0]' -KnownClient:$KnownClient `
+        -ValidationPending:$ValidationPending -OwnerMigration:$OwnerMigration -LegacyMembershipMigration:$LegacyMembershipMigration
+    $github = @{
+        address = 'module.github.github_repository.this'
+        mode = 'managed'
+        type = 'github_repository'
+        provider_name = 'registry.terraform.io/integrations/github'
+        values = @{
+            id = 'terraform-azurerm-avm-ptn-example-repo'; repo_id = 1234
+            name = 'terraform-azurerm-avm-ptn-example-repo'; full_name = 'Azure/terraform-azurerm-avm-ptn-example-repo'
+        }
+    }
+    $plan.planned_values.root_module.child_modules += @{
+        address = 'module.github'
+        resources = @($github)
+    }
+    $plan.resource_changes += @{
+        address = $github.address; mode = $github.mode; type = $github.type; provider_name = $github.provider_name
+        change = @{ actions = @('no-op'); before = $github.values.Clone(); after = $github.values; after_unknown = @{} }
+    }
+    return $plan
+}
+
+function New-AvmTestRetiredIdentityChanges {
+    $plan = New-AvmTestBamiPlan -KnownClient -OwnerMigration -LegacyMembershipMigration -GroupNames @() -ModuleAddress 'module.azure[0]'
+    $plan = ($plan | ConvertTo-Json -Depth 100).Replace('10000000-', '20000000-').Replace('rg-bami-test', 'rg-retired-test') |
+        ConvertFrom-Json -AsHashtable -Depth 100
+    foreach ($change in $plan.resource_changes) {
+        $change.change.actions = @('forget')
+        $change.change.after = $null
+        $change.change.after_unknown = @{}
+        $change.Remove('previous_address')
+    }
+    return $plan.resource_changes
 }

@@ -57,7 +57,7 @@ function Format-AvmTerraformModule {
             "Format-AvmTerraformModule requires a terraform context (got Ecosystem='$($Context.Ecosystem)').")
     }
 
-    $tool = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
+    $tool = Resolve-AvmTool -Name 'terraform' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
 
     $writeArg = if ($CheckDrift) { '-write=false' } else { '-write=true' }
 

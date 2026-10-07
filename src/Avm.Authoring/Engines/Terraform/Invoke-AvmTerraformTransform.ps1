@@ -493,42 +493,6 @@ function Get-AvmRemainingModtmIssue {
     return $issues.ToArray()
 }
 
-function Test-AvmMapotfTransientProviderError {
-    [CmdletBinding()]
-    [OutputType([bool])]
-    param(
-        [AllowEmptyString()]
-        [string] $Output
-    )
-
-    Set-StrictMode -Version 3.0
-    $ErrorActionPreference = 'Stop'
-
-    if ([string]::IsNullOrWhiteSpace($Output)) {
-        return $false
-    }
-
-    $normalized = $Output `
-        -replace '\x1B\[[0-?]*[ -/]*[@-~]', '' `
-        -replace '[\r\n\u2502]+', ' ' `
-        -replace '\s+', ' '
-
-    $patterns = @(
-        'context deadline exceeded'
-        'Client\.Timeout exceeded while awaiting headers'
-        'failed to retrieve cryptographic signature for provider'
-        '(?:provider|registry).*(?:500 Internal Server Error|502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout)'
-    )
-
-    foreach ($pattern in $patterns) {
-        if ($normalized -match $pattern) {
-            return $true
-        }
-    }
-
-    return $false
-}
-
 function Invoke-AvmMapotfTransformTarget {
     [CmdletBinding()]
     param(
@@ -556,39 +520,21 @@ function Invoke-AvmMapotfTransformTarget {
     $transformArguments.Add($Target.Path)
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    $maxRetries = 2
-    $attempt = 0
-    do {
-        $transform = Invoke-AvmProcess `
-            -FilePath $Options.ToolPath `
-            -ArgumentList $transformArguments.ToArray() `
-            -WorkingDirectory $Target.Path `
-            -EnvVars $Options.EnvVars `
-            -IgnoreExitCode
-        if ($transform.ExitCode -eq 0) {
-            break
-        }
-
-        $combinedOutput = @($transform.StdOut, $transform.StdErr) -join [System.Environment]::NewLine
-        if (
-            $attempt -ge $maxRetries -or
-            -not (Test-AvmMapotfTransientProviderError -Output $combinedOutput)
-        ) {
-            $message = Add-AvmProcessFailureDetail `
-                -Message ('mapotf transform exited with code {0} for {1} target {2}.' -f $transform.ExitCode, $Target.Scope, $Target.Path) `
-                -StdOut $transform.StdOut `
-                -StdErr $transform.StdErr
-            throw [AvmProcessException]::new($message)
-        }
-
-        $attempt++
-        $delaySeconds = $attempt * 5
-        Write-AvmLog (
-            'transform: transient provider download failure; retrying {0} target in {1}s ({2} of {3})' -f
-            $Target.Scope, $delaySeconds, $attempt, $maxRetries
-        ) -Level Warning | Out-Null
-        Start-Sleep -Seconds $delaySeconds
-    } while ($attempt -le $maxRetries)
+    $transform = Invoke-AvmProcess `
+        -FilePath $Options.ToolPath `
+        -ArgumentList $transformArguments.ToArray() `
+        -WorkingDirectory $Target.Path `
+        -EnvVars $Options.EnvVars `
+        -IgnoreExitCode `
+        -RetryNetworkFailure `
+        -Label ('mapotf transform {0} target' -f $Target.Scope)
+    if ($transform.ExitCode -ne 0) {
+        $message = Add-AvmProcessFailureDetail `
+            -Message ('mapotf transform exited with code {0} for {1} target {2}.' -f $transform.ExitCode, $Target.Scope, $Target.Path) `
+            -StdOut $transform.StdOut `
+            -StdErr $transform.StdErr
+        throw [AvmProcessException]::new($message)
+    }
     $stopwatch.Stop()
 
     Write-AvmLog (
@@ -660,8 +606,8 @@ function Invoke-AvmTerraformTransform {
         concurrency-safe.
 
         mapotf exit codes: 0 = success. A transform failure caused by a
-        recognized transient Terraform provider network error is retried twice
-        with incremental delay; other failures and retry exhaustion surface as
+        transient network error, such as a provider download timeout, is retried
+        with the shared network retry policy; other failures and retry exhaustion surface as
         AvmProcessException. A missing mapotf binary (AvmToolException) or a
         missing config bundle (AvmConfigurationException) propagates so the
         composition chain reports the step as 'skipped' on an unconfigured
@@ -709,7 +655,7 @@ function Invoke-AvmTerraformTransform {
             "Invoke-AvmTerraformTransform requires a terraform context (got Ecosystem='$($Context.Ecosystem)').")
     }
 
-    $tool = Resolve-AvmTool -Name 'mapotf' -AllowPathFallback:$AllowPathFallback
+    $tool = Resolve-AvmTool -Name 'mapotf' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
     $profileDirs = @{
         common              = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'common'
         module              = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'module'
@@ -765,7 +711,7 @@ function Invoke-AvmTerraformTransform {
         # to mapotf's terraform grandchild. A missing terraform throws
         # AvmToolException, which the chain surfaces as 'skipped' just like a
         # missing mapotf binary.
-        $terraform = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
+        $terraform = Resolve-AvmTool -Name 'terraform' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
         Write-AvmLog ("transform: resolved terraform dependency at {0}" -f $terraform.Path) -Level Verbose | Out-Null
         $mapotfEnv = New-AvmToolPathEnvironment `
             -ToolPath $terraform.Path `

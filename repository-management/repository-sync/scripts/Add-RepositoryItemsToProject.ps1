@@ -273,14 +273,13 @@ $orgName = $repoSplit[3]
 $repoName = $repoSplit[4]
 $orgAndRepoName = "$orgName/$repoName"
 
-Write-Host "$([Environment]::NewLine)<--->" -ForegroundColor Green
-Write-Host "Adding issues/PRs for $orgAndRepoName to project $projectOwner/$projectNumber (includeClosed=$includeClosed, lookbackDays=$lookbackDays, planOnly=$planOnly)" -ForegroundColor Green
-Write-Host "<--->$([Environment]::NewLine)" -ForegroundColor Green
+Write-Information "Project sync: $orgAndRepoName -> $projectOwner/$projectNumber; include closed: $includeClosed; look-back days: $lookbackDays; plan only: $planOnly." -InformationAction Continue
 
+Enter-AvmLogGroup -Name 'Project lookups and item updates'
+try {
 $project = Resolve-ProjectV2Id -owner $projectOwner -number $projectNumber
 if ($null -eq $project) {
     $message = "Could not resolve ProjectV2 id for $projectOwner/$projectNumber. Check the project exists and the token has organization Projects read/write permission."
-    Write-Error $message
     $issueLog = Add-IssueToLog `
         -orgAndRepoName $orgAndRepoName `
         -type "project-sync" `
@@ -291,7 +290,7 @@ if ($null -eq $project) {
     if ($issueLog.Count -gt 0) {
         ConvertTo-Json $issueLog -Depth 100 | Out-File $projectLogFileJson
     }
-    exit 0
+    throw [System.InvalidOperationException]::new($message)
 }
 
 $projectId = $project.Id
@@ -389,23 +388,20 @@ mutation($projectId: ID!, $contentId: ID!) {
         }
     }
 }
+}
+finally {
+    Exit-AvmLogGroup
+}
 
-Write-Host "$([Environment]::NewLine)Project sync summary for $orgAndRepoName" -ForegroundColor Cyan
-Write-Host "  found:        $totalFound"
-Write-Host "  already on:   $totalAlready"
-if ($planOnly) {
-    Write-Host "  would add:    $totalWouldAdd (planOnly)"
-}
-else {
-    Write-Host "  added:        $totalAdded"
-    Write-Host "  failed:       $totalFailed"
-}
-if ($null -ne $rateRemaining) {
-    Write-Host "  graphql budget remaining: $rateRemaining"
-}
+$updated = $planOnly ? "would add: $totalWouldAdd" : "added: $totalAdded; failed: $totalFailed"
+$budget = $null -ne $rateRemaining ? "; GraphQL budget remaining: $rateRemaining" : ''
+Write-Information "Project sync completed for ${orgAndRepoName}: found: $totalFound; already on project: $totalAlready; ${updated}${budget}." -InformationAction Continue
 
 if ($issueLog.Count -gt 0) {
     ConvertTo-Json $issueLog -Depth 100 | Out-File $projectLogFileJson
+    foreach ($issue in $issueLog) {
+        Write-Warning $issue.message
+    }
 }
 
 exit 0

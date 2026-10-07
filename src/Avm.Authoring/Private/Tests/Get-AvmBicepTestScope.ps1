@@ -16,7 +16,7 @@ function Get-AvmBicepTestScope {
     }
 
     $root = [System.IO.Path]::GetFullPath($Context.Root)
-    foreach ($scope in @(Get-AvmMetadataScope -Context $Context)) {
+    foreach ($scope in @(Get-AvmMetadataScope -Context $Context -IncludeModuleDirectories)) {
         if (-not $Recurse -and $scope.ChildModule -and $scope.Path -cne $root) {
             continue
         }

@@ -16,19 +16,21 @@ The build, test, and lint scaffolding is live. The two things you most likely wa
 | [PowerShell 7](https://aka.ms/powershell)       | 7.4 (LTS)   | Everything                                          |
 | [Git](https://git-scm.com/downloads)            | 2.40        | Cloning, branching                                  |
 | [Microsoft.PowerShell.PSResourceGet](https://learn.microsoft.com/powershell/utility-modules/psresourceget/overview) | 1.0.0 | Publishing (`Publish-PSResource`)                  |
-| [Pester](https://pester.dev)                    | 5.5         | Running tests (`./build.ps1 test`)                  |
+| [Pester](https://pester.dev)                    | Managed pin | Running tests (`./build.ps1 test`)                  |
 | [PSScriptAnalyzer](https://learn.microsoft.com/powershell/utility-modules/psscriptanalyzer/overview) | 1.22        | Linting (`./build.ps1 lint`)                        |
 | [Invoke-Build](https://github.com/nightroman/Invoke-Build) | 5.11        | Running `./build.ps1` tasks                         |
 | [GitHub CLI](https://cli.github.com/)           | 2.40        | Optional — opening PRs from the terminal            |
 
-Install everything the module needs (one-time, user scope):
+After cloning the repository, install the build prerequisites (user scope):
 
 ```pwsh
 Install-PSResource Microsoft.PowerShell.PSResourceGet -Scope CurrentUser
-Install-PSResource Pester                              -Scope CurrentUser
-Install-PSResource PSScriptAnalyzer                    -Scope CurrentUser
-Install-PSResource InvokeBuild                         -Scope CurrentUser
+.\scripts\Install-AvmBuildPrerequisites.ps1 -IncludePSScriptAnalyzer -IncludeBicepPolicy
 ```
+
+Build and runtime commands resolve Pester from `avm.pins.jsonc` through the same
+cache-backed prerequisite mechanism, even when a newer version is installed.
+Start a fresh PowerShell session if a different Pester version is already loaded.
 
 PS 7.4 is required on **Windows**, **Linux**, and **macOS**. PS 5.1 is explicitly unsupported.
 
@@ -154,6 +156,7 @@ The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it thr
 ./build.ps1 coverage          # unit tests + coverage gate (fails below the 70% line floor)
 ./build.ps1 component         # Pester Component tier (real FS + real subprocess, stub binaries, no network)
 ./build.ps1 integration       # Pester Integration tier (real network + real binaries; not part of ci/pre-commit)
+./build.ps1 integration -IntegrationGroup Bicep # Compiler, docs and native policy; no deployment
 ./build.ps1 build             # stage a publishable tree under ./out/Avm.Authoring + verify exports
 ./build.ps1 clean             # remove ./out
 ./build.ps1 ?                 # list every task
@@ -163,6 +166,7 @@ Notes:
 
 - `test` runs the **unit** tier only. The `Component` and `Integration` tiers are separate tasks (and separate `-Tag`s) so routine local runs stay fast and offline.
 - `integration` is the only task that touches the network (it also runs the real pinned binaries) and is deliberately excluded from `pre-commit` and `ci`; run it on demand.
+- Integration defaults to all files. `-IntegrationGroup Bicep` selects `Bicep*.Tests.ps1`; `Terraform` selects the remaining shared/Terraform files. CI runs Bicep once per OS and retains both Terraform fixture legs per OS.
 - `build` stages the module as-committed. Version stamping is a release-time concern and lives in the ADO pipeline, so the in-repo `src/Avm.Authoring/Avm.Authoring.psd1` is never rewritten by the build.
 - A first run installs nothing for you — make sure the prerequisites in [§1](#1-prerequisites) (InvokeBuild, Pester, PSScriptAnalyzer) are present.
 

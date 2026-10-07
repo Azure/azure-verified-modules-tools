@@ -16,9 +16,9 @@ The stance has three pillars:
 
 - **Secure by design.** Every new public verb, network call, subprocess invocation, file write, and credential touch is threat-modelled at PR time (what data is handled, which identities are touched, which dependencies are added, what the blast radius is on compromise). New code that fails the threat-model pass is rejected — patches do not happen post-merge.
 - **Secure by default.** Defaults never compromise the user. TLS 1.2 minimum (section 16). `GITHUB_TOKEN: contents: read` unless a write scope is justified job-by-job (section 17). No `-SkipCertificateCheck` (section 16). No plain-text secrets in parameter form (section 17). No `Invoke-Expression`, no `cmd /c`, no `bash -c` on user input (section 9). No PATH-resolved tool execution unless the caller explicitly opts in with `-AllowPathFallback` (section 10).
-- **Secure operations.** Every external dependency is pinned and integrity-verified. Workflow actions are pinned to commit SHA (section 17). Tool binaries are pinned by SHA256 in `Resources/avm.pins.jsonc` and verified on every download (section 10). PowerShell module dependencies are floor-pinned in the workflow with the release pipeline as the upgrade gate (section 20). Dependabot keeps the action SHAs fresh; the lock-refresh script keeps the tool SHAs fresh — both rotations are PR-reviewed.
+- **Secure operations.** Default managed downloads are pinned and integrity-verified. Workflow actions are pinned to commit SHA (section 17). Binary and runtime PowerShell packages are pinned by SHA256 in `Resources/avm.pins.jsonc` and verified on download (section 10). Build-time PowerShell dependencies retain their workflow constraints and release gate (section 20). The explicit repository version-override exception in section 10 requires SFI sign-off before merge/release. Dependabot keeps the action SHAs fresh; the lock-refresh script keeps the tool SHAs fresh — both rotations are PR-reviewed.
 
-A successful supply-chain attack against any of these dependencies must, by construction, require either a SHA collision (impractical) or a deliberate maintainer-side PR that re-publishes a known-good SHA — never a silent tag-repoint or a transparent version drift.
+Default managed downloads must resist silent tag-repointing and version drift through pinned hashes. Explicit version overrides deliberately waive that fixed-hash guarantee only for the named tools; they must not change default verification, TLS, source-host restrictions, or offline controls.
 
 ---
 
@@ -320,6 +320,7 @@ only ever reads it:
 <repo>/
   .avm/
     config.json                  # per-repo pinned-asset / policy overrides
+    tool-version-overrides.json  # known-tool version overrides (read-only)
     managed-files.json           # per-repo managed-files sync-source override
     managed-files-version.json   # managed-files release pin (CLI-managed)
     context.psd1                 # per-repo context override
@@ -327,12 +328,19 @@ only ever reads it:
 ```
 
 Module roots may separately contain `.required-features.json`, a hand-authored
-JSON array of `"Namespace/FeatureName"` strings. `avm register-features`
+JSON array of `"Namespace/FeatureName"` strings. Bicep registry modules
+(`.../avm/res|ptn|utl/...`) instead use the repository-root
+`.required-features.json`, an object keyed by exact module paths such as
+`avm/res/compute/virtual-machine`; the whole object is validated and a
+module-root manifest is rejected. `avm register-features`
 reads this file only; an absent or empty array does nothing. The command
 requires an explicit subscription GUID, validates every entry before calling
 Azure CLI, verifies that the CLI is selected to that subscription, and never
 unregisters a feature. The protected Terraform integration and e2e jobs run it
-only when the manifest is nonempty.
+only when the manifest is nonempty. Bicep `avm test e2e` reads the manifest
+before confirmation and registers the features once per selected subscription
+after the identity check and before validation; a registration failure fails
+the case without deploying.
 
 Rules:
 
@@ -468,7 +476,12 @@ generated CSV indexes and catalog JSON after full validation; published deprecat
 modules remain Deprecated. Otherwise, unpublished modules are Proposed regardless
 of owners or source files; published modules without owners are Orphaned, and
 published modules with owners are Available. Existing Deprecated state is retained
-as a deprecation signal during transition. New deprecations are derived from Bicep `DEPRECATED.md` (covering that
+as a deprecation signal during transition. A multi-scope Bicep root counts as
+published for lifecycle status and deprecation retention when any direct
+`rg-scope`, `sub-scope`, or `mg-scope` module is published. Its registry fields
+still describe the root path, without an invented release version or date;
+ordinary children do not promote their parents.
+New deprecations are derived from Bicep `DEPRECATED.md` (covering that
 module and descendants), or
 the Terraform repository's archived flag (covering all its modules). There is
 no authored metadata status field. Each excluded module produces a warning naming
@@ -507,7 +520,11 @@ in `microsoft/github-operations` unless the repository is listed there or an
 open request exists, and clone the repository into an empty folder. The first
 commit is built in a temporary clone from the portal's seed files,
 metadata.json, the packaged minimal scaffold (`Resources/Scaffolds/Terraform`),
-and `avm pre-commit` output; no other local content is published. Interrupted
+and `avm pre-commit` output. The scaffold is an AzAPI virtual network that takes
+`parent_id` and exposes the AzAPI `resource_types`, `retry`, `timeouts` and
+`ignore_body_changes` interfaces; its default example picks a recommended
+region through `Azure/avm-utl-regions/azurerm` and names resources through
+`Azure/avm-utl-naming/azure`. No other local content is published. Interrupted
 or non-interactive runs stop with instructions and resume on the next run.
 Terraform `-ChildModule` initialization creates only local metadata.json.
 After source exists, `avm pre-commit` compiles each root and child
@@ -697,14 +714,18 @@ stable repository/module-path identities, inherited owners, the derived family
 `moduleType`, and null ARM `providerNamespace`/`resourceType`. Every generated
 CSV omits them, including previews and canonical outputs. Invalid present
 metadata is an error; missing metadata never causes a full legacy CSV record
-to be retained. Generation holds back affected outputs when source CSV module
-identities would disappear; publication independently enforces those holds.
+to be retained. Generation holds back affected outputs when protected source
+CSV module identities would disappear; publication independently enforces those
+holds. Valid Bicep submodule paths below `avm/{res,ptn,utl}/{group}/{module}`
+may disappear without `Force`, including helpers and deeper children. Root
+records, malformed or unresolved identities, and Terraform submodule rows remain
+protected.
 Validated deprecated/unpublished records are retained as `excludedModules` in
 the hash-protected migration report. Only their exact resolved implementation
-identities are exempt from this removal guard, without `Force`; malformed,
+identities are also exempt from this removal guard, without `Force`; malformed,
 inconsistent, or mismatched exclusion evidence fails publication.
 Explicit `Force` permits other removals only, not other validation failures.
-Other helper source rows remain subject to the removal report and guard.
+Other Terraform helper source rows remain subject to the removal report and guard.
 Source CSVs, not existing preview outputs, are the comparison baseline; this
 remains true after canonical CSV replacement. Hash-protected source-row evidence
 is checked again against the unchanged publication base before writes.
@@ -750,9 +771,11 @@ were added directly to the module repository rather than through Bicep Sync.
 and child READMEs through the pinned `bicep docs generate --stdout` command.
 Module-root runs include tests in that root's `tests/e2e` for its own and
 nested READMEs, but do not search above the selected root. The
-nearest `bicepconfig.json` must set `documentation.template.file` to a
-relative, tracked copy of the packaged `avm-readme-v1.scriban`; a different
-template or hash fails before writing. Generated content comes from the
+packaged `avm-readme-v1.scriban` is used by default through the compiler's
+`--template-file` option, without creating caller config or template files.
+An explicit `documentation.template.file` in the nearest `bicepconfig.json`
+must reference a relative canonical copy; a different template or hash fails
+before writing. Generated content comes from the
 native model, Bicep test sources, and compiled `main.json` (or a local build
 when it is absent), never from the existing README body.
 
@@ -857,7 +880,15 @@ must agree. Only wholly regional validation failures can relocate an
 unpinned, non-global, non-resource-group case. Metadata location and
 `baseTime` stay fixed. Record every attempt before submission, verify the
 native response's exact deployment ID, and retry only confirmed failure or
-exact preflight rejection. Unknown or cancelled outcomes never resubmit.
+exact preflight rejection. A submission timeout watches the same deployment
+for up to an hour (stopping after three consecutive read timeouts); a
+recovered `Failed` state counts as confirmed. Unknown or cancelled outcomes
+never resubmit. A confirmed deployment failure whose operation errors are all regional
+may also relocate an eligible case: strict cleanup must first confirm every
+deployment is terminal and fully discovered, remove its resources (no retained
+or soft-deleted names) and delete its deployment records. Otherwise relocation
+stops and ordinary cleanup runs. Rejected regions and attempt numbers carry
+forward, so relocation never exceeds the validation or deployment budgets.
 
 After a successful deployment, pass its exact REST outputs to case-local
 Pester assertions, then run `post.ps1`, then cleanup. Output envelopes support
@@ -975,39 +1006,88 @@ Schema enforced by `Test-AvmPins`:
             }
         }
     )
+    powerShellModules = @{
+        Pester = @{ version = '5.7.1'; sha256 = '...' }
+    }
 }
 ```
 
 - All URLs are `https://`. A non-`https://` URL fails the schema check.
 - The `{os}` placeholder resolves to `windows`, `linux`, or `darwin`. The `{arch}` placeholder resolves to `amd64` or `arm64`.
 - The `entrypoint` value is always lowercase. On Windows the resolver appends `.exe` only when computing the final path.
+- `powerShellModules` contains exact stable versions, Gallery package SHA256s,
+  and optional `dependencies` naming other pinned modules. The shared resolver
+  downloads their official Gallery ZIPs and uses `<Name>.psd1` as the entrypoint.
+  Pester must be at least 5.5.0. Required module dependencies must match the
+  configured names, versions and resolved paths before use.
+- Both composite commands resolve and import-check all applicable prerequisites
+  before metadata/step 1, after the module-upgrade and context/clean-tree guards.
+  Standalone metadata, Bicep Pester, YAML and PSRule entrypoints share the same
+  mechanism. Build prerequisites supply that same Pester pin, and all test
+  runners, including isolated shards, import it through the shared resolver.
+  Reject a different already-loaded module version with fresh-session guidance
+  before composite step 1.
+
+### Repository tool versions
+
+`.avm/tool-version-overrides.json` is an optional, flat JSON object mapping exact
+known tool/module names to version strings. It cannot add tools, URLs, hashes,
+entrypoints or dependency definitions. Reject malformed files, duplicate or
+case-colliding names, ranges, invalid versions and linked files/directories.
+Terraform and standalone modules use their authoritative root. A recognized
+Bicep monorepo uses only its root file, including module-targeted commands;
+nested module files are ignored. Resolve this context before staging or
+parallel work, and never cache effective pins across repositories.
+
+Only explicitly named entries bypass pinned checksum verification, including
+same-version overrides. Untouched dependencies retain packaged versions and
+hashes. Use the trusted packaged download template, normal platform rules,
+TLS, mirror and offline controls. Emit a tools warning with the source file,
+packaged/selected version and disabled-verification notice before use, including
+cache hits. Tool and doctor results retain this provenance.
+
+This user-directed checksum exception requires recorded SFI sign-off before
+merge/release. Repository file changes select executable dependencies and must
+be reviewed before running privileged commands.
 
 ### Cache layout
 
 ```text
 <Data>/tools/<tool>/<version>/
-    <entrypoint>[.exe]      # the binary
+    <entrypoint>[.exe]        # binary or PowerShell module manifest
     .verified                # zero-byte marker — present iff SHA matched and unpack succeeded
-    .meta.json               # { url, sha256, installedAt, source, archive }
+    .meta.json               # source, version, platform, hash and verification state
 ```
 
 - Atomic install: extract to `<Data>/tools/<tool>/.staging/<short-uuid>/`, verify SHA, then `Move-Item` (rename) to `<Data>/tools/<tool>/<version>/`. On rename failure (someone else got there first), discard the staging dir and use whoever won the race.
 - Cross-process lock: file lock on `<Data>/tools/<tool>/.lock` while installing; lock held via `[System.IO.File]::Open(..., FileMode.OpenOrCreate, FileAccess.Write, FileShare.None)`.
-- The `.verified` marker is the only thing the resolver looks at to decide a cached install is good. Missing marker = re-install.
-- `avm tool install --force` deletes `<Data>/tools/<tool>/<version>/` and re-installs.
+- Binary cache hits require the entrypoint and `.verified` marker. PowerShell
+  packages also require matching cache metadata and the configured package hash.
+- Overrides use `<Data>/tools/<tool>/.overrides/<version>/`, `.unverified` and
+  matching unverified metadata. Never accept or overwrite a verified default
+  entry with an override, or accept a loaded override as an installed default.
+  Switching away from a loaded unverified PowerShell package requires a fresh
+  process, avoiding reuse of its already loaded code.
+- `avm tool install --force` stages the replacement before removing the old
+  entry under the installation lock. Failed downloads leave the old entry intact.
 
 ### Lookup order on every invocation
 
-1. **Cache** — `<Data>/tools/<tool>/<version>/<entrypoint>[.exe]` exists and `.verified` marker present → use it.
-2. **PATH (opt-in)** — only when the caller passes `-AllowPathFallback` (the engines' opt-in switch; off by default). `Get-Command <entrypoint>` → if found and it reports the locked version, use it. If found but the version is wrong, warn once and fall through to install. The gauntlet verbs do **not** enable this by default, so PATH is normally ignored in favour of the pinned managed tool.
-3. **Auto-install (default)** — a cache miss transparently installs the locked version from the lock file, into the cache, verifying its SHA-256 (same atomic, locked, `.verified`-marked path as `avm tool install`). A concise progress message is emitted the first time so a first run is not a mysterious pause. This is on by default both locally and in CI — the consumer never needs to run a separate install step. Set `AVM_NO_AUTO_INSTALL=1` (or pass `-NoAutoInstall`) to disable it for locked-down / air-gapped environments; a cache miss then fails fast with an actionable `avm tool install <tool>` message instead of downloading. `AVM_OFFLINE=1` and `AVM_MIRROR` still apply to the download (see below).
+1. **Cache** — use a complete verified entry, or the separate unverified entry for an explicit repository override.
+1. **Installed PowerShell module** — accept the exact selected version discoverable on `PSModulePath`, outside managed caches, with a matching manifest. Do not select arbitrary already loaded modules or change user/system module installations.
+1. **Binary PATH (opt-in)** — only when the caller passes `-AllowPathFallback` (the engines' opt-in switch; off by default). `Get-Command <entrypoint>` → if found and it reports the locked version, use it. If found but the version is wrong, warn once and fall through to install. The gauntlet verbs do **not** enable this by default, so PATH is normally ignored in favour of the pinned managed tool.
+1. **Auto-install (default)** — a cache miss installs the selected version through the same atomic, locked downloader as `avm tool install`, verifying its SHA256 unless explicitly overridden. A concise progress message is emitted on first use. Set `AVM_NO_AUTO_INSTALL=1` (or pass `-NoAutoInstall`) to disable implicit installation; a miss fails with `avm tool install <tool>` guidance. `AVM_OFFLINE=1` and `AVM_MIRROR` still apply. Explicit module installation also acquires its pinned dependencies in dependency order.
 
-`avm tool list` mirrors this exact order: it reports `installed` for a cache hit, `not-installed` when a cache miss would auto-install, `auto-install-disabled` when a cache miss would hard-fail under `AVM_NO_AUTO_INSTALL`, and `installed-on-path` / `outdated-on-path` only when invoked with `-AllowPathFallback`. It never claims a tool is usable via PATH that the engines would actually ignore.
+`avm tool list` mirrors this order: `installed` for a cache hit,
+`installed-on-module-path` for an exact installed module, `not-installed` when
+a miss would auto-install, `auto-install-disabled` when it would fail, and
+`installed-on-path` / `outdated-on-path` only with `-AllowPathFallback`.
 
 ### Offline mode
 
 - `AVM_OFFLINE=1` → resolver refuses any HTTP traffic. Cache hit succeeds; cache miss fails fast with a clear message naming the missing tool.
 - `AVM_MIRROR=https://internal.example.com/avm-mirror` → every `urlTemplate` is rewritten before download. The mirror's scheme, authority, and path prefix are preserved; the source URL's path-and-query is appended verbatim. With the example above, `https://releases.hashicorp.com/terraform/1.9.5/terraform_1.9.5_linux_amd64.zip` is fetched from `https://internal.example.com/avm-mirror/terraform/1.9.5/terraform_1.9.5_linux_amd64.zip`. The mirror itself MUST be `https://`; an `http://` mirror is refused with `AvmConfigurationException` so a misconfigured proxy cannot silently downgrade TLS. `file://` source URLs (test fixtures) are never rewritten.
+- `AVM_NETWORK_RETRY_MAX_ATTEMPTS=<1-10>` → overrides the attempt limit for every retried network read (default 4 from `Resources/network.json`). `1` disables retry. Advisory lookups such as the module update check never exceed their smaller budget.
 
 ---
 
@@ -1174,7 +1254,7 @@ Assume the user runs multiple `avm` invocations in parallel against different re
 - All `Invoke-WebRequest` / `Invoke-RestMethod` calls go through `Invoke-AvmHttp` in `Private/` which:
   - Sets a `User-Agent: Avm.Authoring/<version> (<os>/<arch>)` header.
   - Times out after 60 seconds by default (overridable).
-  - Retries on 5xx and connection errors with exponential backoff (3 attempts, 1 s / 4 s / 16 s).
+  - Retries transient failures (HTTP 408, 429 and 5xx, timeouts and connection resets) through `Invoke-AvmRetry`, using capped exponential backoff with jitter and honouring `Retry-After`. Limits live in `src/Avm.Authoring/Resources/network.json`; `AVM_NETWORK_RETRY_MAX_ATTEMPTS` (1–10) overrides the attempt count.
   - Verifies the certificate chain (no `-SkipCertificateCheck` — ever).
 - Download SHA256 verification is non-negotiable; mismatch throws `AvmToolException` with both expected and actual hashes in the message.
 
@@ -1205,7 +1285,7 @@ This section is the implementation-level expression of the **Security stance** p
 
 ### Tool binary supply chain
 
-- Every binary downloaded by `Resolve-AvmTool` is SHA256-verified against `Resources/avm.pins.jsonc` (section 10). A mismatch throws `AvmToolException` with both the expected and the actual hash. The lock file is the only sanctioned source of truth.
+- Default binary and PowerShell package downloads are SHA256-verified against `Resources/avm.pins.jsonc` (section 10). A mismatch throws `AvmToolException` with both hashes. Only the explicit repository version-override exception may bypass the pinned hash for named tools, using a separate unverified cache and visible warning.
 - `scripts/Update-AvmPins.ps1` is the only sanctioned path to rotate a hash; the PR that lands the rotation must record what was updated and which upstream release notes were reviewed.
 - The repo bundles no precompiled binaries. Everything is fetched at first use and cached under the user's standard cache root (section 7).
 

@@ -182,14 +182,10 @@ function Invoke-AvmTestE2e {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    if ($List) {
-        $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
-    }
-    else {
+    if (-not $List) {
         Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
-        $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem `
-            -SkipModuleVersionCheck:$SkipModuleVersionCheck
     }
+    $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
     $bicepOptions = @(
         'Recurse', 'SubscriptionId', 'TenantId', 'ManagementGroupId', 'Location',
         'ResourceLocation', 'ResourceGroupPrefix', 'TokenFile', 'Tokens', 'ParameterFile', 'Parameters',

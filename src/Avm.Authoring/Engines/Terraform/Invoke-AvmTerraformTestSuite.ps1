@@ -95,7 +95,7 @@ function Invoke-AvmTerraformTestSuite {
             "Invoke-AvmTerraformTestSuite requires a terraform context (got Ecosystem='$($Context.Ecosystem)').")
     }
 
-    $tool = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
+    $tool = Resolve-AvmTool -Name 'terraform' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
 
     $targets = @(Get-AvmTerraformTestTarget -Root $Context.Root -Tier $Tier)
 
@@ -184,7 +184,8 @@ function Invoke-AvmTerraformTestSuite {
                 -EnvVars $envVars `
                 -StreamOutput `
                 -Label ('terraform init {0}' -f $targetDir) `
-                -IgnoreExitCode
+                -IgnoreExitCode `
+                -RetryNetworkFailure
 
             if ($initResult.ExitCode -ne 0) {
                 $message = Add-AvmProcessFailureDetail `

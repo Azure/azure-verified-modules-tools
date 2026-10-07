@@ -158,15 +158,168 @@ Describe 'Component: Bicep native scoped workflow and hosted completion' -Tag Co
         $result.CleanupPending.Count | Should -Be 0
     }
 
-    It 'cleans a confirmed late terminal outcome without masking the original submission timeout' {
+    It 'watches a timed-out submission to a late success without resubmitting it' {
         $script:fixture.CreateMode = 'timeout'
         $script:fixture.ReadinessState = 'Succeeded'
         $result = Invoke-AvmTestE2e @script:options
-        $result.Status | Should -Be 'fail'
+        $result.Status | Should -Be 'pass'
         $result.CleanupPending.Count | Should -Be 0
         @($script:fixture.Calls | Where-Object { $_ -eq 'create' }).Count | Should -Be 1
         $script:fixture.Calls | Should -Contain 'pester'
         $script:fixture.Calls | Should -Contain 'post'
         $script:fixture.Calls | Should -Contain ('remove:' + $script:fixture.CreatedId)
+    }
+
+    It 'fails and cleans a timed-out submission that later fails like any confirmed failure' {
+        $script:fixture.CreateMode = 'timeout'
+        $script:fixture.ReadinessState = 'Failed'
+        $result = Invoke-AvmTestE2e @script:options -DeploymentRetryLimit 1
+        $result.Status | Should -Be 'fail'
+        $result.CleanupPending.Count | Should -Be 0
+        @($script:fixture.Calls | Where-Object { $_ -eq 'create' }).Count | Should -Be 1
+        $script:fixture.Calls | Should -Not -Contain 'pester'
+        $script:fixture.Calls | Should -Contain ('remove:' + $script:fixture.CreatedId)
+    }
+
+    It 'removes a wholly regional failure and its record before relocating to an unused region' {
+        $script:options.Remove('ResourceLocation')
+        $script:fixture.RegionalFailures = 1
+        $result = Invoke-AvmTestE2e @script:options
+        $result.Status | Should -Be 'pass'
+        $result.CleanupPending.Count | Should -Be 0
+        @($script:fixture.NativeInputs | Where-Object Operation -eq 'Create' | ForEach-Object { $_.Parameters['resourceLocation'] }) |
+            Should -Be @('eastus', 'centralus')
+        $deleted = @($script:fixture.Calls | Where-Object { $_ -like 'delete-record:*' })
+        $deleted.Count | Should -Be 1
+        $script:fixture.Calls.IndexOf($deleted[0]) | Should -BeLessThan ($script:fixture.Calls.LastIndexOf('create'))
+        $script:fixture.Calls | Should -Contain 'pester'
+    }
+
+    It 'stops relocation but still runs ordinary cleanup when a regional failure record cannot be removed' {
+        $script:options.Remove('ResourceLocation')
+        $script:fixture.RegionalFailures = 1
+        $script:fixture.RecordDeleteFails = $true
+        $result = Invoke-AvmTestE2e @script:options
+        $result.Status | Should -Be 'fail'
+        @($script:fixture.Calls | Where-Object { $_ -eq 'create' }).Count | Should -Be 1
+        $script:fixture.Calls | Should -Not -Contain 'pester'
+        @($result.Issues | ForEach-Object Code) | Should -Contain 'avm.bicep.e2e-relocation-blocked'
+        @($result.Issues | Where-Object Message -like '*ended with*outcome*').Count | Should -Be 0
+        $script:fixture.Calls | Should -Contain ('remove:' + $script:fixture.CreatedId)
+    }
+
+    It 'retries a regional failure in place when the region is pinned' {
+        $script:fixture.RegionalFailures = 1
+        $result = Invoke-AvmTestE2e @script:options
+        $result.Status | Should -Be 'pass'
+        @($script:fixture.NativeInputs | Where-Object Operation -eq 'Create' | ForEach-Object { $_.Parameters['resourceLocation'] }) |
+            Should -Be @('eastus', 'eastus')
+        @($script:fixture.Calls | Where-Object { $_ -like 'delete-record:*' }).Count | Should -Be 0
+    }
+
+    It 'registers declared features in the selected subscription before validation' {
+        Set-Content -LiteralPath (Join-Path $script:fixture.Root '.required-features.json') -Value '["Microsoft.Compute/EncryptionAtHost"]'
+        Mock Resolve-AvmAzureCli -ModuleName Avm.Authoring { [pscustomobject]@{ Path = 'fake-az'; ArgumentPrefix = [string[]]@(); EnvVars = @{} } }
+        Mock Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring {
+            $script:fixture.Calls.Add("register:${SubscriptionId}:$($Feature.FullName -join ',')")
+            [pscustomobject]@{ RegisteredFeatures = @($Feature.FullName); AlreadyRegisteredFeatures = @() }
+        }
+        $result = Invoke-AvmTestE2e @script:options
+        $result.Status | Should -Be 'pass'
+        $registration = 'register:{0}:Microsoft.Compute/EncryptionAtHost' -f $script:fixture.NativeInputs[0].SubscriptionId
+        $script:fixture.Calls | Should -Contain $registration
+        $script:fixture.Calls.IndexOf($registration) | Should -BeLessThan $script:fixture.Calls.IndexOf('validate')
+    }
+
+    It 'reports a failed registration without validating or deploying' {
+        Set-Content -LiteralPath (Join-Path $script:fixture.Root '.required-features.json') -Value '["Microsoft.Compute/EncryptionAtHost"]'
+        Mock Resolve-AvmAzureCli -ModuleName Avm.Authoring { [pscustomobject]@{ Path = 'fake-az'; ArgumentPrefix = [string[]]@(); EnvVars = @{} } }
+        Mock Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring {
+            throw (& (Get-Module Avm.Authoring) {
+                    [AvmException]::new('Feature Microsoft.Compute/EncryptionAtHost is Pending in subscription test.', 'AVM1070')
+                })
+        }
+        $result = Invoke-AvmTestE2e @script:options
+        $result.Status | Should -Be 'fail'
+        $issue = @($result.Issues | Where-Object Code -eq 'avm.bicep.e2e-feature-registration-failed')
+        $issue.Count | Should -Be 1
+        $issue[0].Message | Should -BeLike '*is Pending*'
+        $script:fixture.Calls | Should -Not -Contain 'validate'
+        $script:fixture.Calls | Should -Not -Contain 'create'
+        $result.CleanupPending.Count | Should -Be 0
+    }
+
+    It 'rejects an invalid feature manifest before any Azure operation' {
+        Set-Content -LiteralPath (Join-Path $script:fixture.Root '.required-features.json') -Value '["not-a-feature"]'
+        Mock Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring { throw 'Registration must not run.' }
+        { Invoke-AvmTestE2e @script:options } | Should -Throw -ExpectedMessage '*Namespace/FeatureName*'
+        Should -Invoke Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring -Exactly 0
+        $script:fixture.Calls | Should -Not -Contain 'validate'
+    }
+
+    Context 'Repository-root feature declarations' {
+        BeforeEach {
+            $script:registry = Join-Path $TestDrive ('registry-' + [guid]::NewGuid().ToString('N'))
+            $moduleRoot = Join-Path $script:registry 'avm' 'res' 'compute' 'virtual-machine'
+            $null = New-Item -ItemType Directory -Path (Split-Path $moduleRoot -Parent) -Force
+            Move-Item -LiteralPath $script:fixture.Root -Destination $moduleRoot
+            $script:fixture.Root = $moduleRoot
+            $script:fixture.Directory = Join-Path $moduleRoot 'tests' 'e2e' 'defaults'
+            $script:options.Path = $moduleRoot
+            $script:manifest = Join-Path $script:registry '.required-features.json'
+        }
+
+        It 'registers only the root entry in the <Selection> subscription and requested tenant' -ForEach @(
+            @{ Selection = 'explicit' }
+            @{ Selection = 'pool-selected' }
+        ) {
+            Set-Content -LiteralPath $script:manifest -Value (@{
+                    'avm/res/compute/virtual-machine' = @('Microsoft.Compute/EncryptionAtHost')
+                    'avm/res/network/route-table' = @('Microsoft.Network/AllowRouteTable')
+                } | ConvertTo-Json)
+            $subscription = '00000000-0000-0000-0000-000000000003'
+            $tenant = '00000000-0000-0000-0000-000000000004'
+            $script:options.TenantId = $tenant
+            if ($Selection -eq 'explicit') { $script:options.SubscriptionId = $subscription }
+            else {
+                $null = $script:options.Remove('SubscriptionId')
+                $script:options.TestSubscriptionIds = '[{"id":"' + $subscription + '","name":"selected fixture subscription"}]'
+            }
+            Mock Resolve-AvmAzureCli -ModuleName Avm.Authoring {
+                [pscustomobject]@{ Path = 'fake-az'; ArgumentPrefix = [string[]]@(); EnvVars = @{} }
+            }
+            Mock Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring {
+                $script:fixture.Calls.Add("register:${SubscriptionId}:$($script:fixture.CurrentTenant):$($Feature.FullName -join ',')")
+                $SubscriptionId | Should -BeExactly $script:fixture.CurrentSubscription
+                [pscustomobject]@{ RegisteredFeatures = @($Feature.FullName); AlreadyRegisteredFeatures = @() }
+            }
+            $result = Invoke-AvmTestE2e @script:options
+            $result.Status | Should -Be 'pass'
+            $registration = "register:${subscription}:${tenant}:Microsoft.Compute/EncryptionAtHost"
+            @($script:fixture.Calls | Where-Object { $_ -like 'register:*' }) | Should -Be @($registration)
+            $script:fixture.Calls.IndexOf($registration) | Should -BeLessThan $script:fixture.Calls.IndexOf('validate')
+            $script:fixture.NativeInputs[0].SubscriptionId | Should -BeExactly $subscription
+            $script:fixture.CurrentSubscription | Should -BeExactly '00000000-0000-0000-0000-000000000099'
+            $script:fixture.CurrentTenant | Should -BeExactly '00000000-0000-0000-0000-000000000002'
+        }
+
+        It 'rejects <Case> before compilation or Azure setup' -ForEach @(
+            @{ Case = 'malformed root JSON'; Json = '{'; Local = $false; Message = '*JSON object*' }
+            @{ Case = 'an array at the repository root'; Json = '["Microsoft.Compute/EncryptionAtHost"]'; Local = $false; Message = '*JSON object*' }
+            @{ Case = 'an invalid unselected entry'; Json = '{"avm/res/compute/virtual-machine":[],"avm/res/network/route-table":["bad"]}'; Local = $false; Message = '*avm/res/network/route-table*' }
+            @{ Case = 'competing root and module manifests'; Json = '{"avm/res/compute/virtual-machine":[]}'; Local = $true; Message = '*remove the module-root manifest*' }
+        ) {
+            Set-Content -LiteralPath $script:manifest -Value $Json
+            if ($Local) {
+                Set-Content -LiteralPath (Join-Path $script:fixture.Root '.required-features.json') -Value '["Microsoft.Compute/EncryptionAtHost"]'
+            }
+            Mock Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring { throw 'Registration must not run.' }
+            { Invoke-AvmTestE2e @script:options } | Should -Throw -ExpectedMessage $Message
+            Should -Invoke Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring -Exactly 0
+            Should -Invoke Assert-AvmBicepAzureDependency -ModuleName Avm.Authoring -Exactly 0
+            Should -Invoke Invoke-AvmBicepAzureContext -ModuleName Avm.Authoring -Exactly 0
+            $script:fixture.Calls.Count | Should -Be 0
+            Test-Path -LiteralPath $script:fixture.StatePath | Should -BeFalse
+        }
     }
 }

@@ -4,17 +4,17 @@ function Invoke-AvmBicepCheckPolicy {
         Evaluate the Bicep module's selected tests with PSRule for Azure.
 
     .DESCRIPTION
-        Uses the repository's PSRule options and rule/suppression directory
+        Uses the package's PSRule options and rule/suppression directory
         to evaluate defaults and waf-aligned e2e tests with the required
         Reliability and AVM WAF Security baselines and the advisory Default
         and Security baselines. Files are tokenized in a temporary tree;
         original module files are never changed. Missing inputs, tools,
         baselines, or uninspectable results fail the check.
 
-        PSRule 2.9.0 and PSRule.Rules.Azure 1.47.0 are optional, exact-version
-        dependencies loaded only for Bicep policy checks. Install them with
-        Install-PSResource before running this command. Tokens are read from
-        VALIDATE_SUBSCRIPTION_ID, VALIDATE_TENANT_ID,
+        The PSRule and PSRule.Rules.Azure versions pinned in avm.pins.jsonc are
+        exact-version dependencies resolved through the shared tool cache.
+        Missing modules are acquired before evaluation. Tokens are read from
+        TEST_SUBSCRIPTION_IDS (first entry) or VALIDATE_SUBSCRIPTION_ID, VALIDATE_TENANT_ID,
         VALIDATE_MANAGEMENT_GROUP_ID (or ARM_MGMTGROUP_ID), TOKEN_NAMEPREFIX,
         and localToken_* environment variables.
 
@@ -57,19 +57,33 @@ function Invoke-AvmBicepCheckPolicy {
     $seen = [System.Collections.Generic.HashSet[string]]::new(
         $(if ($IsWindows) { [System.StringComparer]::OrdinalIgnoreCase }
             else { [System.StringComparer]::Ordinal }))
+    # Only exceptions of the listed types carry author-facing messages; any
+    # other failure is reported with the fixed fallback message.
+    $addFailure = {
+        param(
+            [System.Management.Automation.ErrorRecord] $ErrorRecord,
+            [string] $Path,
+            [string] $Code,
+            [type[]] $KnownType,
+            [string] $Fallback,
+            [string] $Baseline = ''
+        )
+        $exception = $ErrorRecord.Exception
+        $message = $Fallback
+        foreach ($type in $KnownType) {
+            if ($exception -is $type) { $message = $exception.Message; break }
+        }
+        $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $Path `
+                    -Code $Code -Message $message -Baseline $Baseline))
+    }
     $repositoryRoot = $null
     $modules = @()
     try {
         $modules = @(Get-AvmMetadataScope -Context $Context -IncludeModuleDirectories)
     }
-    catch [System.ArgumentException] {
-        $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $Context.Root `
-                    -Code 'avm.bicep.psrule-input' -Message $_.Exception.Message))
-    }
     catch {
-        $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $Context.Root `
-                    -Code 'avm.bicep.psrule-input' `
-                    -Message "PSRule could not enumerate Bicep scopes ($($_.Exception.GetType().Name))."))
+        & $addFailure $_ $Context.Root 'avm.bicep.psrule-input' ([System.ArgumentException]) `
+            "PSRule could not enumerate Bicep scopes ($($_.Exception.GetType().Name))."
     }
     foreach ($module in $modules) {
         $scope = Get-AvmBicepConventionScope -Path $module.Path
@@ -94,14 +108,9 @@ function Invoke-AvmBicepCheckPolicy {
                 }
             }
         }
-        catch [AvmConfigurationException] {
-            $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $module.Path `
-                        -Code 'avm.bicep.psrule-input' -Message $_.Exception.Message))
-        }
         catch {
-            $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $module.Path `
-                        -Code 'avm.bicep.psrule-input' `
-                        -Message "PSRule could not select test sources ($($_.Exception.GetType().Name))."))
+            & $addFailure $_ $module.Path 'avm.bicep.psrule-input' ([AvmConfigurationException]) `
+                "PSRule could not select test sources ($($_.Exception.GetType().Name))."
         }
     }
     if ($tests.Count -eq 0) {
@@ -115,41 +124,21 @@ function Invoke-AvmBicepCheckPolicy {
     $configuration = $null
     $verified = @{}
     if ($issues.Count -eq 0) {
-        $configPath = Join-Path -Path $repositoryRoot -ChildPath 'utilities' `
-            -AdditionalChildPath 'pipelines', 'staticValidation', 'psrule'
-        if (-not [System.IO.File]::Exists((Join-Path $configPath 'ps-rule.yaml')) -or
-            -not [System.IO.Directory]::Exists((Join-Path $configPath '.ps-rule'))) {
-            $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $Context.Root `
-                        -Code 'avm.bicep.psrule-config' `
-                        -Message 'PSRule needs the repository utilities/pipelines/staticValidation/psrule/ps-rule.yaml and .ps-rule/ directory.'))
+        try {
+            $tool = Import-AvmBicepPolicyModule -ModuleRoot $Context.Root
+        }
+        catch {
+            & $addFailure $_ $Context.Root 'avm.bicep.psrule-module' ([AvmConfigurationException]) `
+                'Required PSRule module versions could not be loaded.'
         }
     }
     if ($issues.Count -eq 0) {
         try {
-            $tool = Import-AvmBicepPolicyModule
-        }
-        catch [AvmConfigurationException] {
-            $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $Context.Root `
-                        -Code 'avm.bicep.psrule-module' -Message $_.Exception.Message))
+            $configuration = Get-AvmBicepPolicyConfiguration
         }
         catch {
-            $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $Context.Root `
-                        -Code 'avm.bicep.psrule-module' `
-                        -Message 'Required PSRule module versions could not be loaded.'))
-        }
-    }
-    if ($issues.Count -eq 0) {
-        try {
-            $configuration = Get-AvmBicepPolicyConfiguration -RepositoryRoot $repositoryRoot
-        }
-        catch [AvmConfigurationException] {
-            $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $Context.Root `
-                        -Code 'avm.bicep.psrule-config' -Message $_.Exception.Message))
-        }
-        catch {
-            $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $Context.Root `
-                        -Code 'avm.bicep.psrule-config' `
-                        -Message 'PSRule configuration could not be loaded; inspect ps-rule.yaml and the installed modules.'))
+            & $addFailure $_ $Context.Root 'avm.bicep.psrule-config' ([AvmConfigurationException]) `
+                'PSRule configuration could not be loaded; inspect ps-rule.yaml and the installed modules.'
         }
     }
     if ($issues.Count -eq 0) {
@@ -158,15 +147,9 @@ function Invoke-AvmBicepCheckPolicy {
                 $verified[$baseline.Name] = Get-AvmBicepPolicyBaseline `
                     -Configuration $configuration -Name $baseline.Name
             }
-            catch [AvmConfigurationException] {
-                $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $Context.Root `
-                            -Baseline $baseline.Name -Code 'avm.bicep.psrule-baseline' `
-                            -Message $_.Exception.Message))
-            }
             catch {
-                $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $Context.Root `
-                            -Baseline $baseline.Name -Code 'avm.bicep.psrule-baseline' `
-                            -Message "PSRule baseline '$($baseline.Name)' could not be inspected."))
+                & $addFailure $_ $Context.Root 'avm.bicep.psrule-baseline' ([AvmConfigurationException]) `
+                    "PSRule baseline '$($baseline.Name)' could not be inspected." $baseline.Name
             }
         }
     }
@@ -178,20 +161,12 @@ function Invoke-AvmBicepCheckPolicy {
     }
     if ($issues.Count -eq 0) {
         try {
-            $compiler = Resolve-AvmTool -Name 'bicep' -AllowPathFallback:$AllowPathFallback
-        }
-        catch [AvmToolException] {
-            $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $Context.Root `
-                        -Code 'avm.bicep.psrule-compiler' -Message $_.Exception.Message))
-        }
-        catch [AvmConfigurationException] {
-            $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $Context.Root `
-                        -Code 'avm.bicep.psrule-compiler' -Message $_.Exception.Message))
+            $compiler = Resolve-AvmTool -Name 'bicep' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
         }
         catch {
-            $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $Context.Root `
-                        -Code 'avm.bicep.psrule-compiler' `
-                        -Message 'The pinned Bicep compiler could not be resolved.'))
+            $knownCompilerFailure = [type[]]@([AvmToolException], [AvmConfigurationException])
+            & $addFailure $_ $Context.Root 'avm.bicep.psrule-compiler' $knownCompilerFailure `
+                'The pinned Bicep compiler could not be resolved.'
         }
     }
 
@@ -205,15 +180,9 @@ function Invoke-AvmBicepCheckPolicy {
                     $files = @(Get-AvmBicepPolicySource -Path $test.FullName `
                             -RepositoryRoot $repositoryRoot -Tokens $tokens)
                 }
-                catch [AvmConfigurationException] {
-                    $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $test.FullName `
-                                -Code 'avm.bicep.psrule-source' -Message $_.Exception.Message))
-                    continue
-                }
                 catch {
-                    $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $test.FullName `
-                                -Code 'avm.bicep.psrule-source' `
-                                -Message "PSRule could not read a selected test or local reference ($($_.Exception.GetType().Name))."))
+                    & $addFailure $_ $test.FullName 'avm.bicep.psrule-source' ([AvmConfigurationException]) `
+                        "PSRule could not read a selected test or local reference ($($_.Exception.GetType().Name))."
                     continue
                 }
 

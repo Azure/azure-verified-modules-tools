@@ -45,7 +45,7 @@ function Invoke-AvmBicepTransform {
             "Invoke-AvmBicepTransform requires a bicep context (got Ecosystem='$($Context.Ecosystem)').")
     }
 
-    $tool = Resolve-AvmTool -Name 'bicep' -AllowPathFallback:$AllowPathFallback
+    $tool = Resolve-AvmTool -Name 'bicep' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
     $scopes = @(Get-AvmMetadataScope -Context $Context -IncludeModuleDirectories)
     $plan = [System.Collections.Generic.List[object]]::new()
     $changed = [System.Collections.Generic.List[string]]::new()

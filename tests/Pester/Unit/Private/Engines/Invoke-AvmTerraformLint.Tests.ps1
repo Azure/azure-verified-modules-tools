@@ -201,6 +201,226 @@ rule "x" {
             }
         } | Should -Throw '*unsupported HCL*'
     }
+
+    It 'migrates the resource-ID exemption into <BaseName> with <Value>' -ForEach @(
+        @{ Value = 'false'; BaseName = 'avm.tflint.hcl' }
+        @{ Value = 'false'; BaseName = 'avm.tflint_module.hcl' }
+        @{ Value = 'false'; BaseName = 'avm.tflint_example.hcl' }
+        @{ Value = 'false # legacy override'; BaseName = 'avm.tflint.hcl' }
+        @{ Value = 'false /* legacy override */'; BaseName = 'avm.tflint.hcl' }
+    ) {
+        $base = Join-Path $script:moduleRoot 'Resources' 'tflint' $BaseName
+        [System.IO.File]::WriteAllText($script:overridePath, @"
+rule "required_output_rmfr7" {
+  enabled = $Value
+}
+rule "avm_interface_managed_identities" {
+  enabled = false
+}
+"@)
+        $before = Get-FileHash -LiteralPath $base, $script:overridePath
+        InModuleScope 'Avm.Authoring' -Parameters @{ B = $base; O = $script:overridePath; D = $script:destinationPath } {
+            param($B, $O, $D)
+            Mock Write-AvmLog
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                $Level -eq 'Warning' -and $Message -like "*migrated disabled rule 'required_output_rmfr7' to 'avm_output_resource_id_required'*"
+            }
+        }
+        $merged = Get-Content -LiteralPath $script:destinationPath -Raw
+        $merged | Should -Not -Match 'required_output_rmfr7'
+        $merged | Should -Match '(?s)rule "avm_output_resource_id_required"\s*\{\s*enabled = false'
+        [regex]::Matches($merged, 'rule "avm_output_resource_id_required"').Count | Should -Be 1
+        $merged | Should -Match '(?s)rule "avm_interface_managed_identities"\s*\{\s*enabled = false'
+        $merged | Should -Match 'signature = "attestation"'
+        (Get-FileHash -LiteralPath $base, $script:overridePath).Hash | Should -Be $before.Hash
+    }
+
+    It 'migrates disabled legacy rules for the verified AVM release <Version>' -ForEach @(
+        @{ Version = '1.0.0' }
+        @{ Version = '1.2.0' }
+    ) {
+        [System.IO.File]::WriteAllText($script:basePath, @"
+plugin "avm" {
+  enabled = true
+  version = "$Version"
+  source  = "github.com/Azure/tflint-ruleset-avm"
+}
+"@)
+        [System.IO.File]::WriteAllText($script:overridePath, @'
+rule "required_output_rmfr7" {
+  enabled = false
+}
+rule "terraform_output_separate" {
+  enabled = false
+}
+'@)
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            B = $script:basePath; O = $script:overridePath; D = $script:destinationPath
+        } {
+            param($B, $O, $D)
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+        }
+        $merged = Get-Content -LiteralPath $script:destinationPath -Raw
+        $merged | Should -Not -Match 'required_output_rmfr7|terraform_output_separate'
+        $merged | Should -Match '(?s)rule "avm_output_resource_id_required"\s*\{\s*enabled = false'
+    }
+
+    It 'retains unsupported or ambiguous retired-rule declarations: <Label>' -ForEach @(
+        @{ Label = 'enabled'; Body = 'enabled = true' }
+        @{ Label = 'expression'; Body = 'enabled = false || true' }
+        @{ Label = 'quoted false'; Body = 'enabled = "false"' }
+        @{ Label = 'additional attributes'; Body = "enabled = false`n  severity = `"error`"" }
+        @{ Label = 'duplicate enabled'; Body = "enabled = true`n  enabled = false" }
+    ) {
+        $base = Join-Path $script:moduleRoot 'Resources' 'tflint' 'avm.tflint_module.hcl'
+        [System.IO.File]::WriteAllText($script:overridePath, "rule `"required_output_rmfr7`" {`n  $Body`n}`n")
+        InModuleScope 'Avm.Authoring' -Parameters @{ B = $base; O = $script:overridePath; D = $script:destinationPath } {
+            param($B, $O, $D)
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+        }
+        Get-Content -LiteralPath $script:destinationPath -Raw | Should -Match 'rule "required_output_rmfr7"'
+    }
+
+    It 'does not discard disabled rules for a different or overridden plugin' -ForEach @(
+        @{ Label = 'different version'; Plugin = 'version = "0.17.0"' }
+        @{ Label = 'unverified major'; Plugin = 'version = "2.0.0"' }
+        @{ Label = 'prerelease'; Plugin = 'version = "1.2.0-beta.1"' }
+        @{ Label = 'different source'; Plugin = 'source = "example.invalid/custom"' }
+        @{ Label = 'disabled plugin'; Plugin = 'enabled = false' }
+    ) {
+        $base = Join-Path $script:moduleRoot 'Resources' 'tflint' 'avm.tflint_module.hcl'
+        [System.IO.File]::WriteAllText($script:overridePath, @"
+rule "required_output_rmfr7" {
+  enabled = false
+}
+plugin "avm" {
+  $Plugin
+}
+"@)
+        InModuleScope 'Avm.Authoring' -Parameters @{ B = $base; O = $script:overridePath; D = $script:destinationPath } {
+            param($B, $O, $D)
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+        }
+        Get-Content -LiteralPath $script:destinationPath -Raw | Should -Match 'rule "required_output_rmfr7"'
+    }
+
+    It 'omits only the removed output-separation exemption with <Value>' -ForEach @(
+        @{ Value = 'false' }
+        @{ Value = 'false # retired override' }
+        @{ Value = 'false /* retired override */' }
+    ) {
+        $base = Join-Path $script:moduleRoot 'Resources' 'tflint' 'avm.tflint_example.hcl'
+        [System.IO.File]::WriteAllText($script:overridePath, "rule `"terraform_output_separate`" {`n  enabled = $Value`n}`n")
+        $before = Get-FileHash -LiteralPath $base, $script:overridePath
+        InModuleScope 'Avm.Authoring' -Parameters @{ B = $base; O = $script:overridePath; D = $script:destinationPath } {
+            param($B, $O, $D)
+            Mock Write-AvmLog
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                $Level -eq 'Warning' -and $Message -like "*obsolete disabled rule 'terraform_output_separate'*without a replacement*"
+            }
+        }
+        $merged = Get-Content -LiteralPath $script:destinationPath -Raw
+        $merged.TrimEnd() | Should -Be (Get-Content -LiteralPath $base -Raw).TrimEnd()
+        (Get-FileHash -LiteralPath $base, $script:overridePath).Hash | Should -Be $before.Hash
+    }
+
+    It 'preserves active rule attributes while merging a redundant legacy exemption' {
+        $base = Join-Path $script:moduleRoot 'Resources' 'tflint' 'avm.tflint.hcl'
+        [System.IO.File]::WriteAllText($script:overridePath, @'
+rule "required_output_rmfr7" {
+  enabled = false
+}
+rule "avm_output_resource_id_required" {
+  enabled = false
+  severity = "warning"
+}
+'@)
+        InModuleScope 'Avm.Authoring' -Parameters @{ B = $base; O = $script:overridePath; D = $script:destinationPath } {
+            param($B, $O, $D)
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+        }
+        $merged = Get-Content -LiteralPath $script:destinationPath -Raw
+        $merged | Should -Not -Match 'required_output_rmfr7'
+        [regex]::Matches($merged, 'rule "avm_output_resource_id_required"').Count | Should -Be 1
+        $merged | Should -Match '(?s)rule "avm_output_resource_id_required"\s*\{\s*enabled = false\s*severity = "warning"'
+    }
+
+    It 'retains conflicting or ambiguous canonical overrides: <Label>' -ForEach @(
+        @{ Label = 'explicit enabled'; Body = 'enabled = true' }
+        @{ Label = 'expression'; Body = 'enabled = false || true' }
+        @{ Label = 'omitted enabled'; Body = 'severity = "warning"' }
+        @{ Label = 'duplicate enabled'; Body = "enabled = true`n  enabled = false" }
+    ) {
+        $base = Join-Path $script:moduleRoot 'Resources' 'tflint' 'avm.tflint.hcl'
+        [System.IO.File]::WriteAllText($script:overridePath, @"
+rule "required_output_rmfr7" {
+  enabled = false
+}
+rule "avm_output_resource_id_required" {
+  $Body
+}
+"@)
+        InModuleScope 'Avm.Authoring' -Parameters @{ B = $base; O = $script:overridePath; D = $script:destinationPath } {
+            param($B, $O, $D)
+            Mock Write-AvmLog
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+            Should -Invoke Write-AvmLog -Exactly 0
+        }
+        Get-Content -LiteralPath $script:destinationPath -Raw | Should -Match 'rule "required_output_rmfr7"'
+    }
+
+    It 'retains unsupported disabled rules and enabled output-separation requirements: <Rule>' -ForEach @(
+        @{ Rule = 'terraform_output_separate'; Value = 'true' }
+        @{ Rule = 'terraform_output_separate'; Value = 'false || true' }
+        @{ Rule = 'terraform_output_separate'; Value = "false`n  severity = `"warning`"" }
+        @{ Rule = 'unknown_rule'; Value = 'false' }
+        @{ Rule = 'unknown_rule'; Value = 'true' }
+    ) {
+        $base = Join-Path $script:moduleRoot 'Resources' 'tflint' 'avm.tflint.hcl'
+        [System.IO.File]::WriteAllText($script:overridePath, "rule `"$Rule`" {`n  enabled = $Value`n}`n")
+        InModuleScope 'Avm.Authoring' -Parameters @{ B = $base; O = $script:overridePath; D = $script:destinationPath } {
+            param($B, $O, $D)
+            Mock Write-AvmLog
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+            Should -Invoke Write-AvmLog -Exactly 0
+        }
+        Get-Content -LiteralPath $script:destinationPath -Raw | Should -Match ('rule "' + $Rule + '"')
+    }
+
+    It 'retains ambiguous legacy configurations: <Label>' -ForEach @(
+        @{ Label = 'base legacy declaration'; BaseText = "rule `"required_output_rmfr7`" {`n  enabled = true`n}`n"; OverrideText = '' }
+        @{ Label = 'duplicate legacy declarations'; BaseText = ''; OverrideText = "rule `"required_output_rmfr7`" {`n  enabled = true`n}`n" }
+        @{ Label = 'duplicate canonical declarations'; BaseText = ("rule `"avm_output_resource_id_required`" {`n  enabled = true`n}`n" * 2); OverrideText = '' }
+        @{ Label = 'duplicate plugins'; BaseText = "plugin `"avm`" {`n  enabled = true`n}`n"; OverrideText = '' }
+    ) {
+        $base = Join-Path $script:moduleRoot 'Resources' 'tflint' 'avm.tflint.hcl'
+        [System.IO.File]::WriteAllText($script:basePath, [System.IO.File]::ReadAllText($base) + "`n$BaseText")
+        [System.IO.File]::WriteAllText($script:overridePath, "$OverrideText`nrule `"required_output_rmfr7`" {`n  enabled = false`n}`n")
+        InModuleScope 'Avm.Authoring' -Parameters @{ B = $script:basePath; O = $script:overridePath; D = $script:destinationPath } {
+            param($B, $O, $D)
+            Mock Write-AvmLog
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+            Should -Invoke Write-AvmLog -Exactly 0
+        }
+        Get-Content -LiteralPath $script:destinationPath -Raw | Should -Match 'rule "required_output_rmfr7"'
+    }
+
+    It 'honours a later canonical re-enable after an all-scope legacy disable' {
+        $base = Join-Path $script:moduleRoot 'Resources' 'tflint' 'avm.tflint_module.hcl'
+        [System.IO.File]::WriteAllText($script:overridePath, "rule `"required_output_rmfr7`" {`n  enabled = false`n}`n")
+        $scopeOverride = Join-Path $TestDrive 'scope-override.hcl'
+        [System.IO.File]::WriteAllText($scopeOverride, "rule `"avm_output_resource_id_required`" {`n  enabled = true`n}`n")
+        InModuleScope 'Avm.Authoring' -Parameters @{ B = $base; O = $script:overridePath; S = $scopeOverride; D = $script:destinationPath } {
+            param($B, $O, $S, $D)
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+            Merge-AvmTflintConfig -BasePath $D -OverridePath $S -DestinationPath $D
+        }
+        $merged = Get-Content -LiteralPath $script:destinationPath -Raw
+        $merged | Should -Not -Match 'required_output_rmfr7'
+        $merged | Should -Match '(?s)rule "avm_output_resource_id_required"\s*\{\s*enabled = true'
+    }
 }
 
 Describe 'New-AvmTflintConfigSet' {

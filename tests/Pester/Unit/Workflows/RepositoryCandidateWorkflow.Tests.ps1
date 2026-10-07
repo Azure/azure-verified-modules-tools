@@ -2,6 +2,7 @@ BeforeAll {
     $root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..')).Path
     $script:dispatcher = Get-Content -LiteralPath (Join-Path $root '.github' 'workflows' 'repository-management-sync.yml') -Raw
     $script:workflow = Get-Content -LiteralPath (Join-Path $root '.github' 'workflows' 'repository-management-sync-repository.yml') -Raw
+    $script:configChecks = Get-Content -LiteralPath (Join-Path $root '.github' 'workflows' 'repository-management-config-test.yml') -Raw
     $script:caller = [regex]::Match($script:dispatcher,
         '(?ms)^  sync-repository:\r?\n(?<body>.*)\z').Groups['body'].Value
     $script:prepare = [regex]::Match($script:workflow,
@@ -13,6 +14,16 @@ BeforeAll {
 }
 
 Describe 'Repository sync candidate workflow' {
+    It 'keeps configuration checks wired to the moved workflow and candidate entry points' {
+        foreach ($path in @(
+                '.github/workflows/repository-management-sync-repository.yml',
+                'repository-management/repository-sync/scripts/Invoke-RepositoryCandidate.ps1',
+                'repository-management/repository-sync/scripts/lib/RepositoryCandidate.ps1'
+            )) {
+            $script:configChecks | Should -Match ('(?m)^      - ' + [regex]::Escape($path) + '\r?$') -Because $path
+        }
+    }
+
     It 'runs an independent reusable job chain for every repository in the matrix' {
         $script:dispatcher | Should -Match '(?m)^  generate-matrix:\s*$'
         $script:caller | Should -Match 'fail-fast:\s*false'
@@ -41,7 +52,10 @@ Describe 'Repository sync candidate workflow' {
         $script:prepare | Should -Match '-authoringModulePath \$authoringModulePath'
         $script:prepare | Should -Match '-candidateOutputDirectory \$candidateDirectory'
         $script:prepare | Should -Match 'REPO_META_DATA_JSON: \$\{\{ inputs\.repo_metadata_json \}\}'
-        $script:prepare | Should -Match '-repoId "\$\{\{ inputs\.repo_id \}\}"'
+        $script:prepare | Should -Match '-repoId \$env:REPO_ID'
+        $script:prepare | Should -Match 'REPO_ID: \$\{\{ inputs\.repo_id \}\}'
+        $script:prepare | Should -Match '-repoUrl \$env:REPO_URL'
+        $script:prepare | Should -Match 'REPO_URL: \$\{\{ inputs\.repo_url \}\}'
         $script:caller | Should -Match ([regex]::Escape(
                 'force_file_update: ${{ github.event_name == ''workflow_dispatch'' && inputs.force_file_update }}'))
         $script:caller | Should -Match ([regex]::Escape(
@@ -57,6 +71,15 @@ Describe 'Repository sync candidate workflow' {
         $script:validate | Should -Match 'Invoke-RepositoryCandidate\.ps1 -Mode Validate'
         $script:validate | Should -Not -Match 'GH_TOKEN:|ARM_CLIENT_ID:|ARM_BACKEND_|azure/login@|create-github-app-token@'
         $script:validate | Should -Match 'name:\s*validated-\$\{\{ inputs\.repo_name \}\}'
+    }
+
+    It 'authenticates candidate tool downloads with the read-only job token' {
+        $step = [regex]::Match($script:validate,
+            '(?ms)^      - name: Run candidate checks\r?\n(?<body>.*?)(?=^      - name:|\z)')
+        $step.Success | Should -BeTrue
+        $step.Groups['body'].Value | Should -Match '(?m)^          GITHUB_TOKEN: \$\{\{ github\.token \}\}\r?$'
+        $script:validate | Should -Match '(?m)^      contents:\s*read\r?$'
+        $script:validate | Should -Not -Match 'contents:\s*write|create-github-app-token@'
     }
 
     It 'publishes only after this repository validation passes and never for plan-only' {

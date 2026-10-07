@@ -168,7 +168,7 @@ or Bicep client as a test identity. It replaces the existing repository
 **secrets** `ARM_TENANT_ID`, `ARM_CLIENT_ID`, and `TEST_SUBSCRIPTION_IDS`; writing
 same-named variables would not override the current consumers' secrets.
 There is no fallback to retired-tenant settings. See the
-[candidate state and execution prerequisites](repository-sync/README.md#bami-candidate-identities).
+[unified ownership and execution prerequisites](repository-sync/README.md#unified-bami-ownership).
 
 Bicep variable sync retains its existing eight-field source and five-field
 execution projections. Configured Entra names are not Bicep target Variables.

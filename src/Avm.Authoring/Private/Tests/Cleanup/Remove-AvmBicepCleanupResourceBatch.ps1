@@ -14,12 +14,15 @@ function Remove-AvmBicepCleanupResourceBatch {
         [int] $RetryLimit = 3,
 
         [ValidateRange(0, 3600)]
-        [int] $RetryInterval = 15
+        [int] $RetryInterval = 15,
+
+        [switch] $RequireCompleteRemoval
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
+    $requireCompleteRemovalForBatch = [bool]$RequireCompleteRemoval
     $validated = ConvertTo-AvmBicepCleanupState -State $State
     $byId = [System.Collections.Generic.Dictionary[string, object]]::new(
         [System.StringComparer]::OrdinalIgnoreCase)
@@ -128,7 +131,8 @@ function Remove-AvmBicepCleanupResourceBatch {
                     Assert-AvmBicepCleanupGroupOwnership -State $State -ResourceId $resource['id']
                     Remove-AvmBicepResourceRemainder -ResourceId $resource['id'] -Type $resource['type'] `
                         -ManagedResourceGroupIds $resource['managedResourceGroupIds'] `
-                        -OriginalSoftDeleteFeatureState $resource['originalSoftDeleteFeatureState'] -Confirm:$false
+                        -OriginalSoftDeleteFeatureState $resource['originalSoftDeleteFeatureState'] `
+                        -RequireCompleteRemoval:$requireCompleteRemovalForBatch -Confirm:$false
                 } -Confirm:$false
                 if ($resource['removed']) {
                     $resource['postProcessed'] = $true

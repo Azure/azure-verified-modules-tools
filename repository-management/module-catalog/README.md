@@ -76,8 +76,9 @@ module's metadata or `[]` when no previous telemetry prefix was authored.
 
 The six CSVs retain their existing column order and matched-row compatibility
 fields; `CanonicalType` is not added. Missing metadata is reported but never
-reconstructed from a CSV. Existing source rows without metadata-backed replacements
-hold back affected outputs by default. Only existing columns are projected for metadata rows; full
+reconstructed from a CSV. Existing root rows without metadata-backed replacements
+hold back affected outputs by default; valid Bicep submodule removals are permitted.
+Only existing columns are projected for metadata rows; full
 owners and child identity remain available in `v1/modules.json`. Its canonical
 keys contain arrays per ecosystem: repository plus module path distinguishes
 provider variants. The artifact's `v1/migration-report.json` records missing metadata, unresolved
@@ -101,8 +102,9 @@ ecosystems and all three family kinds. JSON retains every helper under the
 `helper` key, distinguished by repository and module path, with inherited owners,
 the derived family `moduleType`, and null `providerNamespace`/`resourceType`.
 Helpers are not ARM resource types. All six CSV outputs omit helpers, in both
-preview and canonical modes. A helper previously present in a source CSV still requires the normal removal
-override unless it qualifies for the deprecated/unpublished exclusion below.
+preview and canonical modes. Bicep helper rows may be removed without an override.
+Terraform helper rows still require the normal removal override unless they
+qualify for the deprecated/unpublished exclusion below.
 
 ### Deprecated, unpublished modules
 
@@ -114,10 +116,10 @@ Published deprecated modules and published descendants remain indexed.
 The separate approved MAR registration mirror is unchanged.
 
 The hashed migration report retains validated records in `excludedModules`
-and an `excludedEntries` count. Only these exact repository/module identities
-are exempt from removal holds, at both generation and publication; they do not
-require `Force`. Invalid metadata, incomplete registry/archive evidence, and
-unrelated removals retain their safeguards.
+and an `excludedEntries` count. These exact repository/module identities are
+exempt from removal holds, at both generation and publication, alongside valid
+Bicep submodule rows; they do not require `Force`. Invalid metadata, incomplete
+registry/archive evidence, and unrelated removals retain their safeguards.
 
 ### Source CSV row-removal override
 
@@ -126,6 +128,12 @@ identities. New rows cannot hide removed rows by keeping the total count unchang
 and Terraform repositories for different providers remain distinct even when
 their module names match. The baseline is `sourceFile`, which also names the
 publication destination. Existing preview files do not affect this check.
+
+Valid Bicep paths below `avm/{res,ptn,utl}/{group}/{module}` are submodule
+records and may disappear without `Force`, including helpers and deeper children.
+Root records and unresolved or malformed identities remain protected. The
+Terraform removal guard is unchanged, including submodule rows. Generation and
+publication apply the same rule and retain the complete source-row evidence.
 
 Use `-Force` on `Invoke-ModuleCatalog.ps1` only when the other listed source-row
 removals are intentional. The diagnostics identify each source file, module name,
@@ -179,6 +187,12 @@ source files exist and `owners` is empty. Published modules without owners are
 Orphaned; published modules with owners are Available. Both CSV and JSON outputs
 use this rule rather than preserving prior Proposed or Orphaned status.
 
+For multi-scope Bicep roots, any published direct `rg-scope`, `sub-scope`, or
+`mg-scope` child counts as published for the parent's lifecycle status and
+deprecation retention. Scoped children keep their own independent status.
+The parent's registry fields still describe its own path; no parent release
+version or publication date is invented from child releases.
+
 Deprecation takes precedence over ownership. A Bicep
 `DEPRECATED.md` marks that module and its descendants; a child's marker does not
 deprecate its parent or siblings. An archived Terraform repository marks every
@@ -204,7 +218,8 @@ No direct `main` push, permission edit, or obsolete-source deletion is used.
 Terraform metadata creation, the direct Bicep metadata file change, Terraform telemetry transport,
 refreshing the private-source MAR mirror, and approval of any source-row removals
 remain rollout dependencies. Update the internal Azure-Verified-Modules-Docs
-team catalog how-to with the exclusion warnings and deletion recommendation;
+team catalog how-to with the Bicep child-removal and multi-scope status rules,
+exclusion warnings, and deletion recommendation;
 generated catalogs do not belong there.
 Follow the [metadata rollout plan](../../docs/metadata-rollout.md) for merge
 order, required workflow pauses, and the first module/catalog runs.

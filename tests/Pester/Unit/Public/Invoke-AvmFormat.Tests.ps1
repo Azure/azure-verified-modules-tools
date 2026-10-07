@@ -11,11 +11,6 @@ AfterAll {
 }
 
 Describe 'Invoke-AvmFormat' {
-    It 'is exported by the manifest' {
-        (Get-Command Invoke-AvmFormat -Module Avm.Authoring -ErrorAction Stop) |
-            Should -Not -BeNullOrEmpty
-    }
-
     It 'is wired into the verb registry as "avm format"' {
         $reg = InModuleScope 'Avm.Authoring' { Get-AvmVerbRegistry }
         $entry = $reg | Where-Object { $_.Path.Count -eq 1 -and $_.Path[0] -eq 'format' }
@@ -34,7 +29,7 @@ Describe 'Invoke-AvmFormat' {
             $ctx = [pscustomobject]@{
                 Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
             }
-            Mock Get-AvmModuleContext { $ctx } -ParameterFilter { $true }
+            Mock Get-AvmModuleContextInternal { $ctx } -ParameterFilter { $true }
             Mock Format-AvmBicepModule { 'should-not-run' }
             $script:result = Invoke-AvmFormat -Path $D -WhatIf
             Should -Invoke Format-AvmBicepModule -Times 0 -Exactly
@@ -50,7 +45,7 @@ Describe 'Invoke-AvmFormat' {
             $ctx = [pscustomobject]@{
                 Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
             }
-            Mock Get-AvmModuleContext { $ctx }
+            Mock Get-AvmModuleContextInternal { $ctx }
             Mock Format-AvmBicepModule {
                 [pscustomobject]@{ Engine = 'bicep'; FilesProcessed = 7; Changed = @() }
             }
@@ -75,7 +70,7 @@ Describe 'Invoke-AvmFormat' {
             $ctx = [pscustomobject]@{
                 Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
             }
-            Mock Get-AvmModuleContext { $ctx }
+            Mock Get-AvmModuleContextInternal { $ctx }
             Mock Format-AvmTerraformModule {
                 [pscustomobject]@{ Engine = 'terraform'; Changed = @('main.tf') }
             }
@@ -89,14 +84,14 @@ Describe 'Invoke-AvmFormat' {
         }
     }
 
-    It 'forwards -Ecosystem to Get-AvmModuleContext' {
+    It 'forwards -Ecosystem to Get-AvmModuleContextInternal' {
         $dir = Join-Path $TestDrive ("eco-fwd-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         $passed = $null
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
             $script:eco = $null
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 param($Path, $Ecosystem)
                 $script:eco = $Ecosystem
                 [pscustomobject]@{
@@ -115,7 +110,7 @@ Describe 'Invoke-AvmFormat' {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
@@ -133,7 +128,7 @@ Describe 'Invoke-AvmFormat' {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
@@ -151,7 +146,7 @@ Describe 'Invoke-AvmFormat' {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }

@@ -20,11 +20,6 @@ Describe 'Invoke-AvmPrCheck' {
         }
     }
 
-    It 'is exported by the manifest' {
-        (Get-Command Invoke-AvmPrCheck -Module Avm.Authoring -ErrorAction Stop) |
-            Should -Not -BeNullOrEmpty
-    }
-
     It 'is wired into the verb registry as "avm pr-check"' {
         $reg = InModuleScope 'Avm.Authoring' { Get-AvmVerbRegistry }
         $entry = $reg | Where-Object { $_.Path.Count -eq 1 -and $_.Path[0] -eq 'pr-check' }
@@ -54,7 +49,7 @@ Describe 'Invoke-AvmPrCheck' {
             Mock Invoke-AvmDocs { [pscustomobject]@{ Status = 'pass' } }
 
             $run = Invoke-AvmPrCheck -Path $D -Ecosystem terraform -SkipModuleVersionCheck
-            Should -Invoke Test-AvmModuleVersion -Exactly 2 -ParameterFilter { $SkipModuleVersionCheck }
+            Should -Invoke Test-AvmModuleVersion -Exactly 1 -ParameterFilter { $SkipModuleVersionCheck }
             foreach ($command in @('Invoke-AvmSync', 'Invoke-AvmFormat', 'Invoke-AvmTransform',
                     'Invoke-AvmLint', 'Invoke-AvmCheckPolicy', 'Invoke-AvmCheckConvention',
                     'Invoke-AvmTest', 'Invoke-AvmDocs')) {
@@ -81,7 +76,7 @@ Describe 'Invoke-AvmPrCheck' {
             $env:RUNNER_DEBUG = ''
             $env:AVM_VERBOSE = ''
             try {
-                Mock Get-AvmModuleContext {
+                Mock Get-AvmModuleContextInternal {
                     [pscustomobject]@{
                         Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                     }
@@ -165,7 +160,7 @@ Describe 'Invoke-AvmPrCheck' {
                 $env:GITHUB_ACTIONS = ''
                 $env:RUNNER_DEBUG = ''
                 $env:AVM_VERBOSE = ''
-                Mock Get-AvmModuleContext {
+                Mock Get-AvmModuleContextInternal {
                     [pscustomobject]@{
                         Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                     }
@@ -241,7 +236,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $probe = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
@@ -279,7 +274,7 @@ Describe 'Invoke-AvmPrCheck' {
         $probe = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir; E = $Ecosystem; K = $Kind } {
             param($D, $E, $K)
             $script:resolutionOrder = [System.Collections.Generic.List[string]]::new()
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{ Kind = $K; Root = $D; Ecosystem = $E; Source = 'path-heuristic' }
             }
             Mock Assert-AvmGitWorkingTreeClean { $script:resolutionOrder.Add('clean') }
@@ -308,7 +303,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
@@ -354,7 +349,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
@@ -388,7 +383,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
@@ -426,7 +421,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{ Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep' }
             }
             Mock Invoke-AvmSync { throw [AvmNotSupportedException]::new('not applicable') }
@@ -458,7 +453,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{ Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep' }
             }
             Mock Invoke-AvmSync { throw [AvmNotSupportedException]::new('not applicable') }
@@ -497,7 +492,7 @@ Describe 'Invoke-AvmPrCheck' {
         $dir = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir; M = $Mode; E = $Ecosystem } {
             param($D, $M, $E)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{ Kind = 'bicep-module'; Root = $D; Ecosystem = $E }
             }
             Mock Invoke-AvmSync { throw [AvmNotSupportedException]::new('not applicable') }
@@ -540,7 +535,7 @@ Describe 'Invoke-AvmPrCheck' {
         $dir = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir; C = $Case } {
             param($D, $C)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{ Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep' }
             }
             Mock Invoke-AvmSync { throw [AvmNotSupportedException]::new('not applicable') }
@@ -610,7 +605,7 @@ Describe 'Invoke-AvmPrCheck' {
         $dir = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{ Kind = 'bicep-module'; Root = $D; Ecosystem = 'Bicep' }
             }
             Mock Invoke-AvmSync { throw [AvmNotSupportedException]::new('not applicable') }
@@ -641,7 +636,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
@@ -674,7 +669,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
@@ -714,7 +709,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
@@ -753,7 +748,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
@@ -799,7 +794,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $observed = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
@@ -849,7 +844,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
@@ -880,7 +875,7 @@ Describe 'Invoke-AvmPrCheck' {
         $dir = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{ Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform' }
             }
             Mock Invoke-AvmSync { [pscustomobject]@{ Status = 'pass' } }
@@ -904,7 +899,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
@@ -935,7 +930,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }

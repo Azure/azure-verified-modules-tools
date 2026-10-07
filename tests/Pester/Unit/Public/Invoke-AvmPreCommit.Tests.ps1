@@ -18,11 +18,6 @@ Describe 'Invoke-AvmPreCommit' {
         }
     }
 
-    It 'is exported by the manifest' {
-        (Get-Command Invoke-AvmPreCommit -Module Avm.Authoring -ErrorAction Stop) |
-            Should -Not -BeNullOrEmpty
-    }
-
     It 'is wired into the verb registry as "avm pre-commit"' {
         $reg = InModuleScope 'Avm.Authoring' { Get-AvmVerbRegistry }
         $entry = $reg | Where-Object { $_.Path.Count -eq 1 -and $_.Path[0] -eq 'pre-commit' }
@@ -45,7 +40,7 @@ Describe 'Invoke-AvmPreCommit' {
             $env:RUNNER_DEBUG = ''
             $env:AVM_VERBOSE = ''
             try {
-                Mock Get-AvmModuleContext {
+                Mock Get-AvmModuleContextInternal {
                     [pscustomobject]@{
                         Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                     }
@@ -128,7 +123,7 @@ Describe 'Invoke-AvmPreCommit' {
             Mock Invoke-AvmDocs { [pscustomobject]@{ Status = 'pass' } }
 
             $run = Invoke-AvmPreCommit -Path $D -Ecosystem terraform -SkipModuleVersionCheck
-            Should -Invoke Test-AvmModuleVersion -Exactly 2 -ParameterFilter { $SkipModuleVersionCheck }
+            Should -Invoke Test-AvmModuleVersion -Exactly 1 -ParameterFilter { $SkipModuleVersionCheck }
             foreach ($command in @('Invoke-AvmSync', 'Invoke-AvmCheckConvention', 'Invoke-AvmTransform',
                     'Invoke-AvmFormat', 'Invoke-AvmDocs')) {
                 Should -Invoke $command -Exactly 1 -ParameterFilter { $SkipModuleVersionCheck }
@@ -148,7 +143,7 @@ Describe 'Invoke-AvmPreCommit' {
         $probe = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir; E = $Ecosystem; K = $Kind } {
             param($D, $E, $K)
             $script:resolutionOrder = [System.Collections.Generic.List[string]]::new()
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{ Kind = $K; Root = $D; Ecosystem = $E; Source = 'path-heuristic' }
             }
             Mock Resolve-AvmCommandTool { $script:resolutionOrder.Add('tools'); @() }
@@ -177,7 +172,7 @@ Describe 'Invoke-AvmPreCommit' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
@@ -215,7 +210,7 @@ Describe 'Invoke-AvmPreCommit' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
@@ -247,7 +242,7 @@ Describe 'Invoke-AvmPreCommit' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
@@ -301,7 +296,7 @@ Describe 'Invoke-AvmPreCommit' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
@@ -362,7 +357,7 @@ Describe 'Invoke-AvmPreCommit' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
@@ -394,7 +389,7 @@ Describe 'Invoke-AvmPreCommit' {
 
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
@@ -420,7 +415,7 @@ Describe 'Invoke-AvmPreCommit' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
@@ -453,7 +448,7 @@ Describe 'Invoke-AvmPreCommit' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
@@ -482,7 +477,7 @@ Describe 'Invoke-AvmPreCommit' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
@@ -510,7 +505,7 @@ Describe 'Invoke-AvmPreCommit' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
@@ -535,7 +530,7 @@ Describe 'Invoke-AvmPreCommit' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
@@ -564,7 +559,7 @@ Describe 'Invoke-AvmPreCommit' {
 
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }

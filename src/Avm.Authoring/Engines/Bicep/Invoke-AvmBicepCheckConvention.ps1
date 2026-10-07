@@ -26,7 +26,12 @@ function Invoke-AvmBicepCheckConvention {
         [Parameter(Mandatory)]
         $Context,
 
-        [switch] $AllowPathFallback
+        [switch] $AllowPathFallback,
+
+        [switch] $PreparationOnly,
+
+        [AllowEmptyCollection()]
+        [object[]] $SelectedScope
     )
 
     Set-StrictMode -Version 3.0
@@ -39,7 +44,10 @@ function Invoke-AvmBicepCheckConvention {
 
     $issues = [System.Collections.Generic.List[object]]::new()
     $scopes = [System.Collections.Generic.List[object]]::new()
-    foreach ($module in @(Get-AvmMetadataScope -Context $Context -IncludeModuleDirectories)) {
+    $moduleScopes = @(if ($PSBoundParameters.ContainsKey('SelectedScope')) { $SelectedScope } else {
+            Get-AvmMetadataScope -Context $Context -IncludeModuleDirectories
+        })
+    foreach ($module in @($moduleScopes)) {
         $scope = Get-AvmBicepConventionScope -Path $module.Path
         if ($null -eq $scope) {
             $issues.Add((New-AvmBicepConventionIssue -Root $Context.Root `
@@ -59,9 +67,7 @@ function Invoke-AvmBicepCheckConvention {
     if ($scopes.Count -gt 0) {
         $testFiles = @()
         try {
-            $testFiles = @(Get-ChildItem -LiteralPath $scopes[0].RepositoryRoot -File -Recurse `
-                    -Filter 'main.test.bicep' -ErrorAction Stop |
-                    Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) })
+            $testFiles = @(Get-AvmBicepRepositoryTestFile -RepositoryRoot $scopes[0].RepositoryRoot)
         }
         catch [System.IO.IOException], [System.UnauthorizedAccessException],
         [System.Management.Automation.ActionPreferenceStopException] {
@@ -131,7 +137,7 @@ function Invoke-AvmBicepCheckConvention {
     $compiledCount = 0
     if ($sources.Count -gt 0) {
         try {
-            $tool = Resolve-AvmTool -Name 'bicep' -AllowPathFallback:$AllowPathFallback
+            $tool = Resolve-AvmTool -Name 'bicep' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
         }
         catch [AvmToolException] {
             $issues.Add((New-AvmBicepConventionIssue -Root $Context.Root `
@@ -172,68 +178,48 @@ function Invoke-AvmBicepCheckConvention {
                     Path     = $sourceFile.Path
                     Scope    = $sourceFile.Scope
                     Template = $template
+                    Json     = $json
                 })
-            $artifactPath = Join-Path $sourceFile.Scope.Path 'main.json'
-            $artifact = @(Get-ChildItem -LiteralPath $sourceFile.Scope.Path -Force |
-                    Where-Object { $_.Name -ieq 'main.json' })
-            $drift = $null
-            if ($artifact.Count -eq 0) {
-                $drift = Get-AvmBicepCompiledJsonDrift -CompiledJson $json -CurrentBytes $null
-            }
-            elseif ($artifact.Count -eq 1 -and $artifact[0].Name -ceq 'main.json' -and
-                -not $artifact[0].PSIsContainer -and
-                -not ($artifact[0].Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
-                $drift = Get-AvmBicepCompiledJsonDrift -CompiledJson $json `
-                    -CurrentBytes ([System.IO.File]::ReadAllBytes($artifact[0].FullName))
-            }
-            if ($null -ne $drift) {
-                $issues.Add((New-AvmBicepConventionIssue -Root $Context.Root -Path $artifactPath `
-                            -Code "avm.bicep.json-$drift" `
-                            -Message ("The checked-in main.json is $drift; run 'avm pre-commit' and commit the generated artifact.")))
-            }
-            foreach ($issue in @(Test-AvmBicepConventionCompiledTemplate -Root $Context.Root `
-                        -Scope $sourceFile.Scope -Template $template -SourcePath $sourceFile.Path)) {
-                $issues.Add($issue)
-            }
         }
     }
-    foreach ($issue in @(Test-AvmBicepConventionApiVersion -Root $Context.Root `
-                -Modules $compiledModules.ToArray())) {
+    $apiSpecs = $null
+    $apiSpecsUnavailableReason = ''
+    if ($compiledModules.Count -gt 0) {
+        try {
+            $apiSpecs = Get-AvmBicepApiSpecList
+        }
+        catch [AvmConfigurationException] {
+            $apiSpecsUnavailableReason = $_.Exception.Message
+        }
+    }
+    $repositoryRoot = if ($scopes.Count -gt 0) { $scopes[0].RepositoryRoot } else { $Context.Root }
+    $workflows = @(foreach ($scope in $scopes) {
+            if ($scope.IsTopLevel) {
+                [pscustomobject]@{ Scope = $scope; Input = Get-AvmBicepConventionWorkflowInput -Scope $scope }
+            }
+        })
+    $publication = if ($scopes.Count -gt 0) {
+        Get-AvmBicepPublicationInput -RepositoryRoot $repositoryRoot -Scopes $scopes.ToArray()
+    }
+    $convention = @{
+        Root                      = $Context.Root
+        RepositoryRoot            = $repositoryRoot
+        Scopes                    = $scopes.ToArray()
+        CompiledModules           = $compiledModules.ToArray()
+        ApiSpecs                  = $apiSpecs
+        ApiSpecsUnavailableReason = $apiSpecsUnavailableReason
+        ServiceShortIndex         = $serviceShortIndex
+        CompiledTests             = $compiledTests
+        TestSources               = @($sources | Where-Object IsTest)
+        Workflows                 = $workflows
+        Publication               = $publication
+    }
+    if ($PreparationOnly) {
+        return [pscustomobject]@{ Convention = $convention; Issues = $issues.ToArray() }
+    }
+    foreach ($issue in @(Invoke-AvmBicepConventionSuite -Convention $convention)) {
         $issues.Add($issue)
     }
-
-    foreach ($scope in $scopes) {
-        foreach ($issue in @(Test-AvmBicepConventionLayout -Root $Context.Root -Scope $scope)) {
-            $issues.Add($issue)
-        }
-        if ($scope.IsTopLevel) {
-            foreach ($issue in @(Test-AvmBicepConventionWorkflow -Scope $scope)) {
-                $issues.Add($issue)
-            }
-        }
-        foreach ($issue in @(Test-AvmBicepConventionVersion -Root $Context.Root -Scope $scope)) {
-            $issues.Add($issue)
-        }
-        foreach ($issue in @(Test-AvmBicepConventionTestFile -Root $Context.Root `
-                    -Scope $scope -ServiceShortIndex $serviceShortIndex `
-                    -CompiledTestFiles $compiledTests)) {
-            $issues.Add($issue)
-        }
-    }
-    if ($scopes.Count -gt 0) {
-        foreach ($issue in @(Test-AvmBicepConventionCodeowner -RepositoryRoot $scopes[0].RepositoryRoot)) {
-            $issues.Add($issue)
-        }
-        foreach ($issue in @(Test-AvmBicepConventionChildPublish `
-                    -RepositoryRoot $scopes[0].RepositoryRoot -Scopes $scopes.ToArray())) {
-            $issues.Add($issue)
-        }
-        foreach ($issue in @(Test-AvmBicepConventionPublication `
-                    -RepositoryRoot $scopes[0].RepositoryRoot -Scopes $scopes.ToArray())) {
-            $issues.Add($issue)
-        }
-    }
-
     $status = if (@($issues | Where-Object { $_.Severity -eq 'error' }).Count -gt 0) {
         'fail'
     }

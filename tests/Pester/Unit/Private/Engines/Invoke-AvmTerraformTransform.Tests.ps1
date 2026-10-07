@@ -973,11 +973,10 @@ run "telemetry" {
         [System.IO.File]::ReadAllBytes($variables) | Should -Not -Be $originalBytes
     }
 
-    It 'retries a transient provider timeout and then succeeds' {
+    It 'runs the transform with network retry and no local retry loop' {
         $ctx = $script:context
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
-            $script:transformAttempts = 0
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
                     Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
@@ -986,77 +985,18 @@ run "telemetry" {
             }
             Mock Resolve-AvmMapotfConfigDir { '/fake/configs' }
             Mock Start-Sleep
-            Mock Invoke-AvmProcess {
-                if ($ArgumentList[0] -eq 'transform') {
-                    $script:transformAttempts++
-                    if ($script:transformAttempts -eq 1) {
-                        return [pscustomobject]@{
-                            ExitCode = 1
-                            StdOut   = ''
-                            StdErr   = 'context deadline exceeded: Client.Timeout exceeded while awaiting headers'
-                        }
-                    }
-                }
-                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
-            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
             Invoke-AvmTerraformTransform -Context $C
         }
 
         $result.Status | Should -Be 'pass'
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmProcess -Exactly 3 -ParameterFilter {
-                $ArgumentList[0] -eq 'transform'
+            Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter {
+                $ArgumentList[0] -eq 'transform' -and $RetryNetworkFailure -and $IgnoreExitCode
             }
-            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
-                $ArgumentList[0] -eq 'clean-backup'
-            }
-            Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter {
-                $Seconds -eq 5
-            }
+            Should -Invoke Start-Sleep -Exactly 0
         }
     }
-
-    It 'throws after exhausting transient provider download retries' {
-        $ctx = $script:context
-        $err = $null
-        try {
-            InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
-                param($C)
-                Mock Resolve-AvmTool {
-                    [pscustomobject]@{
-                        Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
-                        Source = 'cache'; Path = '/fake/mapotf'
-                    }
-                }
-                Mock Resolve-AvmMapotfConfigDir { '/fake/configs' }
-                Mock Start-Sleep
-                Mock Invoke-AvmProcess {
-                    [pscustomobject]@{
-                        ExitCode = 1
-                        StdOut   = ''
-                        StdErr   = 'failed to retrieve cryptographic signature for provider'
-                    }
-                }
-                Invoke-AvmTerraformTransform -Context $C
-            }
-        }
-        catch {
-            $err = $_.Exception
-        }
-
-        $err                | Should -Not -BeNullOrEmpty
-        $err.GetType().Name | Should -Be 'AvmProcessException'
-        InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmProcess -Exactly 3 -ParameterFilter {
-                $ArgumentList[0] -eq 'transform'
-            }
-            Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter {
-                $ArgumentList[0] -eq 'clean-backup'
-            }
-            Should -Invoke Start-Sleep -Exactly 2
-        }
-    }
-
     It 'throws AvmProcessException when mapotf transform exits non-zero' {
         $ctx = $script:context
         $err = $null
