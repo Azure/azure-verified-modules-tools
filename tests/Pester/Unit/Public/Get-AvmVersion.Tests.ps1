@@ -195,7 +195,7 @@ Describe 'avm version (dispatcher)' {
                 $result[0].Version | Should -BeExactly (Get-Module Avm.Authoring).Version.ToString()
                 $warnings.Count | Should -Be 1
                 [string]$warnings[0] | Should -Match 'update available: 99\.0\.0'
-                [string]$warnings[0] | Should -Match 'avm update'
+                [string]$warnings[0] | Should -Match 'avm upgrade'
                 Should -Invoke Find-PSResource -Times 1 -Exactly
             }
             finally {

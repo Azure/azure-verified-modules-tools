@@ -1,6 +1,6 @@
 # Integration tier
 
-Spec [§18](../../../docs/avm-implementation-spec.md) defines three test tiers
+Spec [§18](../../../docs/quality-spec.md) defines three test tiers
 of increasing realism:
 
 | Tier        | Filesystem | Network | Tag           | Run by                                  |

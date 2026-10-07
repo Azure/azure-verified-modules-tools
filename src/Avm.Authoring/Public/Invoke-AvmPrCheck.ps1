@@ -90,7 +90,9 @@ function Invoke-AvmPrCheck {
     .PARAMETER ExcludeSteps
         Step names to skip: metadata, sync, format, transform, lint,
         check policy, check convention, validate, docs. Accepts an array;
-        names are case-insensitive. By default every step runs.
+        names are case-insensitive and duplicates are ignored. Unknown or
+        empty names are rejected. Omit this parameter or supply an empty
+        array to run every step.
         Version and clean-working-tree checks always run.
 
     .PARAMETER ThrottleLimit
@@ -117,6 +119,28 @@ function Invoke-AvmPrCheck {
 
     .EXAMPLE
         avm pr-check -ExcludeSteps @('check policy', 'docs')
+
+    .EXAMPLE
+        avm pr-check -Ecosystem terraform -ExcludeSteps 'check policy'
+
+        Run the fork-compatible Terraform checks. Run unit tests separately
+        with 'avm test unit'.
+
+    .NOTES
+        The reusable Terraform workflow runs fork pr-check and unit tests in
+        independent jobs. Fork pr-check excludes only check policy and its
+        Conftest prerequisite. Both jobs omit GitHub environments, subscription
+        selection, Azure OIDC permissions, and secret/variable preparation.
+        Inherited secret and variable payloads are replaced with empty objects.
+        Only GitHub's automatically provided read-only token remains available;
+        no configured secrets are required. Unit fixtures and repository hooks
+        must work without Azure credentials.
+
+        Normal branch jobs retain their full checks, credentials, environments,
+        and integration/end-to-end tests. Publish a compatible Avm.Authoring
+        release containing -ExcludeSteps before adopting this workflow revision.
+        Older releases fail with upgrade guidance rather than running policy
+        or silently omitting the other checks.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]

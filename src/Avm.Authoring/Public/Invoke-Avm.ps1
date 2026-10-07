@@ -66,7 +66,7 @@ function Invoke-Avm {
             $PSDefaultParameterValues['*:Verbose'] = $true
         }
 
-        $isUpdateCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -ceq 'update'
+        $isUpdateCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -cin @('update', 'upgrade')
         $isVersionCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -ceq 'version'
         $isE2eListCommand = $false
         if ($rawArguments.Count -ge 3) {

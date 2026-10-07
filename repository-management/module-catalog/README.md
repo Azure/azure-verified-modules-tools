@@ -221,8 +221,8 @@ remain rollout dependencies. Update the internal Azure-Verified-Modules-Docs
 team catalog how-to with the Bicep child-removal and multi-scope status rules,
 exclusion warnings, and deletion recommendation;
 generated catalogs do not belong there.
-Follow the [metadata rollout plan](../../docs/metadata-rollout.md) for merge
-order, required workflow pauses, and the first module/catalog runs.
+Track rollout sequencing in the relevant issue and pull requests. Production
+workflow pauses, enablement, and first runs require explicit operator approval.
 
 The canonical CSV cutover requires a fresh snapshot because the manifest changed;
 bundles collected for `test-` destinations cannot be published with this manifest.
