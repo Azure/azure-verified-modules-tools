@@ -39,7 +39,8 @@ hosted CI matrix on 2026-10-07.
 - [x] Map all relevant changes to adopted, already covered, or excluded behavior.
 - [x] Implement applicable gaps with focused positive and negative regressions.
 - [x] Run the full local gate, Bicep native acceptance, and shared regressions.
-- [ ] Commit, push, open the new review, and inspect hosted checks.
+- [x] Commit, push, and open the new review.
+- [ ] Complete hosted checks, including the Windows job-timeout correction.
 
 ## Comparison evidence
 
@@ -92,17 +93,39 @@ subjects alone.
   files, shared provenance staging, strict explicit overrides and cleanup
   after compiler/launch failures.
 - The initial real Bicep 0.48.1 run exposed removal of `--template-file` and an
-  outdated scaffold pin assertion. After config-based rendering, all 19
-  installed-package Bicep integration cases passed, including all eight
-  packaged PSRule baselines, the static-principal positive/removal-negative
+  outdated scaffold pin assertion. After config-based rendering, all 19 Bicep
+  native/static integration cases passed, including installed-package acceptance,
+  all eight packaged PSRule baselines, the static-principal positive/removal-negative
   control, scoped README examples and native scaffold/telemetry compilation.
 - Real Terraform provider-registration safeguards passed both AzureRM 3.117.1
   and 4.81.0 cases with AzAPI 2.13.0. These run local initialization, provider
   schemas and validation with Azure authentication disabled; they do not
   execute plans, deployments or registrations.
 - Changed/new source files passed LF/UTF-8-without-BOM and `git diff --check`.
-- Publication and hosted qualification remain pending. No local Azure execution
-  has occurred.
+- No local Azure execution has occurred.
+
+## Publication and hosted qualification
+
+- Implementation commit: `3b4f6497bd0078b1b22bebb53ecf9d4f3f3a313d`.
+- Review: [#235](https://github.com/Azure/azure-verified-modules-tools/pull/235).
+- The [first hosted run](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37590520300)
+  passed lint, workflow tests, Linux/macOS coverage and components, all three
+  Bicep integration jobs and all six approved Terraform integration jobs.
+  The independent CodeQL analysis and CLA check also passed.
+- Windows passed all 3,285 unit cases and its 70% coverage floor (73.77%),
+  then reached the 25-minute job ceiling during component execution. The three
+  completed component shards contained no failures; the fourth was canceled.
+  This is incomplete qualification, not a passing Windows result.
+- The [same job on the tools baseline](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37539203280/job/112527757202)
+  already took 24 minutes 22 seconds: coverage took 8 minutes 46 seconds and
+  components 14 minutes 58 seconds. The added regression cases exhausted that
+  narrow margin. Raise only the Windows job ceiling to 30 minutes and update
+  its workflow contract assertion; retain every test, per-test timeout, the
+  70% coverage floor, all matrix entries and Linux/macOS ceilings.
+- The corrected workflow passed all seven focused CI contract cases and a
+  fresh `.\build.ps1 pre-commit`: layout, lint, 3,285 unit passes (nine existing
+  skips) and 1,472 component passes (one existing skip). Hosted qualification
+  of the corrected workflow remains pending.
 
 ## Boundaries and dependencies
 
