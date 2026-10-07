@@ -19,7 +19,12 @@ function Invoke-AvmPrCheck {
         status must report a clean working tree.
         Metadata validation runs after tool resolution but before the other steps.
         Missing or invalid root or child metadata aborts the chain without
-        changing module files or reading indexes, regardless of StopOnFail.
+        changing module files or reading indexes, regardless of StopOnFail,
+        unless metadata is explicitly excluded with -ExcludeSteps.
+
+        ExcludeSteps omits named steps and tools needed only by those steps.
+        Excluded steps remain visible as 'skipped' in the result and log.
+        Excluding every step returns overall Status='skipped', not 'pass'.
 
         The 'validate' step is a build-validation pass ('terraform
         validate' / 'bicep build'), not a test run. Unit tests remain a
@@ -53,8 +58,9 @@ function Invoke-AvmPrCheck {
                         format).
           - 'fail'    : step returned Status='fail'.
           - 'error'   : step threw an unexpected exception; the chain aborts.
-          - 'skipped' : step threw AvmNotSupportedException because it does
-                        not apply to the selected ecosystem.
+          - 'skipped' : step was explicitly excluded or threw
+                        AvmNotSupportedException because it does not apply
+                        to the selected ecosystem.
           - configuration exceptions are failures, not skips.
 
         By default the gauntlet is fail-soft: a step that returns
@@ -81,6 +87,14 @@ function Invoke-AvmPrCheck {
         When set, abort the chain on the first step whose Status is 'fail'.
         A throwing step is always fatal regardless of this flag.
 
+    .PARAMETER ExcludeSteps
+        Step names to skip: metadata, sync, format, transform, lint,
+        check policy, check convention, validate, docs. Accepts an array;
+        names are case-insensitive and duplicates are ignored. Unknown or
+        empty names are rejected. Omit this parameter or supply an empty
+        array to run every step.
+        Version and clean-working-tree checks always run.
+
     .PARAMETER ThrottleLimit
         Maximum number of independent Terraform transform targets, lint scopes,
         or policy examples to process at once. Defaults to four.
@@ -93,7 +107,7 @@ function Invoke-AvmPrCheck {
         pscustomobject with:
           - Path        : the resolved module root
           - Ecosystem   : bicep | terraform
-          - Status      : pass | fail | error
+          - Status      : pass | fail | error | skipped
           - Steps       : array of { Step, Status, Error?, Result?, DurationMs }
           - DurationMs  : total wall-clock cost
 
@@ -102,6 +116,31 @@ function Invoke-AvmPrCheck {
 
     .EXAMPLE
         Invoke-AvmPrCheck -Path C:\repos\my-module -StopOnFail
+
+    .EXAMPLE
+        avm pr-check -ExcludeSteps @('check policy', 'docs')
+
+    .EXAMPLE
+        avm pr-check -Ecosystem terraform -ExcludeSteps 'check policy'
+
+        Run the fork-compatible Terraform checks. Run unit tests separately
+        with 'avm test unit'.
+
+    .NOTES
+        The reusable Terraform workflow runs fork pr-check and unit tests in
+        independent jobs. Fork pr-check excludes only check policy and its
+        Conftest prerequisite. Both jobs omit GitHub environments, subscription
+        selection, Azure OIDC permissions, and secret/variable preparation.
+        Inherited secret and variable payloads are replaced with empty objects.
+        Only GitHub's automatically provided read-only token remains available;
+        no configured secrets are required. Unit fixtures and repository hooks
+        must work without Azure credentials.
+
+        Normal branch jobs retain their full checks, credentials, environments,
+        and integration/end-to-end tests. Publish a compatible Avm.Authoring
+        release containing -ExcludeSteps before adopting this workflow revision.
+        Older releases fail with upgrade guidance rather than running policy
+        or silently omitting the other checks.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -115,6 +154,10 @@ function Invoke-AvmPrCheck {
         [switch] $AllowPathFallback,
 
         [switch] $StopOnFail,
+
+        [ValidateNotNull()]
+        [ValidateSet('metadata', 'sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')]
+        [string[]] $ExcludeSteps = @(),
 
         [ValidateRange(1, 32)]
         [int] $ThrottleLimit = 4,
@@ -133,7 +176,7 @@ function Invoke-AvmPrCheck {
     $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
     Write-AvmLog ("pr-check: module root = {0}; ecosystem = {1}" -f $context.Root, $context.Ecosystem) -Level Verbose | Out-Null
     Assert-AvmGitWorkingTreeClean -Path $context.Root
-    $null = Resolve-AvmCommandTool -Command 'pr-check' -Ecosystem $context.Ecosystem -ModuleRoot $context.Root -AllowPathFallback:$AllowPathFallback
+    $null = Resolve-AvmCommandTool -Command 'pr-check' -Ecosystem $context.Ecosystem -ModuleRoot $context.Root -AllowPathFallback:$AllowPathFallback -ExcludeSteps $ExcludeSteps
 
     $stepDefs = @(
         [pscustomobject]@{
@@ -162,7 +205,7 @@ function Invoke-AvmPrCheck {
     )
 
     $steps = New-Object System.Collections.Generic.List[object]
-    $overall = 'pass'
+    $overall = if (@($stepDefs | Where-Object { $_.Name -notin $ExcludeSteps }).Count -eq 0) { 'skipped' } else { 'pass' }
     $stepIndex = 0
 
     foreach ($def in $stepDefs) {
@@ -173,6 +216,19 @@ function Invoke-AvmPrCheck {
         $def.Name -in @('check policy', 'check convention', 'docs')
         $stepIndex++
         $stepStart = [datetime]::UtcNow
+        if ($def.Name -in $ExcludeSteps) {
+            Write-AvmLog ('step {0}/{1}: {2} -> skipped (excluded by -ExcludeSteps)' -f $stepIndex, $stepDefs.Count, $def.Name) -Level Info | Out-Null
+            $steps.Add([pscustomobject][ordered]@{
+                    Step       = $def.Name
+                    Status     = 'skipped'
+                    Error      = 'Excluded by -ExcludeSteps.'
+                    Result     = $null
+                    StartTime  = $stepStart
+                    EndTime    = $stepStart
+                    DurationMs = 0
+                })
+            continue
+        }
         $stepSw = [System.Diagnostics.Stopwatch]::StartNew()
 
         Write-AvmLog ('step {0}/{1}: {2} (started {3})' -f $stepIndex, $stepDefs.Count, $def.Name, (Format-AvmTimestamp -Timestamp $stepStart)) -Level Info | Out-Null

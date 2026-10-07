@@ -615,6 +615,15 @@ children. Missing or invalid metadata fails and stops either chain before
 other steps, without changing module files or reading indexes. `avm pr-check`
 also requires a clean worktree before tool resolution. `-Verbose` logs the
 discovered module count, each validated metadata path, and any issues.
+`avm pr-check -ExcludeSteps` accepts an array of any of its nine step names:
+`metadata`, `sync`, `format`, `transform`, `lint`, `check policy`,
+`check convention`, `validate`, and `docs`. Names are case-insensitive and
+validated before execution; an empty array keeps the default chain. Explicit
+exclusions bypass only those steps, including the metadata stop and required
+Bicep result checks for an excluded step. Each is reported as `skipped` with an
+exclusion reason. Non-excluded checks retain their ordering and failure rules;
+version and clean-worktree guards remain mandatory. An entirely excluded chain
+reports overall `skipped`, not `pass`.
 For Bicep formatting, `avm pr-check` compares `bicep format --stdout` with
 the original source bytes and never rewrites the working copy. `avm pre-commit`
 still formats in place.
@@ -943,6 +952,9 @@ Schema enforced by `Test-AvmPins`:
   configured names, versions and resolved paths before use.
 - Both composite commands resolve and import-check all applicable prerequisites
   before metadata/step 1, after the module-upgrade and context/clean-tree guards.
+  `pr-check -ExcludeSteps` removes prerequisites used only by excluded steps,
+  retaining those shared with any remaining step. Default prerequisite sets and
+  resolution order are unchanged.
   Standalone metadata, Bicep Pester, YAML and PSRule entrypoints share the same
   mechanism. Build prerequisites supply that same Pester pin, and all test
   runners, including isolated shards, import it through the shared resolver.

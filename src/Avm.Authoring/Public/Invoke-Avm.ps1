@@ -105,11 +105,12 @@ function Invoke-Avm {
         $arguments = @(
             foreach ($arg in $rawArguments) {
                 $token = [string]$arg
-                if ($token -in @('--passthru', '--pass-thru', '-PassThru', '-passthru')) {
+                if ($arg -is [string] -and $token -in @('--passthru', '--pass-thru', '-PassThru', '-passthru')) {
                     $passThru = $true
                     continue
                 }
-                $arg
+                # Preserve array-valued parameters as a single argument.
+                , $arg
             }
         )
         $registry = @(Get-AvmVerbRegistry)

@@ -176,6 +176,27 @@ AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
+Describe 'Invoke-Avm array dispatch' {
+    It 'preserves <Case> without consuming the following parameter' -ForEach @(
+        @{ Case = 'array expressions'; Invocation = "avm spec-verb -Names @('lint', 'check policy') -Label kept"; Count = 2; Values = 'lint|check policy' }
+        @{ Case = 'comma-separated arrays'; Invocation = "avm spec-verb --names 'lint','check policy' --label kept"; Count = 2; Values = 'lint|check policy' }
+        @{ Case = 'array variables'; Invocation = '$names = @(''lint'', ''check policy''); avm spec-verb -Names $names -Label kept'; Count = 2; Values = 'lint|check policy' }
+        @{ Case = 'scalar values'; Invocation = "avm spec-verb -Names 'check policy' -Label kept"; Count = 1; Values = 'check policy' }
+        @{ Case = 'one-item arrays'; Invocation = "avm spec-verb -Names @('check policy') -Label kept"; Count = 1; Values = 'check policy' }
+        @{ Case = 'empty arrays'; Invocation = 'avm spec-verb -Names @() -Label kept'; Count = 0; Values = '' }
+        @{ Case = 'pass-through tokens inside arrays'; Invocation = "avm spec-verb -Names @('--passthru') -Label kept"; Count = 1; Values = '--passthru' }
+    ) {
+        $body = @'
+[CmdletBinding()]
+param([string[]] $Names, [string] $Label)
+'COUNT={0};NAMES={1};LABEL={2}' -f $Names.Count, ($Names -join '|'), $Label
+'@
+        $result = Invoke-AvmChildVerb -Body $body -Invocation $Invocation
+        $result.ExitCode | Should -Be 0
+        $result.Output | Should -Match ([regex]::Escape("COUNT=$Count;NAMES=$Values;LABEL=kept"))
+    }
+}
+
 Describe 'Invoke-Avm verbose dispatch' {
     It 'enables verbose output when GitHub Actions debug logging is active' {
         $body = "Write-Verbose 'runner-debug-marker'; [pscustomobject]@{ Status = 'pass' }"

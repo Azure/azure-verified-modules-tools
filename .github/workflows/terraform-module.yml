@@ -17,7 +17,8 @@
 #         contents: read
 #       secrets: inherit
 #
-# `secrets: inherit` is REQUIRED: the "Prepare test environment" step fans the
+# `secrets: inherit` is required for normal branches, not forks.
+# The "Prepare test environment" step fans the
 # full secret + variable sets into $GITHUB_ENV so terraform and example hooks
 # inherit them. This replaces the governance cred-prep script's curated
 # `AVM_*` / `TF_VAR_*` subset forwarding - and makes the old `AVM_BARE_` prefix
@@ -119,9 +120,10 @@ jobs:
 
   unit-test:
     name: Unit tests
+    if: github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
     environment: no-approval
-    steps:
+    steps: &unit-test-steps
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -129,7 +131,7 @@ jobs:
 
       - name: Configure AVM tool cache
         shell: pwsh
-        run: |
+        run: &configure-avm-tool-cache |
           $ErrorActionPreference = 'Stop'
           $avmHome = Join-Path $env:RUNNER_TEMP 'avm-home'
           $cache = Join-Path $env:RUNNER_TEMP 'tf-plugin-cache'
@@ -138,6 +140,7 @@ jobs:
           "TF_PLUGIN_CACHE_DIR=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Prepare test environment
+        if: github.event.pull_request.head.repo.fork == false
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -226,6 +229,51 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Import-Module Avm.Authoring
           avm test unit
+
+  unit-test-fork:
+    name: Unit tests (fork)
+    if: github.event.pull_request.head.repo.fork == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env: &fork-environment
+      SECRETS_CONTEXT: '{}'
+      VARS_CONTEXT: '{}'
+      ARM_USE_OIDC: 'false'
+    steps: *unit-test-steps
+
+  pr-check-fork:
+    name: PR check (fork)
+    if: github.event.pull_request.head.repo.fork == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env: *fork-environment
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Configure AVM tool cache
+        shell: pwsh
+        run: *configure-avm-tool-cache
+
+      - name: Install Avm.Authoring
+        shell: pwsh
+        env:
+          AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
+        run: *install-avm-authoring
+
+      - name: Run PR check without policy
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module Avm.Authoring
+          if (-not (Get-Command Invoke-AvmPrCheck).Parameters.ContainsKey('ExcludeSteps')) {
+              throw 'Fork checks require an Avm.Authoring release with -ExcludeSteps. Update avm-authoring-version to a compatible release.'
+          }
+          avm pr-check -ExcludeSteps 'check policy'
 
   pr-check:
     name: PR check
