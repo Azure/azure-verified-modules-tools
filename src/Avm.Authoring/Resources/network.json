@@ -9,6 +9,7 @@
   "transientHttpStatusCodes": [408, 429, 500, 502, 503, 504],
   "transientMessagePatterns": [
     "\\b(?:timed out|timeout expired|operation has timed out)\\b",
+    "\\bdial tcp\\s+\\S+:\\s+i/o timeout\\b",
     "\\bconnection (?:was )?(?:reset|refused|closed|aborted)\\b",
     "\\b(?:could not resolve host|no such host(?: is known)?|name or service not known|temporary failure in name resolution|name resolution failed)\\b",
     "\\b(?:no route to host|network is unreachable|tls handshake timeout)\\b",

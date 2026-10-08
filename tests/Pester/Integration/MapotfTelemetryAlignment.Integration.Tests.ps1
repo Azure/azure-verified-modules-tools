@@ -35,7 +35,8 @@ Describe 'Integration: MAPOTF Terraform deployment telemetry' -Tag 'Integration'
             } {
                 param($ToolPath, $Arguments, $Root, $Environment)
                 Invoke-AvmProcess -FilePath $ToolPath -ArgumentList $Arguments `
-                    -WorkingDirectory $Root -EnvVars $Environment
+                    -WorkingDirectory $Root -EnvVars $Environment `
+                    -RetryNetworkFailure:($Arguments[0] -eq 'init')
             }
         }
 
