@@ -644,6 +644,11 @@ Examples run `example,provider-cleanup,common`; standalone test modules run
 clear `TF_PLUGIN_CACHE_DIR` and use target-local providers, so independent
 targets can run in parallel without racing Terraform's shared provider cache.
 
+When direct AzAPI use or generated telemetry needs the provider and no
+`terraform` block exists, the module profile appends a provider requirement
+block to `terraform.tf`, preserving other authored content in that file.
+Modules without direct AzAPI use do not gain an unused provider requirement.
+
 `main.telemetry.tf` reads `telemetryIdPrefix` from the module's own
 `metadata.json` at apply time. When telemetry is enabled, it creates an
 empty `Microsoft.Resources/deployments@2025-04-01` deployment at the active
