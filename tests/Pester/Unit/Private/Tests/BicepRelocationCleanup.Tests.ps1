@@ -74,6 +74,36 @@ Describe 'Bicep relocation regional classification' {
         }
     }
 
+    It 'rejects ambiguous raw JSON on the second operation page: <Form>' -ForEach @(
+        @{ Form = 'duplicate code' }, @{ Form = 'escaped duplicate code' }, @{ Form = 'case-duplicate code' }
+        @{ Form = 'comment' }, @{ Form = 'trailing comma' }, @{ Form = 'array envelope' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Form = $Form } {
+            param($Form)
+            & $script:respond 'Failed' @((& $script:failed $script:regional))
+            $script:firstPage = $script:root + '/operations?api-version=2025-04-01'
+            $script:nextPage = $script:firstPage + '&page=2'
+            $script:pages[$script:firstPage].nextLink = $script:nextPage
+            $json = @{ value = @((& $script:failed $script:regional)) } | ConvertTo-Json -Depth 20 -Compress
+            $script:invalidPage = switch ($Form) {
+                'duplicate code' { $json.Replace('"code":', '"code":"AuthorizationFailed","code":') }
+                'escaped duplicate code' { $json.Replace('"code":', '"\u0063ode":"AuthorizationFailed","code":') }
+                'case-duplicate code' { $json.Replace('"code":', '"Code":"AuthorizationFailed","code":') }
+                'comment' { '/* unclassified */' + $json }
+                'trailing comma' { $json.Insert($json.Length - 1, ',') }
+                'array envelope' { '[' + $json + ']' }
+            }
+            Mock Invoke-AzRestMethod {
+                $content = if ($Path -eq $script:nextPage) { $script:invalidPage }
+                else { $script:pages[$Path] | ConvertTo-Json -Depth 20 }
+                @{ StatusCode = 200; Content = $content }
+            }
+            { Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root } | Should -Throw
+            Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter { $Path -eq $script:firstPage }
+            Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter { $Path -eq $script:nextPage }
+        }
+    }
+
     It 'rejects untyped HTTP evidence for both the deployment and operation pages: <Kind>' -ForEach @(
         @{ Kind = 'Boolean'; HttpStatus = $true }
         @{ Kind = 'string'; HttpStatus = '200' }

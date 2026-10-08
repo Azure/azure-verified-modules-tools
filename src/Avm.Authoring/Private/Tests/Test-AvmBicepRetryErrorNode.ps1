@@ -14,6 +14,7 @@ function Test-AvmBicepRetryErrorNode {
         [string] $ResourceTarget,
         [string] $WorkspaceTarget,
         [string] $AksPreflightMessage,
+        [string[]] $Targets = @(),
         [hashtable] $Evidence
     )
 
@@ -23,7 +24,7 @@ function Test-AvmBicepRetryErrorNode {
     $context = @{
         RetryKind = $RetryKind; SubscriptionId = $SubscriptionId; ResourceLocation = $ResourceLocation
         Depth = $Depth; ResourceTarget = $ResourceTarget; WorkspaceTarget = $WorkspaceTarget
-        AksPreflightMessage = $AksPreflightMessage; Evidence = $Evidence
+        AksPreflightMessage = $AksPreflightMessage; Targets = $Targets; Evidence = $Evidence
     }
     if ($null -eq $Evidence) {
         $context.Evidence = @{ Narrow = $false; Unknown = $false }
@@ -77,6 +78,7 @@ function Test-AvmBicepRetryErrorNode {
             [string]::IsNullOrWhiteSpace($properties['target'])))) {
         $Evidence.Unknown = $true
     }
+    if ($properties['target'] -is [string]) { $context.Targets = @($Targets) + $properties['target'] }
     $children = @()
     if ($null -ne $properties['details']) {
         if ($properties['details'] -isnot [System.Collections.IList]) { return $false }
@@ -134,6 +136,14 @@ function Test-AvmBicepRetryErrorNode {
         return $code -ceq 'InternalServerError' -and $children.Count -eq 0 -and
         -not [string]::IsNullOrWhiteSpace($message) -and -not [string]::IsNullOrWhiteSpace($ResourceTarget) -and
         ($null -eq $properties['target'] -or $properties['target'] -ieq $ResourceTarget)
+    }
+    if ($code -cin @('ResourcesForSkuUnavailable', 'BadRequest', 'ManagedEnvironmentCapacityHeavyUsageError')) {
+        $Evidence.Narrow = $true
+        if (-not $properties.ContainsKey('details') -and -not $properties.ContainsKey('innererror') -and
+            (Test-AvmBicepRegionalServiceError -Code $code -Message $message -ResourceLocation $ResourceLocation `
+                -SubscriptionId $SubscriptionId -Targets $context.Targets)) {
+            return $true
+        }
     }
     switch ($code) {
         'LocationNotAvailableForResourceType' {

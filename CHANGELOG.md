@@ -108,7 +108,7 @@ section when cutting a release.
 ### Changed
 
 - Bicep native retries and cleanup incorporate the registry updates through
-  [`4cb06c2`](https://github.com/Azure/bicep-registry-modules/commit/4cb06c258d90a26a21c79e7cb04fd138e87e32dd):
+  [`c85af73`](https://github.com/Azure/bicep-registry-modules/commit/c85af7325ac0e6cf1ebee4cd3ce4d673b7286569):
   bounded metadata-timeout reads, narrowly recognized capacity failures,
   cleanup before eligible same-region retries, exact nested-preflight and
   existing-Graph evidence, and resumable deployment-record deletion.
@@ -118,6 +118,9 @@ section when cutting a release.
   Exact provider-region availability and SDK-null AKS evidence can relocate
   eligible cases; deployment operations retain extension metadata, and accepted
   history deletions wait through `Deleting` without treating it as absence.
+  Exact Search and Container Apps service failures can use the same bounded
+  regional retry path only with complete region, diagnostic and target evidence;
+  permission, mixed, malformed and regionless failures remain ineligible.
 - Pester initialization rejects an already-loaded same-version engine from
   another configured path, with fresh-session guidance. Build checks also fail
   on setup/teardown errors even when individual tests pass.

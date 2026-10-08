@@ -32,7 +32,7 @@ function New-NativeBicepWorkflowFixture {
         NestedExtensions = @(); MissingOperations = $false; ReadinessState = 'Running'
         Outputs = @{ account = @{ type = 'String'; value = 'deployed-account' } }
         CreatedId = ''; LastDeploymentId = ''
-        RegionalFailures = 0; RecordDeleteFails = $false
+        RegionalFailures = 0; RegionalValidationFailures = 0; RegionalErrorFactory = $null; RecordDeleteFails = $false
         RetrySequence = [Collections.Generic.Queue[string]]::new()
         TransientResourceType = ''; TransientErrorCode = 'InternalServerError'; ThrowRetryFailure = $false
         NativeResponseMode = ''; RecordVisibilityReads = 0; RecordVisibilityAfterDeletion = 1
@@ -150,6 +150,13 @@ function New-NativeBicepWorkflowFixture {
             if ($Operation -eq 'Validate') {
                 if ($state.ValidationFails) { throw [UnauthorizedAccessException]::new('Validation denied.') }
                 if ($null -ne $state.ValidationError) { throw $state.ValidationError }
+                if ($state.RegionalValidationFailures -gt 0) {
+                    $state.RegionalValidationFailures--
+                    $node = & $state.RegionalErrorFactory $Parameters['resourceLocation'] $null
+                    throw [Management.Automation.ErrorRecord]::new(
+                        [InvalidOperationException]::new('Safe regional validation failure.'),
+                        'AvmBicepTemplateValidationFailed', 'InvalidResult', $node)
+                }
                 return
             }
             $id = Get-AvmBicepScopedDeploymentId -Scope $Scope -SubscriptionId $state.CurrentSubscription `
@@ -201,7 +208,10 @@ function New-NativeBicepWorkflowFixture {
                 })
             if ($regional -or $transient) {
                 $errorBody = if ($regional) {
-                    @{ code = 'AllocationFailed'; message = 'Insufficient capacity in the region.' }
+                    if ($null -ne $state.RegionalErrorFactory) {
+                        & $state.RegionalErrorFactory $Parameters['resourceLocation'] $target
+                    }
+                    else { @{ code = 'AllocationFailed'; message = 'Insufficient capacity in the region.' } }
                 }
                 else {
                     @{

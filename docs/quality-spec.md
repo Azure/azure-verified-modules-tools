@@ -835,7 +835,16 @@ response with an explicitly empty supported-zone list, and exact
 `LocationNotAvailableForResourceType` provider-availability response. The latter
 must name the selected region and a valid provider-qualified resource type,
 with a distinct non-global available-region list that excludes the rejected
-region. Normalize null SDK `target` and `details` members only on the copied
+region. Exact Search SKU-capacity and semantic-availability responses also
+qualify only for the selected non-global region. Container Apps managed
+environment capacity requires its complete AKS diagnostic envelope, matching
+strict JSON body and recognized, unique diagnostic headers. For these service
+responses, every supplied ancestor or leaf target must be a consistent service
+identity or deployment in the selected subscription; Container Apps requires a managed-environment
+identity, while untargeted Search messages are allowed. Keep target ancestry
+separate for each error path. A selected candidate or resource ID alone does
+not establish the failed region for regionless service errors.
+Normalize null SDK `target` and `details` members only on the copied
 error node; preserve the original response and reject meaningful, empty,
 malformed or unknown extra fields in narrow evidence. Require the matching
 region and resource/subscription context, complete error structure and no
