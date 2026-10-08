@@ -6,7 +6,7 @@
       "testTenant": "bami",
       "entraGroups": [
         "avm-test-entra-readers",
-        "avm-test-identity-owners"
+        "avm-test-management-group-owners"
       ],
       "repositories": [
         "*"
@@ -57,7 +57,7 @@
         "avm-ptn-unified-data-platform"
       ],
       "entraGroups": [
-        "avm-test-fabric-admins"
+        "avm-test-entra-fabric-admins"
       ]
     },
     {

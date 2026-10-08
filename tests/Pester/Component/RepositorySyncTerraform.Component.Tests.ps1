@@ -43,7 +43,7 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
                 owner = [pscustomobject]@{ id = 6844498 }
             }
             repositorySyncRepositoryId = '1239632211'
-            entraGroupNames = @('avm-test-entra-readers', 'avm-test-identity-owners')
+            entraGroupNames = @('avm-test-entra-readers', 'avm-test-management-group-owners')
             issueLog = @()
         }
         $script:parameters.environment = Get-RepositorySyncTerraformEnvironment -Root $TestDrive -Settings $script:parameters.bamiSettings
