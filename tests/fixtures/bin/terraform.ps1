@@ -46,6 +46,7 @@ if ($env:AVM_STUB_TERRAFORM_TRACE) {
         Command = $args[0]
         Directory = (Get-Location).Path
         DataDirectory = $env:TF_DATA_DIR
+        PluginCache = $env:TF_PLUGIN_CACHE_DIR
         SkipRegistration = $env:ARM_SKIP_PROVIDER_REGISTRATION
         RegistrationMode = $env:ARM_RESOURCE_PROVIDER_REGISTRATIONS
     })

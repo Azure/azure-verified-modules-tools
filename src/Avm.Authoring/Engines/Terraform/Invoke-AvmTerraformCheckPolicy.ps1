@@ -348,8 +348,15 @@ function Invoke-AvmTerraformCheckPolicy {
             $relativeExample = [System.IO.Path]::GetRelativePath($Context.Root, $sourceExample)
             $caseRoot = Join-Path $stageRoot ([string]$exampleIndex)
             $moduleStage = Join-Path $caseRoot 'module'
-            Copy-AvmTerraformModuleTree -SourceRoot $Context.Root -DestinationRoot $moduleStage
+            Copy-AvmTerraformModuleTree `
+                -SourceRoot $Context.Root `
+                -DestinationRoot $moduleStage `
+                -IncludeDependencyLocks
             $stagedExample = Join-Path $moduleStage $relativeExample
+            $null = Copy-AvmTerraformModuleCache `
+                -SourceWorkingDirectory $sourceExample `
+                -DestinationWorkingDirectory $stagedExample `
+                -DestinationDataDirectory (Join-Path $caseRoot 'data')
             $exampleName = Split-Path -Path $sourceExample -Leaf
             Write-AvmLog `
                 -Level Info `

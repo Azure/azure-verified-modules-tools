@@ -187,12 +187,12 @@ The checked-in default and Fabric selection are:
   {
     "name": "default",
     "repositories": ["*"],
-    "entraGroups": ["avm-test-entra-readers", "avm-test-identity-owners"]
+    "entraGroups": ["avm-test-entra-readers", "avm-test-management-group-owners"]
   },
   {
     "name": "fabric",
     "repositories": ["avm-ptn-unified-data-platform"],
-    "entraGroups": ["avm-test-fabric-admins"]
+    "entraGroups": ["avm-test-entra-fabric-admins"]
   }
 ]
 ```

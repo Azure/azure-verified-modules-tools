@@ -16,6 +16,7 @@ Describe 'Shared network retry' {
         InModuleScope 'Avm.Authoring' {
             Mock Wait-AvmRetryDelay
             Mock Write-Warning
+            Mock Write-Verbose
         }
     }
 
@@ -36,10 +37,12 @@ Describe 'Shared network retry' {
                 $result | Should -Be 'ok'
                 $state.Calls | Should -Be 3
                 Should -Invoke Wait-AvmRetryDelay -Exactly 2
+                Should -Invoke Write-Warning -Exactly 0
+                Should -Invoke Write-Verbose -Exactly 2 -ParameterFilter { $Message -match 'attempt [12] of 4' }
             }
         }
 
-        It 'stops at the configured limit and rethrows the original error' {
+        It 'stops at the configured limit and rethrows the original error with a concise detail' {
             InModuleScope 'Avm.Authoring' {
                 $state = @{ Calls = 0 }
                 $thrown = $null
@@ -49,11 +52,33 @@ Describe 'Shared network retry' {
                         throw [System.Net.Http.HttpRequestException]::new('Connection refused')
                     }
                 }
-                catch { $thrown = $_.Exception }
+                catch { $thrown = $_ }
 
-                $thrown | Should -BeOfType ([System.Net.Http.HttpRequestException])
+                $thrown.Exception | Should -BeOfType ([System.Net.Http.HttpRequestException])
+                $thrown.ErrorDetails.Message | Should -BeLike 'probe could not complete after 4 attempts because the network connection*'
+                $thrown.ErrorDetails.Message | Should -BeLike '*Run the command with -Verbose for technical details.'
                 $state.Calls | Should -Be (Get-AvmNetworkRetryPolicy).MaxAttempts
-                Should -Invoke Write-Warning -Exactly 1 -ParameterFilter { $Message -match 'failed after 4 attempts' }
+                Should -Invoke Write-Warning -Exactly 0
+                Should -Invoke Write-Verbose -Exactly 1 -ParameterFilter { $Message -match 'failed after 4 attempts' }
+            }
+        }
+
+        It 'summarizes <Cause> failures for human-readable output' -TestCases @(
+            @{ Cause = 'DNS'; Message = 'Could not resolve host: github.com'; Expected = 'service name could not be resolved' }
+            @{ Cause = 'TLS'; Message = 'schannel: failed to receive handshake'; Expected = 'secure connection' }
+            @{ Cause = 'timeout'; Message = 'connection timed out'; Expected = 'timed out' }
+            @{ Cause = 'service'; Message = 'HTTP 503 Service Unavailable'; Expected = 'temporarily unavailable' }
+        ) {
+            InModuleScope 'Avm.Authoring' -Parameters @{ FailureMessage = $Message; ExpectedCause = $Expected } {
+                param($FailureMessage, $ExpectedCause)
+                $record = [System.Management.Automation.ErrorRecord]::new(
+                    [System.Exception]::new($FailureMessage),
+                    'test',
+                    [System.Management.Automation.ErrorCategory]::ConnectionError,
+                    $null)
+
+                Get-AvmRetryFailureMessage -Activity 'probe' -ErrorRecord $record -Attempts 4 |
+                    Should -BeLike "*$ExpectedCause*"
             }
         }
 

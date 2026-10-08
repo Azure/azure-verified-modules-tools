@@ -13,6 +13,7 @@ Describe 'terraform-module reusable workflow' {
 
     It 'uses the shared retrying installer and version input in <Job>' -ForEach @(
         @{ Job = 'unit-test'; Run = '&install-avm-authoring |' }
+        @{ Job = 'pr-check-fork'; Run = '*install-avm-authoring' }
         @{ Job = 'pr-check'; Run = '*install-avm-authoring' }
         @{ Job = 'integration-test'; Run = '*install-avm-authoring' }
         @{ Job = 'discover-examples'; Run = '*install-avm-authoring' }
@@ -89,6 +90,122 @@ Describe 'terraform-module reusable workflow' {
 
     It 'no longer lists per-example e2e targeting as a divergence' {
         $script:workflow | Should -Not -Match 'has no per-example targeting'
+    }
+}
+
+Describe 'terraform-module fork isolation' {
+    BeforeAll {
+        $workflowPath = Join-Path $PSScriptRoot '..' '..' '..' '..' '.github' 'workflows' 'terraform-module.yml'
+        $script:workflow = Get-Content -LiteralPath $workflowPath -Raw
+        $script:jobs = @{}
+        foreach ($name in @('subscriptions', 'unit-test', 'unit-test-fork', 'pr-check', 'pr-check-fork', 'integration-test', 'discover-examples', 'e2e-test')) {
+            $pattern = '(?ms)^  ' + [regex]::Escape($name) + ':\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)'
+            $block = [regex]::Match($script:workflow, $pattern)
+            if (-not $block.Success) { throw "Could not isolate the $name job block." }
+            $script:jobs[$name] = $block.Value
+        }
+        $run = [regex]::Match(
+            $script:jobs['pr-check-fork'],
+            '(?m)^      - name: Run PR check without policy\r?\n        shell: pwsh\r?\n        run: \|\r?\n(?<code>(?:^          .*\r?\n|^\r?\n)*)')
+        if (-not $run.Success -or [string]::IsNullOrWhiteSpace($run.Groups['code'].Value)) {
+            throw 'Could not isolate the fork pr-check script.'
+        }
+        $script:forkCheckScript = [scriptblock]::Create(($run.Groups['code'].Value -replace '(?m)^          ', ''))
+    }
+
+    It 'runs <Job> independently with read-only permissions and no protected environment' -ForEach @(
+        @{ Job = 'unit-test-fork' }
+        @{ Job = 'pr-check-fork' }
+    ) {
+        $block = $script:jobs[$Job]
+        $block | Should -Match '(?m)^    if: github\.event\.pull_request\.head\.repo\.fork == true\r?$'
+        $block | Should -Match '(?m)^    runs-on: ubuntu-latest\r?$'
+        $block | Should -Match '(?m)^    permissions:\r?\n      contents: read\r?\n    env:'
+        $block | Should -Not -Match 'environment:|needs:|id-token:|azure/login@|SELECTED_SUBSCRIPTION|register-features'
+        $block | Should -Not -Match '\$\{\{\s*(?:secrets|vars)\.'
+    }
+
+    It 'overrides inherited credential contexts and disables OIDC in both fork jobs' {
+        $script:jobs['unit-test-fork'] | Should -Match (
+            '(?m)^    env: &fork-environment\r?\n' +
+            "      SECRETS_CONTEXT: '\{\}'\r?\n" +
+            "      VARS_CONTEXT: '\{\}'\r?\n" +
+            "      ARM_USE_OIDC: 'false'\r?$")
+        $script:jobs['pr-check-fork'] | Should -Match '(?m)^    env: \*fork-environment\r?$'
+    }
+
+    It 'shares the unit-test steps but never prepares the environment on a fork' {
+        $script:jobs['unit-test'] | Should -Match '(?m)^    steps: &unit-test-steps\r?$'
+        $script:jobs['unit-test-fork'] | Should -Match '(?m)^    steps: \*unit-test-steps\r?$'
+        $script:jobs['unit-test'] | Should -Match (
+            '(?m)^      - name: Prepare test environment\r?\n' +
+            '        if: github\.event\.pull_request\.head\.repo\.fork == false\r?$')
+        $script:jobs['unit-test'] | Should -Match '(?m)^          avm test unit\r?$'
+        $script:jobs['unit-test'] | Should -Match '(?m)^          persist-credentials: false\r?$'
+    }
+
+    It 'uses the existing cache setup and non-persistent checkout for fork pr-check' {
+        $script:jobs['unit-test'] | Should -Match '(?m)^        run: &configure-avm-tool-cache \|\r?$'
+        $script:jobs['pr-check-fork'] | Should -Match '(?m)^        run: \*configure-avm-tool-cache\r?$'
+        $script:jobs['pr-check-fork'] | Should -Match '(?m)^          persist-credentials: false\r?$'
+        $script:jobs['pr-check-fork'] | Should -Not -Match 'continue-on-error:|Prepare test environment'
+    }
+
+    It 'rejects an older module before invoking any checks' {
+        & {
+            function Import-Module {
+                param([string] $Name)
+                $Name | Should -Be 'Avm.Authoring'
+            }
+            function Invoke-AvmPrCheck { param([string] $Path) }
+            function Invoke-ForkTestCommand { throw 'Checks must not execute with an older module.' }
+            Set-Alias -Name avm -Value Invoke-ForkTestCommand -Scope Local
+
+            { & $script:forkCheckScript } | Should -Throw '*Fork checks require an Avm.Authoring release with -ExcludeSteps*'
+        }
+    }
+
+    It 'runs the composite command excluding only policy with a compatible module' {
+        $result = & {
+            function Import-Module {
+                param([string] $Name)
+                $Name | Should -Be 'Avm.Authoring'
+            }
+            function Invoke-AvmPrCheck { param([string[]] $ExcludeSteps) }
+            function Invoke-ForkTestCommand {
+                param([string] $Verb, [string[]] $ExcludeSteps)
+                [pscustomobject]@{ Verb = $Verb; Exclusions = $ExcludeSteps }
+            }
+            Set-Alias -Name avm -Value Invoke-ForkTestCommand -Scope Local
+
+            & $script:forkCheckScript
+        }
+        $result.Verb | Should -Be 'pr-check'
+        $result.Exclusions | Should -Be @('check policy')
+    }
+
+    It 'retains the non-fork gate for <Job>' -ForEach @(
+        @{ Job = 'subscriptions' }
+        @{ Job = 'unit-test' }
+        @{ Job = 'pr-check' }
+        @{ Job = 'integration-test' }
+        @{ Job = 'discover-examples' }
+        @{ Job = 'e2e-test' }
+    ) {
+        $script:jobs[$Job] | Should -Match 'github\.event\.pull_request\.head\.repo\.fork == false'
+    }
+
+    It 'preserves normal-branch credentials, environments, and the full pr-check command' {
+        $script:jobs['unit-test'] | Should -Match '(?m)^    environment: no-approval\r?$'
+        $script:jobs['pr-check'] | Should -Match '(?m)^    environment: pr-check\r?$'
+        $script:jobs['pr-check'] | Should -Match '(?m)^    needs: subscriptions\r?$'
+        $script:jobs['pr-check'] | Should -Match '(?m)^      id-token: write\r?$'
+        $script:jobs['pr-check'] | Should -Match '(?m)^          avm pr-check\r?$'
+        $script:jobs['pr-check'] | Should -Not -Match 'ExcludeSteps|fork-environment'
+        foreach ($job in @('unit-test', 'pr-check')) {
+            $script:jobs[$job] | Should -Match 'ConvertFrom-Context \$env:SECRETS_CONTEXT'
+            $script:jobs[$job] | Should -Match 'ConvertFrom-Context \$env:VARS_CONTEXT'
+        }
     }
 }
 
@@ -185,7 +302,8 @@ Describe 'CI workflow' {
         $globalEnvironment.Groups['body'].Value |
             Should -Match "(?m)^  DOTNET_MultiCoreJitMinNumCpus: '7fffffff'\r?$"
         ([regex]::Matches($script:ci, '(?m)^\s*DOTNET_MultiCoreJitMinNumCpus:')).Count | Should -Be 1
-        $script:ci | Should -Match 'run: \./build\.ps1 ci-tests'
+        $script:ci | Should -Match 'run: \./build\.ps1 \$\{\{ matrix\.task \}\}'
+        $script:ci | Should -Match 'run: \./build\.ps1 ci-component'
         $script:ci | Should -Match 'run: \./build\.ps1 test-workflows'
         $script:ci | Should -Match 'run: \./build\.ps1 integration'
     }
@@ -200,7 +318,7 @@ Describe 'CI workflow' {
         $jobBlock | Should -Match 'run: \./build\.ps1 test-workflows'
         $jobBlock | Should -Match 'name: test-results-workflows-ubuntu-latest'
 
-        $script:ci | Should -Match 'needs: \[build, workflows, integration, bicep-integration\]'
+        $script:ci | Should -Match 'needs: \[unit, component, workflows, integration, bicep-integration\]'
     }
 
     It 'authenticates tflint plugin downloads so the shared macOS runner egress does not hit the GitHub API rate limit' {
@@ -209,25 +327,49 @@ Describe 'CI workflow' {
 
     It 'runs lint once in a dedicated Ubuntu job while retaining the three-OS test matrix' {
         $lint = [regex]::Match($script:ci, '(?ms)^  lint:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
-        $build = [regex]::Match($script:ci, '(?ms)^  build:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        $unit = [regex]::Match($script:ci, '(?ms)^  unit:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        $component = [regex]::Match($script:ci, '(?ms)^  component:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
         $lint.Success | Should -BeTrue
-        $build.Success | Should -BeTrue
+        $unit.Success | Should -BeTrue
+        $component.Success | Should -BeTrue
         $lint.Value | Should -Match '(?m)^    runs-on: ubuntu-latest\r?$'
         $lint.Value | Should -Not -Match 'matrix:'
         $lint.Value | Should -Match 'Install-AvmBuildPrerequisites\.ps1 -IncludePSScriptAnalyzer'
         $lint.Value | Should -Match 'run: \./build\.ps1 lint'
         ([regex]::Matches($script:ci, '(?m)run: \./build\.ps1 lint\r?$')).Count | Should -Be 1
-        $build.Value | Should -Match 'os: \[ubuntu-latest, windows-latest, macos-latest\]'
-        $build.Value | Should -Match ([regex]::Escape(
-                "timeout-minutes: `${{ matrix.os == 'windows-latest' && 30 || 25 }}"))
-        $build.Value | Should -Match 'Install-AvmBuildPrerequisites\.ps1 -IncludePSScriptAnalyzer'
-        $build.Value | Should -Match 'run: \./build\.ps1 ci-tests'
+        $unit.Value | Should -Match 'os: ubuntu-latest'
+        $unit.Value | Should -Match 'os: windows-latest'
+        $unit.Value | Should -Match 'os: macos-latest'
+        $unit.Value | Should -Match 'task: ci-coverage'
+        $unit.Value | Should -Match 'task: ci-unit'
+        $unit.Value | Should -Match 'run: \./build\.ps1 \$\{\{ matrix\.task \}\}'
+        $unit.Value | Should -Match 'Upload coverage to GitHub'
+        $unit.Value | Should -Match "matrix\.os == 'ubuntu-latest'"
+        $unit.Value | Should -Match 'out/coverage/coverage\.cobertura\.xml'
+        $component.Value | Should -Match 'os: \[ubuntu-latest, windows-latest, macos-latest\]'
+        foreach ($job in @($unit, $component)) {
+            $job.Value | Should -Match '(?m)^    timeout-minutes: 25\r?$'
+            $job.Value | Should -Match 'fail-fast:\s*false'
+            $job.Value | Should -Not -Match 'continue-on-error:\s*true'
+            $job.Value | Should -Match 'Install-AvmBuildPrerequisites\.ps1 -IncludePSScriptAnalyzer'
+        }
+        $component.Value | Should -Match 'run: \./build\.ps1 ci-component'
+    }
+
+    It 'collects coverage in the Ubuntu unit leg without a duplicate test job' {
+        $unit = [regex]::Match($script:ci, '(?ms)^  unit:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        $unit.Success | Should -BeTrue
+        $unit.Value | Should -Match 'task: ci-coverage'
+        $unit.Value | Should -Match 'Upload coverage to GitHub'
+        $script:ci | Should -Not -Match '(?m)^  coverage:\r?$'
+        $script:ci | Should -Not -Match 'coverage-inputs'
+        $script:ci | Should -Not -Match 'coverage-input\.zip'
     }
 
     It 'uses the prerequisite installer in every CI test job type' {
         ([regex]::Matches(
                 $script:ci,
-                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 5
+                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 6
     }
 
     It 'installs pinned Bicep policy dependencies before integration acceptance only' {
@@ -248,7 +390,7 @@ Describe 'CI workflow' {
         $bicep | Should -Not -Match 'environment:|id-token:|azure/login|Add-MpPreference|fixture:'
         $bicep | Should -Match 'if: always\(\)'
         $bicep | Should -Match 'test-results-bicep-integration-'
-        $script:ci | Should -Match 'needs: \[build, workflows, integration, bicep-integration\]'
+        $script:ci | Should -Match 'needs: \[unit, component, workflows, integration, bicep-integration\]'
     }
 }
 

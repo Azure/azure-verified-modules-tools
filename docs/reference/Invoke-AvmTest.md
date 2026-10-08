@@ -36,7 +36,7 @@ Routed by the dispatcher: 'avm test'.
 ## Syntax
 
 ```powershell
-Invoke-AvmTest [[-Path] <string>] [-Ecosystem <string>] [-AllowPathFallback] [-NoInit] [-SkipModuleVersionCheck] [<CommonParameters>]
+Invoke-AvmTest [[-Path] <string>] [-Ecosystem <string>] [-AllowPathFallback] [-NoInit] [-UseExistingInit] [-SkipModuleVersionCheck] [<CommonParameters>]
 ```
 
 ## Parameters
@@ -101,6 +101,21 @@ current location.
 
 Skip the PowerShell Gallery check that otherwise stops the command when a
 newer Avm.Authoring version is available. Writes a warning once.
+
+| Property | Value |
+| --- | --- |
+| Type | `Switch` |
+| Required | false |
+| Position | named |
+| Default value | False |
+| Accept pipeline input | false |
+| Accept wildcard characters | false |
+
+### -UseExistingInit
+
+Terraform-only: reuse initialization prepared by a composite command
+and assess module coverage from each example's existing
+'.terraform/modules/modules.json'.
 
 | Property | Value |
 | --- | --- |

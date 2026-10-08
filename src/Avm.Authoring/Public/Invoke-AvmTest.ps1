@@ -41,6 +41,11 @@ function Invoke-AvmTest {
         -upgrade' step and use its existing initialization. Module coverage is
         not assessed with this switch and reports a warning. Ignored for Bicep.
 
+    .PARAMETER UseExistingInit
+        Terraform-only: reuse initialization prepared by a composite command
+        and assess module coverage from each example's existing
+        '.terraform/modules/modules.json'.
+
     .PARAMETER SkipModuleVersionCheck
         Skip the PowerShell Gallery check that otherwise stops the command when a
         newer Avm.Authoring version is available. Writes a warning once.
@@ -68,6 +73,9 @@ function Invoke-AvmTest {
 
         [switch] $NoInit,
 
+        [Parameter(DontShow)]
+        [switch] $UseExistingInit,
+
         [switch] $SkipModuleVersionCheck
     )
 
@@ -77,6 +85,9 @@ function Invoke-AvmTest {
     Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
     $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
+    if ($NoInit -and $UseExistingInit) {
+        throw [System.ArgumentException]::new('NoInit and UseExistingInit cannot be combined.')
+    }
 
     switch ($context.Ecosystem) {
         'bicep' {
@@ -84,7 +95,11 @@ function Invoke-AvmTest {
             Invoke-AvmBicepTest -Context $context -AllowPathFallback:$AllowPathFallback
         }
         'terraform' {
-            Invoke-AvmTerraformTest -Context $context -AllowPathFallback:$AllowPathFallback -NoInit:$NoInit
+            Invoke-AvmTerraformTest `
+                -Context $context `
+                -AllowPathFallback:$AllowPathFallback `
+                -NoInit:$NoInit `
+                -UseExistingInit:$UseExistingInit
         }
         default {
             throw [AvmContextException]::new(

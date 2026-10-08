@@ -410,7 +410,7 @@ avm -SkipModuleVersionCheck lint            # Invoke-AvmLint (bicep lint; scoped
 avm -SkipModuleVersionCheck test            # Invoke-AvmTest (bicep build --stdout; terraform validate -json per example)
 avm -SkipModuleVersionCheck test --no-init  # Use initialized examples; module coverage is not assessed
 avm -SkipModuleVersionCheck docs            # Invoke-AvmDocs (terraform-docs inject; Bicep Scriban template)
-avm -SkipModuleVersionCheck pre-commit      # Terraform: metadata -> sync -> check convention -> transform -> format -> docs
+avm -SkipModuleVersionCheck pre-commit      # Terraform: metadata -> initialize -> sync -> check convention -> transform -> format -> docs
 avm -SkipModuleVersionCheck pre-commit -Ecosystem terraform -ManagedFilesLocalPath D:\managed-files\terraform\files -ConfigLocalPath D:\tools\repository-management\repository-config -RepoId avm-res-foo
 
 Remove-Module Avm.Authoring

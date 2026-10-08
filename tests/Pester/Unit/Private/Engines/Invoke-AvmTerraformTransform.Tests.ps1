@@ -74,7 +74,9 @@ Describe 'Invoke-AvmTerraformTransform' {
                 $ArgumentList[0] -eq 'transform' -and
                 ([array]::IndexOf($ArgumentList, '/fake/root')) -lt ([array]::IndexOf($ArgumentList, '/fake/module')) -and
                 ([array]::IndexOf($ArgumentList, '/fake/module')) -lt ([array]::IndexOf($ArgumentList, '/fake/common')) -and
-                $ArgumentList -contains '--tf-dir'
+                $ArgumentList -contains '--tf-dir' -and
+                [string]::IsNullOrWhiteSpace([string]$EnvVars['TF_PLUGIN_CACHE_DIR']) -and
+                -not [string]::IsNullOrWhiteSpace([string]$EnvVars['MAPOTF_PROVIDER_SCHEMA_CACHE_DIR'])
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $ArgumentList[0] -eq 'transform' -and
@@ -163,7 +165,7 @@ Describe 'Invoke-AvmTerraformTransform' {
         }
     }
 
-    It 'uses a serial target throttle when Terraform has a shared plugin cache' {
+    It 'unsets an ambient shared plugin cache for every transform phase' {
         $ctx = $script:context
         InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
@@ -181,6 +183,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                     @(
                         [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
                         [pscustomobject]@{ Path = '/fake/example'; Scope = 'example'; Profiles = @('example', 'provider-cleanup', 'common') }
+                        [pscustomobject]@{ Path = '/fake/test'; Scope = 'test'; Profiles = @('provider-cleanup', 'test') }
                     )
                 }
                 Mock Invoke-AvmParallel
@@ -189,9 +192,11 @@ Describe 'Invoke-AvmTerraformTransform' {
 
                 Invoke-AvmTerraformTransform -Context $C -ThrottleLimit 4 | Out-Null
 
-                Should -Invoke Invoke-AvmParallel -Exactly 3 -ParameterFilter {
-                    $ThrottleLimit -eq 1
+                Should -Invoke Invoke-AvmParallel -Exactly 4 -ParameterFilter {
+                    $ThrottleLimit -eq 4 -and
+                    [string]::IsNullOrWhiteSpace([string]$Argument.EnvVars.TF_PLUGIN_CACHE_DIR)
                 }
+                $env:TF_PLUGIN_CACHE_DIR | Should -Be '/fake/plugin-cache'
             }
             finally {
                 $env:TF_PLUGIN_CACHE_DIR = $savedPluginCache

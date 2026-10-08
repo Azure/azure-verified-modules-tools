@@ -26,7 +26,7 @@ Describe 'Repository sync unified driver' -Tag Component {
         $script:config = @{
             repositoryGroups = @(@{
                 name = 'default'; order = -1; repositories = @('*'); testTenant = 'bami'
-                entraGroups = @('avm-test-entra-readers', 'avm-test-identity-owners')
+                entraGroups = @('avm-test-entra-readers', 'avm-test-management-group-owners')
             })
         }
         $script:config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $script:configPath
@@ -143,7 +143,7 @@ Describe 'Repository sync unified driver' -Tag Component {
         $variables.bami_test_settings.Count | Should -Be 8
         $variables.repository_sync_repository_id | Should -Be '1239632211'
         $variables.ContainsKey('state_layout') | Should -BeFalse
-        $variables.entra_group_names | Should -Be @('avm-test-entra-readers', 'avm-test-identity-owners')
+        $variables.entra_group_names | Should -Be @('avm-test-entra-readers', 'avm-test-management-group-owners')
         $expected = $PlanOnly
         Should -Invoke Invoke-TerraformPlanAndApply -Exactly 1 -ParameterFilter { $planOnly -eq $expected }
         Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 1 -ParameterFilter { $planOnly -eq $expected }
@@ -360,12 +360,12 @@ Describe 'Repository sync unified driver' -Tag Component {
     It 'accumulates and deduplicates additional Entra names before the one root' {
         $script:config.repositoryGroups += @{
             name = 'analytics'; order = 10; repositories = @('avm-ptn-example-repo')
-            entraGroups = @('avm-test-identity-owners', 'avm-test-fabric-admins')
+            entraGroups = @('avm-test-management-group-owners', 'avm-test-entra-fabric-admins')
         }
         $script:config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $script:configPath
         $null = & $script:driver @script:arguments
         Should -Invoke Invoke-TerraformPlanAndApply -Exactly 1 -ParameterFilter {
-            ($entraGroupNames -join ',') -ceq 'avm-test-entra-readers,avm-test-identity-owners,avm-test-fabric-admins'
+            ($entraGroupNames -join ',') -ceq 'avm-test-entra-readers,avm-test-management-group-owners,avm-test-entra-fabric-admins'
         }
     }
 
