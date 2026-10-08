@@ -31,7 +31,7 @@ function New-AvmTestBamiPlan {
         [switch] $OwnerMigration,
         [switch] $LegacyMembershipMigration,
         [string] $RemovedGroup,
-        [string[]] $GroupNames = @('avm-test-identity-owners', 'avm-test-entra-readers'),
+        [string[]] $GroupNames = @('avm-test-workload-identity-owners', 'avm-test-entra-readers'),
         [string] $RepositoryOwnerId = '6844498',
         [string] $RepositorySyncRepositoryId = '1239632211',
         [string] $JobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main',

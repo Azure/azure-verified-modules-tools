@@ -121,7 +121,7 @@ Describe 'Candidate plan and output safety' {
             RepositoryId = '1234'
             RepositoryOwnerId = '6844498'
             RepositorySyncRepositoryId = '1239632211'
-            EntraGroupNames = @('avm-test-identity-owners', 'avm-test-entra-readers')
+            EntraGroupNames = @('avm-test-workload-identity-owners', 'avm-test-entra-readers')
         }
     }
 
@@ -162,7 +162,7 @@ Describe 'Candidate plan and output safety' {
         @{ Address = 'module.azure.data.azapi_client_config.current' }
         @{ Address = 'module.azure.data.azuread_client_config.current' }
         @{ Address = 'module.azure.data.azuread_group.test_permissions["avm-test-entra-readers"]' }
-        @{ Address = 'module.azure.data.azuread_group.test_permissions["avm-test-identity-owners"]' }
+        @{ Address = 'module.azure.data.azuread_group.test_permissions["avm-test-workload-identity-owners"]' }
     ) {
         $resource = @($script:plan.prior_state.values.root_module.child_modules[0].resources |
             Where-Object { $_['address'] -ceq $Address })[0]
@@ -288,7 +288,7 @@ Describe 'Candidate plan and output safety' {
     It 'rejects missing, duplicated, renamed, invalid-ID or nonsecurity group evidence' {
         foreach ($address in @(
             'module.azure.data.azuread_group.test_permissions["avm-test-entra-readers"]',
-            'module.azure.data.azuread_group.test_permissions["avm-test-identity-owners"]'
+            'module.azure.data.azuread_group.test_permissions["avm-test-workload-identity-owners"]'
         )) {
             foreach ($field in @('object_id', 'display_name', 'security_enabled')) {
                 $invalid = New-AvmTestBamiPlan
@@ -354,7 +354,7 @@ Describe 'Candidate plan and output safety' {
     }
 
     It 'adds the configured Fabric edge only when the name is in the resolved repository list' {
-        $names = @('avm-test-identity-owners', 'avm-test-entra-readers', 'avm-test-fabric-admins')
+        $names = @('avm-test-workload-identity-owners', 'avm-test-entra-readers', 'avm-test-fabric-admins')
         $enabled = New-AvmTestBamiPlan -KnownClient -GroupNames $names
         { Assert-AvmBamiIdentityPlan -Plan $enabled @script:planArguments } | Should -Throw '*scope*'
         $script:planArguments.EntraGroupNames = $names

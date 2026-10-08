@@ -6,7 +6,7 @@
       "testTenant": "bami",
       "entraGroups": [
         "avm-test-entra-readers",
-        "avm-test-identity-owners"
+        "avm-test-workload-identity-owners"
       ],
       "repositories": [
         "*"

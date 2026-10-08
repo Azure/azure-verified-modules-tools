@@ -144,7 +144,7 @@ The checked-in default and Fabric selection are:
   {
     "name": "default",
     "repositories": ["*"],
-    "entraGroups": ["avm-test-entra-readers", "avm-test-identity-owners"]
+    "entraGroups": ["avm-test-entra-readers", "avm-test-workload-identity-owners"]
   },
   {
     "name": "fabric",

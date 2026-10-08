@@ -49,10 +49,10 @@ override_data {
 }
 
 override_data {
-  target = module.bami[0].data.azuread_group.test_permissions["avm-test-identity-owners"]
+  target = module.bami[0].data.azuread_group.test_permissions["avm-test-workload-identity-owners"]
   values = {
     object_id        = "10000000-0000-4000-8000-000000000009"
-    display_name     = "avm-test-identity-owners"
+    display_name     = "avm-test-workload-identity-owners"
     security_enabled = true
     types            = []
   }
@@ -74,7 +74,7 @@ override_resource {
 }
 
 variables {
-  entra_group_names             = ["avm-test-entra-readers", "avm-test-identity-owners"]
+  entra_group_names             = ["avm-test-entra-readers", "avm-test-workload-identity-owners"]
   github_repository_name        = "terraform-azurerm-avm-ptn-example-repo"
   github_teams                  = {}
   module_id                     = "avm-ptn-example-repo"
