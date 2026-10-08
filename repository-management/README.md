@@ -161,8 +161,8 @@ Group names come from flat `repositoryGroups[].entraGroups` arrays in the
 [central configuration](repository-config/config.json), not environment IDs
 or capability flags. Matching lists accumulate and deduplicate; they do not
 override defaults. The default adds `avm-test-entra-readers` and
-`avm-test-workload-identity-owners` to every repository test identity. The separate
-`fabric` group adds `avm-test-fabric-admins` only for
+`avm-test-management-group-owners` to every repository test identity. The separate
+`fabric` group adds `avm-test-entra-fabric-admins` only for
 `avm-ptn-unified-data-platform`. Terraform resolves each arbitrary configured
 display name uniquely in the BAMI tenant and manages only individual
 membership edges. The controller never joins these groups. See

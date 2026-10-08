@@ -17,13 +17,13 @@ Describe 'Configured repository Entra memberships' {
 
     It 'applies the two configured defaults and adds Fabric only to the requested repository' {
         $default = @($script:config.repositoryGroups | Where-Object name -CEQ 'default')[0]
-        $default.entraGroups | Should -Be @('avm-test-entra-readers', 'avm-test-workload-identity-owners')
+        $default.entraGroups | Should -Be @('avm-test-entra-readers', 'avm-test-management-group-owners')
         $fabric = @($script:config.repositoryGroups | Where-Object name -CEQ 'fabric')
         $fabric.Count | Should -Be 1
         $fabric[0].repositories | Should -Be @('avm-ptn-unified-data-platform')
-        $fabric[0].entraGroups | Should -Be @('avm-test-fabric-admins')
+        $fabric[0].entraGroups | Should -Be @('avm-test-entra-fabric-admins')
         $selected = Resolve-RepositorySettings -repositoryConfig $script:config -repoId 'avm-ptn-unified-data-platform'
-        $selected.EntraGroups | Should -Be @('avm-test-entra-readers', 'avm-test-workload-identity-owners', 'avm-test-fabric-admins')
+        $selected.EntraGroups | Should -Be @('avm-test-entra-readers', 'avm-test-management-group-owners', 'avm-test-entra-fabric-admins')
         $selected.TestTenant | Should -BeExactly 'bami'
         foreach ($repository in @('unlisted', 'avm-res-fabric-capacity', 'avm-ptn-example-repo')) {
             (Resolve-RepositorySettings -repositoryConfig $script:config -repoId $repository).EntraGroups |
