@@ -34,7 +34,7 @@ Describe 'Bicep relocation regional classification' {
             $script:respond = {
                 param($State, [object[]] $Operations)
                 $script:pages[$script:root + '?api-version=2021-04-01'] = @{ id = $script:root; properties = @{ provisioningState = $State } }
-                $script:pages[$script:root + '/operations?api-version=2021-04-01'] = @{ value = $Operations }
+                $script:pages[$script:root + '/operations?api-version=2025-04-01'] = @{ value = $Operations }
             }
             $script:failed = {
                 param($ErrorNode)
@@ -97,7 +97,7 @@ Describe 'Bicep relocation regional classification' {
             }
             { Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root } |
                 Should -Throw '*Deployment state could not be confirmed*'
-            $script:invalidResponsePath = $script:root + '/operations?api-version=2021-04-01'
+            $script:invalidResponsePath = $script:root + '/operations?api-version=2025-04-01'
             { Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root } |
                 Should -Throw '*Deployment operations could not be read*'
         }
@@ -124,7 +124,7 @@ Describe 'Bicep strict relocation discovery' {
                 $script:pages[$Id + '?api-version=2021-04-01'] = @{
                     Status = 200; Body = @{ id = $Id; properties = @{ provisioningState = $State } }
                 }
-                $script:pages[$Id + '/operations?api-version=2021-04-01'] = @{ Status = 200; Body = @{ value = $Operations } }
+                $script:pages[$Id + '/operations?api-version=2025-04-01'] = @{ Status = 200; Body = @{ value = $Operations } }
             }
             $script:create = {
                 param($Id, $State = 'Succeeded')
@@ -167,7 +167,7 @@ Describe 'Bicep strict relocation discovery' {
             $script:pages[$script:nested + '?api-version=2021-04-01'] = @{
                 Status = 404; Body = @{ error = @{ code = 'DeploymentNotFound' } }
             }
-            $script:pages[$script:nested + '/operations?api-version=2021-04-01'] = $script:pages[$script:nested + '?api-version=2021-04-01']
+            $script:pages[$script:nested + '/operations?api-version=2025-04-01'] = $script:pages[$script:nested + '?api-version=2021-04-01']
             (Get-AvmBicepDeploymentCleanupTarget -DeploymentIds @($script:root)).Issues.Count | Should -Be 0
             $strict = Get-AvmBicepDeploymentCleanupTarget -DeploymentIds @($script:root) -RequireCompleteRemoval
             $strict.Issues.Count | Should -Be 1

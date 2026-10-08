@@ -6,6 +6,11 @@ BeforeAll {
     & (Join-Path $PSScriptRoot '..' '..' '..' 'Import-AvmTestModule.ps1') `
         -SourceManifest (Join-Path $moduleRoot 'Avm.Authoring.psd1')
     & (Get-Module Avm.Authoring) {
+        function script:Get-AzContext {
+            [CmdletBinding()]
+            param()
+            throw 'Unexpected Azure context lookup.'
+        }
         function script:Invoke-AzRestMethod {
             [CmdletBinding()]
             param($Method, $Path)
@@ -25,6 +30,7 @@ Describe 'Bicep registry cleanup proof' {
             $script:requests = [System.Collections.Generic.List[string]]::new()
             Mock Start-Sleep {}
             Mock Write-AvmLog {}
+            Mock Get-AzContext { @{ Environment = @{ ResourceManagerUrl = 'https://management.azure.com/' } } }
             Mock Invoke-AzRestMethod {
                 param($Method, $Path)
                 $script:requests.Add("$Method $Path")
@@ -36,7 +42,7 @@ Describe 'Bicep registry cleanup proof' {
                 $script:responses["GET $Id`?api-version=2021-04-01"] = @{
                     StatusCode = 200; Content = @{ id = $Id; properties = @{ provisioningState = $State } } | ConvertTo-Json
                 }
-                $script:responses["GET $Id/operations?api-version=2021-04-01"] = @{
+                $script:responses["GET $Id/operations?api-version=2025-04-01"] = @{
                     StatusCode = 200; Content = @{ value = $Operations } | ConvertTo-Json -Depth 30 -Compress
                 }
             }
@@ -88,7 +94,7 @@ Describe 'Bicep registry cleanup proof' {
             $result.ResourceIds | Should -Be @($script:group)
             ($result.Deployments | Where-Object Id -EQ $script:child).Status | Should -Be 'RejectedWithoutRecord'
             $script:requests | Should -Contain "GET $script:child`?api-version=2021-04-01"
-            $script:requests | Should -Not -Contain "GET $script:child/operations?api-version=2021-04-01"
+            $script:requests | Should -Not -Contain "GET $script:child/operations?api-version=2025-04-01"
         }
     }
 
@@ -119,7 +125,7 @@ Describe 'Bicep registry cleanup proof' {
                 }
                 'existing record missing operations' {
                     & $script:record $script:child 'Failed' @()
-                    $script:responses["GET $script:child/operations?api-version=2021-04-01"] = @{
+                    $script:responses["GET $script:child/operations?api-version=2025-04-01"] = @{
                         StatusCode = 404; Content = '{"error":{"code":"DeploymentNotFound"}}'
                     }
                 }
@@ -146,8 +152,8 @@ Describe 'Bicep registry cleanup proof' {
     It 'checks all pages before deciding whether a preflight operation is unique' {
         InModuleScope Avm.Authoring {
             & $script:record $script:root 'Failed' @($script:sibling, $script:preflight)
-            $pageTwo = "$script:root/operations?api-version=2021-04-01&next=2"
-            $script:responses["GET $script:root/operations?api-version=2021-04-01"].Content = @{
+            $pageTwo = "$script:root/operations?api-version=2025-04-01&next=2"
+            $script:responses["GET $script:root/operations?api-version=2025-04-01"].Content = @{
                 value = @($script:sibling, $script:preflight); nextLink = $pageTwo
             } | ConvertTo-Json -Depth 30
             $script:responses["GET $pageTwo"] = @{
@@ -172,6 +178,43 @@ Describe 'Bicep registry cleanup proof' {
             $result.Issues.Count | Should -Be 0
             $result.ResourceIds | Should -Be @($script:group)
             @($script:requests | Where-Object { $_ -like 'POST *' }).Count | Should -Be 1
+        }
+    }
+
+    It 'reads extension-aware operations across pages at <Scope> scope before accepting Graph proof' -ForEach @(
+        @{ Scope = 'subscription'; Prefix = '/subscriptions/11111111-1111-1111-1111-111111111111'; Schema = 'subscriptionDeploymentTemplate' }
+        @{ Scope = 'group'; Prefix = '/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/test'; Schema = 'deploymentTemplate' }
+        @{ Scope = 'management group'; Prefix = '/providers/Microsoft.Management/managementGroups/test'; Schema = 'managementGroupDeploymentTemplate' }
+        @{ Scope = 'tenant'; Prefix = ''; Schema = 'tenantDeploymentTemplate' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Prefix = $Prefix; Schema = $Schema } {
+            param($Prefix, $Schema)
+            $id = "$Prefix/providers/Microsoft.Resources/deployments/root"
+            & $script:record $id 'Failed' @($script:sibling)
+            $nextPath = "$id/operations?api-version=2025-04-01&next=2"
+            $script:responses["GET $id/operations?api-version=2025-04-01"].Content = @{
+                value = @($script:sibling); nextLink = "https://management.azure.com$nextPath"
+            } | ConvertTo-Json -Depth 30
+            $script:responses["GET $nextPath"] = @{
+                StatusCode = 200; Content = @{ value = @($script:graph) } | ConvertTo-Json -Depth 30
+            }
+            $script:export.template['$schema'] = "https://schema.management.azure.com/schemas/2019-08-01/$Schema.json#"
+            $script:responses["POST $id/exportTemplate?api-version=2025-04-01"] = @{
+                StatusCode = 200; Content = $script:export | ConvertTo-Json -Depth 30
+            }
+            $script:responses["GET $id/operations?api-version=2021-04-01"] = @{
+                StatusCode = 200; Content = '{"value":[{"properties":{"provisioningOperation":"Create","provisioningState":"Succeeded","targetResource":{"symbolicName":"principal"}}}]}'
+            }
+
+            $result = Get-AvmBicepDeploymentCleanupTarget -DeploymentIds @($id) -RequireCompleteRemoval
+            $result.Issues.Count | Should -Be 0
+            $result.ResourceIds | Should -Be @($script:group)
+            $script:requests | Should -Contain "GET $nextPath"
+            $script:requests | Should -Not -Contain "GET $id/operations?api-version=2021-04-01"
+            @($script:requests | Where-Object { $_ -like 'GET */operations?*' }).Count | Should -Be 2
+            @($script:requests | Where-Object { $_ -like 'POST *' }).Count | Should -Be 1
+            Should -Invoke Get-AzContext -Exactly 1
+            Should -Invoke Start-Sleep -Exactly 0
         }
     }
 
@@ -253,14 +296,71 @@ Describe 'Bicep registry deployment record confirmation' {
         }
     }
 
-    It 'retains accepted deletion progress without claiming absence or repeating DELETE' {
-        InModuleScope Avm.Authoring {
+    It 'retains accepted deletion progress while <State> without claiming absence or repeating DELETE' -ForEach @(
+        @{ State = 'Failed' }, @{ State = 'Deleting' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ State = $State } {
+            param($State)
+            $script:visibleState = $State
+            Mock Invoke-AzRestMethod {
+                if ($Method -eq 'DELETE') { return @{ StatusCode = 202; Content = '' } }
+                @{ StatusCode = 200; Content = @{ id = $script:root; properties = @{ provisioningState = $script:visibleState } } | ConvertTo-Json }
+            }
             { Remove-AvmBicepDeploymentRecord -DeploymentIds @($script:root) -OnProgress $script:onProgress } |
                 Should -Throw '*still exists*'
             $script:progress | Should -Be @("$script:root`:Pending")
             Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter { $Method -eq 'DELETE' }
             Should -Invoke Invoke-AzRestMethod -Exactly 3 -ParameterFilter { $Method -eq 'GET' }
             Should -Invoke Start-Sleep -Exactly 2 -ParameterFilter { $Seconds -eq 15 }
+        }
+    }
+
+    It 'waits through Deleting at <Scope> scope and confirms only exact absence' -ForEach @(
+        @{ Scope = 'subscription'; Prefix = '/subscriptions/11111111-1111-1111-1111-111111111111' }
+        @{ Scope = 'group'; Prefix = '/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/test' }
+        @{ Scope = 'management group'; Prefix = '/providers/Microsoft.Management/managementGroups/test' }
+        @{ Scope = 'tenant'; Prefix = '' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Prefix = $Prefix } {
+            param($Prefix)
+            $script:root = "$Prefix/providers/Microsoft.Resources/deployments/root"
+            foreach ($confirmOnly in @($false, $true)) {
+                $script:progress.Clear()
+                $script:readCount = 0
+                Mock Invoke-AzRestMethod {
+                    $Path | Should -BeExactly "$script:root`?api-version=2021-04-01"
+                    if ($Method -eq 'DELETE') { return @{ StatusCode = 202; Content = '' } }
+                    if (++$script:readCount -eq 1) {
+                        return @{
+                            StatusCode = [Net.HttpStatusCode]::OK
+                            Content = @{ id = $script:root.ToUpperInvariant(); properties = @{ provisioningState = 'Deleting' } } | ConvertTo-Json
+                        }
+                    }
+                    @{ StatusCode = 404; Content = @{ error = @{ code = 'DeploymentNotFound'; target = $script:root } } | ConvertTo-Json }
+                }
+                Remove-AvmBicepDeploymentRecord -DeploymentIds @($script:root) -ConfirmOnly:$confirmOnly -OnProgress $script:onProgress
+                $expected = if ($confirmOnly) { @("$script:root`:Complete") } else { @("$script:root`:Pending", "$script:root`:Complete") }
+                $script:progress | Should -Be $expected
+                $script:readCount | Should -Be 2
+            }
+            Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter { $Method -eq 'DELETE' }
+            Should -Invoke Invoke-AzRestMethod -Exactly 4 -ParameterFilter { $Method -eq 'GET' }
+            Should -Invoke Start-Sleep -Exactly 2 -ParameterFilter { $Seconds -eq 15 }
+        }
+    }
+
+    It 'never treats Deleting as terminal before resource cleanup' {
+        InModuleScope Avm.Authoring {
+            $script:deletingResponse = @{
+                StatusCode = 200; Content = @{ id = $script:root; properties = @{ provisioningState = 'Deleting' } } | ConvertTo-Json
+            }
+            Mock Invoke-AzRestMethod { $script:deletingResponse }
+            { ConvertFrom-AvmBicepDeploymentRecordResponse -Response $script:deletingResponse -DeploymentId $script:root } |
+                Should -Throw '*terminal deployment*'
+            { Assert-AvmBicepCleanupDeploymentTerminal -Record @{ Id = $script:root; Required = $true; PreflightRejected = $false } } |
+                Should -Throw '*terminal deployment*'
+            Should -Invoke Start-Sleep -Exactly 0
+            Should -Invoke Invoke-AzRestMethod -Exactly 0 -ParameterFilter { $Method -eq 'DELETE' }
         }
     }
 
@@ -305,6 +405,19 @@ Describe 'Bicep registry deployment record confirmation' {
         @{ Body = '{}'; HttpStatus = 200 }
         @{ Body = '{"id":"/other","properties":{"provisioningState":"Failed"}}'; HttpStatus = 200 }
         @{ Body = '{"id":"ROOT","properties":{"provisioningState":"Running"}}'; HttpStatus = 200 }
+        @{ Body = '{"id":"ROOT","properties":{"provisioningState":"Accepted"}}'; HttpStatus = 200 }
+        @{ Body = '{"id":"ROOT","properties":{"provisioningState":"Canceled"}}'; HttpStatus = 200 }
+        @{ Body = '{"id":"ROOT","properties":{"provisioningState":"deleting"}}'; HttpStatus = 200 }
+        @{ Body = '{"id":"ROOT","properties":{"provisioningState":["Deleting"]}}'; HttpStatus = 200 }
+        @{ Body = '{"id":["ROOT"],"properties":{"provisioningState":"Deleting"}}'; HttpStatus = 200 }
+        @{ Body = '{"id":"ROOT","properties":[{"provisioningState":"Deleting"}]}'; HttpStatus = 200 }
+        @{ Body = '[{"id":"ROOT","properties":{"provisioningState":"Deleting"}}]'; HttpStatus = 200 }
+        @{ Body = '{"id":"ROOT","properties":{"provisioningState":"Deleting"},"error":null}'; HttpStatus = 200 }
+        @{ Body = '{"id":"ROOT","properties":{"provisioningState":"Deleting"},"error":{"code":"AuthorizationFailed"}}'; HttpStatus = 200 }
+        @{ Body = '{"id":"ROOT","properties":{"provisioningState":"Failed","provisioningState":"Deleting"}}'; HttpStatus = 200 }
+        @{ Body = '{"id":"ROOT","properties":{"provisioningState":"Deleting"}}'; HttpStatus = 403 }
+        @{ Body = '{"id":"ROOT","properties":{"provisioningState":"Deleting"}}'; HttpStatus = 202 }
+        @{ Body = '{"id":"ROOT","properties":{"provisioningState":"Deleting"}}'; HttpStatus = 204 }
         @{ Body = '{"error":{"code":["DeploymentNotFound"]}}'; HttpStatus = 404 }
         @{ Body = '{"error":{"code":"DeploymentNotFound","target":"/other"}}'; HttpStatus = 404 }
         @{ Body = '{"error":{"code":"ResourceGroupNotFound"}}'; HttpStatus = 404 }
@@ -316,6 +429,25 @@ Describe 'Bicep registry deployment record confirmation' {
             Mock Invoke-AzRestMethod { $script:confirmation }
             { Remove-AvmBicepDeploymentRecord -DeploymentIds @($script:root) -ConfirmOnly -OnProgress $script:onProgress } |
                 Should -Throw
+            $script:progress.Count | Should -Be 0
+            Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter { $Method -eq 'GET' }
+            Should -Invoke Start-Sleep -Exactly 0
+        }
+    }
+
+    It 'keeps rejected confirmation payloads out of diagnostics: <Body>' -ForEach @(
+        @{ Body = '{"id":"ROOT","properties":{"provisioningState":"Unknown","parameters":{"secret":"parameter-secret"},"outputs":{"secret":"output-secret"}},"error":{"code":"Unexpected","message":"provider-secret"}}' }
+        @{ Body = 'not-json-with-secret' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Body = $Body } {
+            param($Body)
+            $script:confirmation = @{ StatusCode = 200; Content = $Body.Replace('ROOT', $script:root) }
+            Mock Invoke-AzRestMethod { $script:confirmation }
+            $failure = $null
+            try { Remove-AvmBicepDeploymentRecord -DeploymentIds @($script:root) -ConfirmOnly -OnProgress $script:onProgress }
+            catch { $failure = $_ }
+            $failure | Should -Not -BeNullOrEmpty
+            $failure.Exception.Message | Should -Not -Match 'parameter-secret|output-secret|provider-secret|not-json-with-secret'
             $script:progress.Count | Should -Be 0
             Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter { $Method -eq 'GET' }
             Should -Invoke Start-Sleep -Exactly 0

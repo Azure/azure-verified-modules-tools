@@ -307,7 +307,8 @@ function Initialize-AvmTerraformPolicyStage {
             "Policy example '$WorkingDirectory' declares a backend or cloud execution. Use a local, backend-free example so provider safeguards are enforced in isolated staging.")
     }
     $null = Invoke-AvmTerraformInit -TerraformPath $TerraformPath -WorkingDirectory $WorkingDirectory `
-        -EnvVars $EnvVars -NoColor -SkipPluginCacheLock -Label 'terraform init (policy safeguards)'
+        -EnvVars $EnvVars -NoColor -SkipPluginCacheLock -PreserveDependencySelections `
+        -Label 'terraform init (policy safeguards)'
 
     $directories = @()
     $manifestPath = Join-Path -Path $EnvVars.TF_DATA_DIR -ChildPath 'modules' -AdditionalChildPath 'modules.json'

@@ -36,7 +36,7 @@ function New-NativeBicepWorkflowFixture {
         RetrySequence = [Collections.Generic.Queue[string]]::new()
         TransientResourceType = ''; TransientErrorCode = 'InternalServerError'; ThrowRetryFailure = $false
         NativeResponseMode = ''; RecordVisibilityReads = 0; RecordVisibilityAfterDeletion = 1
-        RecordConfirmationDenied = $false
+        RecordConfirmationDenied = $false; RecordVisibilityState = ''
         OperationLookupDenied = $false
         RemovedRecords = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     }
@@ -280,6 +280,12 @@ function New-NativeBicepWorkflowFixture {
                 if ($state.RecordVisibilityReads -gt 0 -and $state.RemovedRecords.Count -ge $state.RecordVisibilityAfterDeletion -and
                     $state.Deployments.ContainsKey($recordId)) {
                     $state.RecordVisibilityReads--
+                    if ($state.RecordVisibilityState) {
+                        return @{
+                            StatusCode = 200
+                            Content = @{ id = $recordId; properties = @{ provisioningState = $state.RecordVisibilityState } } | ConvertTo-Json
+                        }
+                    }
                     return @{ StatusCode = 200; Content = $state.Deployments[$recordId] | ConvertTo-Json -Depth 20 }
                 }
                 return @{ StatusCode = 404; Content = '{"error":{"code":"DeploymentNotFound"}}' }
@@ -294,12 +300,12 @@ function New-NativeBicepWorkflowFixture {
                 }
                 return @{ StatusCode = 404; Content = '{"error":{"code":"ResourceGroupNotFound"}}' }
             }
-            if ($Path.EndsWith('/operations?api-version=2021-04-01')) {
+            if ($Path.EndsWith('/operations?api-version=2025-04-01')) {
                 $state.Calls.Add('discover')
                 if ($state.OperationLookupDenied) {
                     return @{ StatusCode = 403; Content = '{"error":{"code":"AuthorizationFailed"}}' }
                 }
-                $id = $Path.Substring(0, $Path.Length - '/operations?api-version=2021-04-01'.Length)
+                $id = $Path.Substring(0, $Path.Length - '/operations?api-version=2025-04-01'.Length)
                 if ($state.MissingOperations -or -not $state.OperationMap.ContainsKey($id)) {
                     return @{ StatusCode = 404; Content = '{"error":{"code":"DeploymentNotFound"}}' }
                 }

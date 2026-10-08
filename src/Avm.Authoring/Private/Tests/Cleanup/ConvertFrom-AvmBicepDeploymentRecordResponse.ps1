@@ -6,7 +6,9 @@ function ConvertFrom-AvmBicepDeploymentRecordResponse {
         [object] $Response,
 
         [Parameter(Mandatory)]
-        [string] $DeploymentId
+        [string] $DeploymentId,
+
+        [switch] $AllowDeleting
     )
 
     Set-StrictMode -Version 3.0
@@ -15,7 +17,12 @@ function ConvertFrom-AvmBicepDeploymentRecordResponse {
         $Response.Content -isnot [string]) {
         throw [AvmProcessException]::new("Invalid deployment record response: $DeploymentId")
     }
-    $document = ConvertFrom-AvmStrictJson -Json $Response.Content -RejectCaseInsensitiveDuplicates
+    try {
+        $document = ConvertFrom-AvmStrictJson -Json $Response.Content -RejectCaseInsensitiveDuplicates
+    }
+    catch [System.ArgumentException] {
+        throw [AvmProcessException]::new("Invalid deployment record JSON: $DeploymentId")
+    }
     if ($Response.StatusCode -eq 404) {
         $errorBody = $document['error']
         if ($errorBody -is [System.Collections.IDictionary] -and $errorBody['code'] -is [string]) {
@@ -37,7 +44,8 @@ function ConvertFrom-AvmBicepDeploymentRecordResponse {
     $properties = $document['properties']
     if ($document.Contains('error') -or $document['id'] -isnot [string] -or $document['id'] -ine $DeploymentId -or
         $properties -isnot [System.Collections.IDictionary] -or $properties['provisioningState'] -isnot [string] -or
-        $properties['provisioningState'] -cnotin @('Succeeded', 'Failed')) {
+        ($properties['provisioningState'] -cnotin @('Succeeded', 'Failed') -and
+        (-not $AllowDeleting -or $properties['provisioningState'] -cne 'Deleting'))) {
         throw [AvmProcessException]::new("Deployment record response did not identify a terminal deployment: $DeploymentId")
     }
     return $properties['provisioningState']

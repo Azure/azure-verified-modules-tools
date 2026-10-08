@@ -914,7 +914,7 @@ Describe 'Bicep workflow cleanup deployment discovery' {
                 @{ properties = @{ provisioningOperation = $Kind; targetResource = @{ id = $Id } } }
             }
             $script:pages = @{
-                ($script:root + '/operations?api-version=2021-04-01')          = @{
+                ($script:root + '/operations?api-version=2025-04-01')          = @{
                     value = @(
                         & $operation $script:group
                         & $operation $childGroup
@@ -924,17 +924,17 @@ Describe 'Bicep workflow cleanup deployment discovery' {
                         & $operation "$script:group/providers/Microsoft.Storage/storageAccounts/borrowed" 'Read'
                     )
                 }
-                ($childGroup + '/operations?api-version=2021-04-01')           = @{
+                ($childGroup + '/operations?api-version=2025-04-01')           = @{
                     value = @(
                         & $operation "$script:group/providers/Microsoft.Storage/storageAccounts/created"
                         & $operation $script:root
                     )
                 }
-                ($childSubscription + '/operations?api-version=2021-04-01')    = @{ value = @() }
-                ($childManagementGroup + '/operations?api-version=2021-04-01') = @{
+                ($childSubscription + '/operations?api-version=2025-04-01')    = @{ value = @() }
+                ($childManagementGroup + '/operations?api-version=2025-04-01') = @{
                     value = @(& $operation '/providers/Microsoft.Management/managementGroups/actual-child/providers/Microsoft.Authorization/policyDefinitions/created')
                 }
-                ($childTenant + '/operations?api-version=2021-04-01')          = @{
+                ($childTenant + '/operations?api-version=2025-04-01')          = @{
                     value = @(& $operation '/providers/Microsoft.Management/managementGroups/new-group')
                 }
             }

@@ -56,7 +56,7 @@ function Get-AvmBicepDeploymentCleanupTarget {
         }
         while ($queue.Count -gt 0) {
             $record = $records[$queue.Dequeue()]
-            $nextPath = $record.Id + '/operations?api-version=2021-04-01'
+            $nextPath = $record.Id + '/operations?api-version=2025-04-01'
             $visitedPages = [System.Collections.Generic.HashSet[string]]::new(
                 [System.StringComparer]::Ordinal)
             $operations = [System.Collections.Generic.List[object]]::new()

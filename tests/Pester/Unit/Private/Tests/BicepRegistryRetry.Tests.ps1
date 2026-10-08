@@ -137,6 +137,10 @@ Describe 'Bicep registry structured retry evidence' {
                         message = "Preflight validation check for resource(s) for container service private-cluster in resource group retry-fixture failed. Message: The zone(s) '3' for resource 'systempool' is not supported. The supported zones for location 'swedencentral' are ''. Details: "
                     })
             }
+            $script:providerLocation = @{
+                code = 'LocationNotAvailableForResourceType'
+                message = "The provided location 'norwayeast' is not available for resource type 'Microsoft.DesktopVirtualization/hostpools'. List of available regions for the resource type is 'eastus,westeurope'."
+            }
             $cosmosMessage = "Sorry, we are currently experiencing high demand in Norway East region, and cannot fulfill your request at this time Mon, 05 Oct 2026 07:42:40 GMT. To request region access for your subscription, please follow this link https://aka.ms/cosmosdbquota for more details on how to create a region access request.`r`nActivityId: 33333333-3333-3333-3333-333333333333, Microsoft.Azure.Documents.Common/2.14.0"
             $cosmosJson = @{ code = 'ServiceUnavailable'; message = $cosmosMessage } | ConvertTo-Json -Compress
             $script:cosmos = @{
@@ -153,6 +157,7 @@ Describe 'Bicep registry structured retry evidence' {
         @{ Shape = 'aci'; Location = 'swedencentral' }
         @{ Shape = 'aks'; Location = 'swedencentral' }
         @{ Shape = 'cosmos'; Location = 'norwayeast' }
+        @{ Shape = 'providerLocation'; Location = 'norwayeast' }
     ) {
         InModuleScope Avm.Authoring -Parameters @{ Shape = $Shape; Location = $Location } {
             param($Shape, $Location)
@@ -168,6 +173,169 @@ Describe 'Bicep registry structured retry evidence' {
                 Should -BeFalse
             Test-AvmBicepRetryErrorNode -Node $node -RetryKind Transient -SubscriptionId $script:subscription -ResourceLocation $Location |
                 Should -BeFalse
+        }
+    }
+
+    It 'accepts null SDK optional members without mutating <Shape> evidence' -ForEach @(
+        @{ Shape = 'aks'; Location = 'swedencentral' }
+        @{ Shape = 'providerLocation'; Location = 'norwayeast' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Shape = $Shape; Location = $Location } {
+            param($Shape, $Location)
+            $node = Get-Variable -Name $Shape -Scope Script -ValueOnly | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+            $node | Add-Member -NotePropertyName Target -NotePropertyValue $null
+            $leaf = if ($Shape -eq 'aks') { $node.details[0] } else { $node }
+            if ($Shape -eq 'aks') { $leaf | Add-Member -NotePropertyName Target -NotePropertyValue $null }
+            $leaf | Add-Member -NotePropertyName Details -NotePropertyValue $null
+            $original = ConvertTo-Json -InputObject $node -Depth 20 -Compress
+            $list = [Collections.Generic.List[object]]::new()
+            $list.Add($node)
+            foreach ($source in @($node, $list, @{ status = 'Failed'; error = $node }, $original)) {
+                $jsonSource = $source -is [string]
+                $failure = [Management.Automation.ErrorRecord]::new(
+                    [InvalidOperationException]::new('Safe validation summary.'),
+                    $(if ($jsonSource) { 'NativeFailure' } else { 'AvmBicepTemplateValidationFailed' }),
+                    [Management.Automation.ErrorCategory]::InvalidResult, $source)
+                $failure.ErrorDetails = [Management.Automation.ErrorDetails]::new(
+                    $(if ($jsonSource) { $source } else { 'Safe diagnostic text, not classification evidence.' }))
+                $detail = $failure.ErrorDetails.Message
+                Test-AvmBicepRegionalValidationError -ErrorRecord $failure -ResourceLocation $Location | Should -BeTrue
+                [object]::ReferenceEquals($failure.TargetObject, $source) | Should -BeTrue
+                $failure.ErrorDetails.Message | Should -BeExactly $detail
+                (ConvertTo-Json -InputObject $node -Depth 20 -Compress) | Should -BeExactly $original
+            }
+        }
+    }
+
+    It 'retains narrow preflight field guards for <Field>: <Kind>' -ForEach @(
+        @{ Field = 'target'; Kind = 'meaningful'; Value = 'another-resource' }
+        @{ Field = 'target'; Kind = 'empty'; Value = '' }
+        @{ Field = 'target'; Kind = 'Boolean'; Value = $false }
+        @{ Field = 'details'; Kind = 'empty array'; Value = @() }
+        @{ Field = 'details'; Kind = 'object'; Value = @{} }
+        @{ Field = 'innererror'; Kind = 'null'; Value = $null }
+        @{ Field = 'additionalInfo'; Kind = 'null'; Value = $null }
+        @{ Field = 'additionalInfo'; Kind = 'empty array'; Value = @() }
+        @{ Field = 'additionalInfo'; Kind = 'authorization'; Value = @{ code = 'AuthorizationFailed' } }
+        @{ Field = 'unknown'; Kind = 'null'; Value = $null }
+        @{ Field = 'message'; Kind = 'null'; Value = $null }
+        @{ Field = 'code'; Kind = 'unknown'; Value = 'Unknown' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Field = $Field; Value = $Value } {
+            param($Field, $Value)
+            foreach ($shape in @('aks', 'providerLocation')) {
+                $node = Get-Variable -Name $shape -Scope Script -ValueOnly
+                $location = if ($shape -eq 'aks') { 'swedencentral' } else { 'norwayeast' }
+                $leaf = if ($shape -eq 'aks') { $node.details[0] } else { $node }
+                $leaf[$Field] = $Value
+                Test-AvmBicepRetryErrorNode -Node $node -ResourceLocation $location | Should -BeFalse -Because $shape
+            }
+        }
+    }
+
+    It 'matches provider availability to canonical and display-name regions: <Reported>' -ForEach @(
+        @{ Reported = 'Norway East'; Selected = ' NORWAYEAST '; ResourceType = 'Microsoft.Example/parents/children' }
+        @{ Reported = 'norwayeast'; Selected = 'Norway East'; ResourceType = 'Microsoft.DesktopVirtualization/hostpools' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Reported = $Reported; Selected = $Selected; ResourceType = $ResourceType } {
+            param($Reported, $Selected, $ResourceType)
+            $script:providerLocation.message = $script:providerLocation.message.Replace('norwayeast', $Reported).
+                Replace('Microsoft.DesktopVirtualization/hostpools', $ResourceType)
+            Test-AvmBicepRetryErrorNode -Node $script:providerLocation -ResourceLocation $Selected | Should -BeTrue
+        }
+    }
+
+    It 'rejects incomplete or contradictory provider availability: <Mutation>' -ForEach @(
+        @{ Mutation = 'generic wording' }, @{ Mutation = 'missing provider' }, @{ Mutation = 'resource ID' }
+        @{ Mutation = 'missing region' }, @{ Mutation = 'global region' }, @{ Mutation = 'no selected region' }
+        @{ Mutation = 'empty available regions' }, @{ Mutation = 'selected region available' }
+        @{ Mutation = 'duplicate regions' }, @{ Mutation = 'malformed regions' }, @{ Mutation = 'uppercase regions' }
+        @{ Mutation = 'global availability' }, @{ Mutation = 'trailing error' }, @{ Mutation = 'trailing newline' }
+        @{ Mutation = 'code casing' }, @{ Mutation = 'unknown ancestor' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Mutation = $Mutation } {
+            param($Mutation)
+            $node = $script:providerLocation
+            $location = 'norwayeast'
+            switch ($Mutation) {
+                'generic wording' { $node.message = 'The resource is not available in this region.' }
+                'missing provider' { $node.message = $node.message.Replace('Microsoft.DesktopVirtualization/hostpools', 'hostpools') }
+                'resource ID' { $node.message = $node.message.Replace('Microsoft.DesktopVirtualization/hostpools', $script:resourcePrefix + 'Microsoft.DesktopVirtualization/hostpools/test') }
+                'missing region' { $node.message = $node.message.Replace("'norwayeast'", "''") }
+                'global region' { $node.message = $node.message.Replace('norwayeast', 'global'); $location = 'global' }
+                'no selected region' { $location = '' }
+                'empty available regions' { $node.message = $node.message.Replace('eastus,westeurope', '') }
+                'selected region available' { $node.message = $node.message.Replace('eastus,westeurope', 'eastus,norwayeast') }
+                'duplicate regions' { $node.message = $node.message.Replace('eastus,westeurope', 'eastus,eastus') }
+                'malformed regions' { $node.message = $node.message.Replace('eastus,westeurope', 'eastus,,westeurope') }
+                'uppercase regions' { $node.message = $node.message.Replace('eastus,westeurope', 'EASTUS,westeurope') }
+                'global availability' { $node.message = $node.message.Replace('eastus,westeurope', 'global') }
+                'trailing error' { $node.message += ' AuthorizationFailed.' }
+                'trailing newline' { $node.message += "`n" }
+                'code casing' { $node.code = 'locationnotavailableforresourcetype' }
+                'unknown ancestor' { $node = @{ error = $node; unknown = $null } }
+            }
+            Test-AvmBicepRetryErrorNode -Node $node -ResourceLocation $location | Should -BeFalse
+        }
+    }
+
+    It 'rejects mixed provider-location evidence in either order: <Sibling>' -ForEach @(
+        @{ Sibling = 'authorization' }, @{ Sibling = 'unknown' }, @{ Sibling = 'unknown null field' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Sibling = $Sibling } {
+            param($Sibling)
+            $other = switch ($Sibling) {
+                'authorization' { @{ code = 'AuthorizationFailed'; message = 'Denied.' } }
+                'unknown' { @{ code = 'Unknown'; message = 'Regional failure.' } }
+                'unknown null field' { @{ code = 'SkuNotAvailable'; message = 'SKU not available in this region.'; unknown = $null } }
+            }
+            foreach ($nodes in @(@($script:providerLocation, $other), @($other, $script:providerLocation))) {
+                Test-AvmBicepRetryErrorNode -Node $nodes -ResourceLocation norwayeast | Should -BeFalse
+            }
+        }
+    }
+
+    It 'rejects malformed raw preflight JSON before optional-member normalization: <Mutation>' -ForEach @(
+        @{ Mutation = 'duplicate code' }, @{ Mutation = 'duplicate target' }, @{ Mutation = 'case-duplicate target' }
+        @{ Mutation = 'escaped duplicate target' }, @{ Mutation = 'trailing data' }, @{ Mutation = 'trailing comma' }
+        @{ Mutation = 'comment' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Mutation = $Mutation } {
+            param($Mutation)
+            $script:providerLocation.target = $null
+            $json = $script:providerLocation | ConvertTo-Json -Compress
+            $json = switch ($Mutation) {
+                'duplicate code' { $json.Replace('"code":', '"code":"AuthorizationFailed","code":') }
+                'duplicate target' { $json.Replace('"target":null', '"target":"foreign","target":null') }
+                'case-duplicate target' { $json.Replace('"target":null', '"Target":"foreign","target":null') }
+                'escaped duplicate target' { $json.Replace('"target":null', '"\u0074arget":"foreign","target":null') }
+                'trailing data' { $json + ' Denied' }
+                'trailing comma' { $json.Insert($json.Length - 1, ',') }
+                'comment' { '/* Denied */' + $json }
+            }
+            $failure = [Management.Automation.ErrorRecord]::new(
+                [InvalidOperationException]::new('Safe validation summary.'), 'NativeFailure', 'InvalidResult', $null)
+            $failure.ErrorDetails = [Management.Automation.ErrorDetails]::new($json)
+            Test-AvmBicepRegionalValidationError -ErrorRecord $failure -ResourceLocation norwayeast | Should -BeFalse
+        }
+    }
+
+    It 'never uses provider-location evidence to bypass <Boundary>' -ForEach @(
+        @{ Boundary = 'HTTP 401'; Status = 401 }, @{ Boundary = 'HTTP 403'; Status = 403 }
+        @{ Boundary = 'HTTP 429'; Status = 429 }, @{ Boundary = 'HTTP 500'; Status = 500 }
+        @{ Boundary = 'HTTP 504'; Status = 504 }, @{ Boundary = 'string status'; Status = '400' }
+        @{ Boundary = 'array status'; Status = @(400) }, @{ Boundary = 'Boolean status'; Status = $true }
+        @{ Boundary = 'cancellation'; Status = $null }, @{ Boundary = 'permission category'; Status = $null }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Boundary = $Boundary; Status = $Status } {
+            param($Boundary, $Status)
+            $exception = if ($Boundary -eq 'cancellation') { [OperationCanceledException]::new('Cancelled.') }
+            else { [InvalidOperationException]::new('Safe validation summary.') }
+            if ($null -ne $Status) { $exception | Add-Member -NotePropertyName Response -NotePropertyValue @{ StatusCode = $Status } }
+            $category = if ($Boundary -eq 'permission category') { 'PermissionDenied' } else { 'InvalidResult' }
+            $failure = [Management.Automation.ErrorRecord]::new(
+                $exception, 'AvmBicepTemplateValidationFailed', $category, $script:providerLocation)
+            Test-AvmBicepRegionalValidationError -ErrorRecord $failure -ResourceLocation norwayeast | Should -BeFalse
         }
     }
 

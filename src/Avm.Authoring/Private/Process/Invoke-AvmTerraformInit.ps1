@@ -4,10 +4,14 @@ function Invoke-AvmTerraformInit {
         Initialize a Terraform working directory safely.
 
     .DESCRIPTION
-        Runs terraform init -upgrade and serializes calls that share
-        TF_PLUGIN_CACHE_DIR. When the caller and process environment do not
-        configure a provider cache, uses the AVM cache so repeated lint,
-        policy, and validation initializations reuse provider binaries.
+        Runs terraform init and serializes calls that share
+        TF_PLUGIN_CACHE_DIR. By default dependency selections are upgraded.
+        PreserveDependencySelections instead reuses compatible selections from
+        the working directory's dependency lock file while allowing Terraform
+        to create or update that file when requirements change. When the caller
+        and process environment do not configure a provider cache, uses the AVM
+        cache so repeated lint, policy, and validation initializations reuse
+        provider binaries.
         Terraform's provider plugin cache is not concurrency-safe, while working
         directories without a shared cache can initialize independently.
     #>
@@ -32,6 +36,8 @@ function Invoke-AvmTerraformInit {
 
         [switch] $SkipPluginCacheLock,
 
+        [switch] $PreserveDependencySelections,
+
         [switch] $StreamOutput
     )
 
@@ -40,7 +46,9 @@ function Invoke-AvmTerraformInit {
 
     $arguments = [System.Collections.Generic.List[string]]::new()
     $arguments.Add('init')
-    $arguments.Add('-upgrade')
+    if (-not $PreserveDependencySelections) {
+        $arguments.Add('-upgrade')
+    }
     $arguments.Add('-input=false')
     if ($BackendFalse) {
         $arguments.Add('-backend=false')

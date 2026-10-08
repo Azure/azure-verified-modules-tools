@@ -830,8 +830,14 @@ message-only failures do not qualify. This exception to the normal Azure SDK
 retry boundary does not change shared retry defaults or apply to mutations.
 
 Regional evidence includes the registry's captured small Linux container-group
-capacity message, wrapped ML/Cosmos high-demand response and AKS preflight
-response with an explicitly empty supported-zone list. Require the matching
+capacity message, wrapped ML/Cosmos high-demand response, AKS preflight
+response with an explicitly empty supported-zone list, and exact
+`LocationNotAvailableForResourceType` provider-availability response. The latter
+must name the selected region and a valid provider-qualified resource type,
+with a distinct non-global available-region list that excludes the rejected
+region. Normalize null SDK `target` and `details` members only on the copied
+error node; preserve the original response and reject meaningful, empty,
+malformed or unknown extra fields in narrow evidence. Require the matching
 region and resource/subscription context, complete error structure and no
 mixed or malformed evidence; do not generalize these to arbitrary messages.
 Record every attempt before submission, verify the
@@ -872,7 +878,9 @@ page alone is insufficient. An ID-less Graph service-principal Create may
 be ignored only when a successful operation and that exact deployment's
 exported template prove the matching literal existing declaration, extension,
 import and scope. This proof also applies during ordinary final cleanup;
-never reuse a parent deployment's export for a child.
+never reuse a parent deployment's export for a child. Both cleanup and retry
+classification read deployment operations with API `2025-04-01` to preserve
+extension metadata; record and resource-group reads remain unchanged.
 
 After a successful deployment, pass its exact REST outputs to case-local
 Pester assertions, then run `post.ps1`, then cleanup. Output envelopes support
@@ -910,7 +918,11 @@ temporary-template and parameter-file cleanup.
 Failed/rejected root entries may additionally retain `recordDeletion` as
 `Pending` or `Complete`, only after all saved resources are post-processed.
 An accepted history DELETE is not confirmed absence. Persist progress and
-verify exact terminal record/404 responses; cleanup-only recovery confirms
+verify exact terminal record/404 responses. An exact `Deleting` record is
+allowed only during post-delete confirmation, consumes the existing bounded
+polling budget and never proves absence or permits pre-cleanup removal.
+Reject malformed confirmation responses without logging raw payloads.
+Cleanup-only recovery confirms
 pending deletion with GET without repeating DELETE or rediscovering those
 roots. Pending history deletion prevents a Complete outcome. These fields
 do not permit nested root entries or authorize another deployment retry.

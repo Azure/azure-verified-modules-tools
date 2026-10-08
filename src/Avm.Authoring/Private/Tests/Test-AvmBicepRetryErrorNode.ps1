@@ -68,6 +68,9 @@ function Test-AvmBicepRetryErrorNode {
     if ($code -isnot [string] -or [string]::IsNullOrWhiteSpace($code) -or $properties['additionalInfo']) {
         return $false
     }
+    foreach ($optional in @('target', 'details')) {
+        if ($properties.ContainsKey($optional) -and $null -eq $properties[$optional]) { $properties.Remove($optional) }
+    }
     if (@($properties.psbase.Keys | Where-Object { $_ -notin @('code', 'message', 'target', 'details', 'innererror') }).Count -gt 0 -or
         ($properties.ContainsKey('message') -and $properties['message'] -isnot [string]) -or
         ($properties.ContainsKey('target') -and ($properties['target'] -isnot [string] -or
@@ -133,6 +136,23 @@ function Test-AvmBicepRetryErrorNode {
         ($null -eq $properties['target'] -or $properties['target'] -ieq $ResourceTarget)
     }
     switch ($code) {
+        'LocationNotAvailableForResourceType' {
+            $Evidence.Narrow = $true
+            if ($code -cne 'LocationNotAvailableForResourceType' -or [string]::IsNullOrWhiteSpace($ResourceLocation) -or
+                $properties.ContainsKey('target') -or $properties.ContainsKey('details') -or
+                $properties.ContainsKey('innererror')) { return $false }
+            $pattern = "\AThe provided location '(?<location>[A-Za-z0-9]+(?: [A-Za-z0-9]+)*)' is not available for resource type " +
+            "'Microsoft\.[A-Za-z0-9]+/[A-Za-z0-9]+(?:/[A-Za-z0-9]+)*'\. List of available regions for the resource type is " +
+            "'(?<regions>[a-z0-9]+(?:,[a-z0-9]+)*)'\.\z"
+            $match = [regex]::Match($message, $pattern)
+            if (-not $match.Success) { return $false }
+            $reportedLocation = ($match.Groups['location'].Value -replace '\s', '').ToLowerInvariant()
+            $availableRegions = $match.Groups['regions'].Value.Split(',')
+            return $reportedLocation -eq ($ResourceLocation -replace '\s', '').ToLowerInvariant() -and
+            $reportedLocation -ne 'global' -and 'global' -notin $availableRegions -and
+            $reportedLocation -notin $availableRegions -and
+            @($availableRegions | Select-Object -Unique).Count -eq $availableRegions.Count
+        }
         'AvailabilityZoneNotSupported' {
             $Evidence.Narrow = $true
             if ($code -cne 'AvailabilityZoneNotSupported' -or [string]::IsNullOrWhiteSpace($AksPreflightMessage) -or

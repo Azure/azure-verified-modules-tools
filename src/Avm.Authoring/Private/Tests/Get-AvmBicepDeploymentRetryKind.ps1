@@ -38,7 +38,7 @@ function Get-AvmBicepDeploymentRetryKind {
     }
 
     $operationsPath = $DeploymentId + '/operations'
-    $nextPath = $operationsPath + '?api-version=2021-04-01'
+    $nextPath = $operationsPath + '?api-version=2025-04-01'
     $visitedPages = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     $errors = [System.Collections.Generic.List[object]]::new()
     while (-not [string]::IsNullOrEmpty($nextPath)) {

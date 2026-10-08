@@ -78,7 +78,7 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         InModuleScope Avm.Authoring {
             Mock Initialize-AvmTerraformPolicyStage {
                 $null = Invoke-AvmTerraformInit -TerraformPath $TerraformPath -WorkingDirectory $WorkingDirectory `
-                    -EnvVars $EnvVars -NoColor -SkipPluginCacheLock
+                    -EnvVars $EnvVars -NoColor -SkipPluginCacheLock -PreserveDependencySelections
             }
         }
         $script:moduleDir = Join-Path $TestDrive ('tf-mod-' + [guid]::NewGuid().ToString('N'))
@@ -92,6 +92,17 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         $null = New-Item -ItemType Directory -Path $script:avmsecDir -Force
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'main.tf') -Value 'variable "x" {}' -Encoding utf8
         Set-Content -LiteralPath (Join-Path $script:exampleDir 'main.tf') -Value 'module "test" { source = "../.." }' -Encoding utf8
+        Set-Content -LiteralPath (Join-Path $script:exampleDir '.terraform.lock.hcl') -Value '# fixture lock' -Encoding utf8
+        $moduleCache = Join-Path -Path $script:exampleDir -ChildPath '.terraform' -AdditionalChildPath 'modules'
+        $null = New-Item -ItemType Directory -Path (Join-Path $moduleCache 'cached') -Force
+        Set-Content -LiteralPath (Join-Path $moduleCache 'cached' 'main.tf') -Value 'locals {}' -Encoding utf8
+        @{
+            Modules = @(
+                @{ Key = ''; Source = ''; Dir = '.' }
+                @{ Key = 'cached'; Source = 'registry.example/cached'; Dir = '.terraform/modules/cached' }
+            )
+        } | ConvertTo-Json -Depth 10 |
+            Set-Content -LiteralPath (Join-Path $moduleCache 'modules.json') -Encoding utf8
         Set-Content -LiteralPath (Join-Path $script:avmsecDir 'avm_exceptions.rego.bak') -Value 'package avmsec' -Encoding utf8
 
         $script:context = [pscustomobject][ordered]@{
@@ -162,6 +173,11 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
                         WorkingDirectory = $WorkingDirectory
                         EnvVars          = @{} + $EnvVars
                         PlanJsonExists   = Test-Path -LiteralPath (Join-Path $WorkingDirectory 'tfplan.json')
+                        ModuleCacheSeeded = (
+                            $null -ne $EnvVars -and
+                            $EnvVars.ContainsKey('TF_DATA_DIR') -and
+                            (Test-Path -LiteralPath (Join-Path $EnvVars.TF_DATA_DIR 'modules' 'cached' 'main.tf'))
+                        )
                         CacheLockHeld    = (
                             $null -ne $script:providerCacheLock -and
                             $script:providerCacheLock.CanRead
@@ -196,11 +212,12 @@ Describe 'Invoke-AvmTerraformCheckPolicy' {
         $probe.Result.Issues.Count | Should -Be 0
         $probe.Calls.Count | Should -Be 7
         $probe.Calls[0].Arguments[-1] | Should -BeLike '*pre.ps1'
-        $probe.Calls[1].Arguments | Should -Be @('init', '-upgrade', '-input=false', '-no-color')
+        $probe.Calls[1].Arguments | Should -Be @('init', '-input=false', '-no-color')
         $probe.Calls[2].Arguments | Should -Be @('plan', '-out=tfplan', '-input=false', '-no-color')
         $probe.Calls[3].Arguments | Should -Be @('show', '-json', 'tfplan')
         foreach ($terraformCall in @($probe.Calls[1], $probe.Calls[2], $probe.Calls[3])) {
             $terraformCall.CacheLockHeld | Should -BeTrue
+            $terraformCall.ModuleCacheSeeded | Should -BeTrue
             $terraformCall.EnvVars.ARM_SKIP_PROVIDER_REGISTRATION | Should -Be 'true'
             $terraformCall.EnvVars.ARM_RESOURCE_PROVIDER_REGISTRATIONS | Should -Be 'legacy'
             $terraformCall.EnvVars.TF_DATA_DIR | Should -BeLike '*policy-stage*data'

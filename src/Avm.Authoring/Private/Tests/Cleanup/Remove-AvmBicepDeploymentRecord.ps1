@@ -57,7 +57,7 @@ function Remove-AvmBicepDeploymentRecord {
         $absent = $false
         for ($attempt = 1; $attempt -le $RetryLimit; $attempt++) {
             $lookup = Invoke-AzRestMethod -Method GET -Path $path -ErrorAction Stop
-            $recordStatus = ConvertFrom-AvmBicepDeploymentRecordResponse -Response $lookup -DeploymentId $deploymentId
+            $recordStatus = ConvertFrom-AvmBicepDeploymentRecordResponse -Response $lookup -DeploymentId $deploymentId -AllowDeleting
             if ($recordStatus -cin @('DeploymentNotFound', 'ResourceGroupNotFound')) {
                 $absent = $true
                 break

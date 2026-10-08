@@ -267,9 +267,9 @@ function Invoke-AvmTerraformTransform {
 
         Root and local-module targets finish before examples inspect their
         inputs. Each group runs through the bounded Invoke-AvmParallel
-        scheduler. A configured TF_PLUGIN_CACHE_DIR forces serial target
-        execution because Terraform's shared provider plugin cache is not
-        concurrency-safe.
+        scheduler. Mapotf uses each target's working-directory providers rather
+        than TF_PLUGIN_CACHE_DIR, allowing independent targets and separate AVM
+        processes to run without racing Terraform's shared provider cache.
 
         mapotf exit codes: 0 = success. A transform failure caused by a
         transient network error, such as a provider download timeout, is retried
@@ -376,22 +376,13 @@ function Invoke-AvmTerraformTransform {
         $mapotfEnv = New-AvmToolPathEnvironment `
             -ToolPath $terraform.Path `
             -ToolName 'terraform'
-        $mapotfEnv.TF_PLUGIN_CACHE_DIR = Get-AvmTerraformPluginCachePath
+        $mapotfEnv.TF_PLUGIN_CACHE_DIR = $null
         $mapotfEnv.MAPOTF_PROVIDER_SCHEMA_CACHE_DIR = Join-Path (Get-AvmFolder -Kind Cache) 'mapotf-provider-schema'
         $null = New-Item `
             -ItemType Directory `
             -Path $mapotfEnv.MAPOTF_PROVIDER_SCHEMA_CACHE_DIR `
             -Force `
             -ErrorAction Stop
-
-        $effectiveThrottle = $ThrottleLimit
-        $pluginCache = [string]$mapotfEnv.TF_PLUGIN_CACHE_DIR
-        if ($effectiveThrottle -gt 1 -and -not [string]::IsNullOrWhiteSpace($pluginCache)) {
-            $effectiveThrottle = 1
-            Write-AvmLog (
-                'transform: TF_PLUGIN_CACHE_DIR is configured; running Mapotf targets serially because the shared Terraform provider cache is not concurrency-safe'
-            ) -Level Verbose | Out-Null
-        }
 
         $transformOptions = [pscustomobject]@{
             ToolPath    = $tool.Path
@@ -404,13 +395,13 @@ function Invoke-AvmTerraformTransform {
             -InputObject $moduleTargets `
             -FunctionName 'Invoke-AvmMapotfTransformTarget' `
             -Argument $transformOptions `
-            -ThrottleLimit $effectiveThrottle
+            -ThrottleLimit $ThrottleLimit
         if ($exampleTargets.Count -gt 0) {
             Invoke-AvmParallel `
                 -InputObject $exampleTargets `
                 -FunctionName 'Invoke-AvmMapotfTransformTarget' `
                 -Argument $transformOptions `
-                -ThrottleLimit $effectiveThrottle
+                -ThrottleLimit $ThrottleLimit
         }
         Write-AvmLog 'transform: mapotf scoped transforms completed' -Level Verbose | Out-Null
 

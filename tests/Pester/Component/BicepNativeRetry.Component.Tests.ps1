@@ -219,10 +219,11 @@ Describe 'Component: Bicep native cleaned retries' -Tag Component {
     }
 
     It 'retains pending history deletion for cleanup-only recovery after <Obstacle>' -ForEach @(
-        @{ Obstacle = 'delayed visibility' }, @{ Obstacle = 'authorization failure' }
+        @{ Obstacle = 'delayed visibility' }, @{ Obstacle = 'Deleting' }, @{ Obstacle = 'authorization failure' }
     ) {
-        if ($Obstacle -eq 'delayed visibility') { $script:fixture.RecordVisibilityReads = 6 }
+        if ($Obstacle -in @('delayed visibility', 'Deleting')) { $script:fixture.RecordVisibilityReads = 6 }
         else { $script:fixture.RecordConfirmationDenied = $true }
+        if ($Obstacle -eq 'Deleting') { $script:fixture.RecordVisibilityState = 'Deleting' }
         $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'fail'
         @($script:fixture.NativeInputs | Where-Object Operation -eq 'Create').Count | Should -Be 1
@@ -245,8 +246,11 @@ Describe 'Component: Bicep native cleaned retries' -Tag Component {
         $stored.deployments[0].recordDeletion | Should -Be 'Complete'
     }
 
-    It 'finishes an accepted history deletion during final cleanup without retrying the deployment' {
+    It 'finishes accepted <State> history during final cleanup without retrying the deployment' -ForEach @(
+        @{ State = 'Failed' }, @{ State = 'Deleting' }
+    ) {
         $script:fixture.RecordVisibilityReads = 3
+        $script:fixture.RecordVisibilityState = $State
         $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'fail'
         $result.CleanupPending.Count | Should -Be 0
@@ -255,6 +259,23 @@ Describe 'Component: Bicep native cleaned retries' -Tag Component {
         $stored = Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json
         $stored.status | Should -Be 'Complete'
         $stored.deployments[0].recordDeletion | Should -Be 'Complete'
+    }
+
+    It 'waits for Deleting history to disappear before replaying the validated region' {
+        $script:fixture.RecordVisibilityReads = 2
+        $script:fixture.RecordVisibilityState = 'Deleting'
+        $result = Invoke-AvmTestE2e @script:options
+        $result.Status | Should -Be 'pass'
+        $result.CleanupPending.Count | Should -Be 0
+        $creates = @($script:fixture.NativeInputs | Where-Object Operation -eq 'Create')
+        $creates.Count | Should -Be 2
+        $creates.Parameters.resourceLocation | Should -Be @('eastus', 'eastus')
+        @($script:fixture.NativeInputs | Where-Object Operation -eq 'Validate').Count | Should -Be 1
+        $deleted = @($script:fixture.Calls | Where-Object { $_ -like 'delete-record:*' })
+        $deleted.Count | Should -Be 1
+        $confirmations = @($script:fixture.Calls | Where-Object { $_ -like 'confirm-record:*' })
+        $confirmations.Count | Should -Be 3
+        $script:fixture.Calls.LastIndexOf($confirmations[-1]) | Should -BeLessThan $script:fixture.Calls.LastIndexOf('create')
     }
 
     It 'persists independent progress when only some failed root records have disappeared' {
