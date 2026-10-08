@@ -294,6 +294,34 @@ function Get-RepositorySyncCandidateRepoId {
     return $Matches['id']
 }
 
+function Initialize-RepositorySyncCandidateIndex {
+    param([Parameter(Mandatory)] [string]$Root)
+
+    $infoDirectory = Join-Path $Root '.git' 'info'
+    $null = New-Item -ItemType Directory -Path $infoDirectory -Force
+    $attributesPath = Join-Path $infoDirectory 'attributes'
+    $hadAttributes = Test-Path -LiteralPath $attributesPath -PathType Leaf
+    $originalAttributes = $null
+    if ($hadAttributes) {
+        $originalAttributes = [System.IO.File]::ReadAllBytes($attributesPath)
+    }
+    try {
+        [System.IO.File]::WriteAllText(
+            $attributesPath,
+            "* -text -filter -ident -working-tree-encoding`n",
+            [System.Text.UTF8Encoding]::new($false))
+        $null = Invoke-RepositoryGit -WorkingDirectory $Root -Arguments @('add', '--all', '--force')
+        return Invoke-RepositoryGit -WorkingDirectory $Root -Arguments @('write-tree')
+    }
+    finally {
+        if ($hadAttributes) {
+            [System.IO.File]::WriteAllBytes($attributesPath, $originalAttributes)
+        } elseif (Test-Path -LiteralPath $attributesPath -PathType Leaf) {
+            Remove-Item -LiteralPath $attributesPath -Force -ErrorAction Stop
+        }
+    }
+}
+
 function Invoke-RepositorySyncCandidateValidation {
     param(
         [Parameter(Mandatory)] [string]$Repository,
@@ -342,8 +370,7 @@ function Invoke-RepositorySyncCandidateValidation {
         $null = Invoke-RepositoryGit -WorkingDirectory $workspace -Arguments @('init', '--quiet', '-b', 'main', $root)
         $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('config', '--local', 'core.autocrlf', 'false')
         $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('config', '--local', 'core.hooksPath', (Join-Path $workspace 'disabled-hooks'))
-        $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('add', '--all', '--force')
-        $tree = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('write-tree')
+        $tree = Initialize-RepositorySyncCandidateIndex -Root $root
         if ($tree -cne $candidate.treeSha) {
             throw [System.IO.InvalidDataException]::new('The unpacked candidate does not match the prepared Git tree.')
         }

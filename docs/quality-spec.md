@@ -1378,7 +1378,10 @@ Repository-sync candidate validation requires static checks to pass. Terraform
 unit tests run when discovered; an absent suite is a visible, non-blocking
 `skipped` result, never a unit-test pass. Failures or execution errors in
 existing suites block validation. Candidate-tree and publication safeguards
-still apply when unit tests are absent.
+still apply when unit tests are absent. Archive reconstruction must index the
+committed bytes without Git content conversion, including historical CRLF
+files. Restore normal attributes before checks and require the same exact
+prepared tree; do not normalize the artifact or relax the tree comparison.
 
 ### Coverage
 
