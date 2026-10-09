@@ -49,16 +49,25 @@ function Test-AvmBicepRetryErrorRecord {
                 $status = $property.Value
             }
             if ($null -eq $status) { continue }
+            if ($Kind -eq 'MetadataTimeout') { return $false }
             if ($status -isnot [int] -and $status -isnot [System.Net.HttpStatusCode]) { return $false }
             if ([int]$status -in @(401, 403)) { return $false }
             $allowed = if ($Kind -eq 'Transient') { @(400, 409, 500, 503) } else { @(400, 409, 503) }
             if ($Kind -ne 'MetadataTimeout' -and [int]$status -notin $allowed) { return $false }
         }
         if ($item -is [System.AggregateException]) {
-            foreach ($inner in $item.InnerExceptions) { $pending.Enqueue($inner) }
+            foreach ($inner in $item.InnerExceptions) {
+                if ($Kind -eq 'MetadataTimeout') {
+                    $record = [System.Management.Automation.ErrorRecord]::new($inner, 'BicepReadFailure', 'NotSpecified', $null)
+                    if ((Get-AvmBicepDeploymentErrorKind -ErrorRecord $record) -ne 'Timeout') { return $false }
+                }
+                $pending.Enqueue($inner)
+            }
         }
         elseif ($null -ne $item.InnerException) { $pending.Enqueue($item.InnerException) }
         if ($item -is [System.Management.Automation.IContainsErrorRecord] -and $null -ne $item.ErrorRecord) {
+            if ($Kind -eq 'MetadataTimeout' -and
+                (Get-AvmBicepDeploymentErrorKind -ErrorRecord $item.ErrorRecord) -ne 'Timeout') { return $false }
             $pending.Enqueue($item.ErrorRecord)
         }
     }

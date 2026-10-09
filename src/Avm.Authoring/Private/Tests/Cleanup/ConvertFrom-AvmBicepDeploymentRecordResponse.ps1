@@ -13,7 +13,8 @@ function ConvertFrom-AvmBicepDeploymentRecordResponse {
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
-    if (($Response.StatusCode -isnot [int] -and $Response.StatusCode -isnot [System.Net.HttpStatusCode]) -or
+    if ($Response -is [System.Collections.IList] -or
+        ($Response.StatusCode -isnot [int] -and $Response.StatusCode -isnot [System.Net.HttpStatusCode]) -or
         $Response.Content -isnot [string]) {
         throw [AvmProcessException]::new("Invalid deployment record response: $DeploymentId")
     }

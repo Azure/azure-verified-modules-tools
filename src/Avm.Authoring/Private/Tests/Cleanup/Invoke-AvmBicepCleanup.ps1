@@ -23,19 +23,12 @@ function Invoke-AvmBicepCleanup {
         [ValidateRange(0, 3600)]
         [int] $RemovalRetryInterval = 15,
 
-        # Relocation mode: requires terminal, fully discovered deployments, no retained resources,
-        # freed soft-deleted names and removed deployment records before reporting success.
-        [switch] $RequireCompleteRemoval,
-
-        [switch] $RequireNoDeploymentScripts
+        [switch] $RequireCompleteRemoval
     )
 
     Set-StrictMode -Version 3.0
     $ownerTag = (Get-AvmBicepConfiguration)['e2e']['ownershipTag']
     $ErrorActionPreference = 'Stop'
-    if ($RequireNoDeploymentScripts -and -not $RequireCompleteRemoval) {
-        throw [System.ArgumentException]::new('Deployment-script replay protection requires complete-removal mode.')
-    }
 
     $StatePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($StatePath)
     $state = Read-AvmBicepCleanupState -Path $StatePath
@@ -154,19 +147,8 @@ function Invoke-AvmBicepCleanup {
 
         $records = [System.Collections.Generic.Dictionary[string, object]]::new(
             [System.StringComparer]::OrdinalIgnoreCase)
-        foreach ($resource in $state['resources']) { $records.Add($resource['id'], $resource) }
-        foreach ($resource in ConvertTo-AvmBicepCleanupResource -ResourceIds @($ids)) {
-            if (-not $records.ContainsKey($resource.resourceId)) {
-                $records.Add($resource.resourceId, [ordered]@{
-                        id                             = $resource.resourceId
-                        type                           = $resource.type
-                        removed                        = $false
-                        postProcessed                  = $false
-                        metadataCaptured               = $false
-                        managedResourceGroupIds        = @()
-                        originalSoftDeleteFeatureState = ''
-                    })
-            }
+        foreach ($resource in Get-AvmBicepCleanupResourceRecord -Existing $state['resources'] -ResourceIds @($ids)) {
+            $records.Add($resource['id'], $resource)
         }
         $excluded = @($records.Keys | Where-Object {
                 Test-AvmBicepCleanupExclusion -ResourceId $_ -SubscriptionId $state['subscriptionId']
@@ -183,17 +165,6 @@ function Invoke-AvmBicepCleanup {
             $null = $records.Remove($id)
         }
         $state['resources'] = @($records.Values)
-        $deploymentScripts = @($state['resources'] | Where-Object { $_['type'] -ieq 'Microsoft.Resources/deploymentScripts' })
-        if ($RequireNoDeploymentScripts -and $deploymentScripts.Count -gt 0) {
-            $message = 'Same-region replay is unsafe because the attempt contains deployment scripts with potentially delayed cleanup.'
-            $issues.Add([pscustomobject]@{ ResourceId = ''; Code = 'DeploymentScriptReplayUnsafe'; Message = $message })
-            Write-AvmLog -Level Warning -Message $message
-            Save-AvmBicepCleanupState -State $state -Path $StatePath -Confirm:$false
-            return [pscustomobject]@{
-                Cleaned = $false; Status = 'fail'; Pending = @($deploymentScripts | ForEach-Object { $_['id'] })
-                Issues = $issues.ToArray(); StatePath = $StatePath
-            }
-        }
         $blocked = [System.Collections.Generic.List[string]]::new()
         foreach ($resource in $state['resources']) {
             if ($discovery.Issues.Count -gt 0 -and

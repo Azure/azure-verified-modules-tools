@@ -107,11 +107,21 @@ section when cutting a release.
 
 ### Changed
 
-- Bicep native retries and cleanup incorporate the registry updates through
-  [`c85af73`](https://github.com/Azure/bicep-registry-modules/commit/c85af7325ac0e6cf1ebee4cd3ce4d673b7286569):
-  bounded metadata-timeout reads, narrowly recognized capacity failures,
-  cleanup before eligible same-region retries, exact nested-preflight and
-  existing-Graph evidence, and resumable deployment-record deletion.
+- Bicep end-to-end retries use one bounded loop and packaged
+  `Resources/bicep/retry-policy.json` rules. In-place retries preserve the exact
+  deployment and inputs; fresh retries regenerate the external naming context
+  and normally choose another eligible region. Fixed caller values and names
+  inside Bicep remain unchanged. Neither mode deletes resources between
+  attempts. Final cleanup combines saved and current operation evidence from
+  every attempt, safely deduplicating shared resource IDs. `KeepResources`,
+  split Deploy/Complete and interrupted-run recovery retain their explicit
+  resource-retention behavior.
+- Bicep native reads, recovery and dependency handling incorporate the registry
+  updates through
+  [`76810a5`](https://github.com/Azure/bicep-registry-modules/commit/76810a51c9f8d25230a0d4f8de66858cc45b617d):
+  independently bounded timeout reads, strictly identified subscription-scope
+  nested-read recovery, exact nested-preflight and existing-Graph evidence,
+  and resumable deployment-record deletion for retained cleanup state.
   Management-group HTTP 403 submissions observe the exact original deployment
   using its captured Azure context; only confirmed success recovers outputs,
   and authorization failures never permit replay.
@@ -121,6 +131,9 @@ section when cutting a release.
   Exact Search and Container Apps service failures can use the same bounded
   regional retry path only with complete region, diagnostic and target evidence;
   permission, mixed, malformed and regionless failures remain ineligible.
+  Structured authorization denials veto retry even alongside eligible child
+  errors. Shared PowerShell imports select the unique exact-name module rather
+  than initializer metadata, preserving version, path and dependency checks.
 - Pester initialization rejects an already-loaded same-version engine from
   another configured path, with fresh-session guidance. Build checks also fail
   on setup/teardown errors even when individual tests pass.

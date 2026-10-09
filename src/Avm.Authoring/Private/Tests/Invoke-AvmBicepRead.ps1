@@ -1,4 +1,4 @@
-function Invoke-AvmBicepMetadataRead {
+function Invoke-AvmBicepRead {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
@@ -11,10 +11,12 @@ function Invoke-AvmBicepMetadataRead {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
     $readAction = $Read
-    Invoke-AvmRetry -RetryActivity $Activity -RetryMaxAttempts 3 -RetryInitialDelaySeconds 5 -RetryAction {
+    $readPolicy = (Get-AvmBicepRetryPolicy)['reads']
+    Invoke-AvmRetry -RetryActivity $Activity -RetryMaxAttempts $readPolicy['attempts'] `
+        -RetryInitialDelaySeconds $readPolicy['initialDelaySeconds'] -RetryQuiet -RetryAction {
         try {
-            $metadataResult = @(& $readAction)
-            return $metadataResult
+            $readResult = @(& $readAction)
+            return $readResult
         }
         catch {
             $_.Exception.Data['AvmTransient'] = Test-AvmBicepRetryErrorRecord -ErrorRecord $_ -Kind MetadataTimeout

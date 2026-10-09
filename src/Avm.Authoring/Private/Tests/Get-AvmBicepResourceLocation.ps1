@@ -9,19 +9,16 @@ function Get-AvmBicepResourceLocation {
 
         [string[]] $UnavailableRegions = @(),
 
-        [string[]] $AllowedRegions = @(
-            'swedencentral', 'belgiumcentral', 'norwayeast', 'eastasia', 'polandcentral',
-            'austriaeast', 'denmarkeast', 'koreacentral', 'eastus', 'centralus', 'newzealandnorth'
-        ),
+        [string[]] $AllowedRegions,
 
-        [string[]] $ExcludedRegions = @(
-            'asiasoutheast', 'brazilsouth', 'eastus2', 'japaneast', 'qatercentral',
-            'southcentralus', 'switzerlandnorth', 'uaenorth', 'westeurope', 'westus2'
-        )
+        [string[]] $ExcludedRegions
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
+    $regions = (Get-AvmBicepRetryPolicy)['regions']
+    if (-not $PSBoundParameters.ContainsKey('AllowedRegions')) { $AllowedRegions = $regions['allowed'] }
+    if (-not $PSBoundParameters.ContainsKey('ExcludedRegions')) { $ExcludedRegions = $regions['excluded'] }
 
     $unavailable = @($UnavailableRegions | ForEach-Object { ($_ -replace '\s', '').ToLowerInvariant() })
     $excluded = @($ExcludedRegions | ForEach-Object { ($_ -replace '\s', '').ToLowerInvariant() }) + $unavailable
@@ -31,7 +28,7 @@ function Get-AvmBicepResourceLocation {
             throw [AvmConfigurationException]::new('Automatic resource location selection requires a canonical ARM resource type.')
         }
         $providerName, $typeName = $ResourceType -split '/', 2
-        $provider = Invoke-AvmBicepMetadataRead -Activity "Read provider locations for $providerName" -Read {
+        $provider = Invoke-AvmBicepRead -Activity "Read provider locations for $providerName" -Read {
             Get-AzResourceProvider -ProviderNamespace $providerName -ErrorAction Stop
         }
         $resourceTypes = Get-AvmPropertyValue -InputObject $provider -Name 'ResourceTypes'
@@ -58,7 +55,7 @@ function Get-AvmBicepResourceLocation {
             }
             return [pscustomobject]@{ Location = $location; IsGlobal = $true }
         }
-        $locations = Invoke-AvmBicepMetadataRead -Activity 'Read Azure location metadata' -Read {
+        $locations = Invoke-AvmBicepRead -Activity 'Read Azure location metadata' -Read {
             Get-AzLocation -ErrorAction Stop
         }
         $candidates = @(

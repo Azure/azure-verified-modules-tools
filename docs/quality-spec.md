@@ -822,12 +822,42 @@ type when available; pattern/helper or absent metadata uses the generic
 allowed-region list. Explicit parameter, token and resource-location pins
 must agree. Only wholly regional validation failures can relocate an
 unpinned, non-global, non-resource-group case. Metadata location and
-`baseTime` stay fixed. Provider and location metadata reads buffer each attempt,
-discard partial failed output, and independently allow three attempts for typed
-request timeouts through the shared retry mechanism with a five-second initial
-delay. Permission, authentication, cancellation and untyped transport or
-message-only failures do not qualify. This exception to the normal Azure SDK
-retry boundary does not change shared retry defaults or apply to mutations.
+`baseTime` stay fixed.
+
+`Resources/bicep/retry-policy.json` and its adjacent schema own retry matching
+rules, modes, region choices, submission/region budgets, delay and read/observation
+budgets. Validate the packaged policy before execution: reject duplicate or
+unknown fields, invalid expressions and inconsistent rules. Expressions have
+bounded evaluation time and cannot execute code. Public attempt limits may
+lower, but not exceed, the configured budgets. Code retains unconditional
+identity, response-shape, authentication, cancellation and cleanup guards;
+configuration cannot turn those failures into retries. Every failed error
+branch must support the same configured mode; mixed or unknown evidence stops
+retrying. There is no catch-all replay for a failed or rejected deployment.
+
+The case uses one bounded submission loop with two modes. `InPlace` preserves
+the exact root deployment identity, validated template, resolved parameters,
+external naming context and region. `Fresh` generates another external naming
+context and root identity; resource-group cases create another uniquely named,
+tagged group. Fresh normally chooses the next eligible region, with rejected
+regions and validation attempts carried forward. A policy may instead preserve
+the region while generating a new context. A pin or exhausted region budget
+must not silently change a next-region retry into an in-place retry.
+Generate only harness-owned naming tokens and their derived inputs anew;
+explicit caller values and Bicep-authored names remain unchanged. Fresh means
+a new external attempt context, not guaranteed isolation of fixed or global
+names inside Bicep. Do not add naming-eligibility or ARM what-if gates to retry.
+
+Provider/location, deployment-record, operation-page and assertion-output reads
+buffer each attempt and discard partial failed output. Each idempotent read
+independently defaults to three attempts for typed request timeouts through
+the shared retry mechanism with a five-second initial delay. A later page's
+retry must not replay earlier pages. Any HTTP status, permission,
+authentication, cancellation, unknown sibling cause or untyped transport/
+message-only failure disqualifies the read retry. Traverse both inner exceptions
+and distinct RuntimeException error-record causes. This exception to the normal
+Azure SDK retry boundary does not change shared retry defaults or apply to
+mutations.
 
 Regional evidence includes the registry's captured small Linux container-group
 capacity message, wrapped ML/Cosmos high-demand response, AKS preflight
@@ -849,20 +879,30 @@ error node; preserve the original response and reject meaningful, empty,
 malformed or unknown extra fields in narrow evidence. Require the matching
 region and resource/subscription context, complete error structure and no
 mixed or malformed evidence; do not generalize these to arbitrary messages.
-Record every attempt before submission, verify the
-native response's exact deployment ID, and retry only confirmed failure or
-exact preflight rejection. A submission timeout watches the same deployment
+Record every attempt before submission and verify the native response's exact
+deployment ID. Deployment retries require an exact Failed root and complete
+eligible operation evidence, not preflight rejection alone. A submission
+timeout watches the same deployment
 for up to an hour (stopping after three consecutive read timeouts); a
 recovered `Failed` state counts as confirmed. Unknown or cancelled outcomes
-never resubmit. A confirmed deployment failure whose operation errors are all regional
-may also relocate an eligible case: strict cleanup must first confirm every
-deployment is terminal and fully discovered, remove its resources (no retained
-or soft-deleted names) and delete its deployment records. Otherwise relocation
-stops and ordinary cleanup runs. Rejected regions and attempt numbers carry
-forward, so relocation never exceeds the validation or deployment budgets.
-Management-group submission captures its authenticated tenant context before
-recording an attempt and uses that profile for submission and status reads.
-An actual typed HTTP 403 may only observe that same deployment within the
+never resubmit. Before either retry mode, strictly discover the failed attempt's
+terminal root and nested Create operations and atomically save the union of
+resource identities. Partial discovery is saved but blocks replay. This snapshot
+is read-only: never remove resources, purge soft-deleted names or delete
+deployment records between attempts. ARM may overwrite nested history even
+when root names differ. Final cleanup merges current discovery with saved
+evidence from every attempt, including failed or abandoned attempts, and safely
+deduplicates resource identities without case sensitivity.
+Subscription and management-group submission capture the authenticated context
+before recording an attempt and use that profile for submission and status reads.
+At subscription scope, an exact SDK nested-operation GET 404 may also observe
+the original root: require matching request, typed HTTP status, SDK body and
+strict JSON evidence for a different deployment in the same subscription and
+original cloud authority. It never authorizes another submission itself.
+Only separately confirmed Failed state and eligible operation evidence can
+permit retry after recovery; successful recovery never enters classification.
+For management-group submissions, an actual typed HTTP 403 may only observe
+that same deployment within the
 existing recovery budget: success requires its exact ID, scalar state and
 valid outputs. Failed, missing, malformed or unreadable recovery never permits
 replay or regional classification. Cancellation remains terminal and takes
@@ -872,13 +912,10 @@ An unclassified submission exception may be recovered only by an exact Failed
 root record and complete eligible operation evidence; a malformed returned
 identity or unreadable classification must never enable replay.
 
-Matching `InternalServerError` leaves for application gateways, private
-endpoints and PostgreSQL flexible servers can request cleanup before retrying
-the same region. This uses the same eligible case boundaries and submission
-budget as relocation, preserves the validated template and parameters, and
-does not revalidate an unchanged region. Any discovered deployment script
-blocks this cleaned replay because its cleanup may still be running.
-Existing confirmed-failure and preflight in-place retry behavior is unchanged.
+The default policy assigns narrowly targeted `InternalServerError` leaves for
+application gateways, private endpoints and PostgreSQL flexible servers to
+`InPlace`, and the supported capacity/region failures to `Fresh`. Adding a
+service rule must not require another service-specific execution branch.
 
 Strict discovery may omit a nested deployment only after a unique failed
 preflight Create operation in the complete parent history and explicit
@@ -912,12 +949,19 @@ owning `main.bicep`, discovered assertions and case-local `post.ps1`. This
 is not a fingerprint of every imported helper or the whole checkout.
 Save completion-started state before running authored scripts; interrupted
 or repeated completion must use `avm test cleanup`, not replay those scripts.
-`-KeepResources` runs assertions but skips both the post hook and cleanup.
+`-KeepResources` runs assertions but skips both the post hook and cleanup for
+all attempts; this is an explicit debugging exception to end-of-run cleanup.
+Cancellation or context-restoration failure also retains the complete saved
+evidence for deliberate cleanup rather than deleting possibly active resources.
 
 The private version-1 JSON state allows only target identifiers, status,
 verified group ownership tags and the small amount of resource metadata
 needed after deletion, plus the case path, source fingerprint and
-completion-started marker. It never stores credentials, parameter values,
+completion-started marker. An optional attempt journal records contiguous
+submission numbers, mode, naming ID, root ID, group and region. Validate its
+case/scope ownership, in-place identity reuse, fresh identity changes and
+coverage of every recorded root. Older version-1 states without the journal
+remain readable. The state never stores credentials, parameter values,
 deployment outputs or raw Azure responses. Create a unique local temporary
 file by default; an explicit path resolves against the caller's PowerShell
 location. Never overwrite an existing file during creation. Updates use a
@@ -1049,6 +1093,10 @@ Schema enforced by `Test-AvmPins`:
   downloads their official Gallery ZIPs and uses `<Name>.psd1` as the entrypoint.
   Pester must be at least 5.5.0. Required module dependencies must match the
   configured names, versions and resolved paths before use.
+  Select exactly one exact-name module from `Import-Module -PassThru` output;
+  `ScriptsToProcess` initializer metadata is not the requested module.
+  Initializer failures still fail the import, and selected version, path and
+  dependency checks remain mandatory.
 - Both composite commands resolve and import-check all applicable prerequisites
   before metadata/step 1, after the module-upgrade and context/clean-tree guards.
   `pr-check -ExcludeSteps` removes prerequisites used only by excluded steps,

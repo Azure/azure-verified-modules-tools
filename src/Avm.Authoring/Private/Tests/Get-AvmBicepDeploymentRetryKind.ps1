@@ -23,15 +23,15 @@ function Get-AvmBicepDeploymentRetryKind {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    $response = Invoke-AzRestMethod -Method GET -Path ($DeploymentId + '?api-version=2021-04-01') -ErrorAction Stop
-    $deployment = ConvertFrom-AvmStrictJson -Json $response.Content -RejectCaseInsensitiveDuplicates
-    if (($response.StatusCode -isnot [int] -and $response.StatusCode -isnot [System.Net.HttpStatusCode]) -or
-        $response.StatusCode -ne 200 -or $deployment -isnot [System.Collections.IDictionary] -or
-        $deployment['id'] -isnot [string] -or $deployment.Contains('error') -or
+    $response = Invoke-AvmBicepRead -Activity 'Read failed deployment state' -Read {
+        Invoke-AzRestMethod -Method GET -Path ($DeploymentId + '?api-version=2021-04-01') -ErrorAction Stop
+    }
+    $deployment = ConvertFrom-AvmBicepRestResponse -Response $response -Activity 'Read failed deployment state'
+    if ($deployment['id'] -isnot [string] -or $deployment.Contains('error') -or
         (Get-AvmPropertyValue -InputObject $deployment -Name 'id') -ine $DeploymentId) {
         throw [AvmProcessException]::new("Deployment state could not be confirmed for '$DeploymentId' (HTTP $($response.StatusCode)).")
     }
-    $properties = Get-AvmPropertyValue -InputObject $deployment -Name 'properties'
+    $properties = Get-AvmPropertyValue -InputObject $deployment -Name 'properties' -NoEnumerate
     if ($properties -isnot [System.Collections.IDictionary] -or
         $properties['provisioningState'] -isnot [string] -or $properties['provisioningState'] -cne 'Failed') {
         return 'None'
@@ -45,15 +45,16 @@ function Get-AvmBicepDeploymentRetryKind {
         if (-not $visitedPages.Add($nextPath) -or $visitedPages.Count -gt 1000) {
             throw [AvmProcessException]::new("Deployment returned repeated or excessive operation pages: $DeploymentId")
         }
-        $page = Invoke-AzRestMethod -Method GET -Path $nextPath -ErrorAction Stop
-        $document = ConvertFrom-AvmStrictJson -Json $page.Content -RejectCaseInsensitiveDuplicates
-        if (($page.StatusCode -isnot [int] -and $page.StatusCode -isnot [System.Net.HttpStatusCode]) -or
-            $page.StatusCode -ne 200 -or $document -isnot [System.Collections.IDictionary] -or
-            -not $document.Contains('value') -or $document['value'] -isnot [array]) {
+        $page = Invoke-AvmBicepRead -Activity 'Read deployment operation page' -Read {
+            Invoke-AzRestMethod -Method GET -Path $nextPath -ErrorAction Stop
+        }
+        $document = ConvertFrom-AvmBicepRestResponse -Response $page -Activity 'Read deployment operation page'
+        if (-not $document.Contains('value') -or $document['value'] -isnot [array] -or
+            @($document.psbase.Keys | Where-Object { $_ -cnotin @('value', 'nextLink') }).Count -gt 0) {
             throw [AvmProcessException]::new("Deployment operations could not be read for '$DeploymentId' (HTTP $($page.StatusCode)).")
         }
         foreach ($operation in $document['value']) {
-            $operationProperties = Get-AvmPropertyValue -InputObject $operation -Name 'properties'
+            $operationProperties = Get-AvmPropertyValue -InputObject $operation -Name 'properties' -NoEnumerate
             if ($operationProperties -isnot [System.Collections.IDictionary] -or
                 $operationProperties['provisioningOperation'] -isnot [string] -or
                 [string]::IsNullOrWhiteSpace($operationProperties['provisioningOperation']) -or
@@ -61,14 +62,14 @@ function Get-AvmBicepDeploymentRetryKind {
             $operationState = Get-AvmPropertyValue -InputObject $operationProperties -Name 'provisioningState'
             if ($operationState -ceq 'Succeeded') { continue }
             if ($operationState -cne 'Failed') { return 'None' }
-            $statusMessage = Get-AvmPropertyValue -InputObject $operationProperties -Name 'statusMessage'
+            $statusMessage = Get-AvmPropertyValue -InputObject $operationProperties -Name 'statusMessage' -NoEnumerate
             if ($statusMessage -isnot [System.Collections.IDictionary] -or -not $statusMessage.Contains('error')) {
                 return 'None'
             }
             $errors.Add($statusMessage)
         }
         $nextPath = Resolve-AvmBicepCleanupNextLink -ExpectedPath $operationsPath -NextLink (
-            Get-AvmPropertyValue -InputObject $document -Name 'nextLink')
+            Get-AvmPropertyValue -InputObject $document -Name 'nextLink' -NoEnumerate)
     }
     if ($errors.Count -eq 0) {
         return 'None'

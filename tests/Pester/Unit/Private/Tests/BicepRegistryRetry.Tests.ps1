@@ -27,7 +27,7 @@ Describe 'Bicep registry metadata timeout retries' {
 
     It 'buffers failed reads and returns only the completed attempt' {
         InModuleScope Avm.Authoring {
-            $result = @(Invoke-AvmBicepMetadataRead -Activity 'fixture metadata' -Read {
+            $result = @(Invoke-AvmBicepRead -Activity 'fixture metadata' -Read {
                     $script:metadataAttempts++
                     if ($script:metadataAttempts -eq 1) {
                         'partial metadata'
@@ -47,7 +47,7 @@ Describe 'Bicep registry metadata timeout retries' {
         InModuleScope Avm.Authoring -Parameters @{ Mode = $Mode } {
             param($Mode)
             {
-                Invoke-AvmBicepMetadataRead -Activity 'fixture metadata' -Read {
+                Invoke-AvmBicepRead -Activity 'fixture metadata' -Read {
                     $script:metadataAttempts++
                     if ($Mode -eq 'non-terminating') { Write-Error -Exception ([TimeoutException]::new('Request timed out.')) }
                     else { throw [TimeoutException]::new('Request timed out.') }
@@ -81,7 +81,7 @@ Describe 'Bicep registry metadata timeout retries' {
             else { [System.Management.Automation.ErrorCategory]::InvalidResult }
             $script:metadataError = [System.Management.Automation.ErrorRecord]::new($exception, 'MetadataFixture', $category, $null)
             {
-                Invoke-AvmBicepMetadataRead -Activity 'fixture metadata' -Read {
+                Invoke-AvmBicepRead -Activity 'fixture metadata' -Read {
                     $script:metadataAttempts++
                     throw $script:metadataError
                 }
@@ -116,6 +116,45 @@ Describe 'Bicep registry metadata timeout retries' {
                 Should -BeExactly 'eastus'
             $script:providerReads | Should -Be $(if ($FailedRead -in @('provider', 'both')) { 2 } else { 1 })
             $script:locationReads | Should -Be $(if ($FailedRead -in @('location', 'both')) { 2 } else { 1 })
+        }
+    }
+
+    It 'refuses any HTTP status alongside timeout evidence: <Status>' -ForEach @(
+            @{ Status = 200 }, @{ Status = 408 }, @{ Status = 429 }, @{ Status = 500 }, @{ Status = 503 }
+        ) {
+            InModuleScope Avm.Authoring -Parameters @{ Status = $Status } {
+                param($Status)
+                $script:metadataFault = [Net.Http.HttpRequestException]::new(
+                    'HTTP response with a timeout cause.', [TimeoutException]::new(), [Net.HttpStatusCode]$Status)
+                {
+                    Invoke-AvmBicepRead -Activity 'fixture status read' -Read {
+                        $script:metadataAttempts++
+                        throw $script:metadataFault
+                    }
+                } | Should -Throw
+                $script:metadataAttempts | Should -Be 1
+                Should -Invoke Wait-AvmRetryDelay -Exactly 0
+            }
+        }
+
+    It 'visits independent RuntimeException error-record causes without hiding <Cause>' -ForEach @(
+            @{ Cause = 'cancellation' }, @{ Cause = 'unknown' }, @{ Cause = 'permission' }
+        ) {
+            InModuleScope Avm.Authoring -Parameters @{ Cause = $Cause } {
+                param($Cause)
+                $inner = switch ($Cause) {
+                    'cancellation' { [OperationCanceledException]::new('Cancelled.') }
+                    'permission' { [UnauthorizedAccessException]::new('Denied.') }
+                    default { [InvalidOperationException]::new('Unknown.') }
+                }
+                $category = if ($Cause -eq 'permission') { 'PermissionDenied' } else { 'InvalidResult' }
+                $record = [Management.Automation.ErrorRecord]::new($inner, 'IndependentCause', $category, $null)
+                $fault = [Management.Automation.RuntimeException]::new('Outer timeout.', [TimeoutException]::new(), $record)
+                $outer = [Management.Automation.ErrorRecord]::new($fault, 'OuterCause', 'InvalidResult', $null)
+                Test-AvmBicepRetryErrorRecord -ErrorRecord $outer -Kind MetadataTimeout | Should -BeFalse
+                if ($Cause -eq 'cancellation') {
+                    Get-AvmBicepDeploymentErrorKind -ErrorRecord $outer | Should -Be 'Cancellation'
+            }
         }
     }
 }

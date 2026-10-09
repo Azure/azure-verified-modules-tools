@@ -71,8 +71,13 @@ function Import-AvmPowerShellModule {
                 }
             }
         }
-        $module = Import-Module -Name $tool.Path -Global:$Global -PassThru -DisableNameChecking -ErrorAction Stop
-        if ($module.Name -cne $Name -or $module.Version -ne [version]$pin.version -or
+        $imported = @(Import-Module -Name $tool.Path -Global:$Global -PassThru -DisableNameChecking -ErrorAction Stop |
+                Where-Object Name -CEQ $Name)
+        if ($imported.Count -ne 1) {
+            throw [System.IO.InvalidDataException]::new("Import did not return exactly one module named '$Name'.")
+        }
+        $module = $imported[0]
+        if ($module.Version -ne [version]$pin.version -or
             -not [string]::Equals($module.ModuleBase, $directory, $comparison)) {
             throw [System.IO.InvalidDataException]::new("The loaded module does not match '$Name' $($pin.version) at '$directory'.")
         }

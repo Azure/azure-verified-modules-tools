@@ -1,0 +1,117 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "limits", "modes", "reads", "observation", "regions", "wrappers", "rules"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "modes": {
+      "type": "object", "additionalProperties": false, "required": ["InPlace", "Fresh"],
+      "properties": {
+        "InPlace": {
+          "type": "object", "additionalProperties": false, "required": ["location"],
+          "properties": { "location": { "const": "Preserve" } }
+        },
+        "Fresh": {
+          "type": "object", "additionalProperties": false, "required": ["location"],
+          "properties": { "location": { "enum": ["Preserve", "NextEligible"] } }
+        }
+      }
+    },
+    "limits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["deploymentAttempts", "regionAttempts", "delaySeconds"],
+      "properties": {
+        "deploymentAttempts": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "regionAttempts": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "delaySeconds": { "type": "integer", "minimum": 0, "maximum": 60 }
+      }
+    },
+    "reads": {
+      "type": "object", "additionalProperties": false,
+      "required": ["attempts", "initialDelaySeconds"],
+      "properties": {
+        "attempts": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "initialDelaySeconds": { "type": "integer", "minimum": 0, "maximum": 60 }
+      }
+    },
+    "observation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["timeoutSeconds", "pollIntervalSeconds", "consecutiveTimeouts"],
+      "properties": {
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 3600 },
+        "pollIntervalSeconds": { "type": "integer", "minimum": 0, "maximum": 60 },
+        "consecutiveTimeouts": { "type": "integer", "minimum": 1, "maximum": 3 }
+      }
+    },
+    "regions": {
+      "type": "object", "additionalProperties": false, "required": ["allowed", "excluded"],
+      "properties": {
+        "allowed": { "$ref": "#/definitions/strings" },
+        "excluded": { "$ref": "#/definitions/strings" }
+      }
+    },
+    "wrappers": { "$ref": "#/definitions/strings" },
+    "rules": {
+      "type": "array", "minItems": 1, "maxItems": 100,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "mode", "code", "messagePatterns"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,79}$" },
+          "mode": { "enum": ["InPlace", "Fresh"] },
+          "code": { "type": "string", "pattern": "^[A-Za-z0-9]*$" },
+          "messagePatterns": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "#/definitions/pattern" } },
+          "parentCode": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]+$" },
+          "parentSingleDetail": { "type": "boolean" },
+          "parentTargetRequired": { "type": "boolean" },
+          "parentWithoutTarget": { "type": "boolean" },
+          "parentMessagePattern": { "$ref": "#/definitions/pattern" },
+          "targetTypes": { "$ref": "#/definitions/strings" },
+          "targetRequired": { "type": "boolean" },
+          "forbidTarget": { "type": "boolean" },
+          "allowEmptyDetails": { "type": "boolean" },
+          "regionCapture": { "$ref": "#/definitions/capture" },
+          "numberCaptures": {
+            "type": "object", "propertyNames": { "$ref": "#/definitions/capture" },
+            "additionalProperties": {
+              "type": "object", "additionalProperties": false, "required": ["exclusiveMinimum", "maximum"],
+              "properties": { "exclusiveMinimum": { "type": "number" }, "maximum": { "type": "number" } }
+            }
+          },
+          "dateCaptures": {
+            "type": "object", "propertyNames": { "$ref": "#/definitions/capture" },
+            "additionalProperties": { "enum": ["r", "yyyy-MM-dd"] }
+          },
+          "listCaptures": {
+            "type": "object", "propertyNames": { "$ref": "#/definitions/capture" },
+            "additionalProperties": {
+              "type": "object", "additionalProperties": false, "required": ["maximumCount"],
+              "properties": {
+                "allowed": { "$ref": "#/definitions/strings" },
+                "excluded": { "$ref": "#/definitions/strings" },
+                "excludeRegion": { "type": "boolean" },
+                "maximumCount": { "type": "integer", "minimum": 1, "maximum": 100 }
+              }
+            }
+          },
+          "jsonEquals": {
+            "type": "object", "minProperties": 1,
+            "propertyNames": { "$ref": "#/definitions/capture" },
+            "additionalProperties": { "type": ["string", "null"] }
+          },
+          "jsonMessagePattern": { "$ref": "#/definitions/pattern" },
+          "headerNames": { "$ref": "#/definitions/strings" }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "capture": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]*$" },
+    "pattern": { "type": "string", "minLength": 1, "maxLength": 8192 },
+    "strings": {
+      "type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+    }
+  }
+}

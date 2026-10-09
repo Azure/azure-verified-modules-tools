@@ -13,7 +13,7 @@ function Get-AvmBicepDeploymentCleanupTarget {
         [ValidateRange(0, 3600)]
         [int] $SearchRetryInterval = 60,
 
-        # Relocation mode: every record must be terminal and fully resolved, with complete Create targets.
+        # A retry snapshot requires terminal records and complete Create history, but deletes nothing.
         [switch] $RequireCompleteRemoval
     )
 
@@ -71,8 +71,11 @@ function Get-AvmBicepDeploymentCleanupTarget {
                     if (-not $visitedPages.Add($nextPath) -or $visitedPages.Count -gt 1000) {
                         throw [AvmProcessException]::new("Repeated or excessive deployment operations page: $nextPath")
                     }
-                    $response = Invoke-AzRestMethod -Method GET -Path $nextPath -ErrorAction Stop
-                    $document = ConvertFrom-AvmStrictJson -Json $response.Content -RejectCaseInsensitiveDuplicates
+                    $response = Invoke-AvmBicepRead -Activity 'Read cleanup operation page' -Read {
+                        Invoke-AzRestMethod -Method GET -Path $nextPath -ErrorAction Stop
+                    }
+                    $document = ConvertFrom-AvmBicepRestResponse -Response $response -Activity 'Read cleanup operation page' `
+                        -AllowedStatus @(200, 404)
                     if ([int]$response.StatusCode -ne 200) {
                         $errorBody = Get-AvmPropertyValue -InputObject $document -Name 'error'
                         $errorCode = [string](Get-AvmPropertyValue -InputObject $errorBody -Name 'code')
@@ -103,11 +106,12 @@ function Get-AvmBicepDeploymentCleanupTarget {
                             "Deployment operations lookup failed: HTTP $($response.StatusCode), code '$errorCode', deployment '$($record.Id)'.")
                     }
                     if ($document -isnot [System.Collections.IDictionary] -or
-                        -not $document.Contains('value') -or $document['value'] -isnot [array]) {
+                        -not $document.Contains('value') -or $document['value'] -isnot [array] -or
+                        @($document.psbase.Keys | Where-Object { $_ -cnotin @('value', 'nextLink') }).Count -gt 0) {
                         throw [AvmProcessException]::new("Invalid deployment operations response: $($record.Id)")
                     }
                     foreach ($operation in $document['value']) {
-                        $properties = Get-AvmPropertyValue -InputObject $operation -Name 'properties'
+                        $properties = Get-AvmPropertyValue -InputObject $operation -Name 'properties' -NoEnumerate
                         if ($properties -isnot [System.Collections.IDictionary]) {
                             throw [AvmProcessException]::new("Invalid deployment operation properties: $($record.Id)")
                         }
@@ -122,7 +126,7 @@ function Get-AvmBicepDeploymentCleanupTarget {
                         if ((Get-AvmPropertyValue -InputObject $properties -Name 'provisioningOperation') -ine 'Create') {
                             continue
                         }
-                        $target = Get-AvmPropertyValue -InputObject $properties -Name 'targetResource'
+                        $target = Get-AvmPropertyValue -InputObject $properties -Name 'targetResource' -NoEnumerate
                         if ($null -eq $target -and -not $RequireCompleteRemoval) {
                             continue
                         }
@@ -167,7 +171,7 @@ function Get-AvmBicepDeploymentCleanupTarget {
                         }
                     }
                     $nextPath = Resolve-AvmBicepCleanupNextLink -ExpectedPath ($record.Id + '/operations') -NextLink (
-                        Get-AvmPropertyValue -InputObject $document -Name 'nextLink')
+                        Get-AvmPropertyValue -InputObject $document -Name 'nextLink' -NoEnumerate)
                     if ([string]::IsNullOrEmpty($nextPath)) {
                         $record.Status = 'Resolved'
                         $record.ErrorCode = ''

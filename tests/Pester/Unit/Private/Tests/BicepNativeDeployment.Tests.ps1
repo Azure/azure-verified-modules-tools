@@ -170,10 +170,16 @@ Describe 'Bicep native deployment retries' {
             }
             Mock Start-Sleep {}
             Mock Write-AvmLog {}
+            Mock Get-AzContext {
+                @{
+                    Tenant = @{ Id = '00000000-0000-0000-0000-000000000002' }
+                    Environment = @{ ResourceManagerUrl = 'https://management.azure.com/' }
+                }
+            }
         }
     }
 
-    It 'persists exact attempted IDs before submission and retains a stable baseTime through confirmed-failure retries' {
+    It 'persists the exact attempted ID and inputs without replaying an unclassified confirmed failure' {
         InModuleScope Avm.Authoring {
             Mock Invoke-AvmBicepNativeArmOperation {
                 $script:persisted[-1] | Should -BeLike "*/$DeploymentName`:Attempted"
@@ -183,17 +189,16 @@ Describe 'Bicep native deployment retries' {
                 return @{ Id = $id; ProvisioningState = 'Succeeded'; Outputs = @{ resourceId = @{ value = 'id' } } }
             }
             $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions
-            $result.Status | Should -Be 'pass'
-            $script:state.deployments.Count | Should -Be 2
+            $result.Status | Should -Be 'fail'
+            $script:state.deployments.Count | Should -Be 1
             $script:state.deployments[0].status | Should -Be 'Failed'
-            $script:state.deployments[1].status | Should -Be 'Succeeded'
-            $result.Outputs['resourceId']['value'] | Should -Be 'id'
-            Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 2
-            Should -Invoke Start-Sleep -Exactly 1
+            $result.RetryMode | Should -Be ''
+            Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
+            Should -Invoke Start-Sleep -Exactly 0
         }
     }
 
-    It 'retries exact preflight rejection and preserves every rejected attempt for discovery' {
+    It 'preserves a rejected submission for discovery without assuming it is retryable' {
         InModuleScope Avm.Authoring {
             Mock Invoke-AvmBicepNativeArmOperation {
                 throw [System.Management.Automation.ErrorRecord]::new(
@@ -203,16 +208,16 @@ Describe 'Bicep native deployment retries' {
             }
             $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions
             $result.Status | Should -Be 'fail'
-            $script:state.deployments.Count | Should -Be 3
+            $script:state.deployments.Count | Should -Be 1
             @($script:state.deployments | Where-Object { $_.preflightRejected -and $_.status -eq 'Rejected' }).Count |
-                Should -Be 3
-            Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 3
+                Should -Be 1
+            Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
         }
     }
 
     It 'watches the same deployment after a submission timeout: <Recovered>' -ForEach @(
         @{ Recovered = 'Succeeded'; Status = 'pass'; Submissions = 1 }
-        @{ Recovered = 'Failed'; Status = 'pass'; Submissions = 2 }
+        @{ Recovered = 'Failed'; Status = 'fail'; Submissions = 1 }
         @{ Recovered = 'unreadable'; Status = 'fail'; Submissions = 1 }
     ) {
         InModuleScope Avm.Authoring -Parameters $_ {
@@ -289,7 +294,7 @@ Describe 'Bicep native deployment retries' {
         }
     }
 
-    It 'retries a confirmed failure reported with an error summary: <Summary>' -ForEach @(
+    It 'records a confirmed failure without treating an unstructured summary as retry evidence: <Summary>' -ForEach @(
         @{ Summary = '' }
         @{ Summary = 'Showing 1 out of 1 error(s). Status Message: Quota exceeded. ' }
     ) {
@@ -306,8 +311,10 @@ Describe 'Bicep native deployment retries' {
                 }
             }
             $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions
-            $result.Status | Should -Be 'pass'
+            $result.Status | Should -Be 'fail'
             $script:state.deployments[0].status | Should -Be 'Failed'
+            $result.RetryMode | Should -Be ''
+            Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
         }
     }
 
@@ -378,7 +385,7 @@ Describe 'Bicep native deployment retries' {
                 param($SubmissionFailure)
                 $script:submissionFailure = $SubmissionFailure
                 $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' `
-                    -DeploymentInput $script:inputOptions -AllowRelocation -AllowTransientRetry
+                    -DeploymentInput $script:inputOptions -ClassifyRetry
                 $result.Status | Should -Be 'pass'
                 $result.Outputs.recovered.value | Should -BeExactly 'original-output'
                 $script:state.deployments.Count | Should -Be 1
@@ -437,7 +444,7 @@ Describe 'Bicep native deployment retries' {
                 param($Recovery, $Outcome)
                 $script:recoveryMode = $Recovery
                 $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' `
-                    -DeploymentInput $script:inputOptions -AllowRelocation -AllowTransientRetry
+                    -DeploymentInput $script:inputOptions -ClassifyRetry
                 $result.Status | Should -Be 'fail'
                 $result.Outcome | Should -Be $Outcome
                 $result.ErrorKind | Should -Be 'Forbidden'
@@ -463,7 +470,7 @@ Describe 'Bicep native deployment retries' {
             InModuleScope Avm.Authoring -Parameters $_ {
                 param($States, $Status, $Reads, $Sleeps)
                 foreach ($value in $States) { $script:recoverySequence.Enqueue($value) }
-                $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions -RetryLimit 1
+                $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions
                 $result.Status | Should -Be $Status
                 Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
                 Should -Invoke Invoke-AzRestMethod -Exactly $Reads
@@ -504,7 +511,7 @@ Describe 'Bicep native deployment retries' {
                 $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions
                 $result.Status | Should -Be 'fail'
                 $result.ErrorKind | Should -Be 'Forbidden'
-                Should -Invoke Get-AzContext -Exactly 0
+                Should -Invoke Get-AzContext -Exactly $(if ($Scope -eq 'sub') { 1 } else { 0 })
                 Should -Invoke Invoke-AzRestMethod -Exactly 0
                 Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
             }
@@ -599,7 +606,7 @@ Describe 'Bicep native deployment timeout recovery' {
     }
 
     It 'stops with an unknown outcome when recovery cannot confirm the deployment: <Condition>' -ForEach @(
-        @{ Condition = 'three timeouts'; Message = '*three consecutive*' }
+        @{ Condition = 'three timeouts'; Message = '*3 consecutive request timeouts*' }
         @{ Condition = 'missing'; Message = '*HTTP 404*' }
         @{ Condition = 'wrong ID'; Message = '*did not return exactly*' }
         @{ Condition = 'unsupported state'; Message = "*unsupported recovery state 'Canceled'*" }

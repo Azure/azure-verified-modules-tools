@@ -32,6 +32,9 @@ function New-NativeBicepWorkflowFixture {
         NestedExtensions = @(); MissingOperations = $false; ReadinessState = 'Running'
         Outputs = @{ account = @{ type = 'String'; value = 'deployed-account' } }
         CreatedId = ''; LastDeploymentId = ''
+        CreatedIds = [Collections.Generic.List[string]]::new()
+        UseGeneratedNames = $false; FirstAttemptResources = @(); CancelAtAttempt = 0
+        SubmissionError = $null
         RegionalFailures = 0; RegionalValidationFailures = 0; RegionalErrorFactory = $null; RecordDeleteFails = $false
         RetrySequence = [Collections.Generic.Queue[string]]::new()
         TransientResourceType = ''; TransientErrorCode = 'InternalServerError'; ThrowRetryFailure = $false
@@ -59,6 +62,7 @@ function New-NativeBicepWorkflowFixture {
         Mock Get-Command { [pscustomobject]@{ Source = 'fake-az' } } -ParameterFilter { $Name -eq 'az' }
         Mock Resolve-AvmTool { [pscustomobject]@{ Path = 'fake-bicep'; Source = 'fixture'; Version = 'pinned' } }
         Mock Start-Sleep {}
+        Mock Wait-AvmRetryDelay {}
         Mock Assert-AvmBicepAzureIdentity {
             if ($script:nativeWorkflow.IdentityMismatch) { throw [AvmConfigurationException]::new('Test identity mismatch.') }
         }
@@ -78,7 +82,7 @@ function New-NativeBicepWorkflowFixture {
             @{
                 Subscription = @{ Id = $script:nativeWorkflow.CurrentSubscription }
                 Tenant = @{ Id = $script:nativeWorkflow.CurrentTenant }
-                Environment = @{ Name = 'AzureCloud' }
+                Environment = @{ Name = 'AzureCloud'; ResourceManagerUrl = 'https://management.azure.com/' }
                 Account = @{ Id = 'fixture-account' }
             }
         }
@@ -122,8 +126,9 @@ function New-NativeBicepWorkflowFixture {
             }
             $null = $state.StatePaths.Add($path)
             $stored = Read-AvmBicepCleanupState -Path $path
-            $stored['ownedResourceGroups'].Count | Should -Be 1
-            $stored['ownedResourceGroups'][0]['runId'] | Should -BeExactly $runId
+            $stored['ownedResourceGroups'].Count | Should -Be ($state.Groups.Count + 1)
+            $stored['ownedResourceGroups'][-1]['runId'] | Should -BeExactly $runId
+            $stored['ownedResourceGroups'][-1]['id'] | Should -BeExactly "/subscriptions/$($state.CurrentSubscription)/resourceGroups/$Name"
             $group = @{
                 ResourceId = "/subscriptions/$($state.CurrentSubscription)/resourceGroups/$Name"
                 Tags = $Tag; Location = $Location
@@ -145,7 +150,7 @@ function New-NativeBicepWorkflowFixture {
                     TemplatePath = $TemplatePath; Content = [IO.File]::ReadAllText($TemplatePath)
                     SubscriptionId = $state.CurrentSubscription; Scope = $Scope
                     Location = $MetadataLocation; ResourceGroupName = $ResourceGroupName
-                    DefaultProfile = $DefaultProfile
+                    DefaultProfile = $DefaultProfile; DeploymentName = $DeploymentName
                 })
             if ($Operation -eq 'Validate') {
                 if ($state.ValidationFails) { throw [UnauthorizedAccessException]::new('Validation denied.') }
@@ -164,16 +169,21 @@ function New-NativeBicepWorkflowFixture {
             $stored = Read-AvmBicepCleanupState -Path $path
             $stored['deployments'][-1]['id'] | Should -BeExactly $id
             $stored['deployments'][-1]['status'] | Should -Be 'Attempted'
+            $ordinal = @($state.NativeInputs | Where-Object Operation -eq 'Create').Count
+            $resourceName = if ($state.UseGeneratedNames) {
+                ([IO.File]::ReadAllText($TemplatePath) | ConvertFrom-Json -AsHashtable).resources[0].name
+            }
+            else { 'example' }
             $target = if ($Scope -eq 'group') {
-                "/subscriptions/$($state.CurrentSubscription)/resourceGroups/$ResourceGroupName/providers/Microsoft.Storage/storageAccounts/example"
+                "/subscriptions/$($state.CurrentSubscription)/resourceGroups/$ResourceGroupName/providers/Microsoft.Storage/storageAccounts/$resourceName"
             }
             else {
                 $id.Substring(0, $id.LastIndexOf('/providers/Microsoft.Resources/deployments/')) +
-                "/providers/$($state.RootResourceType)/example"
+                "/providers/$($state.RootResourceType)/$resourceName"
             }
             if ($state.TransientResourceType) {
                 $targetGroup = if ($Scope -eq 'group') { $ResourceGroupName } else { "transient-$runId" }
-                $target = "/subscriptions/$($state.CurrentSubscription)/resourceGroups/$targetGroup/providers/$($state.TransientResourceType)/example"
+                $target = "/subscriptions/$($state.CurrentSubscription)/resourceGroups/$targetGroup/providers/$($state.TransientResourceType)/$resourceName"
             }
             $state.CreatedId = $target
             $state.LastDeploymentId = $id
@@ -254,6 +264,17 @@ function New-NativeBicepWorkflowFixture {
                     properties = @{ provisioningOperation = 'Create'; provisioningState = 'Succeeded'; targetResource = @{ id = $additional } }
                 }
             }
+            if ($ordinal -eq 1) {
+                $historyId = if ($state.Nested) { $nested } else { $id }
+                foreach ($additional in $state.FirstAttemptResources) {
+                    $state.OperationMap[$historyId] += @{
+                        properties = @{ provisioningOperation = 'Create'; provisioningState = 'Succeeded'; targetResource = @{ id = $additional } }
+                    }
+                }
+            }
+            $state.CreatedIds.Add($state.CreatedId)
+            if ($ordinal -eq $state.CancelAtAttempt) { throw [OperationCanceledException]::new('Cancelled retry submission.') }
+            if ($null -ne $state.SubmissionError) { throw $state.SubmissionError }
             if ($state.CreateMode -eq 'timeout') { throw [TimeoutException]::new('Submission timed out.') }
             if ($state.CreateMode -eq 'forbidden') {
                 throw [Net.Http.HttpRequestException]::new(

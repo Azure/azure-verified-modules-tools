@@ -74,6 +74,72 @@ Describe 'Bicep relocation regional classification' {
         }
     }
 
+    It 'retries only a timed-out <Read> without rereading completed pages' -ForEach @(
+        @{ Read = 'root' }, @{ Read = 'first page' }, @{ Read = 'second page' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Read = $Read } {
+            param($Read)
+            & $script:respond 'Failed' @((& $script:failed $script:regional))
+            $script:rootPath = $script:root + '?api-version=2021-04-01'
+            $script:firstPage = $script:root + '/operations?api-version=2025-04-01'
+            $script:secondPage = $script:firstPage + '&page=2'
+            $script:pages[$script:firstPage].nextLink = $script:secondPage
+            $script:pages[$script:secondPage] = @{ value = @((& $script:failed $script:regional)) }
+            $script:timeoutPath = switch ($Read) {
+                'root' { $script:rootPath }
+                'first page' { $script:firstPage }
+                'second page' { $script:secondPage }
+            }
+            $script:readCounts = @{}
+            Mock Wait-AvmRetryDelay {}
+            Mock Invoke-AzRestMethod {
+                $script:readCounts[$Path] = 1 + [int]$script:readCounts[$Path]
+                if ($Path -ceq $script:timeoutPath -and $script:readCounts[$Path] -eq 1) {
+                    @{ StatusCode = 200; Content = '{"error":{"code":"partial-invalid-output"}}' }
+                    throw [TimeoutException]::new('Read timed out.')
+                }
+                @{ StatusCode = 200; Content = $script:pages[$Path] | ConvertTo-Json -Depth 20 -Compress }
+            }
+            Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root | Should -BeExactly 'Regional'
+            foreach ($path in @($script:rootPath, $script:firstPage, $script:secondPage)) {
+                $expected = if ($path -ceq $script:timeoutPath) { 2 } else { 1 }
+                $script:readCounts[$path] | Should -Be $expected
+            }
+            Should -Invoke Wait-AvmRetryDelay -Exactly 1
+            Should -Invoke Invoke-AzRestMethod -Exactly 0 -ParameterFilter { $Method -cne 'GET' }
+        }
+    }
+
+    It 'rejects singleton arrays where structured properties are required: <Field>' -ForEach @(
+        @{ Field = 'root properties' }, @{ Field = 'operation properties' }, @{ Field = 'status message' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Field = $Field } {
+            param($Field)
+            & $script:respond 'Failed' @((& $script:failed $script:regional))
+            $page = $script:pages[$script:root + '/operations?api-version=2025-04-01']
+            switch ($Field) {
+                'root properties' {
+                    $root = $script:pages[$script:root + '?api-version=2021-04-01']
+                    $root.properties = @($root.properties)
+                }
+                'operation properties' { $page.value[0].properties = @($page.value[0].properties) }
+                'status message' { $page.value[0].properties.statusMessage = @($page.value[0].properties.statusMessage) }
+            }
+            Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root | Should -BeExactly 'None'
+        }
+    }
+
+    It 'rejects operation pages containing success data and <Extra> simultaneously' -ForEach @(
+        @{ Extra = 'error' }, @{ Extra = 'unknown' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Extra = $Extra } {
+            param($Extra)
+            & $script:respond 'Failed' @((& $script:failed $script:regional))
+            $script:pages[$script:root + '/operations?api-version=2025-04-01'][$Extra] = @{ code = 'AuthorizationFailed' }
+            { Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root } | Should -Throw
+        }
+    }
+
     It 'rejects ambiguous raw JSON on the second operation page: <Form>' -ForEach @(
         @{ Form = 'duplicate code' }, @{ Form = 'escaped duplicate code' }, @{ Form = 'case-duplicate code' }
         @{ Form = 'comment' }, @{ Form = 'trailing comma' }, @{ Form = 'array envelope' }
@@ -126,10 +192,10 @@ Describe 'Bicep relocation regional classification' {
                 return $response
             }
             { Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root } |
-                Should -Throw '*Deployment state could not be confirmed*'
+                Should -Throw '*invalid response or HTTP status*'
             $script:invalidResponsePath = $script:root + '/operations?api-version=2025-04-01'
             { Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root } |
-                Should -Throw '*Deployment operations could not be read*'
+                Should -Throw '*invalid response or HTTP status*'
         }
     }
 }

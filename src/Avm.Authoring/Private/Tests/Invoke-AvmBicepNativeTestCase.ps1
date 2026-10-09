@@ -2,48 +2,24 @@ function Invoke-AvmBicepNativeTestCase {
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([pscustomobject])]
     param(
-        [Parameter(Mandatory)]
-        [pscustomobject] $Item,
-
-        [Parameter(Mandatory)]
-        [guid] $TenantId,
-
-        [Parameter(Mandatory)]
-        [string] $Location,
-
-        [Parameter(Mandatory)]
-        [string] $RepositoryRoot,
-
-        [Parameter(Mandatory)]
-        [string] $AzPath,
-
-        [Parameter(Mandatory)]
-        [hashtable] $CiInput,
-
+        [Parameter(Mandatory)] [pscustomobject] $Item,
+        [Parameter(Mandatory)] [guid] $TenantId,
+        [Parameter(Mandatory)] [string] $Location,
+        [Parameter(Mandatory)] [string] $RepositoryRoot,
+        [Parameter(Mandatory)] [string] $AzPath,
+        [Parameter(Mandatory)] [hashtable] $CiInput,
         [string] $ManagementGroupId,
-
         [string] $ResourceGroupPrefix,
-
         [string] $ResourceLocation,
-
         [string] $StatePath,
-
-        [ValidateSet('All', 'Deploy')]
-        [string] $Phase = 'All',
-
-        [ValidateRange(1, 3)]
-        [int] $DeploymentRetryLimit = 3,
-
-        [ValidateRange(1, 3)]
-        [int] $ValidationRetryLimit = 3,
-
+        [ValidateSet('All', 'Deploy')] [string] $Phase = 'All',
+        [ValidateRange(1, 3)] [int] $DeploymentRetryLimit = 3,
+        [ValidateRange(1, 3)] [int] $ValidationRetryLimit = 3,
         [switch] $KeepResources
     )
 
     Set-StrictMode -Version 3.0
-    $ownerTag = (Get-AvmBicepConfiguration)['e2e']['ownershipTag']
     $ErrorActionPreference = 'Stop'
-
     if (-not $PSCmdlet.ShouldProcess($Item.Case.RelativeDirectory, 'Run native Bicep deployment test')) {
         return [pscustomobject]@{
             Status = 'skipped'; AssertionResults = @(); PostResults = @(); Issues = @()
@@ -51,18 +27,11 @@ function Invoke-AvmBicepNativeTestCase {
         }
     }
     $executionOptions = @{
-        Location             = $Location
-        RepositoryRoot       = $RepositoryRoot
-        AzPath               = $AzPath
-        CiInput              = $CiInput
-        ManagementGroupId    = $ManagementGroupId
-        ResourceGroupPrefix  = $ResourceGroupPrefix
-        ResourceLocation     = $ResourceLocation
-        StatePath            = $StatePath
-        Phase                = $Phase
-        DeploymentRetryLimit = $DeploymentRetryLimit
-        ValidationRetryLimit = $ValidationRetryLimit
-        KeepResources        = [bool]$KeepResources
+        Location = $Location; RepositoryRoot = $RepositoryRoot; AzPath = $AzPath; CiInput = $CiInput
+        ManagementGroupId = $ManagementGroupId; ResourceGroupPrefix = $ResourceGroupPrefix
+        ResourceLocation = $ResourceLocation; StatePath = $StatePath; Phase = $Phase
+        DeploymentRetryLimit = $DeploymentRetryLimit; ValidationRetryLimit = $ValidationRetryLimit
+        KeepResources = [bool]$KeepResources
     }
     Invoke-AvmBicepAzureContext -SubscriptionId $Item.SubscriptionId -TenantId $TenantId -ScriptBlock {
         Assert-AvmBicepAzureIdentity -AzPath $executionOptions.AzPath -SubscriptionId $Item.SubscriptionId -TenantId $TenantId
@@ -87,6 +56,7 @@ function Invoke-AvmBicepNativeTestCase {
         $handle = New-AvmBicepCleanupState -SubscriptionId $Item.SubscriptionId -TenantId $TenantId `
             -Environment $environmentName -RunId $Item.RunId -Path $executionOptions.StatePath -Confirm:$false
         $state = $handle.State
+        $state['attempts'] = @()
         $groupName = if ($Item.Scope -eq 'group') { '{0}-{1}' -f $executionOptions.ResourceGroupPrefix, $Item.RunId } else { '' }
         $state['case'] = [ordered]@{
             path = $Item.Case.RelativePath; scope = $Item.Scope; resourceGroupName = $groupName
@@ -110,101 +80,97 @@ function Invoke-AvmBicepNativeTestCase {
                     $ciParameters[$name] = $declared[$name]
                 }
             }
-            $parameters = Get-AvmBicepCiParameter -TemplateParameters $ciParameters -TemplateDefinitions $definitions `
+            $baseParameters = Get-AvmBicepCiParameter -TemplateParameters $ciParameters -TemplateDefinitions $definitions `
                 -Variables $executionOptions.CiInput.Variables -Secrets $executionOptions.CiInput.Secrets `
                 -KeyVaultName $executionOptions.CiInput.KeyVaultName
-            foreach ($key in $Item.Parameters.psbase.Keys) { $parameters[$key] = $Item.Parameters[$key] }
-            if ($declared.Contains('resourceLocation') -and -not $parameters.ContainsKey('resourceLocation')) {
-                $parameters['resourceLocation'] = ''
-            }
-            if ($declared.Contains('baseTime') -and -not $parameters.ContainsKey('baseTime')) {
-                $parameters['baseTime'] = [datetime]::UtcNow.ToString('u', [cultureinfo]::InvariantCulture)
-            }
-            $references = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-            $parameters = Resolve-AvmBicepParameterToken -Value $parameters -Tokens $Item.Tokens `
-                -DeferResourceLocation -ReferencedTokens $references
-            $parameters = Get-AvmBicepNativeParameter -Parameters $parameters
-            foreach ($key in $Item.ReferenceParameters.psbase.Keys) {
-                $parameters[$key] = Resolve-AvmBicepParameterToken -Value $Item.ReferenceParameters[$key] `
-                    -Tokens $Item.Tokens -DeferResourceLocation -ReferencedTokens $references
-            }
-            if ($null -ne $parameters['resourceLocation'] -and $parameters['resourceLocation'] -isnot [string]) {
-                throw [AvmConfigurationException]::new('Regional placement requires a non-secure string resourceLocation value.')
-            }
-            $options = @{
-                Scope          = $Item.Scope; TemplatePath = $Item.TemplatePath; MetadataLocation = $executionOptions.Location
-                DeploymentName = 'avm-e2e-{0}-validation' -f $Item.RunId
-                Parameters     = $parameters; ResourceGroupName = $groupName; ManagementGroupId = $executionOptions.ManagementGroupId
-            }
-            $selectedLocation = $executionOptions.ResourceLocation
-            if ($Item.Scope -eq 'group') {
-                $pinned = @(@($executionOptions.ResourceLocation, $Item.TokenResourceLocation, $parameters['resourceLocation']) |
-                        Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) -and $_ -cne '#_resourceLocation_#' } |
-                        ForEach-Object { ([string]$_ -replace '\s', '').ToLowerInvariant() } | Sort-Object -Unique)
-                if ($pinned.Count -gt 1) {
-                    throw [AvmConfigurationException]::new('Conflicting resource locations were supplied by parameters, CI inputs or tokens.')
-                }
-                $selectedLocation = if ($pinned.Count -eq 1) { $pinned[0] } else {
-                    (Get-AvmBicepResourceLocation -ResourceType $Item.ResourceType -MetadataLocation $executionOptions.Location).Location
-                }
-                $existing = Invoke-AvmBicepCleanupLookup -Command 'Get-AzResourceGroup' -Parameters @{ Name = $groupName }
-                if ($null -ne $existing) {
-                    throw [AvmConfigurationException]::new("Refusing to use existing resource group '$groupName'.")
-                }
-                $groupId = '/subscriptions/{0}/resourceGroups/{1}' -f $Item.SubscriptionId, $groupName
-                $state['ownedResourceGroups'] = @(@{ id = $groupId; runId = $Item.RunId })
-                Save-AvmBicepCleanupState -State $state -Path $handle.Path -Confirm:$false
-                $group = New-AzResourceGroup -Name $groupName -Location $selectedLocation `
-                    -Tag @{ $ownerTag = $Item.RunId } -ErrorAction Stop
-                if ((Get-AvmPropertyValue -InputObject $group -Name 'ResourceId') -ine $groupId -or
-                    (Get-AvmPropertyValue -InputObject (
-                        Get-AvmPropertyValue -InputObject $group -Name 'Tags') -Name $ownerTag) -cne $Item.RunId) {
-                    throw [AvmProcessException]::new('The new resource group identity and ownership tag could not be verified.')
-                }
-            }
+            $baseTime = [datetime]::UtcNow.ToString('u', [cultureinfo]::InvariantCulture)
             $unavailableRegions = @()
-            $relocationBlocked = $false
-            $firstAttempt = 1
-            $needsValidation = $true
-            while ($true) {
-                if ($needsValidation) {
+            $mode = 'Initial'
+            $namingIndex = -1
+            $retryBlocked = $false
+            $freshChangesRegion = $Item.RetryPolicy['modes']['Fresh']['location'] -ceq 'NextEligible'
+            $attemptLimit = [Math]::Min($executionOptions.DeploymentRetryLimit, $Item.RetryPolicy['limits']['deploymentAttempts'])
+            for ($attempt = 1; $attempt -le $attemptLimit; $attempt++) {
+                if ($mode -ne 'InPlace') {
+                    $namingIndex++
+                    $attemptInput = $Item.AttemptInputs[$namingIndex]
+                    $parameters = $baseParameters.Clone()
+                    foreach ($key in $attemptInput.Parameters.psbase.Keys) { $parameters[$key] = $attemptInput.Parameters[$key] }
+                    if ($declared.Contains('resourceLocation') -and -not $parameters.ContainsKey('resourceLocation')) {
+                        $parameters['resourceLocation'] = ''
+                    }
+                    if ($declared.Contains('baseTime') -and -not $parameters.ContainsKey('baseTime')) { $parameters['baseTime'] = $baseTime }
+                    $references = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                    $parameters = Resolve-AvmBicepParameterToken -Value $parameters -Tokens $attemptInput.Tokens `
+                        -DeferResourceLocation -ReferencedTokens $references
+                    $parameters = Get-AvmBicepNativeParameter -Parameters $parameters
+                    foreach ($key in $attemptInput.ReferenceParameters.psbase.Keys) {
+                        $parameters[$key] = Resolve-AvmBicepParameterToken -Value $attemptInput.ReferenceParameters[$key] `
+                            -Tokens $attemptInput.Tokens -DeferResourceLocation -ReferencedTokens $references
+                    }
+                    if ($null -ne $parameters['resourceLocation'] -and $parameters['resourceLocation'] -isnot [string]) {
+                        throw [AvmConfigurationException]::new('Regional placement requires a non-secure string resourceLocation value.')
+                    }
+                    $selectedLocation = $executionOptions.ResourceLocation
+                    if ($mode -eq 'Fresh' -and -not $freshChangesRegion) { $selectedLocation = $validated.Location }
+                    $groupCanRelocate = $false
+                    if ($Item.Scope -eq 'group') {
+                        $groupName = '{0}-{1}' -f $executionOptions.ResourceGroupPrefix, $attemptInput.NamingId
+                        $pinned = @(@($executionOptions.ResourceLocation, $Item.TokenResourceLocation, $parameters['resourceLocation']) |
+                                Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) -and $_ -cne '#_resourceLocation_#' } |
+                                ForEach-Object { ([string]$_ -replace '\s', '').ToLowerInvariant() } | Sort-Object -Unique)
+                        if ($pinned.Count -gt 1) {
+                            throw [AvmConfigurationException]::new('Conflicting resource locations were supplied by parameters, CI inputs or tokens.')
+                        }
+                        if ($mode -eq 'Fresh' -and -not $freshChangesRegion) { $selectedLocation = $validated.Location }
+                        elseif ($pinned.Count -eq 1) { $selectedLocation = $pinned[0] }
+                        else {
+                            $selection = Get-AvmBicepResourceLocation -ResourceType $Item.ResourceType `
+                                -MetadataLocation $executionOptions.Location -UnavailableRegions $unavailableRegions
+                            $selectedLocation = $selection.Location
+                            $groupCanRelocate = -not $selection.IsGlobal
+                        }
+                        New-AvmBicepAttemptGroup -State $state -StatePath $handle.Path -Name $groupName `
+                            -Location $selectedLocation -Confirm:$false
+                    }
+                    $options = @{
+                        Scope = $Item.Scope; TemplatePath = $Item.TemplatePath; MetadataLocation = $executionOptions.Location
+                        DeploymentName = 'avm-e2e-{0}-t{1}' -f $Item.RunId, $attempt
+                        Parameters = $parameters; ResourceGroupName = $groupName; ManagementGroupId = $executionOptions.ManagementGroupId
+                    }
                     $validated = Test-AvmBicepNativeDeployment -DeploymentInput $options -SubscriptionId $Item.SubscriptionId `
-                        -TemplateContent $Item.TemplateContent -ResourceType $Item.ResourceType `
+                        -TemplateContent $attemptInput.TemplateContent -ResourceType $Item.ResourceType `
                         -ResourceLocation $selectedLocation -TokenResourceLocation $Item.TokenResourceLocation `
                         -ParameterResourceLocationToken:($references.Contains('resourceLocation')) `
                         -UnavailableRegions $unavailableRegions -RetryLimit $executionOptions.ValidationRetryLimit
+                    $canFresh = -not $freshChangesRegion -or
+                    (($validated.CanRelocate -or $groupCanRelocate) -and
+                    $validated.AttemptedRegions.Count -lt $executionOptions.ValidationRetryLimit)
                 }
-                $canCleanRetry = $validated.CanRelocate -and -not $executionOptions.KeepResources
-                $canRelocate = $canCleanRetry -and
-                $validated.AttemptedRegions.Count -lt $executionOptions.ValidationRetryLimit
                 $deployed = New-AvmBicepNativeDeployment -State $state -StatePath $handle.Path `
-                    -DeploymentInput $validated.DeploymentInput -RetryLimit $executionOptions.DeploymentRetryLimit `
-                    -FirstAttempt $firstAttempt -AllowRelocation:$canRelocate -AllowTransientRetry:$canCleanRetry `
-                    -ResourceLocation $validated.Location -Confirm:$false
-                if ($deployed.Status -notin @('relocate', 'retry-clean')) { break }
-                $needsValidation = $deployed.Status -eq 'relocate'
+                    -DeploymentInput $validated.DeploymentInput -Attempt $attempt -Mode $mode -NamingId $attemptInput.NamingId `
+                    -ClassifyRetry:($attempt -lt $attemptLimit) -ResourceLocation $validated.Location -Confirm:$false
+                if ($deployed.Status -eq 'pass' -or $attempt -eq $attemptLimit -or -not $deployed.RetryMode -or
+                    ($deployed.RetryMode -eq 'Fresh' -and -not $canFresh)) { break }
 
-                Write-AvmLog -Level Warning -Message "Deployment '$($deployed.DeploymentName)' requires complete cleanup before its '$($deployed.Status)' retry."
-                $relocationCleanup = Invoke-AvmBicepCleanup -StatePath $handle.Path -SubscriptionId $Item.SubscriptionId `
-                    -TenantId $TenantId -RequireCompleteRemoval -RequireNoDeploymentScripts:(-not $needsValidation) -Confirm:$false
-                if (-not $relocationCleanup.Cleaned) {
-                    foreach ($issue in $relocationCleanup.Issues) { Write-AvmLog -Level Warning -Message $issue.Message }
-                    Add-AvmBicepTestIssue -Issues $issues -File $Item.Case.RelativePath -Code 'relocation-blocked' `
-                        -Message "Cleanup did not confirm safe removal of every outstanding deployment, so the retry stopped. Cleanup state: '$($handle.Path)'."
-                    $relocationBlocked = $true
-                    $deployed.Status = 'fail'
+                # ARM can overwrite nested operation history even when the next root name changes.
+                $snapshot = Get-AvmBicepDeploymentCleanupTarget -DeploymentIds @($deployed.DeploymentId) `
+                    -RequireCompleteRemoval -SearchRetryLimit 1 -SearchRetryInterval 0
+                $state['resources'] = @(Get-AvmBicepCleanupResourceRecord -Existing $state['resources'] -ResourceIds $snapshot.ResourceIds)
+                Save-AvmBicepCleanupState -State $state -Path $handle.Path -Confirm:$false
+                if ($snapshot.Issues.Count -gt 0) {
+                    foreach ($issue in $snapshot.Issues) { Write-AvmLog -Level Warning -Message $issue.Message }
+                    Add-AvmBicepTestIssue -Issues $issues -File $Item.Case.RelativePath -Code 'retry-evidence-incomplete' `
+                        -Message "The failed attempt's resource history could not be preserved completely; retry stopped. Cleanup state: '$($handle.Path)'."
+                    $retryBlocked = $true
                     break
                 }
-                $state = Read-AvmBicepCleanupState -Path $handle.Path
-                $state['status'] = 'Pending'
-                $state['deployments'] = @()
-                $state['resources'] = @()
-                Save-AvmBicepCleanupState -State $state -Path $handle.Path -Confirm:$false
-                if ($needsValidation) { $unavailableRegions = $validated.AttemptedRegions }
-                else { Start-Sleep -Seconds 5 }
-                $firstAttempt = $deployed.Attempt + 1
+                $mode = $deployed.RetryMode
+                if ($mode -eq 'Fresh' -and $freshChangesRegion) { $unavailableRegions = $validated.AttemptedRegions }
+                Write-AvmLog -Level Warning -Message "Retrying '$($deployed.DeploymentName)' in $mode mode ($attempt/$attemptLimit); all resources remain until finalization."
+                Start-Sleep -Seconds $Item.RetryPolicy['limits']['delaySeconds']
             }
-            if ($deployed.Status -ne 'pass' -and -not $relocationBlocked) {
+            if ($deployed.Status -ne 'pass' -and -not $retryBlocked) {
                 $authorizationDetail = if ($deployed.ErrorKind -eq 'Forbidden') {
                     ' Submission returned HTTP 403; authorization failures never permit replay.'
                 }
@@ -246,7 +212,8 @@ function Invoke-AvmBicepNativeTestCase {
             CleanupPending   = @(if ($null -ne $completion) { $completion.CleanupPending })
             CleanupDeferred  = $executionOptions.Phase -eq 'Deploy' -or $executionOptions.KeepResources -or
             ($null -ne $completion -and $completion.CleanupDeferred)
-            StatePath = $handle.Path; Issues = $issues.ToArray()
+            StatePath        = $handle.Path
+            Issues           = $issues.ToArray()
         }
     } -Confirm:$false
 }

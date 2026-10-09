@@ -20,6 +20,7 @@ Describe 'Component: Bicep native service retry <Kind>' -Tag Component -ForEach 
         $script:options = Get-NativeBicepWorkflowOptions -Fixture $script:fixture
         $script:options.Remove('ResourceLocation')
         $script:fixture.Schema = 'subscriptionDeploymentTemplate'
+        $script:fixture.UseGeneratedNames = $true
         $service = New-BicepServiceRetryFixture -Kind $Kind -SubscriptionId $script:options.SubscriptionId
         $script:fixture.TransientResourceType = $service.Provider
         $errorJson = $service.Response.error | ConvertTo-Json -Depth 20 -Compress
@@ -126,7 +127,7 @@ Describe 'Component: Bicep native service retry <Kind>' -Tag Component -ForEach 
         @($script:fixture.Calls | Where-Object { $_ -like 'delete-record:*' }).Count | Should -Be 0
     }
 
-    It 'cleans complete operation evidence and confirms absent history before changing regions' {
+    It 'preserves complete attempt evidence and cleans both external naming contexts after changing regions' {
         $script:fixture.RegionalFailures = 1
         $script:fixture.RecordVisibilityReads = 2
         $script:fixture.RecordVisibilityState = 'Deleting'
@@ -139,52 +140,60 @@ Describe 'Component: Bicep native service retry <Kind>' -Tag Component -ForEach 
         $creates.Location | Should -Be @('westus', 'westus')
         @($script:fixture.NativeInputs | Where-Object Operation -eq 'Validate').Count | Should -Be 2
         $deletions = @($script:fixture.Calls | Where-Object { $_ -like 'delete-record:*' })
-        $deletions.Count | Should -Be 1
+        $deletions.Count | Should -Be 0
         $confirmations = @($script:fixture.Calls | Where-Object { $_ -like 'confirm-record:*' })
-        $confirmations.Count | Should -Be 3
-        $script:fixture.Calls.IndexOf("purge:$($script:fixture.CreatedId)") | Should -BeLessThan $script:fixture.Calls.IndexOf($deletions[0])
-        $script:fixture.Calls.LastIndexOf($confirmations[-1]) | Should -BeLessThan $script:fixture.Calls.LastIndexOf('validate')
+        $confirmations.Count | Should -Be 0
         $script:fixture.Calls.LastIndexOf('validate') | Should -BeLessThan $script:fixture.Calls.LastIndexOf('create')
+        @($script:fixture.CreatedIds | Select-Object -Unique).Count | Should -Be 2
+        foreach ($id in $script:fixture.CreatedIds) {
+            $script:fixture.Calls.IndexOf("remove:$id") | Should -BeGreaterThan $script:fixture.Calls.LastIndexOf('create')
+            $script:fixture.Calls.IndexOf("purge:$id") | Should -BeGreaterThan $script:fixture.Calls.LastIndexOf('create')
+        }
     }
 
-    It 'keeps both budgets bounded when exhausted regions leave only in-place retries' {
+    It 'stops when the regional budget is exhausted without inventing an in-place fallback' {
         $script:fixture.RegionalValidationFailures = 1
         $script:fixture.RegionalFailures = 3
         $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'fail'
         $creates = @($script:fixture.NativeInputs | Where-Object Operation -eq 'Create')
-        $creates.Parameters.resourceLocation | Should -Be @('centralus', 'westus2', 'westus2')
+        $creates.Parameters.resourceLocation | Should -Be @('centralus', 'westus2')
         @($script:fixture.NativeInputs | Where-Object Operation -eq 'Validate').Parameters.resourceLocation |
             Should -Be @('eastus', 'centralus', 'westus2')
-        @($script:fixture.Calls | Where-Object { $_ -like 'delete-record:*' }).Count | Should -Be 1
-        (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).deployments[-1].id | Should -BeLike '*-t3'
+        @($script:fixture.Calls | Where-Object { $_ -like 'delete-record:*' }).Count | Should -Be 0
+        (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).deployments[-1].id | Should -BeLike '*-t2'
         $script:fixture.Calls | Should -Not -Contain 'pester'
     }
 
-    It 'does not relocate a retained deployment' {
+    It 'retains every fresh attempt when KeepResources is explicitly selected' {
         $script:fixture.RegionalFailures = 1
         $script:options.KeepResources = $true
         $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'pass'
         $creates = @($script:fixture.NativeInputs | Where-Object Operation -eq 'Create')
-        $creates.Parameters.resourceLocation | Should -Be @('eastus', 'eastus')
+        $creates.Parameters.resourceLocation | Should -Be @('eastus', 'centralus')
+        $stored = Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json
+        $stored.deployments.Count | Should -Be 2
+        $stored.attempts.mode | Should -Be @('Initial', 'Fresh')
         @($script:fixture.Calls | Where-Object { $_ -match '^(delete-record|remove|purge):' }).Count | Should -Be 0
     }
 
-    It 'never replays when <Obstacle> prevents confirmed complete cleanup' -ForEach @(
+    It 'reports <Obstacle> at its correct discovery or final-cleanup boundary' -ForEach @(
         @{ Obstacle = 'resource removal' }, @{ Obstacle = 'history visibility' }, @{ Obstacle = 'history authorization' }
     ) {
         $script:fixture.RegionalFailures = 1
         switch ($Obstacle) {
             'resource removal' { $script:fixture.CleanupFails = $true }
-            'history visibility' { $script:fixture.RecordVisibilityReads = 6; $script:fixture.RecordVisibilityState = 'Deleting' }
-            'history authorization' { $script:fixture.RecordConfirmationDenied = $true }
+            'history visibility' { $script:fixture.MissingOperations = $true }
+            'history authorization' { $script:fixture.OperationLookupDenied = $true }
         }
         $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'fail'
         $result.CleanupPending.Count | Should -BeGreaterThan 0
-        @($script:fixture.NativeInputs | Where-Object Operation -eq 'Create').Count | Should -Be 1
-        @($script:fixture.NativeInputs | Where-Object Operation -eq 'Validate').Count | Should -Be 1
-        $script:fixture.Calls | Should -Not -Contain 'pester'
+        $attempts = if ($Obstacle -eq 'resource removal') { 2 } else { 1 }
+        @($script:fixture.NativeInputs | Where-Object Operation -eq 'Create').Count | Should -Be $attempts
+        @($script:fixture.NativeInputs | Where-Object Operation -eq 'Validate').Count | Should -Be $attempts
+        if ($Obstacle -eq 'resource removal') { $script:fixture.Calls | Should -Contain 'pester' }
+        else { $script:fixture.Calls | Should -Not -Contain 'pester' }
     }
 }

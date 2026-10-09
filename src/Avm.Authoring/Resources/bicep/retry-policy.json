@@ -1,0 +1,164 @@
+{
+  "schemaVersion": 1,
+  "limits": { "deploymentAttempts": 3, "regionAttempts": 3, "delaySeconds": 5 },
+  "modes": { "InPlace": { "location": "Preserve" }, "Fresh": { "location": "NextEligible" } },
+  "reads": { "attempts": 3, "initialDelaySeconds": 5 },
+  "observation": { "timeoutSeconds": 3600, "pollIntervalSeconds": 15, "consecutiveTimeouts": 3 },
+  "regions": {
+    "allowed": [
+      "swedencentral", "belgiumcentral", "norwayeast", "eastasia", "polandcentral",
+      "austriaeast", "denmarkeast", "koreacentral", "eastus", "centralus", "newzealandnorth"
+    ],
+    "excluded": [
+      "asiasoutheast", "brazilsouth", "eastus2", "japaneast", "qatercentral",
+      "southcentralus", "switzerlandnorth", "uaenorth", "westeurope", "westus2"
+    ]
+  },
+  "wrappers": ["InvalidTemplateDeployment", "DeploymentFailed", "MultipleErrorsOccurred", "ResourceDeploymentFailure"],
+  "rules": [
+    {
+      "id": "service-internal-error",
+      "mode": "InPlace",
+      "code": "InternalServerError",
+      "parentCode": "ResourceDeploymentFailure",
+      "parentTargetRequired": true,
+      "targetRequired": true,
+      "targetTypes": ["Microsoft.Network/applicationGateways", "Microsoft.Network/privateEndpoints", "Microsoft.DBforPostgreSQL/flexibleServers"],
+      "allowEmptyDetails": true,
+      "messagePatterns": ["\\S"]
+    },
+    {
+      "id": "container-instance-capacity",
+      "mode": "Fresh",
+      "code": "",
+      "parentCode": "ResourceDeploymentFailure",
+      "parentSingleDetail": true,
+      "parentTargetRequired": true,
+      "targetRequired": true,
+      "targetTypes": ["Microsoft.ContainerInstance/containerGroups"],
+      "messagePatterns": [
+        "\\AThe requested resource is not available in the location '(?<region>[A-Za-z0-9]+(?: [A-Za-z0-9]+)*)' at this moment\\. Please retry with a different resource request or in another location\\. Resource requested: '(?<cpu>[0-9]+(?:\\.[0-9]+)?)' CPU '(?<memory>[0-9]+(?:\\.[0-9]+)?)' GB memory 'Linux' OS\\z"
+      ],
+      "regionCapture": "region",
+      "numberCaptures": {
+        "cpu": { "exclusiveMinimum": 0, "maximum": 4 },
+        "memory": { "exclusiveMinimum": 0, "maximum": 16 }
+      }
+    },
+    {
+      "id": "provider-location",
+      "mode": "Fresh",
+      "code": "LocationNotAvailableForResourceType",
+      "forbidTarget": true,
+      "messagePatterns": [
+        "\\AThe provided location '(?<region>[A-Za-z0-9]+(?: [A-Za-z0-9]+)*)' is not available for resource type 'Microsoft\\.[A-Za-z0-9]+/[A-Za-z0-9]+(?:/[A-Za-z0-9]+)*'\\. List of available regions for the resource type is '(?<regions>[a-z0-9]+(?:,[a-z0-9]+)*)'\\.\\z"
+      ],
+      "regionCapture": "region",
+      "listCaptures": { "regions": { "excluded": ["global"], "excludeRegion": true, "maximumCount": 100 } }
+    },
+    {
+      "id": "aks-empty-zones",
+      "mode": "Fresh",
+      "code": "AvailabilityZoneNotSupported",
+      "forbidTarget": true,
+      "parentCode": "InvalidTemplateDeployment",
+      "parentWithoutTarget": true,
+      "parentMessagePattern": "\\AThe template deployment '[A-Za-z0-9_.()-]+' is not valid according to the validation procedure\\. The following resource provider\\(s\\) - 'Microsoft\\.ContainerService/managedClusters \\((?<version>[0-9]{4}-[0-9]{2}-[0-9]{2})\\)' reported preflight validation errors\\. Tracking id is '[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}'\\. See inner errors for details\\.\\z",
+      "messagePatterns": [
+        "\\APreflight validation check for resource\\(s\\) for container service [A-Za-z0-9_-]+ in resource group [A-Za-z0-9_.()-]+ failed\\. Message: The zone\\(s\\) '(?<zones>[123](?:,[123])*)' for resource '[a-z][a-z0-9]{0,11}' is not supported\\. The supported zones for location '(?<region>[A-Za-z0-9]+(?: [A-Za-z0-9]+)*)' are ''\\. Details: \\z"
+      ],
+      "regionCapture": "region",
+      "dateCaptures": { "version": "yyyy-MM-dd" },
+      "listCaptures": { "zones": { "allowed": ["1", "2", "3"], "maximumCount": 3 } }
+    },
+    {
+      "id": "workspace-cosmos-capacity",
+      "mode": "Fresh",
+      "code": "BadRequest",
+      "parentCode": "ResourceDeploymentFailure",
+      "parentTargetRequired": true,
+      "targetRequired": true,
+      "targetTypes": ["Microsoft.MachineLearningServices/workspaces"],
+      "messagePatterns": [
+        "\\ALong running operation failed with status 'Failed'\\. Additional Info:'Database account creation failed\\. Operation Id: [0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}, Error : Message: (?<json>\\{.*\\}), Request URI: /serviceReservation, RequestStats: , SDK: Microsoft\\.Azure\\.Documents\\.Common/[0-9]+\\.[0-9]+\\.[0-9]+(?:, Microsoft\\.Azure\\.Documents\\.Common/[0-9]+\\.[0-9]+\\.[0-9]+)*'\\z"
+      ],
+      "jsonEquals": { "code": "ServiceUnavailable" },
+      "jsonMessagePattern": "\\ASorry, we are currently experiencing high demand in (?<region>[A-Za-z0-9]+(?: [A-Za-z0-9]+)*) region, and cannot fulfill your request at this time (?<time>[A-Z][a-z]{2}, [0-9]{2} [A-Z][a-z]{2} [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} GMT)\\. To request region access for your subscription, please follow this link https://aka\\.ms/cosmosdbquota for more details on how to create a region access request\\.\\r\\nActivityId: [0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}, Microsoft\\.Azure\\.Documents\\.Common/[0-9]+\\.[0-9]+\\.[0-9]+\\z",
+      "regionCapture": "region",
+      "dateCaptures": { "time": "r" }
+    },
+    {
+      "id": "search-sku-capacity",
+      "mode": "Fresh",
+      "code": "ResourcesForSkuUnavailable",
+      "targetTypes": ["Microsoft.Search/searchServices"],
+      "messagePatterns": [
+        "\\AThe region '(?<region>[A-Za-z0-9]+(?: [A-Za-z0-9]+)*)' currently does not have enough resources available to provision services with the SKU '[A-Za-z][A-Za-z0-9_]*'\\. Try creating the service in another region or selecting a different SKU\\. RequestId: [0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\\z"
+      ],
+      "regionCapture": "region"
+    },
+    {
+      "id": "search-semantic-region",
+      "mode": "Fresh",
+      "code": "BadRequest",
+      "targetTypes": ["Microsoft.Search/searchServices"],
+      "messagePatterns": [
+        "\\ASemantic Search is not available in '(?<region>[A-Za-z0-9]+(?: [A-Za-z0-9]+)*)' region\\. Please refer to https://aka\\.ms/semanticsearchavailability for list of available regions\\.\\z"
+      ],
+      "regionCapture": "region"
+    },
+    {
+      "id": "container-apps-capacity",
+      "mode": "Fresh",
+      "code": "ManagedEnvironmentCapacityHeavyUsageError",
+      "targetRequired": true,
+      "targetTypes": ["Microsoft.App/managedEnvironments"],
+      "messagePatterns": [
+        "\\A(?<summary>(?:AKS is experiencing heavy usage in region (?<region>[A-Za-z0-9]+(?: [A-Za-z0-9]+)*)\\. We are working on adding new capacity\\. In the meantime, please consider creating new AKS clusters in a different region\\.|Creating a new cluster is unavailable at this time in region (?<region>[A-Za-z0-9]+(?: [A-Za-z0-9]+)*)\\. To create a new cluster, we recommend using an alternate region\\.) For a list of all the Azure regions, visit https://aka\\.ms/aks/regions\\. For more details on this error, visit https://aka\\.ms/akscapacityheavyusage\\.)\\r?\\nStatus: 400 \\(Bad Request\\)\\r?\\nErrorCode: AKSCapacityHeavyUsage\\r?\\n\\r?\\nContent:\\r?\\n(?<json>\\{.*\\})\\r?\\n\\r?\\nHeaders:\\r?\\n(?<headers>(?:[A-Za-z0-9-]+: [^\\r\\n]+\\r?\\n)+)\\z"
+      ],
+      "regionCapture": "region",
+      "jsonEquals": { "code": "AKSCapacityHeavyUsage", "message": "@summary", "details": null, "subcode": "" },
+      "headerNames": [
+        "Cache-Control", "Pragma", "x-ms-operation-identifier", "x-ms-correlation-request-id", "x-ms-request-id",
+        "Strict-Transport-Security", "x-ms-throttling-version", "x-ms-ratelimit-remaining-subscription-writes",
+        "x-ms-routing-request-id", "X-Content-Type-Options", "X-Cache", "X-MSEdge-Ref", "Date",
+        "Content-Length", "Content-Type", "Expires"
+      ]
+    },
+    {
+      "id": "location-ineligible",
+      "mode": "Fresh",
+      "code": "RequestDisallowedByAzure",
+      "allowEmptyDetails": true,
+      "messagePatterns": ["https://aka\\.ms/locationineligible(?:[?#\\s).,;:'\"]|$)"]
+    },
+    {
+      "id": "allocation-capacity",
+      "mode": "Fresh",
+      "code": "AllocationFailed",
+      "allowEmptyDetails": true,
+      "messagePatterns": ["(?i)\\b(capacity|allocation)\\b", "(?i)\\b(region|location|zone)\\b"]
+    },
+    {
+      "id": "zonal-allocation-capacity",
+      "mode": "Fresh",
+      "code": "ZonalAllocationFailed",
+      "allowEmptyDetails": true,
+      "messagePatterns": ["(?i)\\b(capacity|allocation)\\b", "(?i)\\b(region|location|zone)\\b"]
+    },
+    {
+      "id": "insufficient-capacity",
+      "mode": "Fresh",
+      "code": "InsufficientCapacity",
+      "allowEmptyDetails": true,
+      "messagePatterns": ["(?i)\\b(capacity|allocation)\\b", "(?i)\\b(region|location|zone)\\b"]
+    },
+    {
+      "id": "sku-capacity",
+      "mode": "Fresh",
+      "code": "SkuNotAvailable",
+      "allowEmptyDetails": true,
+      "messagePatterns": ["(?i)\\b(capacity|not available)\\b", "(?i)\\b(region|location)\\b"]
+    }
+  ]
+}

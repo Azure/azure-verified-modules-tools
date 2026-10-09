@@ -143,19 +143,27 @@ function ConvertTo-AvmBicepCleanupState {
         ownedResourceGroups = $groups.ToArray()
         resources           = $resources.ToArray()
     }
+    if ($State.Contains('attempts') -and -not $State.Contains('case')) {
+        throw [AvmConfigurationException]::new('A Bicep attempt journal requires its case metadata.')
+    }
     if ($State.Contains('case')) {
         if ($State['case'] -isnot [System.Collections.IDictionary]) {
             throw [AvmConfigurationException]::new('Cleanup case metadata must be an object.')
         }
         $document['case'] = ConvertTo-AvmBicepCleanupCase -Case $State['case']
         $case = $document['case']
-        foreach ($entry in $deployments) {
-            $expectedId = Get-AvmBicepScopedDeploymentId -Scope $case['scope'] `
-                -SubscriptionId $State['subscriptionId'] -ResourceGroupName $case['resourceGroupName'] `
-                -ManagementGroupId $case['managementGroupId'] -DeploymentName $entry['id'].Split('/')[-1]
-            if ($entry['id'] -ine $expectedId -or
-                $entry['id'].Split('/')[-1] -cnotmatch ('^avm-e2e-' + $State['runId'] + '-t[1-3]$')) {
-                throw [AvmConfigurationException]::new('Cleanup deployment does not belong to its recorded case.')
+        if ($State.Contains('attempts')) {
+            $document['attempts'] = @(ConvertTo-AvmBicepAttemptJournal -State $State)
+        }
+        else {
+            foreach ($entry in $deployments) {
+                $expectedId = Get-AvmBicepScopedDeploymentId -Scope $case['scope'] `
+                    -SubscriptionId $State['subscriptionId'] -ResourceGroupName $case['resourceGroupName'] `
+                    -ManagementGroupId $case['managementGroupId'] -DeploymentName $entry['id'].Split('/')[-1]
+                if ($entry['id'] -ine $expectedId -or
+                    $entry['id'].Split('/')[-1] -cnotmatch ('^avm-e2e-' + $State['runId'] + '-t[1-3]$')) {
+                    throw [AvmConfigurationException]::new('Cleanup deployment does not belong to its recorded case.')
+                }
             }
         }
     }
