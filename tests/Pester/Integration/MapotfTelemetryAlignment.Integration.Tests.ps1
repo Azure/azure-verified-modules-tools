@@ -597,7 +597,142 @@ run "telemetry" {
         $unitResult.StdOut | Should -Match 'Success! 1 passed, 0 failed'
     }
 
-    It 'preserves root and local-child unit targets when telemetry introduces location' {
+    It 'runs root and child telemetry assertions with <Shape> customized client mocks' -TestCases @(
+        @{ Shape = 'missing'; SubscriptionId = '00000000-0000-0000-0000-000000000000' }
+        @{ Shape = 'partial'; SubscriptionId = '11111111-1111-1111-1111-111111111111' }
+    ) {
+        param($Shape, $SubscriptionId)
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $child = Join-Path $root 'modules' 'child'
+        New-TelemetryModule -Root $root -WithLegacy
+        New-TelemetryModule -Root $child -WithLegacy -Child
+        foreach ($target in @($root, $child)) {
+            Set-Content -LiteralPath (Join-Path $target 'main.tf') -Encoding utf8NoBOM -Value @'
+data "azapi_resource_list" "authored" {
+  type      = "Microsoft.Resources/resourceGroups@2025-04-01"
+  parent_id = "/subscriptions/11111111-1111-1111-1111-111111111111"
+}
+'@
+        }
+        $unit = Join-Path $root 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $unit -Force
+        $testPath = Join-Path $unit 'custom.tftest.hcl'
+        $client = if ($Shape -eq 'partial') {
+            @'
+  mock_data "azapi_client_config" {
+    defaults = {
+      subscription_id = "11111111-1111-1111-1111-111111111111"
+      object_id       = "22222222-2222-2222-2222-222222222222"
+    }
+  }
+'@
+        }
+        else { '' }
+        $assertion = if ($Shape -eq 'partial') {
+            @'
+  assert {
+    condition = (
+      data.azapi_client_config.telemetry[0].subscription_id == "11111111-1111-1111-1111-111111111111" &&
+      data.azapi_client_config.telemetry[0].object_id == "22222222-2222-2222-2222-222222222222"
+    )
+    error_message = "Keep the authored client identity defaults."
+  }
+'@
+        }
+        else { '' }
+        $source = @'
+mock_provider "modtm" {}
+mock_provider "random" {}
+mock_provider "azapi" {
+  mock_data "azapi_resource_list" {
+    defaults = { output = { value = [] } }
+  }
+  mock_resource "azapi_resource" {
+    defaults = {
+      id = "/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.Resources/deployments/authored"
+    }
+  }
+__CLIENT__
+}
+
+variables {
+  location = "westeurope"
+}
+
+run "root_on" {
+  command = apply
+  assert {
+    condition = (
+      length(modtm_telemetry.telemetry) == 1 &&
+      azapi_resource.telemetry[0].parent_id == "/subscriptions/__SUBSCRIPTION__" &&
+      azapi_resource.telemetry[0].location == "westeurope" &&
+      length(data.azapi_resource_list.authored.output.value) == 0
+    )
+    error_message = "Telemetry must work without changing the location or unrelated mock."
+  }
+__ASSERTION__
+}
+
+run "root_off" {
+  command = plan
+  variables {
+    enable_telemetry = false
+  }
+  assert {
+    condition     = length(modtm_telemetry.telemetry) == 0
+    error_message = "Keep the authored telemetry opt-out assertion."
+  }
+}
+
+run "child_on" {
+  command = apply
+  module {
+    source = "./modules/child"
+  }
+  variables {
+    location = "swedencentral"
+  }
+  assert {
+    condition = (
+      length(modtm_telemetry.telemetry) == 1 &&
+      azapi_resource.telemetry[0].parent_id == "/subscriptions/__SUBSCRIPTION__" &&
+      azapi_resource.telemetry[0].location == "swedencentral" &&
+      length(data.azapi_resource_list.authored.output.value) == 0
+    )
+    error_message = "Keep the local child target and its authored region."
+  }
+__ASSERTION__
+}
+'@
+        $source = $source.Replace('__CLIENT__', $client).Replace('__ASSERTION__', $assertion).
+            Replace('__SUBSCRIPTION__', $SubscriptionId)
+        [System.IO.File]::WriteAllText($testPath, $source + "`n", [System.Text.UTF8Encoding]::new($false))
+        $snapshot = InModuleScope Avm.Authoring -Parameters @{ Root = $root } {
+            param($Root)
+            Get-AvmFileSnapshot -Path @((Get-AvmTerraformFile -Root $Root).FullName)
+        }
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'fail'
+        foreach ($path in $snapshot.Keys) {
+            [System.IO.File]::ReadAllBytes($path) | Should -Be $snapshot[$path]
+        }
+        (Invoke-TelemetryEngine -Root $root).Status | Should -Be 'pass'
+        $first = [System.IO.File]::ReadAllText($testPath)
+        $first | Should -Not -Match 'mock_provider "(modtm|random)"'
+        $first | Should -Match 'source\s*=\s*"\./modules/child"'
+        $first | Should -Match 'enable_telemetry\s*=\s*false'
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'pass'
+        [System.IO.File]::ReadAllText($testPath) | Should -BeExactly $first
+        Assert-TelemetryTerraformValid -Root $root -TestDirectory 'tests/unit'
+        $result = Invoke-TelemetryProcess -FilePath $script:terraformPath `
+            -ArgumentList @('test', '-no-color', '-test-directory=tests/unit') -Root $root
+        $result.StdOut | Should -Match 'Success! 3 passed, 0 failed'
+    }
+
+    It 'preserves root and local-child unit targets with <MockShape> AzAPI mocks' -TestCases @(
+        @{ MockShape = 'empty'; MockBody = '' }
+        @{ MockShape = 'comment-only'; MockBody = "`n  # Keep the authored provider explanation.`n" }
+    ) {
+        param($MockBody)
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $child = Join-Path $root 'modules' 'child'
         New-TelemetryModule -Root $root -WithLegacy
@@ -617,8 +752,8 @@ locals {
         $unit = Join-Path $root 'tests' 'unit'
         $null = New-Item -ItemType Directory -Path $unit -Force
         $testPath = Join-Path $unit 'scopes.tftest.hcl'
-        Set-Content -LiteralPath $testPath -Encoding utf8NoBOM -Value @'
-mock_provider "azapi" {}
+        $source = @'
+mock_provider "azapi" {__AZAPI_MOCK_BODY__}
 mock_provider "modtm" {}
 mock_provider "random" {}
 
@@ -660,6 +795,9 @@ run "child" {
   }
 }
 '@
+        [System.IO.File]::WriteAllText(
+            $testPath, $source.Replace('__AZAPI_MOCK_BODY__', $MockBody) + "`n",
+            [System.Text.UTF8Encoding]::new($false))
 
         $before = InModuleScope Avm.Authoring -Parameters @{ Root = $root } {
             param($Root)
@@ -675,6 +813,10 @@ run "child" {
         $content | Should -Match 'source\s*=\s*"\./modules/child"'
         $content | Should -Match 'mock_provider "azapi"'
         $content | Should -Not -Match 'mock_provider "(modtm|random)"'
+        $content | Should -Match 'subscription_resource_id\s*=\s*"/subscriptions/00000000-0000-0000-0000-000000000000"'
+        if ($MockBody) {
+            $content | Should -Match '# Keep the authored provider explanation\.'
+        }
         (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'pass'
         [System.IO.File]::ReadAllText($testPath) | Should -BeExactly $content
         Assert-TelemetryTerraformValid -Root $root -TestDirectory 'tests/unit'

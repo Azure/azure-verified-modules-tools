@@ -23,7 +23,11 @@ BeforeAll {
                     root  = @{ kind = 'root'; dir = $root; source = $null }
                     child = @{ kind = 'local'; dir = $child; source = './modules/child' }
                 }
-                mock_providers = @{ azapi = @{ mptf = @{ is_empty = $true } } }
+                mock_providers = @{
+                    azapi = New-CustomTelemetryMock -Defaults @{
+                        subscription_resource_id = '/subscriptions/00000000-0000-0000-0000-000000000000'
+                    }
+                }
                 providers      = @{}
             }
             modules = @{
@@ -83,6 +87,27 @@ BeforeAll {
             param($Fixture, $DryRun)
             Invoke-AvmTerraformUnitTestMigration -Root $Fixture.Root -ModuleTargets $Fixture.Targets `
                 -Snapshots $Fixture.Snapshots -Options $Fixture.Options -WhatIf:$DryRun
+        }
+    }
+
+    function New-CustomTelemetryMock {
+        param([object] $Defaults = @{})
+        @{
+            mptf      = @{ is_empty = $false; attributes = @{} }
+            mock_data = @(
+                @{
+                    mptf = @{
+                        block_labels = @('azapi_client_config')
+                        attributes   = @{ defaults = $Defaults }
+                    }
+                },
+                @{
+                    mptf = @{
+                        block_labels = @('azapi_resource_list')
+                        attributes   = @{ defaults = @{ output = @{ value = @() } } }
+                    }
+                }
+            )
         }
     }
 }
@@ -273,6 +298,196 @@ Describe 'Terraform unit-test migration' {
             }
         }
 
+        Context 'customized telemetry mocks' {
+                BeforeEach {
+                    Mock Get-AvmTerraformUnitTestInspection -ModuleName Avm.Authoring { $Scope.Inspection }
+                    Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
+                        [pscustomobject]@{ ExitCode = 0; StdOut = 'true'; StdErr = '' }
+                    } -ParameterFilter { $ArgumentList[0] -eq 'debug' }
+                    foreach ($target in $script:fixture.Targets) {
+                        $script:fixture.Before.modules[$target.Path].variables.location = @{ required = $true }
+                    }
+                    $script:fixture.After.test.mock_providers.azapi = New-CustomTelemetryMock
+                }
+
+                It 'adds a native missing-field patch using <Source> without changing inspected defaults' -TestCases @(
+                    @{ Source = 'the synthetic subscription'; Defaults = @{}; Id = '00000000-0000-0000-0000-000000000000' }
+                    @{
+                        Source = 'an authored subscription'
+                        Defaults = @{
+                            subscription_id = 'A1111111-1111-1111-1111-111111111111'
+                            tenant_id = '${var.authored_tenant}'
+                            object_id = '22222222-2222-2222-2222-222222222222'
+                        }
+                        Id = 'A1111111-1111-1111-1111-111111111111'
+                    }
+                ) {
+                    param($Defaults, $Id)
+                    $script:fixture.After.test.mock_providers.azapi = New-CustomTelemetryMock -Defaults $Defaults
+                    $before = $script:fixture.After.test | ConvertTo-Json -Depth 20 -Compress
+                    Invoke-UnitMigrationFixture -Fixture $script:fixture
+                    ($script:fixture.After.test | ConvertTo-Json -Depth 20 -Compress) | Should -BeExactly $before
+                    InModuleScope Avm.Authoring -Parameters @{ ResourceId = "/subscriptions/$Id" } {
+                        param($ResourceId)
+                        Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                            $ArgumentList[0] -eq 'transform' -and
+                            $ArgumentList[8] -ceq 'new_location_modules=[]' -and
+                            $ArgumentList[10] -ceq ('telemetry_subscription_resource_id=' +
+                                (ConvertTo-Json -InputObject $ResourceId -Compress))
+                        }
+                        Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'clean-backup' }
+                    }
+                }
+
+                It 'plans a missing client-config block or defaults object' -TestCases @(
+                    @{ Missing = 'block' }
+                    @{ Missing = 'defaults' }
+                ) {
+                    param($Missing)
+                    $mock = $script:fixture.After.test.mock_providers.azapi
+                    if ($Missing -eq 'block') {
+                        $mock.mock_data = @($mock.mock_data[1])
+                    }
+                    else {
+                        $mock.mock_data[0].mptf.attributes.Remove('defaults')
+                    }
+                    Invoke-UnitMigrationFixture -Fixture $script:fixture
+                    Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                        $ArgumentList[0] -eq 'transform' -and
+                        $ArgumentList[10] -ceq 'telemetry_subscription_resource_id="/subscriptions/00000000-0000-0000-0000-000000000000"'
+                    }
+                }
+
+                It 'patches semantically empty mocks through the native profile' {
+                    $script:fixture.After.test.mock_providers.azapi = @{
+                        mptf = @{ is_empty = $true; attributes = @{} }
+                    }
+                    Invoke-UnitMigrationFixture -Fixture $script:fixture
+                    Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                        $ArgumentList[0] -eq 'debug'
+                    }
+                    Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                        $ArgumentList[0] -eq 'transform' -and
+                        $ArgumentList[8] -ceq 'new_location_modules=[]' -and
+                        $ArgumentList[10] -ceq 'telemetry_subscription_resource_id="/subscriptions/00000000-0000-0000-0000-000000000000"'
+                    }
+                }
+
+                It 'never overwrites an authored resource ID even when it is null or invalid' -TestCases @(
+                    @{ Value = '/subscriptions/33333333-3333-3333-3333-333333333333' }
+                    @{ Value = '${var.resource_id}' }
+                    @{ Value = $null }
+                    @{ Value = 'invalid-authored-value' }
+                ) {
+                    param($Value)
+                    $script:fixture.After.test.mock_providers.azapi =
+                        New-CustomTelemetryMock -Defaults @{ subscription_resource_id = $Value }
+                    Invoke-UnitMigrationFixture -Fixture $script:fixture
+                    Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+                }
+
+                It 'rejects defaults that cannot be merged without replacing authored expressions' -TestCases @(
+                    @{ Value = $null }
+                    @{ Value = '${var.client_defaults}' }
+                    @{ Value = @('not', 'an object') }
+                ) {
+                    param($Value)
+                    $script:fixture.After.test.mock_providers.azapi = New-CustomTelemetryMock -Defaults $Value
+                    { Invoke-UnitMigrationFixture -Fixture $script:fixture } | Should -Throw '*defaults must be a statically inspectable object literal*'
+                    Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+                    Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 0
+                }
+
+                It 'rejects subscription IDs that cannot supply a matching resource ID' -TestCases @(
+                    @{ Value = $null }
+                    @{ Value = '${var.subscription_id}' }
+                    @{ Value = '' }
+                    @{ Value = 1 }
+                    @{ Value = "11111111-1111-1111-1111-111111111111`n" }
+                    @{ Value = '/subscriptions/11111111-1111-1111-1111-111111111111' }
+                ) {
+                    param($Value)
+                    $script:fixture.After.test.mock_providers.azapi =
+                        New-CustomTelemetryMock -Defaults @{ subscription_id = $Value }
+                    { Invoke-UnitMigrationFixture -Fixture $script:fixture } | Should -Throw '*subscription_id is not a literal GUID*'
+                    Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+                    Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 0
+                }
+
+                It 'rejects ambiguous mock bindings even when no location input is needed' -TestCases @(
+                    @{ Unsafe = 'source' }
+                    @{ Unsafe = 'real' }
+                    @{ Unsafe = 'alias' }
+                    @{ Unsafe = 'mapping' }
+                    @{ Unsafe = 'duplicate' }
+                ) {
+                    param($Unsafe)
+                    switch ($Unsafe) {
+                        source { $script:fixture.After.test.mock_providers.azapi.mptf.attributes.source = './mocks' }
+                        real { $script:fixture.After.test.providers.azapi = @{} }
+                        alias { $script:fixture.After.test.mock_providers['azapi.alternate'] = @{ mptf = @{ is_empty = $true } } }
+                        mapping { $script:fixture.After.test.runs.root.mptf.attributes.providers = @{ azapi = 'azapi' } }
+                        duplicate {
+                            $script:fixture.After.test.mock_providers.azapi.mock_data +=
+                                $script:fixture.After.test.mock_providers.azapi.mock_data[0]
+                        }
+                    }
+                    { Invoke-UnitMigrationFixture -Fixture $script:fixture } | Should -Throw '*Cannot automatically migrate unit test*'
+                    Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+                    Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 0
+                }
+
+                It 'rejects incomplete customized-mock inspection' -TestCases @(
+                    @{ Missing = 'provider metadata' }
+                    @{ Missing = 'provider attributes' }
+                    @{ Missing = 'data labels' }
+                    @{ Missing = 'data attributes' }
+                ) {
+                    param($Missing)
+                    $mock = $script:fixture.After.test.mock_providers.azapi
+                    switch ($Missing) {
+                        'provider metadata' { $mock.Remove('mptf') }
+                        'provider attributes' { $mock.mptf.Remove('attributes') }
+                        'data labels' { $mock.mock_data[0].mptf.Remove('block_labels') }
+                        'data attributes' { $mock.mock_data[0].mptf.Remove('attributes') }
+                    }
+                    { Invoke-UnitMigrationFixture -Fixture $script:fixture } | Should -Throw '*invalid AzAPI*'
+                    Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 0
+                }
+
+                It 'does not augment mocks for targets without telemetry' {
+                    foreach ($target in $script:fixture.Targets) {
+                        $target.Profiles = @('module', 'common')
+                    }
+                    Invoke-UnitMigrationFixture -Fixture $script:fixture
+                    Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+                }
+
+                It 'rejects unsafe binaries or profiles before changing any test file' -TestCases @(
+                    @{ Response = 'false' }
+                    @{ Response = '{}' }
+                    @{ Response = 'null' }
+                    @{ Response = 'invalid JSON' }
+                ) {
+                    param($Response)
+                    $script:fixture.Options.EnvVars['AVM_TEST_CAPABILITY_RESPONSE'] = $Response
+                    Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
+                        [pscustomobject]@{ ExitCode = 0; StdOut = $EnvVars['AVM_TEST_CAPABILITY_RESPONSE']; StdErr = '' }
+                    } -ParameterFilter { $ArgumentList[0] -eq 'debug' }
+                    { Invoke-UnitMigrationFixture -Fixture $script:fixture } | Should -Throw '*label-safe*'
+                    Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 0
+                    Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter {
+                        $ArgumentList[0] -in @('transform', 'clean-backup')
+                    }
+                }
+
+                It 'does not change customized mocks under WhatIf' {
+                    Invoke-UnitMigrationFixture -Fixture $script:fixture -WhatIf
+                    Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+                    Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 0
+                }
+        }
+
         It 'does not repair a pre-existing input or invent a value for an optional or absent input' -TestCases @(
             @{ InputState = 'pre-existing' }
             @{ InputState = 'optional' }
@@ -368,6 +583,7 @@ Describe 'Terraform unit-test migration' {
             foreach ($target in $script:fixture.Targets) {
                 $script:fixture.Before.modules[$target.Path].variables.location = @{ required = $true }
             }
+            $script:fixture.After.test.mock_providers.azapi = @{ mptf = @{ is_empty = $true } }
             $script:fixture.After.test.runs.child.mptf.attributes.providers = @{ azapi = 'azapi' }
             { Invoke-UnitMigrationFixture -Fixture $script:fixture } | Should -Throw '*run provider mappings*'
             Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 0

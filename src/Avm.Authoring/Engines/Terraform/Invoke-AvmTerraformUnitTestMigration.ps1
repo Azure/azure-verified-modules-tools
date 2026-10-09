@@ -139,6 +139,78 @@ function Get-AvmTerraformUnitTestSnapshot {
     }
 }
 
+function Get-AvmTerraformTelemetryMockResourceId {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Test,
+        [Parameter(Mandatory)] [string] $Path
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+    if (-not $Test.mock_providers.Contains('azapi')) {
+        return $null
+    }
+    $mock = $Test.mock_providers.azapi
+    if ($mock -isnot [System.Collections.IDictionary] -or
+        $mock['mptf'] -isnot [System.Collections.IDictionary] -or
+        $mock.mptf['is_empty'] -isnot [bool]) {
+        throw [AvmConfigurationException]::new(
+            "Cannot inspect Terraform unit test '$Path': invalid AzAPI mock inspection.")
+    }
+    $subscriptionId = '00000000-0000-0000-0000-000000000000'
+    if ($mock.mptf.is_empty) {
+        return "/subscriptions/$subscriptionId"
+    }
+    if ($mock.mptf['attributes'] -isnot [System.Collections.IDictionary]) {
+        throw [AvmConfigurationException]::new(
+            "Cannot inspect Terraform unit test '$Path': invalid AzAPI mock attributes.")
+    }
+    $clientConfigs = @(
+        foreach ($data in @($mock['mock_data'])) {
+            if ($null -eq $data) { continue }
+            if ($data -isnot [System.Collections.IDictionary] -or
+                $data['mptf'] -isnot [System.Collections.IDictionary] -or
+                $data.mptf['block_labels'] -isnot [System.Collections.IList] -or
+                @($data.mptf['block_labels']).Count -ne 1 -or
+                $data.mptf['attributes'] -isnot [System.Collections.IDictionary]) {
+                throw [AvmConfigurationException]::new(
+                    "Cannot inspect Terraform unit test '$Path': invalid AzAPI mock_data inspection.")
+            }
+            if ($data.mptf.block_labels[0] -ceq 'azapi_client_config') { $data }
+        }
+    )
+    if ($clientConfigs.Count -gt 1) {
+        throw [AvmConfigurationException]::new(
+            "Cannot automatically migrate unit test '$Path': multiple azapi_client_config mocks require review.")
+    }
+    $defaults = @{}
+    if ($clientConfigs.Count -eq 1 -and $clientConfigs[0].mptf.attributes.Contains('defaults')) {
+        $defaults = $clientConfigs[0].mptf.attributes.defaults
+        if ($defaults -isnot [System.Collections.IDictionary]) {
+            throw [AvmConfigurationException]::new(
+                "Cannot automatically migrate unit test '$Path': azapi_client_config defaults must be a statically inspectable object literal before adding subscription_resource_id.")
+        }
+    }
+    if ($defaults.Contains('subscription_resource_id')) {
+        return $null
+    }
+    if ($mock.mptf.attributes.Contains('source')) {
+        throw [AvmConfigurationException]::new(
+            "Cannot automatically migrate unit test '$Path': source-based AzAPI mocks require review before adding subscription_resource_id.")
+    }
+    if ($defaults.Contains('subscription_id')) {
+        $subscriptionId = $defaults.subscription_id
+        if ($subscriptionId -isnot [string] -or
+            $subscriptionId -cnotmatch '\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z') {
+            throw [AvmConfigurationException]::new(
+                "Cannot automatically migrate unit test '$Path': author a full subscription_resource_id when subscription_id is not a literal GUID.")
+        }
+    }
+    return "/subscriptions/$subscriptionId"
+}
+
 function Invoke-AvmTerraformUnitTestMigration {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -185,14 +257,19 @@ function Invoke-AvmTerraformUnitTestMigration {
                 $null = $newLocations.Add($target.dir)
             }
         }
+        $instrumentedTargets = @($ModuleTargets |
+                Where-Object { $targetPaths.Contains($_.Path) -and $_.Profiles -contains 'root' })
+        $migratesTelemetry = $scope.Owner.Profiles -contains 'root' -or $instrumentedTargets.Count -gt 0
+        $telemetryResourceId = if ($migratesTelemetry) {
+            Get-AvmTerraformTelemetryMockResourceId -Test $after.test -Path $scope.File.FullName
+        }
+        else { $null }
         $hasEmptyModtm = $after.test.mock_providers.Contains('modtm') -and
         $after.test.mock_providers.modtm.mptf.is_empty
         $hasEmptyAzapi = $after.test.mock_providers.Contains('azapi') -and
         $after.test.mock_providers.azapi.mptf.is_empty
-        $instrumentedTargets = @($ModuleTargets |
-                Where-Object { $targetPaths.Contains($_.Path) -and $_.Profiles -contains 'root' })
-        $migratesTelemetry = $scope.Owner.Profiles -contains 'root' -or $instrumentedTargets.Count -gt 0
-        if ($newLocations.Count -gt 0 -or ($migratesTelemetry -and ($hasEmptyModtm -or $hasEmptyAzapi))) {
+        if ($newLocations.Count -gt 0 -or
+            ($migratesTelemetry -and ($hasEmptyModtm -or $hasEmptyAzapi -or $null -ne $telemetryResourceId))) {
             $requiresAzapiMock = @($instrumentedTargets | Where-Object { $newLocations.Contains($_.Path) }).Count -gt 0
             $hasAzureMock = $after.test.mock_providers.Contains('azapi') -or
             (-not $requiresAzapiMock -and $after.test.mock_providers.Contains('azurerm')) -or
@@ -207,26 +284,54 @@ function Invoke-AvmTerraformUnitTestMigration {
                     "Cannot automatically migrate unit test '$($scope.File.FullName)': use an unaliased mock for each introduced Azure provider, without real-provider declarations or run provider mappings.")
             }
         }
+        $encoded = (ConvertTo-Json -InputObject @($newLocations) -Compress).Replace('${', '$${').Replace('%{', '%%{')
+        $arguments = @(
+            'transform', '--tf-dir', $scope.Owner.Path, '--test-file', $scope.RelativePath,
+            '--mptf-dir', $Options.ProfileDirs['unit-test'],
+            '--mptf-var', ("new_location_modules=$encoded")
+        )
+        if ($null -ne $telemetryResourceId) {
+            $resourceIdJson = ConvertTo-Json -InputObject $telemetryResourceId -Compress
+            $arguments += @('--mptf-var', "telemetry_subscription_resource_id=$resourceIdJson")
+        }
         $plans.Add([pscustomobject]@{
-                Path             = $scope.File.FullName
-                Scope            = $scope
-                TargetPaths      = @($targetPaths)
-                NewLocationPaths = @($newLocations)
+                Path                            = $scope.File.FullName
+                Scope                           = $scope
+                TargetPaths                     = @($targetPaths)
+                NewLocationPaths                = @($newLocations)
+                TelemetrySubscriptionResourceId = $telemetryResourceId
+                Arguments                       = $arguments
             })
     }
 
     if (-not $PSCmdlet.ShouldProcess($Root, 'migrate scoped Terraform unit tests')) {
         return
     }
-    Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets $ModuleTargets -UnitTestPlans $plans.ToArray()
-    foreach ($plan in $plans | Where-Object { $_.NewLocationPaths.Count -gt 0 }) {
-        $encoded = (ConvertTo-Json -InputObject @($plan.NewLocationPaths) -Compress).Replace('${', '$${').Replace('%{', '%%{')
+    foreach ($plan in $plans | Where-Object { $null -ne $_.TelemetrySubscriptionResourceId }) {
+        $arguments = @('debug') + $plan.Arguments[1..($plan.Arguments.Count - 1)] + @(
+            '--eval',
+            'try(transform.update_in_place.telemetry_mock.azapi.match_nested_block_labels, false) && try(transform.update_in_place.telemetry_mock.azapi.merge_object_attributes, false)'
+        )
+        $result = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList $arguments `
+            -WorkingDirectory $plan.Scope.Owner.Path -EnvVars $Options.EnvVars
         try {
-            $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList @(
-                'transform', '--tf-dir', $plan.Scope.Owner.Path, '--test-file', $plan.Scope.RelativePath,
-                '--mptf-dir', $Options.ProfileDirs['unit-test'],
-                '--mptf-var', ("new_location_modules=$encoded")
-            ) -WorkingDirectory $plan.Scope.Owner.Path -EnvVars $Options.EnvVars
+            $supported = ConvertFrom-Json -InputObject $result.StdOut -ErrorAction Stop
+        }
+        catch {
+            throw [AvmConfigurationException]::new(
+                "Cannot verify label-safe MaPoTF support for '$($plan.Path)': invalid native capability response. $($_.Exception.Message)")
+        }
+        if ($supported -isnot [bool] -or -not $supported) {
+            throw [AvmConfigurationException]::new(
+                "Cannot migrate customized telemetry mocks in '$($plan.Path)': update MaPoTF and the unit-test profile to support label-safe object merging; remove outdated tool or profile overrides.")
+        }
+    }
+    Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets $ModuleTargets -UnitTestPlans $plans.ToArray()
+    foreach ($plan in $plans |
+            Where-Object { $_.NewLocationPaths.Count -gt 0 -or $null -ne $_.TelemetrySubscriptionResourceId }) {
+        try {
+            $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList $plan.Arguments `
+                -WorkingDirectory $plan.Scope.Owner.Path -EnvVars $Options.EnvVars
         }
         finally {
             $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList @(

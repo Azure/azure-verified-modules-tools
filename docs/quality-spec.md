@@ -705,12 +705,23 @@ or data sources remain in the module. The transform also removes obsolete
 they have no remaining `modtm` resources or data sources, empty `modtm` test
 mocks, and standard references to the old telemetry resource. Direct unit
 tests receive a missing AzAPI mock when retiring their empty modtm mock;
-empty AzAPI mocks receive a valid synthetic subscription resource ID for
-`azapi_client_config`. Authored non-empty AzAPI mocks are preserved.
-Their client-config defaults must provide a full `/subscriptions/<guid>`
-resource ID, not a bare GUID. Published dependencies and legacy telemetry
+empty AzAPI mocks, including comment-only bodies, receive a valid synthetic
+subscription resource ID for `azapi_client_config` without losing comments.
+Non-empty AzAPI mocks receive only a missing
+client-config block or `subscription_resource_id` default, matching nested
+blocks by type and labels and merging object fields without replacing authored
+defaults. Before modifying any test file, native reflection must confirm that
+the selected binary and profile enable label matching and object merging;
+older overrides that silently ignore either feature fail with upgrade guidance.
+Use an authored literal `subscription_id` to construct its matching
+`/subscriptions/<guid>` value; otherwise use the synthetic subscription.
+Existing resource-ID defaults, unrelated mocks, comments and expressions are
+preserved. Source-based mocks, defaults that native inspection cannot resolve
+to an object, and nonliteral subscription IDs require review instead of
+overwriting or guessing their values.
+Published dependencies and legacy telemetry
 in scopes without a telemetry prefix are not migrated by the root profile.
-MaPoTF 0.3.0 inspects each direct `tests/unit/*.tftest.hcl` file before source
+Native MaPoTF inspects each direct `tests/unit/*.tftest.hcl` file before source
 transformation. Root runs and explicitly selected, known local module
 targets, including discovered standalone test setup and wrapper modules,
 are supported; remote or unknown targets fail without fetching them.

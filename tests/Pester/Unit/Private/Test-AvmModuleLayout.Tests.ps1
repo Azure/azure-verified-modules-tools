@@ -202,6 +202,7 @@ Describe 'Module Resources packaging' {
             )
             'unit-test' = @(
                 'location.mptf.hcl'
+                'telemetry.mptf.hcl'
             )
         }
 
