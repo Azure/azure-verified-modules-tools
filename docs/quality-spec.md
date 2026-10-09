@@ -1402,6 +1402,10 @@ still apply when unit tests are absent. Archive reconstruction must index the
 committed bytes without Git content conversion, including historical CRLF
 files. Restore normal attributes before checks and require the same exact
 prepared tree; do not normalize the artifact or relax the tree comparison.
+Both temporary checkouts must retain the original repository URL as their
+Git origin so module classification does not depend on temporary directory
+names or legacy telemetry prefixes. Setting that local identity must not
+fetch from or write to the remote repository.
 
 ### Coverage
 

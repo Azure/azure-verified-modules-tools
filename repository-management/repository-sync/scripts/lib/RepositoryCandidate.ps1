@@ -352,6 +352,7 @@ function Invoke-RepositorySyncCandidateValidation {
     }
     $workspace = Join-Path ([System.IO.Path]::GetTempPath()) ('avm-candidate-validation-' + [guid]::NewGuid().ToString('N'))
     $root = Join-Path $workspace 'repository'
+    $repositoryUrl = "https://github.com/$Repository.git"
     $null = New-Item -ItemType Directory -Path $root -Force
     $environmentNames = @(
         'ARM_CLIENT_ID', 'ARM_TENANT_ID', 'ARM_SUBSCRIPTION_ID', 'ARM_USE_OIDC', 'ARM_USE_CLI', 'ARM_USE_MSI',
@@ -368,6 +369,7 @@ function Invoke-RepositorySyncCandidateValidation {
             throw [System.IO.InvalidDataException]::new("Failed to unpack the staged candidate: $($archive.StdErr)")
         }
         $null = Invoke-RepositoryGit -WorkingDirectory $workspace -Arguments @('init', '--quiet', '-b', 'main', $root)
+        $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('remote', 'add', 'origin', $repositoryUrl)
         $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('config', '--local', 'core.autocrlf', 'false')
         $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('config', '--local', 'core.hooksPath', (Join-Path $workspace 'disabled-hooks'))
         $tree = Initialize-RepositorySyncCandidateIndex -Root $root
@@ -391,6 +393,7 @@ function Invoke-RepositorySyncCandidateValidation {
         $prCheck = Invoke-AvmPrCheck -Path $root -Ecosystem terraform -SkipModuleVersionCheck
         $unitRoot = Join-Path $workspace 'unit'
         $null = Invoke-RepositoryGit -WorkingDirectory $workspace -Arguments @('clone', '--quiet', $root, $unitRoot)
+        $null = Invoke-RepositoryGit -WorkingDirectory $unitRoot -Arguments @('remote', 'set-url', 'origin', $repositoryUrl)
         if ((Invoke-RepositoryGit -WorkingDirectory $unitRoot -Arguments @('rev-parse', 'HEAD^{tree}')) -cne $candidate.treeSha) {
             throw [System.IO.InvalidDataException]::new('The unit-test checkout differs from the validated candidate.')
         }
