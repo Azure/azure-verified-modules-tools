@@ -3,7 +3,7 @@ BeforeAll {
     $script:entryPath = Join-Path $script:root 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'Invoke-BicepTestTenantSync.ps1'
     Import-Module (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
     $workflow = (Get-Content -LiteralPath (Join-Path $script:root '.github' 'workflows' 'repository-management-bicep-sync.yml') -Raw).Replace("`r`n", "`n")
-    $run = [regex]::Match($workflow, '(?ms)^        run: \|\n(?<body>.*)\z')
+    $run = [regex]::Match($workflow, '(?m)^        run: \|\n(?<body>(?: {10}[^\n]*\n?)+)')
     if (-not $run.Success) { throw 'The Bicep publication run script is missing.' }
     $script:workflowRun = [scriptblock]::Create(($run.Groups['body'].Value -replace '(?m)^ {10}', ''))
     $script:sourceValues = [ordered]@{
@@ -29,7 +29,7 @@ BeforeAll {
         VALIDATE_PERSISTENT_SUBSCRIPTION_ID = 'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID'
     }
     foreach ($variableName in (@($script:sourceValues.Keys) + @(
-        'GH_TOKEN', 'AVM_OFFLINE', 'AVM_APP_SLUG', 'GITHUB_WORKSPACE',
+        'GH_TOKEN', 'AVM_OFFLINE', 'AVM_APP_SLUG', 'GITHUB_WORKSPACE', 'BICEP_SYNC_PLAN_ONLY',
         'GITHUB_REPOSITORY', 'GITHUB_REF', 'GITHUB_EVENT_NAME',
         'AVM_BAMI_TEST_TENANT_SYNC_ENABLED', 'PLAN_ONLY'
     ))) {
@@ -62,6 +62,7 @@ Describe 'Bicep test tenant entry point with a synthetic bundle and mocked GitHu
         $env:GITHUB_EVENT_NAME = $null
         $env:AVM_BAMI_TEST_TENANT_SYNC_ENABLED = $null
         $env:PLAN_ONLY = $null
+        $env:BICEP_SYNC_PLAN_ONLY = $null
         $script:entryState = @{
             Variables = [ordered]@{
                 ARM_TENANT_ID = New-BicepEntryVariable -Name 'ARM_TENANT_ID' -Value 'legacy-value'
@@ -231,6 +232,15 @@ Describe 'Bicep test tenant entry point with a synthetic bundle and mocked GitHu
         $script:entryState.WriteNames | Should -HaveCount 0
     }
 
+    It 'honors the actual workflow manual plan flag without initializing variables' {
+        $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
+        $env:BICEP_SYNC_PLAN_ONLY = 'true'
+        $result = & $script:workflowRun | ConvertFrom-Json -AsHashtable
+        $result.Status | Should -BeExactly 'Planned'
+        $result.PlanOnly | Should -BeTrue
+        $script:entryState.WriteNames | Should -HaveCount 0
+    }
+
     It 'validates the workflow source bundle before reading or writing variables' {
         $env:TEST_BAMI_TENANT_ID = 'invalid-tenant'
         { & $script:workflowRun } | Should -Throw
@@ -370,7 +380,7 @@ if ($method -ceq 'GET') { $response | ConvertTo-Json -Depth 10 -Compress }
         $actual = Set-AvmBicepTestTenantVariable -Expected $expected -Name 'VALIDATE_SUBSCRIPTION_IDS' -Value $value
         $actual.VALIDATE_SUBSCRIPTION_IDS.Value | Should -BeExactly $value
         @($actual.VALIDATE_SUBSCRIPTION_IDS.Value | ConvertFrom-Json) | Should -HaveCount 28
-        $actual.Count | Should -Be 5
+        $actual.Count | Should -Be 6
         $actual.Contains('TEST_BAMI_MODULE_PATHS') | Should -BeFalse
         $state = Get-Content -LiteralPath $script:boundaryStatePath -Raw | ConvertFrom-Json -AsHashtable
         $state.Request[4] | Should -BeExactly $Method

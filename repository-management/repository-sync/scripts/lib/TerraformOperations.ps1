@@ -132,10 +132,11 @@ function Invoke-RepositorySyncTerraform {
         [Parameter(Mandatory)] [string[]] $Arguments,
         [Parameter(Mandatory)] [string] $Root,
         [hashtable] $Environment = @{},
-        [switch] $Json
+        [switch] $Json,
+        [switch] $Quiet
     )
 
-    if (-not $Json) {
+    if (-not $Json -and -not $Quiet) {
         Write-Information "Running Terraform $($Arguments[0])..." -InformationAction Continue
     }
     try {
@@ -144,7 +145,7 @@ function Invoke-RepositorySyncTerraform {
     }
     catch [System.TimeoutException] {
         $message = "Terraform $($Arguments[0]) timed out; the child process was stopped. Inspect state ownership before retrying an interrupted apply."
-        if (-not $Json) {
+        if (-not $Json -and -not $Quiet) {
             $message += "`n" + (Protect-RepositorySyncLogText -Text (@(
                 $_.Exception.Data['StdOut'], $_.Exception.Data['StdErr']
             ) -join "`n"))
@@ -172,6 +173,7 @@ function Invoke-RepositorySyncTerraform {
         }
         return $document
     }
+    if ($Quiet) { return }
     foreach ($text in @($result.StdOut, $result.StdErr)) {
         if (-not [string]::IsNullOrWhiteSpace($text)) {
             Write-Information (Protect-RepositorySyncLogText -Text $text) -InformationAction Continue

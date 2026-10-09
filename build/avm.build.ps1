@@ -374,8 +374,13 @@ task infra {
 task 'test-tenant-terraform' {
     Import-Module $script:manifestPath -Force
     . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'RetryHelpers.ps1')
-    foreach ($directory in @('terraform', [System.IO.Path]::Combine('terraform', 'modules', 'azure'))) {
+    foreach ($directory in @(
+        'terraform',
+        [System.IO.Path]::Combine('terraform', 'modules', 'azure'),
+        [System.IO.Path]::Combine('..', 'bicep-test-tenant-sync', 'terraform')
+    )) {
         $directoryName = $directory.Replace([string][System.IO.Path]::DirectorySeparatorChar, '-')
+        if ($directory.StartsWith('..')) { $directoryName = 'bicep-identities' }
         $root = Join-Path $script:repoRoot 'repository-management' 'repository-sync' $directory
         $formatPaths = @('main.tf', 'variables.tf', 'tests')
         if ($directory -eq 'terraform') {
@@ -556,6 +561,66 @@ task 'test-tenant-terraform' {
                         throw [System.IO.InvalidDataException]::new('The single mocked apply must publish its own execution client ID through the GitHub secret.')
                     }
                     Write-Build Green '  unified plan passes the ownership guard; one apply resolves GitHub and identity dependencies'
+                }
+                if ($directoryName -ceq 'bicep-identities') {
+                    . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'TestTenant.ps1')
+                    . (Join-Path $script:repoRoot 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'lib' 'ModuleConfig.ps1')
+                    . (Join-Path $script:repoRoot 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'lib' 'ModuleIdentitySync.ps1')
+                    . (Join-Path $script:repoRoot 'tests' 'fixtures' 'TestTenant.ps1')
+                    . (Join-Path $script:repoRoot 'tests' 'fixtures' 'BicepIdentities.ps1')
+                    $plans = @($events | Where-Object {
+                        $_['type'] -ceq 'test_plan' -and $_['@testrun'] -ceq 'module_plan_binds_identities_groups_and_workflows'
+                    })
+                    if ($plans.Count -ne 1) {
+                        throw [System.IO.InvalidDataException]::new('Expected one actual mocked-provider Bicep module plan.')
+                    }
+                    $candidatePlan = $plans[0]['test_plan']
+                    if (-not $candidatePlan.Contains('planned_values')) {
+                        $changes = $candidatePlan['resource_changes']
+                        $resources = @($changes | ForEach-Object {
+                            @{ address = $_['address']; mode = $_['mode']; type = $_['type']; provider_name = $_['provider_name']; values = $_['change']['after'] }
+                        })
+                        $contracts = $candidatePlan['output_changes']['test_group_contract']['after']
+                        if ($contracts -isnot [System.Collections.IDictionary] -or $contracts.Count -ne 2) {
+                            throw [System.IO.InvalidDataException]::new('The Bicep mock plan must expose both modules and their observed group evidence.')
+                        }
+                        $dataResources = @(
+                            foreach ($path in $contracts.Keys) {
+                                $address = "module.bicep[`"$path`"]"
+                                $evidence = $contracts[$path]
+                                if ($evidence['groups'] -isnot [System.Collections.IDictionary]) {
+                                    throw [System.IO.InvalidDataException]::new('Bicep mock-plan group evidence is incomplete.')
+                                }
+                                @{ address = "$address.data.azapi_client_config.current"; mode = 'data'; type = 'azapi_client_config'; values = $evidence['azure_context'] }
+                                @{ address = "$address.data.azuread_client_config.current"; mode = 'data'; type = 'azuread_client_config'; values = $evidence['graph_context'] }
+                                foreach ($name in $evidence['groups'].Keys) {
+                                    $key = ConvertTo-Json -InputObject $name -Compress
+                                    @{ address = "$address.data.azuread_group.test_permissions[$key]"; mode = 'data'; type = 'azuread_group'; values = $evidence['groups'][$name] }
+                                }
+                            }
+                        )
+                        $candidatePlan = @{
+                            errored = $false
+                            resource_changes = $changes
+                            planned_values = @{ root_module = @{ resources = $resources } }
+                            prior_state = @{ values = @{ root_module = @{ resources = $dataResources } } }
+                        }
+                    }
+                    $configuration = ConvertFrom-AvmTestTenantJson -Json (
+                        Get-Content -LiteralPath (Join-Path $script:repoRoot 'repository-management' 'bicep-config' 'config.json') -Raw
+                    )
+                    $modules = Resolve-AvmBicepModuleSettings -ModulePaths @('avm/res/fabric/capacity', 'avm/res/storage/storage-account') -Configuration $configuration
+                    $settings = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)
+                    Assert-AvmBicepIdentityPlan -Plan $candidatePlan -Settings $settings -Modules $modules -Context (New-AvmTestBicepIdentityContext)
+                    $applied = @($events | Where-Object {
+                        $_['type'] -ceq 'test_state' -and $_['@testrun'] -ceq 'one_apply_returns_the_complete_module_mapping'
+                    })
+                    if ($applied.Count -ne 1) {
+                        throw [System.IO.InvalidDataException]::new('Expected one applied Bicep identity mock state.')
+                    }
+                    $null = ConvertTo-AvmBicepIdentityMapping -Identities $applied[0]['test_state']['outputs']['test_identities']['value'] `
+                        -ModulePaths @($modules.Keys) -Settings $settings
+                    Write-Build Green '  Bicep mock plan passes the ownership guard; one apply produces the complete dedicated mapping'
                 }
             }
         }

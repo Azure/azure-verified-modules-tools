@@ -1,3 +1,5 @@
+. (Join-Path $PSScriptRoot 'ModuleConfig.ps1')
+
 function Get-AvmBicepTestTenantSnapshotDifference {
     [CmdletBinding()]
     [OutputType([string])]
@@ -46,7 +48,7 @@ function Set-AvmBicepTestTenantVariable {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
     if ($Name -cnotin @(Get-AvmBicepTestTenantVariableNames)) {
-        throw [System.ArgumentException]::new('Only the five Bicep execution variables may be written.')
+        throw [System.ArgumentException]::new('Only the five Bicep execution variables and the module client-ID mapping may be written.')
     }
     if (-not $PSCmdlet.ShouldProcess("Azure/bicep-registry-modules/$Name", 'Publish a nonsecret Actions variable')) {
         throw [System.OperationCanceledException]::new('The nonsecret variable write was not approved.')
@@ -113,6 +115,7 @@ function Invoke-AvmBicepTestTenantSync {
     [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Values,
+        [System.Collections.IDictionary] $ModuleClientIds,
         [Parameter(ParameterSetName = 'Plan')] [switch] $PlanOnly = $true,
         [Parameter(Mandatory, ParameterSetName = 'Apply')] [switch] $Apply
     )
@@ -131,6 +134,11 @@ function Invoke-AvmBicepTestTenantSync {
         VALIDATE_MANAGEMENT_GROUP_ID = $execution.TEST_BAMI_MANAGEMENT_GROUP_ID
         VALIDATE_SUBSCRIPTION_IDS = $execution.TEST_BAMI_SUBSCRIPTION_IDS
     }
+    $moduleJson = $null
+    $forbidden = @($bundle.TEST_BAMI_CONTROLLER_CLIENT_ID, $bundle.TEST_BAMI_BICEP_CLIENT_ID)
+    if ($PSBoundParameters.ContainsKey('ModuleClientIds')) {
+        $moduleJson = ConvertTo-AvmBicepModuleClientIdJson -ClientIds $ModuleClientIds -ForbiddenClientIds $forbidden
+    }
     $snapshot = Get-AvmBicepTestTenantSnapshot
     $retargetedNames = @(
         foreach ($name in $projection.Keys) {
@@ -142,9 +150,17 @@ function Invoke-AvmBicepTestTenantSync {
             "Existing BAMI execution values cannot change: $($retargetedNames -join ', '). Retargeting requires coordinated maintenance; routine publication cannot overwrite present values."
         )
     }
+    if ($PSBoundParameters.ContainsKey('ModuleClientIds')) {
+        $projection['VALIDATE_MODULE_CLIENT_IDS'] = $moduleJson
+        if ($null -ne $snapshot['VALIDATE_MODULE_CLIENT_IDS']) {
+            Assert-AvmBicepModuleMappingExtension -ExistingJson $snapshot['VALIDATE_MODULE_CLIENT_IDS'].Value `
+                -ClientIds $ModuleClientIds -ForbiddenClientIds $forbidden
+        }
+    }
     $changes = @(
         foreach ($name in $projection.Keys) {
-            if ($null -eq $snapshot[$name]) { $name }
+            if ($null -eq $snapshot[$name] -or
+                ($name -ceq 'VALIDATE_MODULE_CLIENT_IDS' -and $snapshot[$name].Value -cne $projection[$name])) { $name }
         }
     )
     $publishing = $PSCmdlet.ParameterSetName -ceq 'Apply' -and $Apply.IsPresent
@@ -156,7 +172,7 @@ function Invoke-AvmBicepTestTenantSync {
         ChangedNames = $changes
     }
     if (-not $publishing) { return [pscustomobject]$result }
-    if ($changes.Count -gt 0 -and -not $PSCmdlet.ShouldProcess($result.Target, 'Initialize missing nonsecret Bicep execution variables')) {
+    if ($changes.Count -gt 0 -and -not $PSCmdlet.ShouldProcess($result.Target, 'Publish nonsecret Bicep variables without retargeting existing identities')) {
         $result.Status = 'Preview'
         $result.PlanOnly = $true
         return [pscustomobject]$result
