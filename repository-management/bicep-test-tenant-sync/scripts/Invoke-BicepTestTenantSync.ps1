@@ -3,6 +3,7 @@
 [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Plan')]
 param(
     [ValidateNotNullOrEmpty()] [string] $ModuleClientIdPath,
+    [ValidateNotNullOrEmpty()] [string] $IdentityMigrationPath,
     [Parameter(ParameterSetName = 'Plan')] [switch] $PlanOnly = $true,
     [Parameter(Mandatory, ParameterSetName = 'Apply')] [switch] $Apply
 )
@@ -30,6 +31,9 @@ $values = [ordered]@{
 $options = if ($PSCmdlet.ParameterSetName -ceq 'Apply') { @{ Apply = $Apply } } else { @{ PlanOnly = $PlanOnly } }
 if ($ModuleClientIdPath) {
     $options.ModuleClientIds = ConvertFrom-AvmTestTenantJson -Json (Get-Content -LiteralPath $ModuleClientIdPath -Raw -ErrorAction Stop)
+}
+if ($IdentityMigrationPath) {
+    $options.IdentityMigration = ConvertFrom-AvmTestTenantJson -Json (Get-Content -LiteralPath $IdentityMigrationPath -Raw -ErrorAction Stop)
 }
 Invoke-AvmBicepTestTenantSync -Values $values @options | ConvertTo-Json -Depth 5
 $global:LASTEXITCODE = 0

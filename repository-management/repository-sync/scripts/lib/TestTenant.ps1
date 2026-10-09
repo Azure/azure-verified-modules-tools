@@ -137,7 +137,8 @@ function Assert-AvmBamiIdentityPlan {
         [string] $IdentityName,
         [string] $WorkflowRef,
         [ValidatePattern('^[a-z][a-z0-9-]*$')]
-        [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test')
+        [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test'),
+        [switch] $PassThru
     )
 
     $Settings = Get-AvmBamiSettings -Values $Settings
@@ -146,7 +147,8 @@ function Assert-AvmBamiIdentityPlan {
         $RepositorySyncRepositoryId -cnotmatch '^[1-9][0-9]*$') {
         throw [System.ArgumentException]::new('Candidate federation requires positive GitHub repository, organization, and tools repository IDs.')
     }
-    if (($Plan.Contains('errored') -and $Plan['errored'] -ne $false) -or $Plan['planned_values'] -isnot [System.Collections.IDictionary] -or
+    if (($Plan.Contains('errored') -and $Plan['errored'] -ne $false) -or
+        ($Plan.Contains('complete') -and $Plan['complete'] -ne $true) -or $Plan['planned_values'] -isnot [System.Collections.IDictionary] -or
         $Plan['planned_values']['root_module'] -isnot [System.Collections.IDictionary]) {
         throw [System.InvalidOperationException]::new('Candidate Terraform plan is incomplete or errored.')
     }
@@ -180,26 +182,50 @@ function Assert-AvmBamiIdentityPlan {
         }
         $changes[$change['address']] = $change
     }
+    $nameArguments = @{ Repository = $Repository }
+    $moduleMatch = [regex]::Match($ModuleAddress, '^module\.bicep\["([^"]+)"\]$')
+    if ($moduleMatch.Success) {
+        if ($Repository -cne 'Azure/bicep-registry-modules') {
+            throw [System.ArgumentException]::new('Bicep module identities must belong to the registry repository.')
+        }
+        $nameArguments = @{ ModulePath = $moduleMatch.Groups[1].Value }
+    }
+    $name = Get-AvmTestIdentityName @nameArguments
+    $previousName = Get-AvmTestIdentityName @nameArguments -Legacy
+    if ($IdentityName -and $IdentityName -cne $name) {
+        throw [System.ArgumentException]::new('The identity override must match the computed dedicated test identity name.')
+    }
+    $identityChange = $changes[$identityAddress]
+    $renaming = $null -ne $identityChange -and
+        (@($identityChange['change']['actions']) -join ',') -cin @('delete,create', 'create,delete')
+    $beforeIdentity = if ($null -ne $identityChange) { $identityChange['change']['before'] } else { $null }
+    if ($renaming -and ($beforeIdentity -isnot [System.Collections.IDictionary] -or $beforeIdentity['name'] -cne $previousName)) {
+        throw [System.InvalidOperationException]::new('Candidate identity plans must not delete or replace identities except for their exact legacy-to-current naming transition.')
+    }
     foreach ($resource in $managed) {
         $address = $resource['address']
         $type = if ($membershipNames.ContainsKey($address)) { 'azuread_group_member' } else { 'azapi_resource' }
         $change = $changes[$address]
         $actions = if ($null -ne $change) { @($change['change']['actions']) } else { @() }
-        $permittedActions = if ($type -ceq 'azuread_group_member') { @('no-op', 'create', 'update', 'delete,create', 'create,delete') } else { @('no-op', 'create', 'update') }
+        $permittedActions = if ($type -ceq 'azuread_group_member' -or $renaming) { @('no-op', 'create', 'update', 'delete,create', 'create,delete') } else { @('no-op', 'create', 'update') }
+        $provider = if ($type -ceq 'azuread_group_member') { 'registry.terraform.io/hashicorp/azuread' } else { 'registry.terraform.io/azure/azapi' }
         if ($resource['type'] -cne $type -or $resource['values'] -isnot [System.Collections.IDictionary] -or
             $null -eq $change -or $change['mode'] -cne 'managed' -or $change['type'] -cne $type -or
-            ($actions -join ',') -cnotin $permittedActions) {
+            $change['provider_name'] -cne $provider -or $change['change']['after'] -isnot [System.Collections.IDictionary] -or
+            ($change.Contains('previous_address') -and $change['previous_address'] -cne $address) -or
+            $null -ne $change['change']['importing'] -or ($actions -join ',') -cnotin $permittedActions) {
             throw [System.InvalidOperationException]::new('Candidate identity plans must not delete or replace required resources, or omit their changes.')
         }
     }
     $identity = @($managed | Where-Object { $_['address'] -ceq $identityAddress })[0]['values']
     $parentId = "/subscriptions/$($Settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'])/resourceGroups/$($Settings['TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME'])"
-    $name = if ($IdentityName) { $IdentityName } else { $Repository.Replace('/', '-').Replace('windows', 'w5s') }
     $identityId = "$parentId/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$name"
-    if ($identity['parent_id'] -cne $parentId -or $identity['name'] -cne $name -or
-        ($null -ne $identity['id'] -and $identity['id'] -ine $identityId) -or
-        $identity['type'] -cne 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-07-31-preview') {
-        throw [System.InvalidOperationException]::new('Candidate identity is not scoped to the expected repository and BAMI resource group.')
+    foreach ($values in @($identity, $identityChange['change']['after'])) {
+        if ($values['parent_id'] -cne $parentId -or $values['name'] -cne $name -or
+            ($null -ne $values['id'] -and $values['id'] -ine $identityId) -or
+            $values['type'] -cne 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-07-31-preview') {
+            throw [System.InvalidOperationException]::new('Candidate identity is not scoped to the expected repository and BAMI resource group.')
+        }
     }
     $dataResources = @(Get-AvmTerraformPlanDataResource -Plan $Plan)
     $azureContexts = @($dataResources | Where-Object { $_['address'] -ceq "$ModuleAddress.data.azapi_client_config.current" })
@@ -225,9 +251,59 @@ function Assert-AvmBamiIdentityPlan {
         $controllerPrincipal -eq [guid]::Empty) {
         throw [System.InvalidOperationException]::new('Candidate membership requires a verified controller principal object ID.')
     }
+    $previousPrincipal = $null
+    $previousClient = $null
+    $previousIdentityId = $null
+    if ($null -ne $beforeIdentity) {
+        $ownedName = if ($renaming) { $previousName } else { $name }
+        $previousIdentityId = "$parentId/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$ownedName"
+        if ($beforeIdentity -isnot [System.Collections.IDictionary] -or
+            $beforeIdentity['name'] -cne $ownedName -or $beforeIdentity['parent_id'] -cne $parentId -or
+            $beforeIdentity['id'] -ine $previousIdentityId -or
+            $beforeIdentity['type'] -cne 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-07-31-preview' -or
+            $beforeIdentity['output'] -isnot [System.Collections.IDictionary] -or
+            $beforeIdentity['output']['properties'] -isnot [System.Collections.IDictionary]) {
+            throw [System.InvalidOperationException]::new('Existing state must belong to the expected dedicated identity, never a foreign or shared identity.')
+        }
+        $properties = $beforeIdentity['output']['properties']
+        $oldPrincipal = [guid]::Empty
+        $oldClient = [guid]::Empty
+        if ($properties['tenantId'] -ine $Settings['TEST_BAMI_TENANT_ID'] -or
+            $properties['principalId'] -isnot [string] -or
+            -not [guid]::TryParseExact($properties['principalId'], 'D', [ref]$oldPrincipal) -or
+            $oldPrincipal -eq [guid]::Empty -or $oldPrincipal -eq $controllerPrincipal -or
+            $properties['clientId'] -isnot [string] -or
+            -not [guid]::TryParseExact($properties['clientId'], 'D', [ref]$oldClient) -or
+            $oldClient -eq [guid]::Empty -or
+            $oldClient.ToString() -in @($Settings['TEST_BAMI_CONTROLLER_CLIENT_ID'], $Settings['TEST_BAMI_BICEP_CLIENT_ID'])) {
+            throw [System.InvalidOperationException]::new('Existing identity ownership requires a dedicated client and principal in the pinned BAMI tenant.')
+        }
+        $previousPrincipal = $oldPrincipal.ToString()
+        $previousClient = $oldClient.ToString()
+    }
+    if ((@($identityChange['change']['actions']) -join ',') -ceq 'create') {
+        if ($null -ne $beforeIdentity) {
+            throw [System.InvalidOperationException]::new('A new identity cannot adopt existing ownership evidence.')
+        }
+    }
+    elseif ($null -eq $beforeIdentity) {
+        throw [System.InvalidOperationException]::new('Existing identity changes require complete previous ownership evidence.')
+    }
     $principal = $null
+    $afterOutput = $identityChange['change']['after']['output']
+    if (($null -eq $identity['output']) -ne ($null -eq $afterOutput)) {
+        throw [System.InvalidOperationException]::new('Planned identity outputs and resource-change outputs must agree.')
+    }
     if ($identity['output'] -is [System.Collections.IDictionary] -and
         $identity['output']['properties'] -is [System.Collections.IDictionary]) {
+        if ($afterOutput -isnot [System.Collections.IDictionary] -or $afterOutput['properties'] -isnot [System.Collections.IDictionary]) {
+            throw [System.InvalidOperationException]::new('Planned identity outputs and resource-change outputs must agree.')
+        }
+        foreach ($field in @('tenantId', 'clientId', 'principalId')) {
+            if ($identity['output']['properties'][$field] -ine $afterOutput['properties'][$field]) {
+                throw [System.InvalidOperationException]::new('Planned identity outputs and resource-change outputs must agree.')
+            }
+        }
         $principal = $identity['output']['properties']['principalId']
         if ($identity['output']['properties']['tenantId'] -ine $Settings['TEST_BAMI_TENANT_ID']) {
             throw [System.InvalidOperationException]::new('Candidate identity output must belong to the pinned BAMI tenant.')
@@ -239,6 +315,10 @@ function Assert-AvmBamiIdentityPlan {
             $clientId.ToString() -in @($Settings['TEST_BAMI_CONTROLLER_CLIENT_ID'], $Settings['TEST_BAMI_BICEP_CLIENT_ID'])) {
             throw [System.InvalidOperationException]::new('Candidate execution requires a dedicated repository client ID, never the controller or shared Bicep identity.')
         }
+        if ($previousClient -and (($renaming -and $client -ieq $previousClient) -or
+            (-not $renaming -and $client -ine $previousClient))) {
+            throw [System.InvalidOperationException]::new('Identity client IDs may change only for a verified naming replacement, and must then be new.')
+        }
     }
     $principalId = [guid]::Empty
     $unknownPrincipal = Test-AvmTerraformPlanUnknownField -Change $changes[$identityAddress]['change'] -Path 'output.properties.principalId'
@@ -247,6 +327,10 @@ function Assert-AvmBamiIdentityPlan {
             -not [guid]::TryParseExact($principal, 'D', [ref] $principalId) -or $principalId -eq [guid]::Empty -or
             $principalId -eq $controllerPrincipal))) {
         throw [System.InvalidOperationException]::new('Candidate group membership must use the dedicated repository principal, never the controller.')
+    }
+    if ($null -ne $principal -and $previousPrincipal -and
+        (($renaming -and $principal -ieq $previousPrincipal) -or (-not $renaming -and $principal -ine $previousPrincipal))) {
+        throw [System.InvalidOperationException]::new('Identity principals may change only for a verified naming replacement, and must then be new.')
     }
     foreach ($address in $membershipNames.Keys) {
         $groupName = $membershipNames[$address]
@@ -263,13 +347,19 @@ function Assert-AvmBamiIdentityPlan {
             $values['security_enabled'] -isnot [bool] -or $values['security_enabled'] -ne $true) {
             throw [System.InvalidOperationException]::new('Candidate group evidence must identify the configured security group in the selected tenant.')
         }
-        $membership = @($managed | Where-Object { $_['address'] -ceq $address })[0]['values']
-        $member = $membership['member_object_id']
-        if ($membership['group_object_id'] -isnot [string] -or $membership['group_object_id'] -ine $groupId.ToString() -or
-            ($null -ne $principal -and ($member -isnot [string] -or $member -ine $principal)) -or
-            ($null -eq $principal -and ($null -ne $member -or
-                -not (Test-AvmTerraformPlanUnknownField -Change $changes[$address]['change'] -Path 'member_object_id')))) {
-            throw [System.InvalidOperationException]::new('Candidate membership must bind only the resolved configured group and dedicated repository principal.')
+        $plannedMembership = @($managed | Where-Object { $_['address'] -ceq $address })[0]['values']
+        foreach ($membership in @($plannedMembership, $changes[$address]['change']['after'])) {
+            $member = $membership['member_object_id']
+            if ($membership['group_object_id'] -isnot [string] -or $membership['group_object_id'] -ine $groupId.ToString() -or
+                ($null -ne $principal -and ($member -isnot [string] -or $member -ine $principal)) -or
+                ($null -eq $principal -and ($null -ne $member -or
+                    -not (Test-AvmTerraformPlanUnknownField -Change $changes[$address]['change'] -Path 'member_object_id')))) {
+                throw [System.InvalidOperationException]::new('Candidate membership must bind only the resolved configured group and dedicated repository principal.')
+            }
+        }
+        if ($renaming -and $null -ne $changes[$address]['change']['before'] -and
+            (@($changes[$address]['change']['actions']) -join ',') -cnotin @('delete,create', 'create,delete')) {
+            throw [System.InvalidOperationException]::new('A naming replacement must replace each retained membership edge for the old principal.')
         }
     }
     $federation = [ordered]@{}
@@ -286,23 +376,53 @@ function Assert-AvmBamiIdentityPlan {
         Name = "$name-avm-validation"
         Subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
     }
+    $previousModuleCredentials = 0
     foreach ($address in $federation.Keys) {
         $credential = @($managed | Where-Object { $_['address'] -ceq $address })[0]['values']
-        if ($credential['body'] -isnot [System.Collections.IDictionary] -or
-            $credential['body']['properties'] -isnot [System.Collections.IDictionary]) {
-            throw [System.InvalidOperationException]::new('Candidate federation must have complete credential properties.')
+        $credentialChange = $changes[$address]['change']
+        $beforeCredential = $credentialChange['before']
+        if ($null -ne $beforeCredential -and ($null -eq $beforeIdentity -or
+            ($renaming -and (@($credentialChange['actions']) -join ',') -cnotin @('delete,create', 'create,delete')))) {
+            throw [System.InvalidOperationException]::new('Existing federation requires its verified identity and must be replaced with that identity during a naming transition.')
         }
-        $properties = $credential['body']['properties']
-        $audiences = @($properties['audiences'])
-        if ($credential['type'] -cne 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview' -or
-            $credential['name'] -cne $federation[$address].Name -or
-            ($null -ne $credential['parent_id'] -and $credential['parent_id'] -cne $identityId) -or
-            ($null -eq $credential['parent_id'] -and -not (Test-AvmTerraformPlanUnknownField -Change $changes[$address]['change'] -Path 'parent_id')) -or
-            $properties['issuer'] -cne 'https://token.actions.githubusercontent.com' -or
-            $audiences.Count -ne 1 -or $audiences[0] -cne 'api://AzureADTokenExchange' -or
-            $properties['subject'] -cne $federation[$address].Subject) {
-            throw [System.InvalidOperationException]::new('Candidate federation, including validation federation, must retain the exact repository, environment, workflow, and identity binding.')
+        if ((@($credentialChange['actions']) -join ',') -ceq 'create') {
+            if ($null -ne $beforeCredential) { throw [System.InvalidOperationException]::new('New federation must not adopt an existing credential.') }
         }
+        elseif ($beforeCredential -isnot [System.Collections.IDictionary]) {
+            throw [System.InvalidOperationException]::new('Existing federation changes require previous credential ownership evidence.')
+        }
+        $sides = @(
+            @{ Values = $credential; Name = $federation[$address].Name; Parent = $identityId; Previous = $false }
+            @{ Values = $credentialChange['after']; Name = $federation[$address].Name; Parent = $identityId; Previous = $false }
+        )
+        if ($null -ne $beforeCredential) {
+            if ($address -cne $validationCredentialAddress) { $previousModuleCredentials++ }
+            $oldName = if ($renaming) { $previousName + $federation[$address].Name.Substring($name.Length) } else { $federation[$address].Name }
+            $sides += @{ Values = $beforeCredential; Name = $oldName; Parent = $previousIdentityId; Previous = $true }
+        }
+        foreach ($side in $sides) {
+            $values = $side.Values
+            if ($values -isnot [System.Collections.IDictionary] -or $values['body'] -isnot [System.Collections.IDictionary] -or
+                $values['body']['properties'] -isnot [System.Collections.IDictionary]) {
+                throw [System.InvalidOperationException]::new('Candidate federation must have complete credential properties.')
+            }
+            $properties = $values['body']['properties']
+            $audiences = @($properties['audiences'])
+            if ($values['type'] -cne 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview' -or
+                $values['name'] -cne $side.Name -or $side.Name.Length -gt 120 -or
+                ($null -ne $values['id'] -and $values['id'] -ine "$($side.Parent)/federatedIdentityCredentials/$($side.Name)") -or
+                ($null -ne $values['parent_id'] -and $values['parent_id'] -ine $side.Parent) -or
+                ($null -eq $values['parent_id'] -and ($side.Previous -or
+                    -not (Test-AvmTerraformPlanUnknownField -Change $credentialChange -Path 'parent_id'))) -or
+                $properties.Count -ne 3 -or $properties['issuer'] -cne 'https://token.actions.githubusercontent.com' -or
+                $audiences.Count -ne 1 -or $audiences[0] -cne 'api://AzureADTokenExchange' -or
+                $properties['subject'] -cne $federation[$address].Subject) {
+                throw [System.InvalidOperationException]::new('Candidate federation, including validation federation, must retain the exact repository, environment, workflow, and identity binding.')
+            }
+        }
+    }
+    if ($renaming -and $previousModuleCredentials -eq 0) {
+        throw [System.InvalidOperationException]::new('A naming replacement requires existing module federation proving the same immutable repository and workflow binding.')
     }
     $ownerDeletions = 0
     foreach ($change in $changes.Values) {
@@ -312,7 +432,7 @@ function Assert-AvmBamiIdentityPlan {
             $null -eq $change['change']['before']) { continue }
         if ($change['mode'] -ceq 'data' -and $actions.Count -eq 1 -and $actions[0] -cin @('no-op', 'read')) { continue }
         $before = $change['change']['before']
-        if ($change['mode'] -cne 'managed' -or $before -isnot [System.Collections.IDictionary] -or $null -eq $principal) {
+        if ($change['mode'] -cne 'managed' -or $before -isnot [System.Collections.IDictionary] -or $null -eq $previousPrincipal) {
             throw [System.InvalidOperationException]::new('Candidate plans must not delete or replace resources outside verified permission migration or revocation.')
         }
         $membershipAddress = $change['address'] -ceq "$ModuleAddress.azuread_group_member.example" -or
@@ -323,7 +443,7 @@ function Assert-AvmBamiIdentityPlan {
             $retained = $change['address'] -cin $allowed -and
                 ($actions -join ',') -cin @('no-op', 'update', 'delete,create', 'create,delete')
             if (($removed -or $retained) -and $before['member_object_id'] -is [string] -and
-                $before['member_object_id'] -ieq $principal -and $before['group_object_id'] -is [string] -and
+                $before['member_object_id'] -ieq $previousPrincipal -and $before['group_object_id'] -is [string] -and
                 [guid]::TryParseExact($before['group_object_id'], 'D', [ref] $previousGroupId) -and $previousGroupId -ne [guid]::Empty) {
                 continue
             }
@@ -339,13 +459,20 @@ function Assert-AvmBamiIdentityPlan {
                 $before['parent_id'] -ceq $scope -and $before['name'] -ceq $assignmentName -and
                 $before['id'] -ieq "$scope/providers/Microsoft.Authorization/roleAssignments/$assignmentName" -and
                 $properties['roleDefinitionId'] -ceq '/providers/Microsoft.Authorization/roleDefinitions/8e3af657-a8ff-443c-a75c-2fe8c4bcb635' -and
-                $properties['principalType'] -ceq 'ServicePrincipal' -and $properties['principalId'] -ieq $principal -and
+                $properties['principalType'] -ceq 'ServicePrincipal' -and $properties['principalId'] -ieq $previousPrincipal -and
                 (-not $change.Contains('previous_address') -or $change['previous_address'] -ceq $ownerAddresses[0])) {
                 $ownerDeletions++
                 if ($ownerDeletions -eq 1) { continue }
             }
         }
         throw [System.InvalidOperationException]::new('Candidate change is not the exact obsolete Owner assignment or an individual membership edge for this repository principal.')
+    }
+    if ($PassThru -and $renaming) {
+        return @{
+            identity_resource_id = $previousIdentityId
+            client_id = $previousClient
+            tenant_id = $Settings['TEST_BAMI_TENANT_ID']
+        }
     }
 }
 
@@ -359,7 +486,8 @@ function ConvertTo-AvmBamiConsumerSettings {
 
     $Settings = Get-AvmBamiSettings -Values $Settings
     $clientId = [guid]::Empty
-    $expectedIdentity = "/subscriptions/$($Settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'])/resourceGroups/$($Settings['TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME'])/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$($Repository.full_name.Replace('/', '-').Replace('windows', 'w5s'))"
+    $name = Get-AvmTestIdentityName -Repository $Repository.full_name
+    $expectedIdentity = "/subscriptions/$($Settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'])/resourceGroups/$($Settings['TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME'])/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$name"
     if ($Identity['client_id'] -isnot [string] -or -not [guid]::TryParseExact($Identity['client_id'], 'D', [ref] $clientId) -or
         $clientId -eq [guid]::Empty -or $clientId.ToString() -in @($Settings['TEST_BAMI_CONTROLLER_CLIENT_ID'], $Settings['TEST_BAMI_BICEP_CLIENT_ID']) -or
         $Identity['tenant_id'] -ine $Settings['TEST_BAMI_TENANT_ID'] -or
@@ -394,6 +522,7 @@ function Resolve-AvmRepositorySyncContext {
         $Repository -cnotmatch ('^Azure/terraform-(azurerm|azure|azapi)-' + [regex]::Escape($RepoId) + '$')) {
         throw [System.ArgumentException]::new('Repository sync requires the selected canonical Azure AVM repository.')
     }
+    $null = Get-AvmTestIdentityName -Repository $Repository
     if ($env:GITHUB_REF -cne 'refs/heads/main') {
         throw [System.InvalidOperationException]::new('BAMI repository sync requires trusted Azure/azure-verified-modules-tools main in GitHub Actions.')
     }
@@ -457,7 +586,7 @@ function Assert-AvmRetiredRepositoryIdentityPlan {
         $identity['parent_id'] -cnotmatch $parentPattern -or
         $identity['parent_id'].StartsWith("/subscriptions/$($Settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'])/", [StringComparison]::OrdinalIgnoreCase) -or
         $identity['type'] -cne 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-07-31-preview' -or
-        $identity['name'] -cne $Repository.Replace('/', '-').Replace('windows', 'w5s') -or
+        $identity['name'] -cne (Get-AvmTestIdentityName -Repository $Repository -Legacy) -or
         $identity['id'] -ine "$($identity['parent_id'])/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$($identity['name'])") {
         throw [System.InvalidOperationException]::new('Only the original repository identity in a different, retired tenant may be forgotten; live BAMI ownership must be transferred.')
     }
@@ -500,7 +629,8 @@ function Assert-AvmRepositorySyncPlan {
         [string[]] $ResourceTypesThatCannotBeDestroyed = @('github_repository')
     )
 
-    if ($Plan['errored'] -eq $true -or $Plan['resource_changes'] -isnot [System.Collections.IList] -or
+    if ($Plan['errored'] -eq $true -or ($Plan.Contains('complete') -and $Plan['complete'] -ne $true) -or
+        $Plan['resource_changes'] -isnot [System.Collections.IList] -or
         $Plan['planned_values'] -isnot [System.Collections.IDictionary] -or
         $Plan['planned_values']['root_module'] -isnot [System.Collections.IDictionary]) {
         throw [System.InvalidOperationException]::new('Repository Terraform plan is incomplete or errored.')

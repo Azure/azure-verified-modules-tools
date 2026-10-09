@@ -14,6 +14,7 @@ function New-AvmTestBicepIdentityModules {
 function New-AvmTestBicepIdentityPlan {
     param(
         [switch] $KnownClient,
+        [switch] $NamingMigration,
         [System.Collections.IDictionary] $Modules = (New-AvmTestBicepIdentityModules)
     )
 
@@ -27,6 +28,9 @@ function New-AvmTestBicepIdentityPlan {
     $number = 0
     foreach ($path in $Modules.Keys) {
         $slice = New-AvmTestBamiPlan -KnownClient:$KnownClient -GroupNames $Modules[$path] `
+            -NamingMigration:$NamingMigration -PreviousIdentityName (Get-AvmTestIdentityName -ModulePath $path -Legacy) `
+            -PreviousClientId ('10000000-0000-4000-8000-{0:d12}' -f (106 + $number)) `
+            -PreviousPrincipalId ('10000000-0000-4000-8000-{0:d12}' -f (107 + $number)) `
             -ModuleAddress "module.bicep[`"$path`"]" -RepositoryId '447791597' `
             -IdentityName (Get-AvmBicepModuleIdentityName -ModulePath $path) -Environments @('avm-validation') `
             -ClientId ('10000000-0000-4000-8000-{0:d12}' -f (6 + $number)) `
@@ -39,6 +43,18 @@ function New-AvmTestBicepIdentityPlan {
         $number += 10
     }
     return $plan
+}
+
+function New-AvmTestBicepIdentityMigration {
+    $settings = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)
+    $modules = New-AvmTestBicepIdentityModules
+    return [ordered]@{
+        schemaVersion = 1
+        context = Get-AvmBicepIdentityPublicationContext
+        before = Assert-AvmBicepIdentityPlan -Plan (New-AvmTestBicepIdentityPlan -NamingMigration) `
+            -Settings $settings -Modules $modules -Context (New-AvmTestBicepIdentityContext) -PassThru
+        after = New-AvmTestBicepIdentityOutputs
+    }
 }
 
 function New-AvmTestBicepIdentityOutputs {

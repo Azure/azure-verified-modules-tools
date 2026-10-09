@@ -71,7 +71,7 @@ override_resource {
   target          = module.bicep["avm/res/fabric/capacity"].azapi_resource.identity
   override_during = plan
   values = {
-    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-bicep-avm-res-fabric-capacity-32f81a9a"
+    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-fabric-capacity"
     output = {
       properties = {
         principalId = "10000000-0000-4000-8000-000000000007"
@@ -86,7 +86,7 @@ override_resource {
   target          = module.bicep["avm/res/storage/storage-account"].azapi_resource.identity
   override_during = plan
   values = {
-    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-bicep-avm-res-storage-storage-account-3ecbb5ba"
+    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-storage-storage-account"
     output = {
       properties = {
         principalId = "10000000-0000-4000-8000-000000000017"
@@ -116,8 +116,41 @@ variables {
   }
 }
 
+override_resource {
+  target = module.bicep["avm/res/fabric/capacity"].azapi_resource.identity_federated_credentials["avm-validation"]
+  values = {
+    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-fabric-capacity/federatedIdentityCredentials/id-test-bicep-avm-res-fabric-capacity-module-avm-validation"
+  }
+}
+override_resource {
+  target = module.bicep["avm/res/fabric/capacity"].azapi_resource.validation_federated_credential
+  values = {
+    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-fabric-capacity/federatedIdentityCredentials/id-test-bicep-avm-res-fabric-capacity-avm-validation"
+  }
+}
+override_resource {
+  target = module.bicep["avm/res/storage/storage-account"].azapi_resource.identity_federated_credentials["avm-validation"]
+  values = {
+    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-storage-storage-account/federatedIdentityCredentials/id-test-bicep-avm-res-storage-storage-account-module-avm-validation"
+  }
+}
+override_resource {
+  target = module.bicep["avm/res/storage/storage-account"].azapi_resource.validation_federated_credential
+  values = {
+    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-storage-storage-account/federatedIdentityCredentials/id-test-bicep-avm-res-storage-storage-account-avm-validation"
+  }
+}
+
 run "module_plan_binds_identities_groups_and_workflows" {
   command = plan
+
+  assert {
+    condition = (
+      local.identity_names["avm/res/fabric/capacity"] == "id-test-bicep-avm-res-fabric-capacity" &&
+      local.identity_names["avm/res/storage/storage-account"] == "id-test-bicep-avm-res-storage-storage-account"
+    )
+    error_message = "Bicep identity names must preserve the full flattened path without a hash or duplicated avm prefix."
+  }
 
   assert {
     condition = (
@@ -142,6 +175,15 @@ run "one_apply_returns_the_complete_module_mapping" {
   }
 }
 
+run "subsequent_plan_keeps_the_same_names_and_client_ids" {
+  command = plan
+
+  assert {
+    condition     = output.test_identities == run.one_apply_returns_the_complete_module_mapping.test_identities
+    error_message = "An unchanged inventory must retain its complete applied identity mapping on subsequent plans."
+  }
+}
+
 run "empty_inventory_is_rejected" {
   command = plan
 
@@ -157,6 +199,29 @@ run "child_module_inventory_is_rejected" {
 
   variables {
     modules = { "avm/res/storage/storage-account/blob-service" = [] }
+  }
+
+  expect_failures = [var.modules]
+}
+
+run "flattened_path_collisions_are_rejected" {
+  command = plan
+
+  variables {
+    modules = {
+      "avm/res/a-b/c" = []
+      "avm/res/a/b-c" = []
+    }
+  }
+
+  expect_failures = [var.modules]
+}
+
+run "overlong_path_is_rejected_without_truncation" {
+  command = plan
+
+  variables {
+    modules = { "avm/res/a/${join("", [for index in range(59) : "b"])}" = [] }
   }
 
   expect_failures = [var.modules]
