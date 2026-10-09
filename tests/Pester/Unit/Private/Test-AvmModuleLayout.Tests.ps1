@@ -88,7 +88,7 @@ Describe 'Module Resources packaging' {
         foreach ($file in @('avm.tflint.hcl', 'avm.tflint_module.hcl', 'avm.tflint_example.hcl')) {
             $content = Get-Content -LiteralPath (Join-Path $tflintDir $file) -Raw
             $content | Should -Match 'plugin\s+"avm"'
-            $content | Should -Match 'version\s*=\s*"1\.2\.0"'
+            $content | Should -Match 'version\s*=\s*"1\.3\.0"'
             $content | Should -Match 'signature\s*=\s*"attestation"'
             $content | Should -Not -Match 'signing_key\s*='
             $content | Should -Not -Match 'disabled_by_default\s*='

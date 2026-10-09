@@ -239,6 +239,7 @@ rule "avm_interface_managed_identities" {
     It 'migrates disabled legacy rules for the verified AVM release <Version>' -ForEach @(
         @{ Version = '1.0.0' }
         @{ Version = '1.2.0' }
+        @{ Version = '1.3.0' }
     ) {
         [System.IO.File]::WriteAllText($script:basePath, @"
 plugin "avm" {
@@ -284,6 +285,7 @@ rule "terraform_output_separate" {
 
     It 'does not discard disabled rules for a different or overridden plugin' -ForEach @(
         @{ Label = 'different version'; Plugin = 'version = "0.17.0"' }
+        @{ Label = 'unverified minor'; Plugin = 'version = "1.4.0"' }
         @{ Label = 'unverified major'; Plugin = 'version = "2.0.0"' }
         @{ Label = 'prerelease'; Plugin = 'version = "1.2.0-beta.1"' }
         @{ Label = 'different source'; Plugin = 'source = "example.invalid/custom"' }

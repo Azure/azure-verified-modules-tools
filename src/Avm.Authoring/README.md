@@ -423,9 +423,10 @@ It warns if the checkout's root module or a direct `modules/` configuration is
 not reached by an example. Registry/Git copies and test-only helper modules do
 not count. Coverage gaps are non-failing; no examples returns `skipped`.
 
-The Terraform lint bundle pins TFLint 0.64.0 and `tflint-ruleset-avm` 1.0.0.
+The Terraform lint bundle pins TFLint 0.64.0 and `tflint-ruleset-avm` 1.3.0.
 All three packaged configurations require GitHub Artifact Attestation; there is
-no PGP signing-key fallback.
+no PGP signing-key fallback. AzureRM remains optional, but its version constraint
+must exclude 5.0.0 and later.
 
 AVM rules use the canonical `avm_*` names and are enabled by default in the
 ruleset. The packaged configurations declare scope-specific disables plus native

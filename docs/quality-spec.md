@@ -683,7 +683,11 @@ above a tagless generated telemetry deployment; other inline ignores still
 warn. The packaged root TFLint profile disables the retired
 `modtm` provider requirement, as the module and example profiles already do.
 
-The packaged AVM TFLint ruleset is pinned to attested release v1.2.0.
+The packaged AVM TFLint ruleset is pinned to attested release v1.3.0.
+AzureRM remains optional, but declared version constraints must exclude 5.0.0
+and later in root, child and example scopes. The existing source and
+compatibility checks still apply; excluding individual 5.x versions does not
+replace an upper bound.
 `avm_output_resource_id_required` applies only to resource roots. The lint
 engine derives a root class from the repository ID, AVM folder name, Git
 origin, and any declared context scope; conflicting classes fail. Pattern

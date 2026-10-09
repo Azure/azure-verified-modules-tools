@@ -254,6 +254,98 @@ output "deprecated_lock" {
             Should -BeNullOrEmpty
     }
 
+    It 'enforces released AzureRM version policy for <Case> in every packaged scope' -TestCases @(
+        @{ Case = 'the former Backup Vault range'; Constraint = '>= 4.2, < 6.0'; ExpectedIssues = 1 }
+        @{ Case = 'an open range'; Constraint = '>= 4.2'; ExpectedIssues = 1 }
+        @{ Case = 'a broad pessimistic range'; Constraint = '~> 4'; ExpectedIssues = 1 }
+        @{ Case = 'an inclusive major-five boundary'; Constraint = '>= 4.2, <= 5.0'; ExpectedIssues = 1 }
+        @{ Case = 'an excluded major-five boundary'; Constraint = '>= 4, != 5.0.0'; ExpectedIssues = 1 }
+        @{ Case = 'an excluded later major-five version'; Constraint = '>= 4, != 5.999.0'; ExpectedIssues = 1 }
+        @{ Case = 'multiple excluded major-five versions'; Constraint = '>= 4, != 5.0.0, != 5.999.0'; ExpectedIssues = 1 }
+        @{ Case = 'an exclusion masking a broad range'; Constraint = '>= 4.2, < 6.0, != 5.0.0'; ExpectedIssues = 1 }
+        @{ Case = 'an exclusion without a bound'; Constraint = '!= 5.0.0'; ExpectedIssues = 1 }
+        @{ Case = 'a major-five-only range'; Constraint = '>= 5, < 6'; ExpectedIssues = 1 }
+        @{ Case = 'an exact version outside the compatibility probe'; Constraint = '4.2.0'; ExpectedIssues = 1 }
+        @{ Case = 'a narrow minor outside the compatibility probe'; Constraint = '~> 4.2.0'; ExpectedIssues = 1 }
+        @{ Case = 'the preserved earlier-major compatibility'; Constraint = '>= 3, < 5'; ExpectedIssues = 0 }
+        @{ Case = 'an explicit major-four bound'; Constraint = '>= 4.2, < 5.0'; ExpectedIssues = 0 }
+        @{ Case = 'a pessimistic major-four bound'; Constraint = '~> 4.0'; ExpectedIssues = 0 }
+        @{ Case = 'a pessimistic major-four minimum'; Constraint = '~> 4.2'; ExpectedIssues = 0 }
+        @{ Case = 'an inclusive bound with its boundary excluded'; Constraint = '<= 5.0.0, != 5.0.0'; ExpectedIssues = 0 }
+        @{ Case = 'an absent optional AzureRM provider'; Constraint = ''; ExpectedIssues = 0 }
+        @{ Case = 'an incorrect AzureRM source'; Constraint = '>= 4.2, < 5.0'; Source = 'Azure/azurerm'; ExpectedIssues = 1 }
+    ) -Skip:($env:AVM_OFFLINE -eq '1') {
+        param($Case, $Constraint, $ExpectedIssues, $Source = 'hashicorp/azurerm')
+
+        $root = Join-Path $TestDrive ('provider-version-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        $null = New-Item -ItemType Directory -Path $root -Force
+        $configuration = if ($Constraint) {
+            @"
+terraform {
+  required_version = ">= 1.9.0"
+  required_providers {
+    azurerm = {
+      source  = "$Source"
+      version = "$Constraint"
+    }
+  }
+}
+"@
+        }
+        else {
+            'terraform { required_version = ">= 1.9.0" }'
+        }
+        Set-Content -LiteralPath (Join-Path $root 'terraform.tf') -Value $configuration -Encoding utf8NoBOM
+
+        $result = InModuleScope Avm.Authoring -Parameters @{
+            Root = $root
+            ConfigDir = (Split-Path -Parent $script:configPath)
+            PluginDir = (Join-Path $TestDrive 'provider-version-plugins')
+        } {
+            param($Root, $ConfigDir, $PluginDir)
+
+            $tool = Resolve-AvmTool -Name tflint
+            $rootConfig = Join-Path $ConfigDir 'avm.tflint.hcl'
+            $initialization = Invoke-AvmProcess -FilePath $tool.Path -WorkingDirectory $Root `
+                -ArgumentList @('--init', '--no-color', '--config', $rootConfig) `
+                -EnvVars @{ TFLINT_PLUGIN_DIR = $PluginDir } -IgnoreExitCode
+            if ($initialization.ExitCode -ne 0) {
+                throw "TFLint plugin initialization failed: $($initialization.StdErr)`n$($initialization.StdOut)"
+            }
+            $version = Invoke-AvmProcess -FilePath $tool.Path -WorkingDirectory $Root `
+                -ArgumentList @('--config', $rootConfig, '--version') `
+                -EnvVars @{ TFLINT_PLUGIN_DIR = $PluginDir } -IgnoreExitCode
+            $runs = foreach ($name in @('avm.tflint.hcl', 'avm.tflint_module.hcl', 'avm.tflint_example.hcl')) {
+                $run = Invoke-AvmProcess -FilePath $tool.Path -WorkingDirectory $Root `
+                    -ArgumentList @(
+                        '--config', (Join-Path $ConfigDir $name),
+                        '--format=json', '--no-color',
+                        '--only=avm_provider_azurerm_version_constraint'
+                    ) `
+                    -EnvVars @{ TFLINT_PLUGIN_DIR = $PluginDir } -IgnoreExitCode
+                [pscustomobject]@{ Scope = $name; Run = $run }
+            }
+            [pscustomobject]@{ Version = $version; Runs = @($runs) }
+        }
+
+        $result.Version.ExitCode | Should -Be 0 -Because $result.Version.StdErr
+        "$($result.Version.StdOut)`n$($result.Version.StdErr)" |
+            Should -Match ('ruleset\.avm \({0}\)' -f [regex]::Escape($script:avmRulesetVersion))
+        $result.Runs | Should -HaveCount 3
+        $expectedExitCode = if ($ExpectedIssues) { 2 } else { 0 }
+        foreach ($entry in $result.Runs) {
+            $entry.Run.ExitCode | Should -Be $expectedExitCode -Because "$Case in $($entry.Scope): $($entry.Run.StdErr)`n$($entry.Run.StdOut)"
+            $payload = $entry.Run.StdOut | ConvertFrom-Json
+            @($payload.errors) | Should -HaveCount 0
+            @($payload.issues) | Should -HaveCount $ExpectedIssues -Because "$Case in $($entry.Scope)"
+            foreach ($issue in $payload.issues) {
+                $issue.rule.name | Should -Be 'avm_provider_azurerm_version_constraint'
+                $issue.rule.severity | Should -Be 'error'
+                $issue.range.filename | Should -Be 'terraform.tf'
+            }
+        }
+    }
+
     It 'applies the released resource-ID rule to <Case>' -TestCases @(
         @{ Case = 'resource without output'; Leaf = 'terraform-azure-avm-res-class'; MetadataClass = 'resource'; ExpectedClass = 'resource'; RepoId = ''; Origin = ''; HasOutput = $false; ExpectedIssues = 1 }
         @{ Case = 'resource with output'; Leaf = 'terraform-azure-avm-res-class'; MetadataClass = 'resource'; ExpectedClass = 'resource'; RepoId = ''; Origin = ''; HasOutput = $true; ExpectedIssues = 0 }
@@ -438,8 +530,8 @@ output "value" {
 
         @($runs).Count | Should -Be $Configs.Count
         foreach ($run in $runs) {
-            $run.Baseline.ExitCode | Should -BeIn @(0, 2) -Because $run.Baseline.StdErr
-            $run.Candidate.ExitCode | Should -BeIn @(0, 2) -Because $run.Candidate.StdErr
+            $run.Baseline.ExitCode | Should -BeIn @(0, 2) -Because "$($run.Name): $($run.Baseline.StdErr)`n$($run.Baseline.StdOut)"
+            $run.Candidate.ExitCode | Should -BeIn @(0, 2) -Because "$($run.Name): $($run.Candidate.StdErr)`n$($run.Candidate.StdOut)"
             $baselinePayload = $run.Baseline.StdOut | ConvertFrom-Json
             $candidatePayload = $run.Candidate.StdOut | ConvertFrom-Json
             $baselinePayload.errors | Should -BeNullOrEmpty
