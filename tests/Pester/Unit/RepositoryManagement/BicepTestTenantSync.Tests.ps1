@@ -647,6 +647,77 @@ Describe 'Guarded nonsecret Bicep variable publication' {
             Should -Throw '*changed outside this sync*'
         Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
     }
+
+    Context 'Module client-ID publication' {
+        BeforeEach {
+            Initialize-BicepSyncTestCandidate
+            $script:consumer['VALIDATE_MODULE_CLIENT_IDS'] = $null
+            $script:clientIds = [ordered]@{
+                'avm/res/fabric/capacity' = '10000000-0000-4000-8000-000000000006'
+                'avm/res/storage/storage-account' = '10000000-0000-4000-8000-000000000016'
+            }
+        }
+
+        It 'publishes and extends the compact mapping without changing the five existing values' {
+            $result = Invoke-AvmBicepTestTenantSync -Values $script:values -ModuleClientIds $script:clientIds -Apply
+            $result.ChangedNames | Should -Be @('VALIDATE_MODULE_CLIENT_IDS')
+            $script:attempts | Should -HaveCount 1
+            $script:attempts[0].Method | Should -BeExactly 'POST'
+            $script:consumer.VALIDATE_MODULE_CLIENT_IDS.Value | Should -BeExactly (ConvertTo-AvmBicepModuleClientIdJson -ClientIds $script:clientIds)
+            $script:clientIds['avm/res/new/service'] = '10000000-0000-4000-8000-000000000026'
+            $result = Invoke-AvmBicepTestTenantSync -Values $script:values -ModuleClientIds $script:clientIds -Apply
+            $result.Status | Should -BeExactly 'Published'
+            $script:attempts | Should -HaveCount 2
+            $script:attempts[1].Method | Should -BeExactly 'PATCH'
+            foreach ($name in $script:executionNames) {
+                $script:consumer[$name].Value | Should -BeExactly $script:projection[$name]
+            }
+            $result = Invoke-AvmBicepTestTenantSync -Values $script:values -ModuleClientIds $script:clientIds -Apply
+            $result.Status | Should -BeExactly 'NoChange'
+            $script:attempts | Should -HaveCount 2
+        }
+
+        It 'does not write mappings in a plan or WhatIf preview' {
+            (Invoke-AvmBicepTestTenantSync -Values $script:values -ModuleClientIds $script:clientIds).Status |
+                Should -BeExactly 'Planned'
+            (Invoke-AvmBicepTestTenantSync -Values $script:values -ModuleClientIds $script:clientIds -Apply -WhatIf).Status |
+                Should -BeExactly 'Preview'
+            Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
+        }
+
+        It 'rejects shared and controller client IDs before reading GitHub' -ForEach @('TEST_BAMI_CONTROLLER_CLIENT_ID', 'TEST_BAMI_BICEP_CLIENT_ID') {
+            $script:clientIds['avm/res/fabric/capacity'] = $script:values[$_]
+            { Invoke-AvmBicepTestTenantSync -Values $script:values -ModuleClientIds $script:clientIds -Apply } | Should -Throw
+            Should -Invoke Get-AvmBicepTestTenantSnapshot -Exactly 0
+            Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
+        }
+
+        It 'will not retarget or delete an existing module binding' -ForEach @('remove', 'replace') {
+            Set-BicepSyncTestValue -Name 'VALIDATE_MODULE_CLIENT_IDS' -Value (ConvertTo-AvmBicepModuleClientIdJson -ClientIds $script:clientIds)
+            if ($_ -ceq 'remove') { $script:clientIds.Remove('avm/res/fabric/capacity') }
+            else { $script:clientIds['avm/res/fabric/capacity'] = '90000000-0000-4000-8000-000000000006' }
+            { Invoke-AvmBicepTestTenantSync -Values $script:values -ModuleClientIds $script:clientIds -Apply } |
+                Should -Throw '*removed or retargeted*'
+            Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
+        }
+
+        It 'detects shared-identity drift during mapping publication without a rollback' {
+            $script:afterWrite = {
+                Set-BicepSyncTestValue -Name 'VALIDATE_CLIENT_ID' -Value 'outside-value' -Revision 'outside'
+            }
+            { Invoke-AvmBicepTestTenantSync -Values $script:values -ModuleClientIds $script:clientIds -Apply } |
+                Should -Throw '*Readback mismatch*VALIDATE_CLIENT_ID*'
+            $script:attempts | Should -HaveCount 1
+        }
+
+        It 'reads back an unacknowledged mapping write but never retries it or reports success' {
+            $script:afterWrite = { throw [System.IO.IOException]::new('Mapping response lost.') }
+            { Invoke-AvmBicepTestTenantSync -Values $script:values -ModuleClientIds $script:clientIds -Apply } |
+                Should -Throw '*not acknowledged*No write retry or rollback*'
+            $script:attempts | Should -HaveCount 1
+            Should -Invoke Start-Sleep -Exactly 0
+        }
+    }
 }
 
 Describe 'Narrow GitHub nonsecret variable adapter' {
@@ -733,7 +804,7 @@ Describe 'Narrow GitHub nonsecret variable adapter' {
         Should -Invoke Invoke-RepositorySyncProcess -Exactly 0
     }
 
-    It 'snapshots only the five generic variables and ignores old aliases and legacy values' {
+    It 'snapshots the five execution variables and module mapping while ignoring old aliases and legacy values' {
         $unmanaged = @(
             'ARM_TENANT_ID', 'TEST_BAMI_CONTROLLER_CLIENT_ID', 'TEST_BAMI_MODULE_PATHS',
             'TEST_BAMI_TENANT_ID', 'TEST_BAMI_BICEP_CLIENT_ID', 'TEST_BAMI_SUBSCRIPTION_IDS',
@@ -748,8 +819,8 @@ Describe 'Narrow GitHub nonsecret variable adapter' {
             )
         }
         $snapshot = Get-AvmBicepTestTenantSnapshot
-        $snapshot.Count | Should -Be 5
-        @($snapshot.Keys | Sort-Object) | Should -Be @($script:executionNames | Sort-Object)
+        $snapshot.Count | Should -Be 6
+        @($snapshot.Keys | Sort-Object) | Should -Be @((@($script:executionNames) + 'VALIDATE_MODULE_CLIENT_IDS') | Sort-Object)
         $snapshot.VALIDATE_TENANT_ID.Value | Should -BeExactly 'fixture-value'
         $snapshot.VALIDATE_TENANT_ID.CreatedAt | Should -BeExactly '2026-09-01T00:00:00.0000000Z'
         $snapshot.VALIDATE_TENANT_ID.UpdatedAt | Should -BeExactly '2026-09-15T00:00:00.0000000Z'
@@ -758,7 +829,7 @@ Describe 'Narrow GitHub nonsecret variable adapter' {
 
     It 'distinguishes genuinely absent variables from unreadable collection responses' {
         $snapshot = Get-AvmBicepTestTenantSnapshot
-        $snapshot.Count | Should -Be 5
+        $snapshot.Count | Should -Be 6
         @($snapshot.Values | Where-Object { $null -ne $_ }) | Should -HaveCount 0
         $script:response.StdOut = ''
         { Get-AvmBicepTestTenantSnapshot } | Should -Throw '*empty variable collection*'
@@ -852,36 +923,44 @@ Describe 'Bicep variable adapter uses Invoke-AvmProcess without exposing credent
 Describe 'Bicep workflow isolation and trusted input boundary' {
     BeforeAll {
         $script:workflow = (Get-Content -LiteralPath (Join-Path $script:root '.github' 'workflows' 'repository-management-bicep-sync.yml') -Raw).Replace("`r`n", "`n")
-        $script:variablesJob = [regex]::Match($script:workflow, '(?ms)^  sync-test-tenant-variables:\n.*\z').Value
+        $script:variablesJob = [regex]::Match($script:workflow, '(?ms)^  sync-test-tenant-variables:\n.*?(?=^  [a-z][a-z-]+:\n|\z)').Value
+        $script:identitiesJob = [regex]::Match($script:workflow, '(?ms)^  sync-module-identities:\n.*\z').Value
         $script:entry = Get-Content -LiteralPath (Join-Path $script:syncScripts 'Invoke-BicepTestTenantSync.ps1') -Raw
     }
 
-    It 'runs only the variable job and never restores Bicep CODEOWNERS publication' {
+    It 'reuses the sync workflow for identities and variables without restoring CODEOWNERS publication' {
         $jobs = @([regex]::Matches($script:workflow, '(?m)^  ([a-z][a-z-]+):\n    name:') |
             ForEach-Object { $_.Groups[1].Value })
-        $jobs | Should -Be @('sync-test-tenant-variables')
+        $jobs | Should -Be @('sync-test-tenant-variables', 'sync-module-identities')
         $script:workflow | Should -Not -Match 'BicepCodeownersSync|bicep-codeowners-sync|Generate and synchronize CODEOWNERS'
         Test-Path -LiteralPath (Join-Path $script:root 'repository-management' 'bicep-codeowners-sync') | Should -BeFalse
     }
 
-    It 'restores the previous schedule and input-free dispatch without activation or preview flags' {
+    It 'retains the schedule and defaults manual runs to a non-applying plan' {
         $triggers = [regex]::Match($script:workflow, '(?ms)^on:\n(.*?)(?=^\S)').Groups[1].Value.TrimEnd()
         $triggers | Should -BeExactly (@(
             '  schedule:'
             "    - cron: '33 2-23/4 * * *'"
             '  workflow_dispatch:'
+            '    inputs:'
+            '      plan_only:'
+            '        description: Plan identity and variable changes without applying'
+            '        type: boolean'
+            '        default: true'
         ) -join "`n")
-        $script:workflow | Should -Not -Match 'inputs[.:]|enable_test_tenant_sync|plan_only|PlanOnly|WhatIf|AVM_BAMI_TEST_TENANT_SYNC_ENABLED'
+        $script:workflow | Should -Not -Match 'enable_test_tenant_sync|AVM_BAMI_TEST_TENANT_SYNC_ENABLED'
     }
 
     It 'requires trusted Tools main for every job, excluding forks, other repositories and non-main refs' {
         $script:variablesJob | Should -Not -BeNullOrEmpty
-        $condition = [regex]::Match($script:variablesJob, '(?ms)^    if: >-\n(.*?)(?=^    runs-on:)').Groups[1].Value
-        [regex]::Replace($condition, '\s+', ' ').Trim() | Should -BeExactly (@(
-            "github.repository == 'Azure/azure-verified-modules-tools'",
-            "github.ref == 'refs/heads/main'"
-        ) -join ' && ')
-        @([regex]::Matches($script:workflow, '(?m)^\s+if:')) | Should -HaveCount 1
+        foreach ($job in @($script:variablesJob, $script:identitiesJob)) {
+            $condition = [regex]::Match($job, '(?ms)^    if: >-\n(.*?)(?=^    runs-on:)').Groups[1].Value
+            [regex]::Replace($condition, '\s+', ' ').Trim() | Should -BeExactly (@(
+                "github.repository == 'Azure/azure-verified-modules-tools'",
+                "github.ref == 'refs/heads/main'"
+            ) -join ' && ')
+        }
+        @([regex]::Matches($script:workflow, '(?m)^    if:')) | Should -HaveCount 2
     }
 
     It 'uses a separate target-only Variables token in avm without broadening default permissions' {
@@ -930,13 +1009,32 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
         $script:entry | Should -Not -Match 'Get-ChildItem\s+Env:|GetEnvironmentVariables|Get-Content\s+Env:'
     }
 
-    It 'calls Apply directly without dispatch input interpolation and retains standalone previews' {
+    It 'selects plan or apply through environment data rather than interpolating dispatch input into code' {
         $run = [regex]::Match($script:variablesJob, '(?s)        run: \|\n(.*)$').Groups[1].Value
         $run | Should -Not -BeNullOrEmpty
         $run | Should -Not -Match '\$\{\{'
-        $run | Should -Match "'Invoke-BicepTestTenantSync.ps1'\) -Apply\s*$"
+        $run | Should -Match "'Invoke-BicepTestTenantSync.ps1'\) @options\s*$"
+        $run | Should -Match '\$env:BICEP_SYNC_PLAN_ONLY -ceq ''true'''
         $script:entry | Should -Match '\[switch\] \$PlanOnly = \$true'
         $script:entry | Should -Match "Parameter\(Mandatory, ParameterSetName = 'Apply'\)"
+    }
+
+    It 'limits OIDC to the identity job and publishes its mapping only after a successful apply' {
+        $script:identitiesJob | Should -Match '(?m)^    needs: sync-test-tenant-variables$'
+        $script:identitiesJob | Should -Match '(?m)^      id-token: write'
+        $script:variablesJob | Should -Not -Match 'id-token:'
+        $script:identitiesJob | Should -Match 'repository: Azure/bicep-registry-modules'
+        $script:identitiesJob | Should -Match "'Invoke-BicepModuleIdentitySync.ps1'"
+        $script:identitiesJob | Should -Match '\-ModuleClientIdPath .* -Apply'
+        @([regex]::Matches($script:identitiesJob, "(?m)^        if: github.event_name != 'workflow_dispatch' \|\| !inputs.plan_only$")) |
+            Should -HaveCount 2
+        $script:identitiesJob | Should -Not -Match 'permission-secrets|permission-contents|permission-workflows|azure/login'
+        foreach ($field in @('TENANT_ID', 'SUBSCRIPTION_ID', 'CLIENT_ID', 'STORAGE_ACCOUNT_NAME', 'STORAGE_CONTAINER_NAME')) {
+            $script:identitiesJob | Should -Match "ARM_BACKEND_${field}:"
+        }
+        foreach ($reference in [regex]::Matches($script:identitiesJob, '(?m)^\s+uses: ([^@\s]+)@([^\s]+)')) {
+            $reference.Groups[2].Value | Should -Match '^[0-9a-f]{40}$'
+        }
     }
 
     It 'has no selector configuration and reuses the shared bundle validation and process helpers' {

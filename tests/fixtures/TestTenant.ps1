@@ -35,7 +35,13 @@ function New-AvmTestBamiPlan {
         [string] $RepositoryOwnerId = '6844498',
         [string] $RepositorySyncRepositoryId = '1239632211',
         [string] $JobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main',
-        [string] $ModuleAddress = 'module.azure'
+        [string] $ModuleAddress = 'module.azure',
+        [string] $IdentityName = 'Azure-terraform-azurerm-avm-ptn-example-repo',
+        [string] $RepositoryId = '1234',
+        [string] $ClientId = '10000000-0000-4000-8000-000000000006',
+        [string] $PrincipalId = '10000000-0000-4000-8000-000000000007',
+        [string] $WorkflowRef,
+        [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test')
     )
 
     $condition = @'
@@ -60,8 +66,10 @@ AND
 )
 '@
     $identity = New-AvmTestBamiIdentity
+    $identity.identity_resource_id = $identity.identity_resource_id.Replace('Azure-terraform-azurerm-avm-ptn-example-repo', $IdentityName)
+    $identity.client_id = $ClientId
+    $identity.repository_id = $RepositoryId
     $settings = New-AvmTestBamiSettings
-    $principalId = '10000000-0000-4000-8000-000000000007'
     if (-not $KnownClient) { $identity.Remove('client_id') }
     $resources = @(
         @{
@@ -71,7 +79,7 @@ AND
             values = @{
                 type = 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-07-31-preview'
                 parent_id = '/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test'
-                name = 'Azure-terraform-azurerm-avm-ptn-example-repo'
+                name = $IdentityName
                 id = if ($KnownClient) { $identity.identity_resource_id } else { $null }
                 output = if ($KnownClient) {
                     @{ properties = @{ tenantId = $identity.tenant_id; clientId = $identity.client_id; principalId = $principalId } }
@@ -95,26 +103,36 @@ AND
         }
         $number++
     }
-    foreach ($environment in @('pr-check', 'integration-test', 'examples-test', 'avm-validation')) {
-        $resources += @{
-            address = if ($environment -ceq 'avm-validation') { 'module.azure.azapi_resource.validation_federated_credential' } else {
-                'module.azure.azapi_resource.identity_federated_credentials["' + $environment + '"]'
+    $credentials = @(
+        foreach ($environment in $Environments) {
+            $subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:${environment}:job_workflow_ref:$JobWorkflowRef"
+            if ($WorkflowRef) { $subject += ":workflow_ref:$WorkflowRef" }
+            @{
+                Address = 'module.azure.azapi_resource.identity_federated_credentials["' + $environment + '"]'
+                Name = if ($WorkflowRef) { "$IdentityName-module-$environment" } else { "$IdentityName-$environment" }
+                Subject = $subject
             }
+        }
+        @{
+            Address = 'module.azure.azapi_resource.validation_federated_credential'
+            Name = "$IdentityName-avm-validation"
+            Subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
+        }
+    )
+    foreach ($credential in $credentials) {
+        $resources += @{
+            address = $credential.Address
             mode = 'managed'
             type = 'azapi_resource'
             values = @{
                 type = 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview'
-                name = "Azure-terraform-azurerm-avm-ptn-example-repo-$environment"
+                name = $credential.Name
                 parent_id = if ($KnownClient) { $identity.identity_resource_id } else { $null }
                 body = @{
                     properties = @{
                         audiences = @('api://AzureADTokenExchange')
                         issuer = 'https://token.actions.githubusercontent.com'
-                        subject = if ($environment -ceq 'avm-validation') {
-                            "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
-                        } else {
-                            "repository_owner_id:${RepositoryOwnerId}:repository_id:1234:environment:${environment}:job_workflow_ref:$JobWorkflowRef"
-                        }
+                        subject = $credential.Subject
                     }
                 }
             }

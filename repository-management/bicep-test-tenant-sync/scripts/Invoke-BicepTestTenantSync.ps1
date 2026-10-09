@@ -2,6 +2,7 @@
 
 [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Plan')]
 param(
+    [ValidateNotNullOrEmpty()] [string] $ModuleClientIdPath,
     [Parameter(ParameterSetName = 'Plan')] [switch] $PlanOnly = $true,
     [Parameter(Mandatory, ParameterSetName = 'Apply')] [switch] $Apply
 )
@@ -27,4 +28,8 @@ $values = [ordered]@{
     TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID = $env:TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
 }
 $options = if ($PSCmdlet.ParameterSetName -ceq 'Apply') { @{ Apply = $Apply } } else { @{ PlanOnly = $PlanOnly } }
+if ($ModuleClientIdPath) {
+    $options.ModuleClientIds = ConvertFrom-AvmTestTenantJson -Json (Get-Content -LiteralPath $ModuleClientIdPath -Raw -ErrorAction Stop)
+}
 Invoke-AvmBicepTestTenantSync -Values $values @options | ConvertTo-Json -Depth 5
+$global:LASTEXITCODE = 0

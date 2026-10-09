@@ -41,6 +41,28 @@ variable "identity_resource_group_name" {
   description = "Name of the resource group to create the identities in."
 }
 
+variable "identity_name" {
+  type        = string
+  description = "Optional dedicated module identity name; repository identities retain their existing names."
+  default     = null
+
+  validation {
+    condition     = var.identity_name == null ? true : can(regex("^[A-Za-z0-9][A-Za-z0-9_-]{2,89}$", var.identity_name))
+    error_message = "An explicit identity name must contain 3-90 letters, digits, underscores or hyphens."
+  }
+}
+
+variable "github_workflow_ref" {
+  type        = string
+  description = "Optional top-level caller workflow binding in addition to the reusable job workflow."
+  default     = null
+
+  validation {
+    condition     = var.github_workflow_ref == null ? true : can(regex("^[^/\\s@]+/[^/\\s@]+/\\.github/workflows/[^/\\s@]+\\.ya?ml@refs/heads/main$", var.github_workflow_ref))
+    error_message = "The caller workflow must be a fully qualified workflow ref on trusted main."
+  }
+}
+
 variable "github_repository_owner" {
   type        = string
   description = "Owner of the GitHub repositories."
