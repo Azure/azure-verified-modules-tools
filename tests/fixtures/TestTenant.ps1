@@ -313,20 +313,25 @@ function New-AvmTestRepositorySyncPlan {
         [switch] $ValidationPending,
         [switch] $OwnerMigration,
         [switch] $LegacyMembershipMigration,
-        [switch] $NamingMigration
+        [switch] $NamingMigration,
+        [string] $Repository = 'Azure/terraform-azurerm-avm-ptn-example-repo',
+        [string] $IdentityName = 'id-test-terraform-azurerm-avm-ptn-example-repo',
+        [string] $PreviousIdentityName = 'Azure-terraform-azurerm-avm-ptn-example-repo'
     )
 
     $plan = New-AvmTestBamiPlan -ModuleAddress 'module.bami[0]' -KnownClient:$KnownClient `
         -ValidationPending:$ValidationPending -OwnerMigration:$OwnerMigration `
-        -LegacyMembershipMigration:$LegacyMembershipMigration -NamingMigration:$NamingMigration
+        -LegacyMembershipMigration:$LegacyMembershipMigration -NamingMigration:$NamingMigration `
+        -IdentityName $IdentityName -PreviousIdentityName $PreviousIdentityName
+    $repositoryName = $Repository.Split('/')[1]
     $github = @{
         address = 'module.github.github_repository.this'
         mode = 'managed'
         type = 'github_repository'
         provider_name = 'registry.terraform.io/integrations/github'
         values = @{
-            id = 'terraform-azurerm-avm-ptn-example-repo'; repo_id = 1234
-            name = 'terraform-azurerm-avm-ptn-example-repo'; full_name = 'Azure/terraform-azurerm-avm-ptn-example-repo'
+            id = $repositoryName; repo_id = 1234
+            name = $repositoryName; full_name = $Repository
         }
     }
     $plan.planned_values.root_module.child_modules += @{

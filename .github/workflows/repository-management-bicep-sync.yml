@@ -37,12 +37,14 @@ jobs:
       - name: Create target-scoped Variables token
         id: variables-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        env:
+          # The pinned parser supports this permission, but its input manifest omits it.
+          INPUT_PERMISSION-ACTIONS-VARIABLES: write
         with:
           client-id: ${{ vars.AVM_APP_CLIENT_ID }}
           private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
           owner: Azure
           repositories: bicep-registry-modules
-          permission-actions-variables: write
 
       - name: Publish nonsecret Bicep test tenant variables
         shell: pwsh
@@ -128,12 +130,13 @@ jobs:
         if: github.event_name != 'workflow_dispatch' || !inputs.plan_only
         id: variables-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        env:
+          INPUT_PERMISSION-ACTIONS-VARIABLES: write
         with:
           client-id: ${{ vars.AVM_APP_CLIENT_ID }}
           private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
           owner: Azure
           repositories: bicep-registry-modules
-          permission-actions-variables: write
 
       - name: Publish nonsecret module client IDs
         if: github.event_name != 'workflow_dispatch' || !inputs.plan_only

@@ -98,7 +98,7 @@ Everything else (Terraform, TFLint, `terraform-docs`, Conftest, `avmfix`, `mapot
 
 ## 3. Cross-OS guarantees
 
-Every public verb produces **byte-identical exit codes**, **structurally identical JSON output** (under `--json`), and **semantically identical filesystem effects** across every Tier 1 platform listed above. CI proves this by running the full Pester matrix on Windows `x64`, Linux `x64`, Linux `arm64`, and macOS `arm64`. A test failure on any one of those four is a release blocker.
+Every public verb produces **byte-identical exit codes**, **structurally identical JSON output** (under `--json`), and **semantically identical filesystem effects** across every Tier 1 platform listed above. CI validates affected scopes using the Windows, Linux and macOS matrix in section 18. A failing selected platform check is a release blocker.
 
 Human-readable text output is allowed to differ in formatting (line endings, ANSI colour) per §11.
 
@@ -140,7 +140,9 @@ azure-verified-modules-tools/
     reference/                    # generated public cmdlet reference
   .github/
     workflows/
-      ci.yml
+      ci-authoring.yml
+      ci-workflows.yml
+      repository-management-config-test.yml
   .gitattributes
   .gitignore
   LICENSE                         # MIT, referenced by manifest LicenseUri
@@ -1239,6 +1241,22 @@ suppress nested `Info` and `Pass` narration. `-Verbose`, `AVM_VERBOSE=1`, and
 GitHub Actions runner debug mode restore all nested narration. Warnings and
 errors are never suppressed.
 
+Sensitive-output consumers can use `Invoke-AvmProcess -StreamOutput` with
+`OnStdOutLine` and `OnStdErrLine` callbacks to own both streams' incremental
+rendering. A handled stream is not echoed or replayed unfiltered on failure.
+Captured output and exception data remain private inputs to the caller, which
+must sanitize diagnostics before publishing them. A failed callback stops the
+child process and propagates the error.
+
+Bicep identity sync displays Terraform's human-readable saved plan only after
+the ownership and migration guards accept it, then streams per-resource apply
+progress. `Protect-RepositorySyncLogText` redacts configured credentials from
+both inherited and child-specific environments, including multiline values.
+Ordinary names and client IDs remain visible; Terraform sensitive annotations
+remain intact. Machine-readable plan/output JSON and raw state stay private,
+including error and timeout paths. Streaming is opt-in so existing buffered
+repository-sync callers remain compatible with the published module.
+
 During Pester runs, the build harness temporarily clears `GITHUB_ACTIONS` and
 `GITHUB_STEP_SUMMARY`, and pauses workflow-command parsing while tests
 deliberately exercise GitHub
@@ -1403,7 +1421,7 @@ This section is the implementation-level expression of the **Security stance** p
 
 ### Workflow / GitHub Actions hardening
 
-- Every `uses:` reference in `.github/workflows/*.yml` is pinned to a 40-character commit SHA, with the human-readable version as a trailing `# vX.Y.Z` comment. Floating tag references (`@v5`, `@main`, branch refs) are rejected at PR review. Rationale: a single tag-repoint on a compromised maintainer account would deliver attacker-controlled code into every CI run on the next push, and that code runs with `GITHUB_TOKEN`, `secrets.*`, OIDC mint rights, and full write access to the working tree. SHA pinning closes that vector at the cost of needing a maintenance loop for security fixes; that loop is Dependabot.
+- Every external `uses:` reference in `.github/workflows/*.yml` is pinned to a 40-character commit SHA, with the human-readable version as a trailing `# vX.Y.Z` comment. Floating tag references (`@v5`, `@main`, branch refs) are rejected at PR review. Same-repository reusable workflows use local `./.github/workflows/` paths, which resolve at the caller's commit. Rationale: a single tag-repoint on a compromised maintainer account would deliver attacker-controlled code into every CI run on the next push, and that code runs with `GITHUB_TOKEN`, `secrets.*`, OIDC mint rights, and full write access to the working tree. SHA pinning closes that vector at the cost of needing a maintenance loop for security fixes; that loop is Dependabot.
 - `.github/dependabot.yml` enables the `github-actions` ecosystem on a weekly cadence, batches minor/patch bumps to reduce noise, and keeps major bumps as individual PRs so they get individual review.
 - Every workflow declares an explicit top-level `permissions:` block. Default is `permissions: contents: read`. Write scopes (`contents: write`, `packages: write`, `id-token: write`, etc.) are added job-by-job with an inline comment justifying why.
 - `actions/checkout` is always called with `persist-credentials: false` outside the release pipeline so the cloned repo's `.git/config` doesn't carry a token usable by any subsequent step or any subprocess that reads from the working tree.
@@ -1417,10 +1435,15 @@ This section is the implementation-level expression of the **Security stance** p
 ### Test identity naming and replacement
 
 - Terraform test identities use `id-test-terraform-` plus the lowercase repository
-  name without its leading `terraform-`; the owner is excluded. Bicep test
+  name without its leading `terraform-`, replacing the known Azure-reserved
+  `windows` substring with `w5s`; the owner is excluded. Reject normalized
+  Terraform-name collisions across the complete installed repository inventory
+  before filtering, and recheck it in workers with `windows` or `w5s` names.
+  An incomplete or unavailable inventory must not bypass this check. Bicep test
   identities use `id-test-bicep-` plus the complete canonical root path with
-  slashes replaced by hyphens. Neither convention hashes, truncates or
-  abbreviates names. Preserve the 90-character repository identity bound and
+  slashes replaced by hyphens, without the Terraform reserved-word substitution.
+  Neither convention hashes or truncates names; no other words are abbreviated.
+  Preserve the 90-character repository identity bound and
   68-character canonical Bicep path bound; reject Bicep flattening collisions
   before provisioning and validate complete federated credential names against
   Azure's 120-character maximum.
@@ -1445,6 +1468,34 @@ This section is the implementation-level expression of the **Security stance** p
   authorize live execution, change conditional Owner permissions, rename
   backend/controller/shared identities, or cut over Bicep validation consumers
   or their OIDC subject template.
+
+### Repository-sync state-lock recovery
+
+- Ordinary remote Terraform sync may attempt recovery once per native command
+  only after a complete, unambiguous state-lock acquisition failure. Retry the
+  identical plan or verified saved-plan apply at most once. Never recover
+  release failures, other errors, timeouts or interrupted applies; never disable
+  locking or rewrite/import state. Local bootstrap and Bicep sync do not opt in.
+- Require trusted Tools `main` workflow/current-attempt evidence, complete
+  current-job discovery and no observed active competing run or same-state
+  worker. Use the repository-scoped Actions read token, not broader App
+  permissions. Check the initialized default-workspace backend against the
+  exact selected key and all configured tenant/subscription/client/account/
+  container values. CLI recovery authenticates only as the state identity;
+  native Terraform and BAMI providers retain explicit OIDC and disabled CLI
+  fallback.
+- Inspect blob properties/lock metadata, never resource state contents.
+  Validate error-reported and stored ID/path, then recheck active writers and
+  unchanged ETag/lease/metadata immediately before release. Known IDs use the
+  initialized backend's force-unlock. Missing metadata permits only a scoped
+  ETag-conditional lease break without a fabricated ID. Failed or uncertain
+  release stops without fallback or retry; verify release before retrying
+  acquisition. Preserve original native errors/exit codes and redact credentials.
+- Unknown-owner recovery is an explicit risk-accepted exception, not verified
+  abandonment. Timestamps and empty metadata are not ownership proof; the
+  ETag check cannot eliminate external-writer or lease-generation races.
+  The changed automatic-recovery policy requires recorded SFI sign-off before
+  merge, separately from user risk acceptance and any live-operation approval.
 
 ### Module manifest and release pipeline
 
@@ -1475,7 +1526,7 @@ This section is the implementation-level expression of the **Security stance** p
 | Component   | `tests/Pester/Component/`    | Real FS under `TestDrive`; stub binaries via fixture scripts in `tests/fixtures/bin/` | No | Real            |
 | Integration | `tests/Pester/Integration/`  | Pulls and runs the real managed tools from the resolver against the on-disk fixtures | Yes | Real |
 
-- Integration tests are tagged `-Tag Integration` and excluded from default runs. CI runs them on pull requests via the `integration` job in the `ci` workflow.
+- Integration tests are tagged `-Tag Integration` and excluded from default local runs. Selected authoring pull-request and manual CI runs include them; main pushes do not.
 - A stub-binary harness in `tests/fixtures/bin/` provides PowerShell scripts named `terraform.ps1`, `tflint.ps1`, etc. that emit pre-canned output. The resolver is hooked at test time to point at the stubs.
 
 Repository-sync candidate validation requires static checks to pass. Terraform
@@ -1496,16 +1547,47 @@ fetch from or write to the remote repository.
 - 70% line coverage on `src/Avm.Authoring/` minimum, enforced via Pester `CodeCoverage`. CI build fails below the floor.
 - Coverage is tracked per file; new files start with the floor and ratchet up as code matures.
 
-### CI matrix
+### Scoped CI
 
-Every PR runs Unit + Component on:
+Three independent workflows use GitHub's native `on.push.paths` and
+`on.pull_request.paths` filters for pushes to `main` and pull requests targeting
+`main`. Each also has `workflow_dispatch` to run its own suite without a file
+change. There is no dispatcher, custom changed-file detection or cross-workflow
+status aggregation.
 
-- `windows-2025` (`x64`)
-- `ubuntu-24.04` (`x64`)
-- `ubuntu-24.04-arm` (`arm64`)
-- `macos-15` (`arm64`)
+| Workflow | File | Coverage |
+| --- | --- | --- |
+| `Authoring: CI` | `ci-authoring.yml` | Lint once on Ubuntu; authoring unit and component tests on Ubuntu, Windows and macOS; the Ubuntu unit leg enforces the 70% coverage floor. |
+| `Workflows: CI` | `ci-workflows.yml` | Workflow definitions, embedded installation behavior and CI contract tests on Ubuntu only. |
+| `Repos: CI` | `repository-management-config-test.yml` | Repository-management unit/component tests, configuration checks and mocked Terraform validation on Ubuntu only. |
 
-Integration runs on every pull request via the `integration` job in the `ci` workflow on each of the above.
+Authoring pull-request/manual runs retain both Terraform fixtures per OS and
+one Bicep integration leg per OS. Main pushes skip both integration matrices.
+Existing integration environment approval and job-specific permissions remain
+in place. Workflow and repository-management CI need no Azure credentials.
+
+The static YAML filters include each area's source, tests, fixtures and
+relevant workflow files. Authoring excludes repository-management and workflow
+test directories, plus the dedicated repository component/fixture files.
+Repository-management tests include the `BicepModuleIdentities`,
+`BicepTestTenantSync`, `ModuleCatalog`, `Repository` and `TerraformCodeowners`
+component filename families and the shared `TerraformInitUpgrade.Tests.ps1`
+guard. Changes to shared build scripts, dependency installers, module bootstrap,
+pinned dependencies or runtime helpers can trigger multiple workflows.
+Keep these filters aligned when adding shared dependencies or test families.
+
+Each workflow uploads and reports its own test artifacts. Unrelated
+documentation-only changes intentionally skip the workflows; generated
+`docs/reference/` changes still trigger authoring for drift validation.
+Native path-filter limits and skip behavior apply. Do not require a
+path-filtered workflow for every change; branch-protection configuration is
+not modified by these workflows.
+
+The build entry point's `-TestGroup Authoring` and
+`-TestGroup RepositoryManagement` select test files only, not changed paths.
+Serial, sharded and coverage runs use the same inventories. The default `All`
+and full local `pre-commit` gate still run every unit/component group,
+including workflow and repository-management tests.
 
 ---
 
@@ -1531,6 +1613,7 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
   - Encoding check (no BOM, LF line endings).
   - PSScriptAnalyzer with project settings.
   - Pester Unit layer.
+  - Pester Component layer.
   - Generated cmdlet documentation drift validation.
 - `build/avm.build.ps1` exposes this as `./build.ps1 pre-commit`; contributors run it before pushing.
 

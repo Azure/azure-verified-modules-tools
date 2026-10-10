@@ -34,10 +34,13 @@
                     in a separate Ubuntu job and runs workflow tests separately.
 
     The test, coverage, component, and integration tasks write an NUnit result
-    file per tier under out/test-results/. The CI workflows upload it as an
-    artifact, and a companion workflow_run workflow renders the pass/fail report
-    on the pull request and run summary via the publish-test-results action.
+    file per tier under out/test-results/. The split CI workflows upload it as
+    an artifact and publish their own test reports.
     Locally this is just a file write under the gitignored out/ tree.
+
+    TestGroup selects All (the local default), Authoring, or RepositoryManagement
+    for unit and component tasks, including the unit coverage task. Workflow
+    tests run separately in CI. The local pre-commit task still runs every group.
 
     The default task (`.`) is `layout`.
 #>
@@ -49,6 +52,9 @@ param(
     [string] $Configuration = 'Debug',
 
     [string[]] $TestName = @(),
+
+    [ValidateSet('All', 'Authoring', 'RepositoryManagement')]
+    [string] $TestGroup = 'All',
 
     [ValidateSet('All', 'Bicep', 'Terraform')]
     [string] $IntegrationGroup = 'All'
@@ -269,6 +275,33 @@ function script:Get-AvmTestResultPath {
         $null = New-Item -ItemType Directory -Path $dir -Force
     }
     Join-Path $dir ("{0}.xml" -f $Tier)
+}
+
+function script:Get-AvmScopedTestFile {
+    [CmdletBinding()]
+    [OutputType([System.IO.FileInfo])]
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [ValidateSet('Unit', 'Component')] [string] $Tier,
+        [ValidateSet('All', 'Authoring', 'RepositoryManagement')] [string] $Group = 'All'
+    )
+
+    $files = @(Get-ChildItem -LiteralPath $Path -Filter '*.Tests.ps1' -File -Recurse |
+        Where-Object {
+            $relative = [System.IO.Path]::GetRelativePath($Path, $_.FullName).Replace('\', '/')
+            $repositoryTest = $Tier -eq 'Unit' ?
+                $relative -clike 'RepositoryManagement/*' :
+                $relative -cmatch '^(BicepModuleIdentities|BicepTestTenantSync|ModuleCatalog|Repository|TerraformCodeowners)[^/]*\.Tests\.ps1$'
+            $sharedTest = $Tier -eq 'Unit' -and $relative -ceq 'Module/TerraformInitUpgrade.Tests.ps1'
+            $workflowTest = $Tier -eq 'Unit' -and $relative -clike 'Workflows/*'
+            $Group -eq 'All' -or $sharedTest -or
+                ($Group -eq 'RepositoryManagement' -and $repositoryTest) -or
+                ($Group -eq 'Authoring' -and -not $repositoryTest -and -not $workflowTest)
+        } | Sort-Object -Property FullName)
+    if ($files.Count -eq 0) {
+        throw [System.IO.InvalidDataException]::new("No $Tier test files found for group '$Group' in '$Path'.")
+    }
+    $files
 }
 
 . (Join-Path $PSScriptRoot 'AvmPesterSharding.ps1')
@@ -565,7 +598,7 @@ task 'test-tenant-terraform' {
                         }
                         else {
                             $previous = Assert-AvmBamiIdentityPlan -Plan $candidatePlan -Settings $settings `
-                                -Repository 'Azure/terraform-azurerm-avm-ptn-example-repo' -RepositoryId '1234' `
+                                -Repository 'Azure/terraform-azurerm-avm-ptn-azuremonitorwindowsagent' -RepositoryId '1234' `
                                 -RepositoryOwnerId '6844498' -RepositorySyncRepositoryId '1239632211' `
                                 -EntraGroupNames @('repository-readers', 'repository-owners') -PassThru
                         }
@@ -574,6 +607,24 @@ task 'test-tenant-terraform' {
                         }
                         Write-Build Green "  $ecosystem naming replacement passes its production ownership guard"
                     }
+                    $recoveryPlans = @($events | Where-Object {
+                        $_['type'] -ceq 'test_plan' -and $_['@testrun'] -ceq 'recreate_windows_identity_after_its_legacy_resources_were_deleted'
+                    })
+                    if ($recoveryPlans.Count -ne 1) {
+                        throw [System.IO.InvalidDataException]::new('Expected one actual mocked windows identity recreation plan.')
+                    }
+                    $plan = $recoveryPlans[0]['test_plan']
+                    $candidatePlan = ConvertFrom-AvmTestTerraformPlan -Plan $plan -AddressPrefix 'module.azure.' `
+                        -GroupContracts @{ 'module.azure' = $plan['output_changes']['test_group_contract']['after'] }
+                    $managed = @($candidatePlan.resource_changes | Where-Object { $_['mode'] -ceq 'managed' })
+                    if ($managed.Count -ne 7 -or @($managed | Where-Object { (@($_['change']['actions']) -join ',') -cne 'create' }).Count -gt 0) {
+                        throw [System.IO.InvalidDataException]::new('Recovery after legacy deletion must only create the seven missing identity resources.')
+                    }
+                    Assert-AvmBamiIdentityPlan -Plan $candidatePlan -Settings $settings `
+                        -Repository 'Azure/terraform-azurerm-avm-ptn-azuremonitorwindowsagent' -RepositoryId '1234' `
+                        -RepositoryOwnerId '6844498' -RepositorySyncRepositoryId '1239632211' `
+                        -EntraGroupNames @('repository-readers', 'repository-owners')
+                    Write-Build Green '  windows identity recreation passes its production ownership guard'
                 }
                 if ($directoryName -ceq 'bicep-identities') {
                     . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'TestTenant.ps1')
@@ -643,8 +694,9 @@ task test {
         return
     }
 
+    $unitFiles = @(Get-AvmScopedTestFile -Path $unitPath -Tier Unit -Group $TestGroup)
     $config = New-PesterConfiguration
-    $config.Run.Path                = $unitPath
+    $config.Run.Path                = @($unitFiles.FullName)
     $config.Run.PassThru            = $true
     $config.Run.Exit                = $false
     $config.Output.Verbosity        = 'Detailed'
@@ -659,7 +711,6 @@ task test {
         $result = script:Invoke-AvmPester -Configuration $config
     }
     else {
-        $unitFiles = @(Get-ChildItem -LiteralPath $unitPath -Filter '*.Tests.ps1' -File -Recurse | Sort-Object -Property FullName)
         $result = @(
             script:Invoke-AvmPesterShardedTier -Tier 'unit' -File $unitFiles -ShardCount $shardCount
         )[-1]
@@ -686,11 +737,12 @@ task coverage {
         $null = New-Item -ItemType Directory -Path $coverageOut -Force
     }
 
+    $unitFiles = @(Get-AvmScopedTestFile -Path $unitPath -Tier Unit -Group $TestGroup | Where-Object {
+            $relative = [System.IO.Path]::GetRelativePath($unitPath, $_.FullName).Replace('\', '/')
+            $relative -cnotlike 'Workflows/*'
+        })
     $config = New-PesterConfiguration
-    $config.Run.Path                           = $unitPath
-    if (Test-Path -LiteralPath $script:workflowUnitTestsRoot) {
-        $config.Run.ExcludePath                = @($script:workflowUnitTestsRoot)
-    }
+    $config.Run.Path                           = @($unitFiles.FullName)
     $config.Run.PassThru                       = $true
     $config.Run.Exit                           = $false
     $config.Output.Verbosity                   = if ($env:AVM_COVERAGE_VERBOSE -eq '1') { 'Detailed' } else { 'Minimal' }
@@ -830,14 +882,10 @@ task component {
         return
     }
 
-    $componentFiles = @(Get-ChildItem -LiteralPath $componentPath -Filter '*.Tests.ps1' -File -Recurse | Sort-Object -Property FullName)
-    if ($componentFiles.Count -eq 0) {
-        Write-Build Yellow "  no component test files found at $componentPath"
-        return
-    }
+    $componentFiles = @(Get-AvmScopedTestFile -Path $componentPath -Tier Component -Group $TestGroup)
 
     $config = New-PesterConfiguration
-    $config.Run.Path                = $componentPath
+    $config.Run.Path                = @($componentFiles.FullName)
     $config.Run.PassThru            = $true
     $config.Run.Exit                = $false
     $config.Output.Verbosity        = 'Detailed'

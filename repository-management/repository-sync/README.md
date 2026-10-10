@@ -43,8 +43,9 @@ never pass tokens, SAS credentials, or account keys through `-backend-config`.
 The state UAMI trusts the same repository-ID/`avm` environment subject as the
 existing provider UAMI, in its own tenant.
 
-Ordinary sync does not use Azure CLI login or automatic lock repair. Native
-Terraform uses explicit OIDC backend authentication, not CLI fallback. Providers use
+Ordinary workers sign Azure CLI in with the state-only identity for scoped
+lock inspection and recovery. Native Terraform still uses explicit OIDC
+backend authentication, not CLI fallback. Providers use
 the verified BAMI tenant, administration subscription, and controller from the
 settings bundle; old `ARM_CLIENT_ID`, `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID`
 and legacy subscription/group inputs are no longer source requirements.
@@ -80,9 +81,49 @@ plan, even when a new identity's client ID is unknown. Apply validates that save
 plan and applies it once. Foreign GitHub ownership, unexpected addresses/providers,
 and unrelated identity deletions or replacements are rejected. Only the exact
 naming transition and permission retirement below are allowed. Failed or uncertain
-operations stop without a second plan/apply, automatic import, force-unlock, or
-blob-lease repair. `-WhatIf` returns before external discovery or file writes.
+operations stop without a second plan/apply, automatic import, or state rewrite.
+The sole retry exception is a verified lock-acquisition failure before the native
+operation starts, as described below. `-WhatIf` returns before external discovery
+or file writes.
 Sync does not run module deployment tests.
+
+### Automatic state-lock recovery
+
+After native `plan` or saved-plan `apply` exhausts `-lock-timeout=5m`,
+one complete state-lock acquisition diagnostic permits one recovery attempt
+and one retry of the identical command. This also applies to `plan_only`.
+Release errors, provider errors, multiple error diagnostics, timeouts and
+interrupted applies never qualify. Recovery never replans an apply, disables
+locking, imports resources, rewrites state or repairs identity ownership.
+Local bootstrap, Bicep sync and callers without explicit backend context do
+not use this recovery path.
+
+Recovery is restricted to the trusted Tools `main` Terraform Sync workflow.
+It checks the current run/attempt and completely enumerates its jobs with a
+repository-scoped `actions: read` token, separate from the GitHub App token.
+Another active sync run, another active worker for the same state key, or
+unavailable/incomplete evidence stops recovery. Other state keys can continue.
+The initialized backend must match all five configured identity/storage
+values, the default workspace and the exact selected `<repoId>.tfstate`.
+Azure CLI must confirm the state-only tenant, subscription and client.
+
+Only blob properties and `terraformlockid` metadata are read; state contents
+are never downloaded or logged. Recovery checks any error-reported ID/path,
+rechecks active writers, then rereads the ETag, lease status and metadata
+immediately before release. Changed or malformed evidence stops recovery.
+A matching ID uses `terraform force-unlock` through the initialized backend.
+Missing metadata uses an exact-blob lease break conditional on the observed
+ETag; it never invents a lock ID. A failed/uncertain unlock does not fall back
+to breaking the lease. The lease must be observed released before retrying.
+
+**Risk:** an old timestamp, missing metadata or absence of an observed competing
+workflow is not proof of abandonment. Automatic recovery can release an
+unknown external writer's lock. An ETag check does not uniquely identify a
+lease generation or eliminate the final inspection/release race, especially
+when lock metadata is missing. This policy accepts that unknown-owner risk;
+it does not authorize live unlocking. It requires recorded SFI sign-off
+before merge; user risk acceptance is not that sign-off. Keep overlapping
+sync runs queued and do not run external writers against these states.
 
 Discovery, Terraform, GitHub policy changes, managed-file checks, and project
 details are folded in Actions logs. Effective selection, target repository,
@@ -100,15 +141,21 @@ Terraform uses `id-test-terraform-` followed by the complete lowercase repositor
 name with exactly its leading `terraform-` removed. The GitHub owner is omitted;
 the provider (`azure`, `azurerm` or `azapi`) and module components remain. For
 example, `Azure/terraform-azurerm-avm-res-storage-storageaccount` becomes
-`id-test-terraform-azurerm-avm-res-storage-storageaccount`. New names have no
-hash, truncation or `windows` to `w5s` abbreviation.
+`id-test-terraform-azurerm-avm-res-storage-storageaccount`. Replace `windows`
+with `w5s` in the lowercase Terraform stem because Azure reserves that word:
+`terraform-azurerm-avm-ptn-azuremonitorwindowsagent` therefore uses
+`id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent`. No other words are
+abbreviated, and names have no hash or truncation.
 
 The full identity name must fit the repository's existing 90-character bound.
 This is stricter than [Azure's 3-128-character identity limit](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-name-rules#microsoftmanagedidentity);
 the full federation names must also fit their
 [3-120-character limit](https://learn.microsoft.com/en-us/azure/templates/microsoft.managedidentity/userassignedidentities/federatedidentitycredentials).
-Lowercase GitHub repository names are unique within the managed Azure
-organization; stripping only a fixed leading prefix preserves that uniqueness.
+Discovery rejects normalized-name collisions across the complete installed
+repository inventory before selection, exclusions or archive filtering.
+Workers whose names contain `windows` or `w5s` recheck that inventory before
+Terraform, including directly invoked workers. Inventory failures stop the
+run; selecting only one colliding repository does not bypass the check.
 The distinct `id-test-bicep-` prefix separates [Bicep module identities](../bicep-test-tenant-sync/README.md#identity-names).
 
 An operator-approved saved plan may replace only the exact former
@@ -122,11 +169,16 @@ assignment can be removed only for the verified old principal. The ordinary
 root's existing references publish the new client ID to the repository's
 consumer settings; their shape and precedence do not change.
 
-The backend/controller and shared `id-avm-bicep` identities are unchanged.
+The backend/controller, shared `id-avm-bicep`, dedicated Bicep identities and
+Terraform names without `windows` are unchanged.
 Identity replacement changes client IDs and invalidates old federation, so
 coordinate the first approved reconciliation with active tests and inspect
 explicit consumer overrides. Failed or partially completed operations stop
 for review; there is no automatic identity rollback, state repair or blind retry.
+If a failed rename already deleted the old identity, a separately approved
+fresh plan may create the missing identity and credentials at the corrected
+name. Surviving foreign or unverifiable membership/federation ownership still
+fails the guard; never manufacture old identity evidence to bypass it.
 The narrow replacement exception requires recorded SFI sign-off before merge,
 separately from operator approval for any live run.
 

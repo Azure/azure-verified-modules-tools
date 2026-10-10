@@ -17,11 +17,6 @@ terraform {
   }
 }
 
-variable "prefix" {
-  type    = string
-  default = "avmtest"
-}
-
 output "name_prefix" {
   value = "${var.prefix}-unit"
 }

@@ -136,7 +136,7 @@ run "validation_rejects_nonnumeric_repository_ids" {
   expect_failures = [var.repository_sync_repository_id]
 }
 
-run "identity_names_preserve_provider_and_complete_stem_without_owner_or_hash" {
+run "identity_names_preserve_the_stem_except_the_reserved_windows_substring" {
   command = plan
 
   variables {
@@ -145,8 +145,28 @@ run "identity_names_preserve_provider_and_complete_stem_without_owner_or_hash" {
   }
 
   assert {
-    condition     = azapi_resource.identity.name == "id-test-terraform-azapi-avm-res-compute-windows-terraform"
-    error_message = "Only the owner and leading terraform- must be removed; the full lowercase stem must be preserved."
+    condition = (
+      azapi_resource.identity.name == "id-test-terraform-azapi-avm-res-compute-w5s-terraform" &&
+      alltrue([for environment, credential in azapi_resource.identity_federated_credentials :
+        credential.name == "id-test-terraform-azapi-avm-res-compute-w5s-terraform-${environment}"
+      ]) &&
+      azapi_resource.validation_federated_credential.name == "id-test-terraform-azapi-avm-res-compute-w5s-terraform-avm-validation"
+    )
+    error_message = "The owner and leading terraform- are removed, and only the reserved windows substring is abbreviated in identity and credential names."
+  }
+}
+
+run "explicit_bicep_identity_names_do_not_use_the_terraform_substitution" {
+  command = plan
+
+  variables {
+    identity_name          = "id-test-bicep-avm-res-compute-windows-agent"
+    github_repository_name = "bicep-registry-modules"
+  }
+
+  assert {
+    condition     = azapi_resource.identity.name == "id-test-bicep-avm-res-compute-windows-agent"
+    error_message = "Explicit Bicep identity names must not change."
   }
 }
 
@@ -188,6 +208,19 @@ run "overlong_identity_is_rejected_without_truncation" {
   }
 
   expect_failures = [var.github_repository_name]
+}
+
+run "reserved_word_normalization_precedes_the_identity_length_check" {
+  command = plan
+
+  variables {
+    github_repository_name = "terraform-azurerm-avm-res-windows${join("", [for index in range(53) : "a"])}"
+  }
+
+  assert {
+    condition     = azapi_resource.identity.name == "id-test-terraform-azurerm-avm-res-w5s${join("", [for index in range(53) : "a"])}"
+    error_message = "The normalized 90-character name must be accepted without truncating any other characters."
+  }
 }
 
 run "overlong_credential_is_rejected_without_truncation" {

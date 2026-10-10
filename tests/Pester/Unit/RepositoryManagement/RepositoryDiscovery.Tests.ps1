@@ -281,6 +281,29 @@ Describe "Repository discovery built-in exclusions" {
         Should -Invoke ConvertFrom-Csv -Times 0 -Exactly
     }
 
+    It 'rejects reserved-name collisions before selection or exclusions: <Case>' -ForEach @(
+        @{ Case = 'full fleet'; Parameters = @{}; Archived = $false }
+        @{ Case = 'selected windows repository'; Parameters = @{ repoFilter = @('avm-ptn-azuremonitorwindowsagent') }; Archived = $false }
+        @{ Case = 'explicitly skipped peer'; Parameters = @{ additionalReposToSkip = @('terraform-azurerm-avm-ptn-azuremonitorw5sagent') }; Archived = $false }
+        @{ Case = 'archived peer'; Parameters = @{}; Archived = $true }
+    ) {
+        $windows = New-TestRepository -Name 'terraform-azurerm-avm-ptn-azuremonitorwindowsagent'
+        $peer = New-TestRepository -Name 'terraform-azurerm-avm-ptn-azuremonitorw5sagent'
+        $peer.archived = $Archived
+        { Invoke-RepositoryDiscovery -InstalledRepositories @($windows, $peer) -Parameters $Parameters } |
+            Should -Throw '*normalize to the same test identity*id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent*'
+        @($script:discoveryState.Requests | Where-Object { $_ -like '*/contents/*' }) | Should -HaveCount 0
+    }
+
+    It 'preserves the real repository name while admitting a unique reserved-name identity' {
+        $repositories = @(Invoke-RepositoryDiscovery -InstalledRepositories @(
+            (New-TestRepository -Name 'terraform-azurerm-avm-ptn-azuremonitorwindowsagent')
+            (New-TestRepository -Name 'terraform-azurerm-avm-res-normal')
+        ))
+        $repositories.repoName | Should -Contain 'terraform-azurerm-avm-ptn-azuremonitorwindowsagent'
+        $repositories | Should -HaveCount 2
+    }
+
     It "skips tooling repositories before validation without warning or issue artifacts" -ForEach @(
         @{ ToolingName = "policy-library-avm" }
         @{ ToolingName = "mapotf" }

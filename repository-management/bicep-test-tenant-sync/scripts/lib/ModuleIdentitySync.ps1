@@ -201,6 +201,8 @@ function Invoke-AvmBicepModuleIdentitySync {
         $updates = @($changes | Where-Object { $_['change']['actions'] -contains 'update' }).Count
         $removals = @($changes | Where-Object { $_['change']['actions'] -contains 'delete' }).Count
         Write-Information "Verified Bicep identity plan: $($paths.Count) modules, $creates creates, $updates updates, $removals removals, $($previousIdentities.Count) identity renames." -InformationAction Continue
+        Invoke-RepositorySyncTerraform -Root $TerraformRoot -Environment $environment -StreamOutput `
+            -Arguments @('show', '-no-color', $planPath)
         if (-not $applying) { return [pscustomobject]$result }
         if ($previousIdentities.Count -gt 0 -and -not $IdentityMigrationPath) {
             throw [System.InvalidOperationException]::new('Identity renames require an IdentityMigrationPath for verified mapping publication before applying.')
@@ -210,7 +212,7 @@ function Invoke-AvmBicepModuleIdentitySync {
             $result.PlanOnly = $true
             return [pscustomobject]$result
         }
-        Invoke-RepositorySyncTerraform -Root $TerraformRoot -Environment $environment -Quiet `
+        Invoke-RepositorySyncTerraform -Root $TerraformRoot -Environment $environment -StreamOutput `
             -Arguments @('apply', '-input=false', '-no-color', '-lock-timeout=5m', $planPath)
         $identities = Invoke-RepositorySyncTerraform -Root $TerraformRoot -Environment $environment `
             -Arguments @('output', '-json', 'test_identities') -Json

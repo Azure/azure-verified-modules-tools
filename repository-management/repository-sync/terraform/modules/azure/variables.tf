@@ -43,7 +43,7 @@ variable "identity_resource_group_name" {
 
 variable "identity_name" {
   type        = string
-  description = "Optional dedicated Bicep module identity name; Terraform repository names use id-test-terraform- and the complete repository stem."
+  description = "Optional dedicated Bicep module identity name; Terraform names use id-test-terraform- and the repository stem with reserved windows replaced by w5s."
   default     = null
 
   validation {
@@ -74,7 +74,7 @@ variable "github_repository_name" {
 
   validation {
     condition = var.identity_name != null ? true : (
-      length("id-test-terraform-${trimprefix(lower(var.github_repository_name), "terraform-")}") <= 90 &&
+      length("id-test-terraform-${replace(trimprefix(lower(var.github_repository_name), "terraform-"), "windows", "w5s")}") <= 90 &&
       can(regex("^terraform-(azure|azurerm|azapi)-avm-(res|ptn|utl)-[a-z0-9]+(-[a-z0-9]+)*$", lower(var.github_repository_name)))
     )
     error_message = "Default test identity naming requires an AVM Terraform repository whose complete identity name fits the repository's 90-character limit."

@@ -51,6 +51,10 @@ jobs:
     name: Prepare ${{ inputs.repo_name }}
     runs-on: ubuntu-latest
     environment: avm
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -120,6 +124,13 @@ jobs:
           "storage-account=$($state.StorageAccountName)" >> $env:GITHUB_OUTPUT
           "container=$($state.ContainerName)" >> $env:GITHUB_OUTPUT
 
+      - name: Sign in with the state backend identity
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        with:
+          tenant-id: ${{ steps.state-backend.outputs.tenant-id }}
+          subscription-id: ${{ steps.state-backend.outputs.subscription-id }}
+          client-id: ${{ steps.state-backend.outputs.client-id }}
+
       - name: Run sync for ${{ inputs.repo_id }}
         run: |
 
@@ -183,6 +194,7 @@ jobs:
         env:
           SYNC_REPO_NAME: ${{ inputs.repo_name }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ACTIONS_STATE_LOCK_TOKEN: ${{ github.token }}
           AVM_APP_BOT_LOGIN: ${{ vars.AVM_APP_BOT_LOGIN }}
           AVM_APP_BOT_USER_ID: ${{ vars.AVM_APP_BOT_USER_ID }}
           ARM_BACKEND_TENANT_ID: ${{ steps.state-backend.outputs.tenant-id }}

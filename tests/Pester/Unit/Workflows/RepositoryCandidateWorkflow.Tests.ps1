@@ -15,12 +15,11 @@ BeforeAll {
 
 Describe 'Repository sync candidate workflow' {
     It 'keeps configuration checks wired to the moved workflow and candidate entry points' {
-        foreach ($path in @(
-                '.github/workflows/repository-management-sync-repository.yml',
-                'repository-management/repository-sync/scripts/Invoke-RepositoryCandidate.ps1',
-                'repository-management/repository-sync/scripts/lib/RepositoryCandidate.ps1'
+        foreach ($pattern in @(
+                '.github/workflows/repository-management-*.yml',
+                'repository-management/**'
             )) {
-            $script:configChecks | Should -Match ('(?m)^      - ' + [regex]::Escape($path) + '\r?$') -Because $path
+            $script:configChecks | Should -Match ('(?m)^      - ''' + [regex]::Escape($pattern) + '''\r?$') -Because $pattern
         }
     }
 

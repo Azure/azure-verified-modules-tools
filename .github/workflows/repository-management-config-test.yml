@@ -1,48 +1,101 @@
 ---
-name: 'Repos: Config Tests'
+name: 'Repos: CI'
 
 on:
-  pull_request:
+  push:
+    branches: [main]
     paths:
-      - .github/workflows/repository-management-config-test.yml
-      - .github/workflows/repository-management-label-sync.yml
-      - .github/workflows/repository-management-sync.yml
-      - .github/workflows/repository-management-sync-repository.yml
-      - .github/workflows/repository-management-bicep-sync.yml
-      - repository-management/repository-config/config.json
-      - repository-management/bicep-config/**
-      - repository-management/labels/**
-      - repository-management/shared/**
-      - repository-management/bicep-test-tenant-sync/**
-      - repository-management/repository-sync/terraform/**
-      - repository-management/repository-sync/scripts/lib/TestTenant.ps1
-      - tests/Pester/Unit/RepositoryManagement/**
-      - tests/fixtures/TestTenant.ps1
-      - tests/fixtures/BicepIdentities.ps1
-      - repository-management/repository-sync/scripts/Invoke-RepositorySync.ps1
-      - repository-management/repository-sync/scripts/Invoke-RepositoryCandidate.ps1
-      - repository-management/repository-sync/scripts/lib/AvmPreCommit.ps1
-      - repository-management/repository-sync/scripts/lib/RepositoryCandidate.ps1
-      - repository-management/repository-sync/scripts/lib/RepositoryFileSync.ps1
-      - repository-management/repository-sync/scripts/lib/RepoTree.ps1
-      - repository-management/repository-sync/scripts/lib/ManagedFilesUpgrade.ps1
-      - repository-management/repository-sync/scripts/lib/RepositoryConfig.ps1
-      - repository-management/repository-sync/scripts/lib/TeamsAndUsers.ps1
-      - repository-management/repository-sync/scripts/lib/TerraformOperations.ps1
-      - repository-management/repository-sync/scripts/lib/RetryHelpers.ps1
-      - infra/**
-      - build/avm.build.ps1
-      - repository-management/repository-sync/scripts/Test-AvmPreCommit.ps1
-      - repository-management/repository-sync/scripts/Test-ManagedFilesUpgrade.ps1
-      - repository-management/repository-sync/scripts/Test-RepositoryConfig.ps1
-      - repository-management/repository-sync/scripts/Test-RepositorySyncInputs.ps1
-      - repository-management/repository-sync/scripts/Test-TeamsAndUsers.ps1
+      - 'repository-management/**'
+      - 'infra/**'
+      - 'src/Avm.Authoring/**'
+      - 'build/**'
+      - 'build.ps1'
+      - 'scripts/Install-AvmBuildPrerequisites.ps1'
+      - 'scripts/Import-AvmNetworkRetry.ps1'
+      - 'tests/Pester/Unit/RepositoryManagement/**'
+      - 'tests/Pester/Unit/Module/TerraformInitUpgrade.Tests.ps1'
+      - 'tests/Pester/Component/BicepModuleIdentities*.Tests.ps1'
+      - 'tests/Pester/Component/BicepTestTenantSync*.Tests.ps1'
+      - 'tests/Pester/Component/ModuleCatalog*.Tests.ps1'
+      - 'tests/Pester/Component/Repository*.Tests.ps1'
+      - 'tests/Pester/Component/TerraformCodeowners*.Tests.ps1'
+      - 'tests/Pester/Helpers/ModuleCatalogFixture.ps1'
+      - 'tests/Pester/Import-AvmTestModule.ps1'
+      - 'tests/fixtures/TestTenant.ps1'
+      - 'tests/fixtures/BicepIdentities.ps1'
+      - '.github/workflows/repository-management-*.yml'
+      - '.github/workflows/module-metadata-sync.yml'
+      - '.github/workflows/terraform-module.yml'
+      - '.github/actions/**'
+      - '.gitattributes'
+      - '.gitignore'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'repository-management/**'
+      - 'infra/**'
+      - 'src/Avm.Authoring/**'
+      - 'build/**'
+      - 'build.ps1'
+      - 'scripts/Install-AvmBuildPrerequisites.ps1'
+      - 'scripts/Import-AvmNetworkRetry.ps1'
+      - 'tests/Pester/Unit/RepositoryManagement/**'
+      - 'tests/Pester/Unit/Module/TerraformInitUpgrade.Tests.ps1'
+      - 'tests/Pester/Component/BicepModuleIdentities*.Tests.ps1'
+      - 'tests/Pester/Component/BicepTestTenantSync*.Tests.ps1'
+      - 'tests/Pester/Component/ModuleCatalog*.Tests.ps1'
+      - 'tests/Pester/Component/Repository*.Tests.ps1'
+      - 'tests/Pester/Component/TerraformCodeowners*.Tests.ps1'
+      - 'tests/Pester/Helpers/ModuleCatalogFixture.ps1'
+      - 'tests/Pester/Import-AvmTestModule.ps1'
+      - 'tests/fixtures/TestTenant.ps1'
+      - 'tests/fixtures/BicepIdentities.ps1'
+      - '.github/workflows/repository-management-*.yml'
+      - '.github/workflows/module-metadata-sync.yml'
+      - '.github/workflows/terraform-module.yml'
+      - '.github/actions/**'
+      - '.gitattributes'
+      - '.gitignore'
   workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  DOTNET_MultiCoreJitMinNumCpus: '7fffffff'
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  pester:
+    name: Repository tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build prerequisites
+        shell: pwsh
+        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -Confirm:$false
+
+      - name: Run repository management tests
+        shell: pwsh
+        run: ./build.ps1 test,component -TestGroup RepositoryManagement
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-repository-management-ubuntu-latest
+          path: out/test-results/*.xml
+          if-no-files-found: warn
+          retention-days: 7
+
   infra:
     name: Validate state infrastructure
     runs-on: ubuntu-latest
@@ -69,6 +122,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Test repository configuration
         shell: pwsh
@@ -78,3 +133,28 @@ jobs:
           ./repository-management/repository-sync/scripts/Test-ManagedFilesUpgrade.ps1
           ./repository-management/repository-sync/scripts/Test-RepositorySyncInputs.ps1
           ./repository-management/repository-sync/scripts/Test-TeamsAndUsers.ps1
+
+  report:
+    name: Report repository tests
+    needs: pester
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      checks: write         # publish this workflow's test report
+      pull-requests: write  # publish this workflow's results comment
+      contents: read
+    steps:
+      - name: Download test results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: test-results-repository-management-ubuntu-latest
+          path: artifacts
+
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@d0a4676d0e0b938bc201470d88276b7c74c712b3 # v2.24.0
+        with:
+          check_name: Repository test results
+          comment_title: Repository test results
+          files: artifacts/**/*.xml
+          report_individual_runs: "true"

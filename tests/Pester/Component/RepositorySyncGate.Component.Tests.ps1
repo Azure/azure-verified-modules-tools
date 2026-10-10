@@ -151,6 +151,13 @@ Describe 'Repository sync unified driver' -Tag Component {
             $stateTenantId -ceq '44444444-4444-4444-8444-444444444444' -and
             $environment.ARM_TENANT_ID -ceq '10000000-0000-4000-8000-000000000001'
         }
+        Should -Invoke Invoke-TerraformPlanAndApply -Exactly 1 -ParameterFilter {
+            $stateTenantId -ceq '44444444-4444-4444-8444-444444444444' -and
+            $stateSubscriptionId -ceq '55555555-5555-4555-8555-555555555555' -and
+            $stateClientId -ceq '66666666-6666-4666-8666-666666666666' -and
+            $stateStorageAccountName -ceq 'tmestorage' -and $stateContainerName -ceq 'tme-state' -and
+            $environment.ARM_CLIENT_ID -ceq '10000000-0000-4000-8000-000000000002'
+        }
     }
 
     It 'ignores a retired cutover environment value: <Value>' -ForEach @(
@@ -354,6 +361,10 @@ Describe 'Repository sync unified driver' -Tag Component {
         $null = & $script:driver @script:arguments
         $script:fixture.Events | Should -Be @('teams', 'cleanup', 'init', 'terraform')
         Should -Invoke Invoke-TerraformInit -Exactly 1 -ParameterFilter { $repositoryCreationModeEnabled }
+        Should -Invoke Invoke-TerraformPlanAndApply -Exactly 1 -ParameterFilter {
+            -not $stateTenantId -and -not $stateClientId -and -not $stateSubscriptionId -and
+            -not $stateStorageAccountName -and -not $stateContainerName
+        }
         Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 0
     }
 

@@ -248,14 +248,15 @@ run "seed_legacy_terraform_identity" {
   state_key = "terraform-name-migration"
 
   variables {
-    identity_name = "Azure-terraform-azurerm-avm-ptn-example-repo"
+    identity_name          = "Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent"
+    github_repository_name = "terraform-azurerm-avm-ptn-azuremonitorwindowsagent"
   }
 
   override_resource {
     target          = azapi_resource.identity
     override_during = plan
     values = {
-      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-example-repo"
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent"
       output = {
         properties = {
           principalId = "10000000-0000-4000-8000-000000000107"
@@ -269,25 +270,25 @@ run "seed_legacy_terraform_identity" {
   override_resource {
     target = azapi_resource.identity_federated_credentials["pr-check"]
     values = {
-      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-example-repo/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-example-repo-pr-check"
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-pr-check"
     }
   }
   override_resource {
     target = azapi_resource.identity_federated_credentials["integration-test"]
     values = {
-      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-example-repo/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-example-repo-integration-test"
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-integration-test"
     }
   }
   override_resource {
     target = azapi_resource.identity_federated_credentials["examples-test"]
     values = {
-      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-example-repo/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-example-repo-examples-test"
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-examples-test"
     }
   }
   override_resource {
     target = azapi_resource.validation_federated_credential
     values = {
-      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-example-repo/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-example-repo-avm-validation"
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-avm-validation"
     }
   }
 }
@@ -295,6 +296,25 @@ run "seed_legacy_terraform_identity" {
 run "rename_legacy_terraform_identity" {
   command   = plan
   state_key = "terraform-name-migration"
+
+  variables {
+    github_repository_name = "terraform-azurerm-avm-ptn-azuremonitorwindowsagent"
+  }
+
+  override_resource {
+    target          = azapi_resource.identity
+    override_during = plan
+    values = {
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent"
+      output = {
+        properties = {
+          principalId = "10000000-0000-4000-8000-000000000007"
+          clientId    = "10000000-0000-4000-8000-000000000006"
+          tenantId    = "10000000-0000-4000-8000-000000000001"
+        }
+      }
+    }
+  }
 
   # Mock providers do not execute AzAPI's replacement planning.
   plan_options {
@@ -311,13 +331,48 @@ run "rename_legacy_terraform_identity" {
 
   assert {
     condition = (
-      azapi_resource.identity.name == "id-test-terraform-azurerm-avm-ptn-example-repo" &&
+      azapi_resource.identity.name == "id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent" &&
       output.client_id == "10000000-0000-4000-8000-000000000006" &&
       alltrue([for edge in azuread_group_member.test_permissions :
         edge.member_object_id == "10000000-0000-4000-8000-000000000007"
       ])
     )
     error_message = "The legacy identity and its individual memberships must change together to the new dedicated principal."
+  }
+}
+
+run "recreate_windows_identity_after_its_legacy_resources_were_deleted" {
+  command   = plan
+  state_key = "windows-identity-absent"
+
+  variables {
+    github_repository_name = "terraform-azurerm-avm-ptn-azuremonitorwindowsagent"
+  }
+
+  override_resource {
+    target          = azapi_resource.identity
+    override_during = plan
+    values = {
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent"
+      output = {
+        properties = {
+          principalId = "10000000-0000-4000-8000-000000000007"
+          clientId    = "10000000-0000-4000-8000-000000000006"
+          tenantId    = "10000000-0000-4000-8000-000000000001"
+        }
+      }
+    }
+  }
+
+  assert {
+    condition = (
+      azapi_resource.identity.name == "id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent" &&
+      alltrue([for environment, credential in azapi_resource.identity_federated_credentials :
+        credential.name == "id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent-${environment}" &&
+        credential.parent_id == azapi_resource.identity.id
+      ])
+    )
+    error_message = "A fresh plan after legacy deletion must recreate only the corrected identity and its bound credentials."
   }
 }
 

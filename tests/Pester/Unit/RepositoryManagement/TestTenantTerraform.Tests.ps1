@@ -12,19 +12,35 @@ BeforeAll {
 }
 
 Describe 'Test identity naming' {
-    It 'drops only the owner and leading terraform prefix, preserving provider and full lowercase module text' -ForEach @(
+    It 'preserves the full lowercase stem except the known reserved windows substring' -ForEach @(
         @{ Repository = 'Azure/terraform-azurerm-avm-res-storage-storageaccount'; Expected = 'id-test-terraform-azurerm-avm-res-storage-storageaccount' }
-        @{ Repository = 'Azure/terraform-azapi-avm-res-windows-terraform-example'; Expected = 'id-test-terraform-azapi-avm-res-windows-terraform-example' }
+        @{ Repository = 'Azure/terraform-azapi-avm-res-windows-terraform-example'; Expected = 'id-test-terraform-azapi-avm-res-w5s-terraform-example' }
         @{ Repository = 'Azure/terraform-azure-avm-utl-naming'; Expected = 'id-test-terraform-azure-avm-utl-naming' }
-        @{ Repository = 'AnotherOwner/Terraform-AzAPI-avm-res-Windows-example'; Expected = 'id-test-terraform-azapi-avm-res-windows-example' }
+        @{ Repository = 'AnotherOwner/Terraform-AzAPI-avm-res-Windows-example'; Expected = 'id-test-terraform-azapi-avm-res-w5s-example' }
+        @{ Repository = 'Azure/terraform-azurerm-avm-ptn-azuremonitorwindowsagent'; Expected = 'id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent' }
+        @{ Repository = 'Azure/terraform-azurerm-avm-ptn-windows-windowsagent'; Expected = 'id-test-terraform-azurerm-avm-ptn-w5s-w5sagent' }
+        @{ Repository = 'Azure/terraform-azurerm-avm-ptn-w5sagent'; Expected = 'id-test-terraform-azurerm-avm-ptn-w5sagent' }
     ) {
         Get-AvmTestIdentityName -Repository $Repository | Should -BeExactly $Expected
         Get-AvmTestIdentityName -Repository $Repository | Should -BeExactly (Get-AvmTestIdentityName -Repository $Repository)
     }
 
-    It 'retains the old owner and windows substitution only for legacy ownership verification' {
+    It 'retains the exact old owner and windows substitution for legacy ownership verification' {
         Get-AvmTestIdentityName -Repository 'Azure/terraform-azurerm-avm-res-compute-windows' -Legacy |
             Should -BeExactly 'Azure-terraform-azurerm-avm-res-compute-w5s'
+    }
+
+    It 'does not apply the Terraform reserved-word substitution to Bicep names' {
+        Get-AvmTestIdentityName -ModulePath 'avm/res/compute/windows-agent' |
+            Should -BeExactly 'id-test-bicep-avm-res-compute-windows-agent'
+    }
+
+    It 'checks the complete length after reserved-word normalization without truncation' {
+        $stem = 'a' * (90 - 'id-test-terraform-azapi-avm-res-w5s-'.Length)
+        Get-AvmTestIdentityName -Repository "Azure/terraform-azapi-avm-res-windows-$stem" |
+            Should -BeExactly "id-test-terraform-azapi-avm-res-w5s-$stem"
+        { Get-AvmTestIdentityName -Repository "Azure/terraform-azapi-avm-res-windows-${stem}a" } |
+            Should -Throw '*90 characters*never truncated*'
     }
 
     It 'accepts the full 90-character name and refuses longer names without shortening them' {
@@ -118,6 +134,65 @@ Describe 'Tools repository federation context' {
     }
 }
 
+Describe 'Terraform reserved-name worker inventory' {
+    BeforeEach {
+        $script:previousWorkerContext = @{}
+        $workerContext = @{
+            GITHUB_ACTIONS = 'true'
+            GITHUB_REPOSITORY = 'Azure/azure-verified-modules-tools'
+            GITHUB_REF = 'refs/heads/main'
+        }
+        foreach ($environmentName in $workerContext.Keys) {
+            $script:previousWorkerContext[$environmentName] = [Environment]::GetEnvironmentVariable($environmentName)
+            [Environment]::SetEnvironmentVariable($environmentName, $workerContext[$environmentName], 'Process')
+        }
+        $script:workerRepository = [pscustomobject]@{
+            full_name = 'Azure/terraform-azurerm-avm-ptn-azuremonitorwindowsagent'
+            id = 1234
+            fork = $false
+            owner = [pscustomobject]@{ login = 'Azure'; id = 6844498 }
+        }
+        Mock Resolve-AvmRepositorySyncFederationContext {
+            [pscustomobject]@{ RepositoryId = '1239632211'; OrganizationId = '6844498' }
+        }
+        Mock Invoke-RepositoryGitHubApi { $script:workerRepository }
+        Mock Get-RepositoryInstalledRepositories { @($script:workerRepository) }
+    }
+
+    AfterEach {
+        foreach ($environmentName in $script:previousWorkerContext.Keys) {
+            $value = $script:previousWorkerContext[$environmentName]
+            [Environment]::SetEnvironmentVariable($environmentName, ($null -eq $value ? [NullString]::Value : $value), 'Process')
+        }
+    }
+
+    It 'rechecks the installation for <Stem> only when normalization can collide' -ForEach @(
+        @{ Stem = 'azuremonitorwindowsagent'; Calls = 1 }
+        @{ Stem = 'azuremonitorw5sagent'; Calls = 1 }
+        @{ Stem = 'example'; Calls = 0 }
+    ) {
+        $script:workerRepository.full_name = "Azure/terraform-azurerm-avm-ptn-$Stem"
+        $context = Resolve-AvmRepositorySyncContext -RepoId "avm-ptn-$Stem" `
+            -Repository $script:workerRepository.full_name -RepositorySyncRepositoryId '1239632211'
+        $context.Repository.full_name | Should -BeExactly $script:workerRepository.full_name
+        Should -Invoke Get-RepositoryInstalledRepositories -Exactly $Calls
+    }
+
+    It 'refuses a target missing from the installation inventory' {
+        Mock Get-RepositoryInstalledRepositories { @() }
+        { Resolve-AvmRepositorySyncContext -RepoId 'avm-ptn-azuremonitorwindowsagent' `
+            -Repository $script:workerRepository.full_name -RepositorySyncRepositoryId '1239632211' } |
+            Should -Throw '*complete App installation inventory*'
+    }
+
+    It 'does not bypass a failed or colliding inventory' {
+        Mock Get-RepositoryInstalledRepositories { throw [System.InvalidOperationException]::new('fixture inventory unavailable or colliding') }
+        { Resolve-AvmRepositorySyncContext -RepoId 'avm-ptn-azuremonitorwindowsagent' `
+            -Repository $script:workerRepository.full_name -RepositorySyncRepositoryId '1239632211' } |
+            Should -Throw '*inventory unavailable or colliding*'
+    }
+}
+
 Describe 'Terraform test tenant selection' {
     It 'rejects the retired tenant rather than preserving an old execution fallback' {
         { Resolve-RepositoryTestTenantSettings -TestTenant legacy } |
@@ -175,6 +250,72 @@ Describe 'Candidate plan and output safety' {
         { Assert-AvmRepositorySyncPlan @arguments } | Should -Not -Throw
         $plan.complete = $false
         { Assert-AvmRepositorySyncPlan @arguments } | Should -Throw '*incomplete*'
+    }
+
+    It 'accepts the corrected windowsagent name for <Case> without changing repository trust' -ForEach @(
+        @{ Case = 'missing identity after partial apply'; NamingMigration = $false; KnownClient = $false }
+        @{ Case = 'verified legacy replacement'; NamingMigration = $true; KnownClient = $false }
+        @{ Case = 'already corrected identity'; NamingMigration = $false; KnownClient = $true }
+    ) {
+        $repository = [pscustomobject]@{
+            full_name = 'Azure/terraform-azurerm-avm-ptn-azuremonitorwindowsagent'
+            id = 1234; owner = [pscustomobject]@{ id = 6844498 }
+        }
+        $plan = New-AvmTestRepositorySyncPlan -Repository $repository.full_name `
+            -IdentityName 'id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent' `
+            -PreviousIdentityName 'Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent' `
+            -NamingMigration:$NamingMigration -KnownClient:$KnownClient
+        { Assert-AvmRepositorySyncPlan -Plan $plan -Settings $script:settings -Repository $repository `
+            -RepositorySyncRepositoryId '1239632211' -EntraGroupNames $script:planArguments.EntraGroupNames } |
+            Should -Not -Throw
+        $credentials = @($plan.resource_changes | Where-Object { $_.address -like '*federated_credential*' })
+        $credentials | Should -HaveCount 4
+        foreach ($credential in $credentials) {
+            $credential.change.after.name | Should -BeLike 'id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent-*'
+            $credential.change.after.body.properties.subject | Should -Match '^repository_owner_id:6844498:repository_id:'
+        }
+    }
+
+    It 'refuses unverifiable surviving <Resource> after an identity was deleted' -ForEach @(
+        @{ Resource = 'membership'; Index = 1 }
+        @{ Resource = 'federation'; Index = 3 }
+    ) {
+        $names = @{
+            IdentityName = 'id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent'
+            PreviousIdentityName = 'Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent'
+        }
+        $plan = New-AvmTestBamiPlan @names
+        $old = New-AvmTestBamiPlan @names -NamingMigration
+        $plan.resource_changes[$Index].change.before = $old.resource_changes[$Index].change.before
+        $plan.resource_changes[$Index].change.actions = @('delete', 'create')
+        $arguments = $script:planArguments.Clone()
+        $arguments.Repository = 'Azure/terraform-azurerm-avm-ptn-azuremonitorwindowsagent'
+        { Assert-AvmBamiIdentityPlan -Plan $plan @arguments } | Should -Throw
+    }
+
+    It 'requires the legacy w5s name rather than recognizing the failed reserved name as owned' {
+        $plan = New-AvmTestBamiPlan -NamingMigration `
+            -IdentityName 'id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent' `
+            -PreviousIdentityName 'Azure-terraform-azurerm-avm-ptn-azuremonitorwindowsagent'
+        $arguments = $script:planArguments.Clone()
+        $arguments.Repository = 'Azure/terraform-azurerm-avm-ptn-azuremonitorwindowsagent'
+        { Assert-AvmBamiIdentityPlan -Plan $plan @arguments } | Should -Throw '*exact legacy-to-current*'
+    }
+
+    It 'validates corrected windowsagent consumer output without changing its client or repository IDs' {
+        $repository = [pscustomobject]@{
+            full_name = 'Azure/terraform-azurerm-avm-ptn-azuremonitorwindowsagent'
+            id = 1234; owner = [pscustomobject]@{ id = 6844498 }
+        }
+        $identity = New-AvmTestBamiIdentity
+        $identity.identity_resource_id = $identity.identity_resource_id.Replace(
+            'id-test-terraform-azurerm-avm-ptn-example-repo', 'id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent'
+        )
+        $result = ConvertTo-AvmBamiConsumerSettings -Identity $identity -Settings $script:settings -Repository $repository
+        $result.client_id | Should -BeExactly $identity.client_id
+        $identity.identity_resource_id = $identity.identity_resource_id.Replace('w5sagent', 'windowsagent')
+        { ConvertTo-AvmBamiConsumerSettings -Identity $identity -Settings $script:settings -Repository $repository } |
+            Should -Throw '*dedicated test identity*'
     }
 
     It 'requires the refreshed snapshot rather than configured values or planned data: <Case>' -ForEach @(

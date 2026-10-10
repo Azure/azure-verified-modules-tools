@@ -44,7 +44,7 @@ permissions:
   id-token: write
   contents: read
 
-# Queue overlapping runs; state locks are never broken automatically.
+# Queue runs; only scoped acquisition failures qualify for bounded lock recovery.
 concurrency:
   group: repository-sync
   cancel-in-progress: false
@@ -75,6 +75,10 @@ jobs:
     name: Sync ${{ matrix.repoName }}
     needs: generate-matrix
     if: needs.generate-matrix.result == 'success'
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       max-parallel: ${{ fromJson(needs.generate-matrix.outputs.matrixParallel) }}
