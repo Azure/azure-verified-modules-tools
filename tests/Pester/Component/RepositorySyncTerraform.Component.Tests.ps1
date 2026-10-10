@@ -49,13 +49,17 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
         $script:parameters.environment = Get-RepositorySyncTerraformEnvironment -Root $TestDrive -Settings $script:parameters.bamiSettings
     }
 
-    It 'uses one guarded saved plan with known client <Known> and plan-only <PlanOnly>' -ForEach @(
-        @{ Known = $false; PlanOnly = $false }
-        @{ Known = $false; PlanOnly = $true }
-        @{ Known = $true; PlanOnly = $false }
-        @{ Known = $true; PlanOnly = $true }
+    It 'uses one guarded saved plan with known client <Known>, naming migration <Rename> and plan-only <PlanOnly>' -ForEach @(
+        @{ Known = $false; Rename = $false; PlanOnly = $false }
+        @{ Known = $false; Rename = $false; PlanOnly = $true }
+        @{ Known = $true; Rename = $false; PlanOnly = $false }
+        @{ Known = $true; Rename = $false; PlanOnly = $true }
+        @{ Known = $false; Rename = $true; PlanOnly = $false }
+        @{ Known = $false; Rename = $true; PlanOnly = $true }
+        @{ Known = $true; Rename = $true; PlanOnly = $false }
+        @{ Known = $true; Rename = $true; PlanOnly = $true }
     ) {
-        $script:fixture.Plan = New-AvmTestRepositorySyncPlan -KnownClient:$Known
+        $script:fixture.Plan = New-AvmTestRepositorySyncPlan -KnownClient:$Known -NamingMigration:$Rename
         $script:parameters.planOnly = $PlanOnly
         $null = Invoke-TerraformPlanAndApply @script:parameters
         $script:fixture.Calls.Arguments | Where-Object { $_ -ceq 'plan' } | Should -HaveCount 1
@@ -115,9 +119,15 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
         @{ Case = 'split address'; Mutate = { param($p) $p.resource_changes[0].address = 'module.azure.azapi_resource.identity' }; Message = '*provider binding*' }
         @{ Case = 'partial transfer'; Mutate = { param($p) $p.planned_values.root_module.child_modules[0].resources = @($p.planned_values.root_module.child_modules[0].resources | Select-Object -Skip 1) }; Message = '*complete dedicated*' }
         @{ Case = 'wrong identity resource ID'; Mutate = { param($p) $p.planned_values.root_module.child_modules[0].resources[0].values.id += '-wrong' }; Message = '*expected repository*' }
-        @{ Case = 'controller client'; Mutate = { param($p) $p.planned_values.root_module.child_modules[0].resources[0].values.output.properties.clientId = '10000000-0000-4000-8000-000000000002' }; Message = '*dedicated repository client*' }
+        @{ Case = 'controller client'; Mutate = {
+            param($p)
+            $p.planned_values.root_module.child_modules[0].resources[0].values.output.properties.clientId = '10000000-0000-4000-8000-000000000002'
+            $p.resource_changes[0].change.after.output.properties.clientId = '10000000-0000-4000-8000-000000000002'
+        }; Message = '*dedicated repository client*' }
+        @{ Case = 'inconsistent identity output'; Mutate = { param($p) $p.resource_changes[0].change.after.output.properties.clientId = '10000000-0000-4000-8000-000000000099' }; Message = '*outputs must agree*' }
         @{ Case = 'unrefreshed evidence'; Mutate = { param($p) $p.Remove('prior_state') }; Message = '*refreshed Terraform*' }
         @{ Case = 'errored plan'; Mutate = { param($p) $p.errored = $true }; Message = '*incomplete or errored*' }
+        @{ Case = 'incomplete plan'; Mutate = { param($p) $p.complete = $false }; Message = '*incomplete or errored*' }
         @{ Case = 'incomplete retired state'; Mutate = { param($p) $p.resource_changes += @(New-AvmTestRetiredIdentityChanges | Select-Object -Skip 1) }; Message = '*Partial retired-tenant*' }
         @{ Case = 'BAMI identity under retired address'; Mutate = {
             param($p)

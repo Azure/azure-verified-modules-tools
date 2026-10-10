@@ -121,6 +121,7 @@ jobs:
           $options = if ($env:BICEP_SYNC_PLAN_ONLY -ceq 'true') { @{ PlanOnly = $true } } else { @{ Apply = $true } }
           & (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'Invoke-BicepModuleIdentitySync.ps1') `
             -BicepRoot (Join-Path $env:GITHUB_WORKSPACE 'bicep-source') `
+            -IdentityMigrationPath (Join-Path $env:RUNNER_TEMP 'bicep-module-identity-renames.json') `
             -MappingPath (Join-Path $env:RUNNER_TEMP 'bicep-module-client-ids.json') @options
 
       - name: Create target-scoped Variables token
@@ -145,4 +146,5 @@ jobs:
             throw 'The configured GitHub App is not azure-verified-modules.'
           }
           & (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'Invoke-BicepTestTenantSync.ps1') `
+            -IdentityMigrationPath (Join-Path $env:RUNNER_TEMP 'bicep-module-identity-renames.json') `
             -ModuleClientIdPath (Join-Path $env:RUNNER_TEMP 'bicep-module-client-ids.json') -Apply

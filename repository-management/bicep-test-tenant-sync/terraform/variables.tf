@@ -9,6 +9,11 @@ variable "modules" {
     ])
     error_message = "Identity discovery must contain canonical root Bicep module paths of at most 68 characters."
   }
+
+  validation {
+    condition     = length(distinct([for path in keys(var.modules) : replace(path, "/", "-")])) == length(var.modules)
+    error_message = "Root module paths must produce unique identity names; ambiguous flattened paths cannot be provisioned."
+  }
 }
 
 variable "bami_test_settings" {

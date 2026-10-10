@@ -22,7 +22,7 @@ override_resource {
   target          = azapi_resource.identity
   override_during = plan
   values = {
-    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-example-repo"
+    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-terraform-azurerm-avm-ptn-example-repo"
     output = {
       properties = {
         principalId = "10000000-0000-4000-8000-000000000008"
@@ -134,4 +134,96 @@ run "validation_rejects_nonnumeric_repository_ids" {
     repository_sync_repository_id = "123abc"
   }
   expect_failures = [var.repository_sync_repository_id]
+}
+
+run "identity_names_preserve_provider_and_complete_stem_without_owner_or_hash" {
+  command = plan
+
+  variables {
+    github_repository_owner = "DifferentOwner"
+    github_repository_name  = "Terraform-AzAPI-Avm-Res-Compute-Windows-Terraform"
+  }
+
+  assert {
+    condition     = azapi_resource.identity.name == "id-test-terraform-azapi-avm-res-compute-windows-terraform"
+    error_message = "Only the owner and leading terraform- must be removed; the full lowercase stem must be preserved."
+  }
+}
+
+run "azure_provider_remains_part_of_the_readable_identity" {
+  command = plan
+
+  variables {
+    github_repository_name = "terraform-azure-avm-ptn-example-repo"
+  }
+
+  assert {
+    condition     = azapi_resource.identity.name == "id-test-terraform-azure-avm-ptn-example-repo"
+    error_message = "The azure provider component must not be confused with the omitted GitHub owner."
+  }
+}
+
+run "full_identity_and_credential_names_accept_their_exact_bounds" {
+  command = plan
+
+  variables {
+    github_repository_name              = "terraform-azurerm-avm-res-${join("", [for index in range(56) : "a"])}"
+    github_repository_environment_names = [join("", [for index in range(29) : "a"])]
+  }
+
+  assert {
+    condition = (
+      length(azapi_resource.identity.name) == 90 &&
+      alltrue([for credential in azapi_resource.identity_federated_credentials : length(credential.name) == 120])
+    )
+    error_message = "Complete identity and federation names must retain every character at their respective bounds."
+  }
+}
+
+run "overlong_identity_is_rejected_without_truncation" {
+  command = plan
+
+  variables {
+    github_repository_name = "terraform-azurerm-avm-res-${join("", [for index in range(57) : "a"])}"
+  }
+
+  expect_failures = [var.github_repository_name]
+}
+
+run "overlong_credential_is_rejected_without_truncation" {
+  command = plan
+
+  variables {
+    github_repository_name              = "terraform-azurerm-avm-res-${join("", [for index in range(56) : "a"])}"
+    github_repository_environment_names = [join("", [for index in range(30) : "a"])]
+  }
+
+  expect_failures = [var.github_repository_environment_names]
+}
+
+run "caller_bound_credential_accepts_exactly_120_characters" {
+  command = plan
+
+  variables {
+    identity_name                       = join("", [for index in range(90) : "a"])
+    github_workflow_ref                 = "Azure/bicep-registry-modules/.github/workflows/avm.res.fabric.capacity.yml@refs/heads/main"
+    github_repository_environment_names = [join("", [for index in range(22) : "a"])]
+  }
+
+  assert {
+    condition     = alltrue([for credential in azapi_resource.identity_federated_credentials : length(credential.name) == 120])
+    error_message = "The module- discriminator must be counted in caller-bound credential names."
+  }
+}
+
+run "overlong_caller_bound_credential_is_rejected" {
+  command = plan
+
+  variables {
+    identity_name                       = join("", [for index in range(90) : "a"])
+    github_workflow_ref                 = "Azure/bicep-registry-modules/.github/workflows/avm.res.fabric.capacity.yml@refs/heads/main"
+    github_repository_environment_names = [join("", [for index in range(23) : "a"])]
+  }
+
+  expect_failures = [var.github_repository_environment_names]
 }

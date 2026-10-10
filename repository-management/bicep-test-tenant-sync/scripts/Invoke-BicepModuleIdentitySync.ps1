@@ -4,6 +4,7 @@
 param(
     [Parameter(Mandatory)] [string] $BicepRoot,
     [Parameter(Mandatory)] [string] $MappingPath,
+    [string] $IdentityMigrationPath,
     [Parameter(ParameterSetName = 'Plan')] [switch] $PlanOnly = $true,
     [Parameter(Mandatory, ParameterSetName = 'Apply')] [switch] $Apply
 )
@@ -39,7 +40,7 @@ $configuration = ConvertFrom-AvmTestTenantJson -Json (
     Get-Content -LiteralPath (Join-Path $repositoryRoot 'repository-management' 'bicep-config' 'config.json') -Raw -ErrorAction Stop
 )
 $options = if ($PSCmdlet.ParameterSetName -ceq 'Apply') { @{ Apply = $Apply } } else { @{ PlanOnly = $PlanOnly } }
-Invoke-AvmBicepModuleIdentitySync -BicepRoot $BicepRoot -MappingPath $MappingPath `
+Invoke-AvmBicepModuleIdentitySync -BicepRoot $BicepRoot -MappingPath $MappingPath -IdentityMigrationPath $IdentityMigrationPath `
     -TerraformRoot (Join-Path $PSScriptRoot '..' 'terraform') `
     -Values $values -Backend $backend -Configuration $configuration @options | ConvertTo-Json -Depth 5
 $global:LASTEXITCODE = 0

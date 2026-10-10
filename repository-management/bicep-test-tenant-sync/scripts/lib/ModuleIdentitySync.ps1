@@ -26,7 +26,8 @@ function Assert-AvmBicepIdentityPlan {
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Plan,
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Settings,
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Modules,
-        [Parameter(Mandatory)] [object] $Context
+        [Parameter(Mandatory)] [object] $Context,
+        [switch] $PassThru
     )
 
     if ($Modules.Count -eq 0 -or ($Plan.Contains('errored') -and $Plan['errored'] -ne $false) -or
@@ -38,8 +39,12 @@ function Assert-AvmBicepIdentityPlan {
     }
     $resources = @(Get-AvmTerraformPlannedResource -Module $Plan['planned_values']['root_module'])
     $moduleAddresses = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $identityNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($path in $Modules.Keys) {
         Assert-AvmBicepModulePath -Path $path
+        if (-not $identityNames.Add((Get-AvmBicepModuleIdentityName -ModulePath $path))) {
+            throw [System.InvalidOperationException]::new('Bicep module paths must produce unique identity names before provisioning.')
+        }
         $null = $moduleAddresses.Add("module.bicep[`"$path`"]")
     }
     foreach ($resource in @($Plan['resource_changes']) + $resources) {
@@ -77,6 +82,7 @@ function Assert-AvmBicepIdentityPlan {
     }
     $clients = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $principals = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $renames = [ordered]@{}
     foreach ($path in $Modules.Keys) {
         $address = "module.bicep[`"$path`"]"
         $prefix = "$address."
@@ -87,19 +93,20 @@ function Assert-AvmBicepIdentityPlan {
             prior_state = $Plan['prior_state']
         }
         $name = Get-AvmBicepModuleIdentityName -ModulePath $path
-        $identity = @($slice.resource_changes | Where-Object { $_['address'] -ceq "${prefix}azapi_resource.identity" })
-        if ($identity.Count -eq 1 -and $null -ne $identity[0]['change']['before']) {
-            $expectedId = "/subscriptions/$($Settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'])/resourceGroups/$($Settings['TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME'])/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$name"
-            if ($identity[0]['change']['before']['id'] -ine $expectedId) {
-                throw [System.InvalidOperationException]::new('Existing state must already belong to this dedicated module identity; shared identities cannot be adopted.')
-            }
-        }
-        Assert-AvmBamiIdentityPlan -Plan $slice -Settings $Settings -Repository 'Azure/bicep-registry-modules' `
+        $previous = Assert-AvmBamiIdentityPlan -Plan $slice -Settings $Settings -Repository 'Azure/bicep-registry-modules' `
             -RepositoryId $Context.RepositoryId -RepositoryOwnerId $Context.OrganizationId `
             -RepositorySyncRepositoryId $Context.ToolsRepositoryId -EntraGroupNames $Modules[$path] `
             -ModuleAddress $address -IdentityName $name -Environments @('avm-validation') `
             -JobWorkflowRef 'Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml@refs/heads/main' `
-            -WorkflowRef "Azure/bicep-registry-modules/.github/workflows/$($path.Replace('/', '.')).yml@refs/heads/main"
+            -WorkflowRef "Azure/bicep-registry-modules/.github/workflows/$($path.Replace('/', '.')).yml@refs/heads/main" -PassThru
+        if ($null -ne $previous) {
+            $renames[$path] = $previous
+            $identity = @($slice.resource_changes | Where-Object { $_['address'] -ceq "${prefix}azapi_resource.identity" })[0]
+            if (-not $clients.Add($previous.client_id) -or
+                -not $principals.Add($identity['change']['before']['output']['properties']['principalId'])) {
+                throw [System.InvalidOperationException]::new('Renamed Bicep identities must have unique previous clients and principals.')
+            }
+        }
         $plannedIdentity = @($slice.planned_values.root_module.resources | Where-Object { $_['address'] -ceq "${prefix}azapi_resource.identity" })[0]['values']
         if ($plannedIdentity['output'] -is [System.Collections.IDictionary]) {
             $properties = $plannedIdentity['output']['properties']
@@ -108,37 +115,7 @@ function Assert-AvmBicepIdentityPlan {
             }
         }
     }
-}
-
-function ConvertTo-AvmBicepIdentityMapping {
-    [CmdletBinding()]
-    [OutputType([System.Collections.IDictionary])]
-    param(
-        [Parameter(Mandatory)] [System.Collections.IDictionary] $Identities,
-        [Parameter(Mandatory)] [string[]] $ModulePaths,
-        [Parameter(Mandatory)] [System.Collections.IDictionary] $Settings
-    )
-
-    $settings = Get-AvmBamiSettings -Values $Settings
-    if ($Identities.Count -ne $ModulePaths.Count -or
-        @($Identities.Keys | Where-Object { $_ -cnotin $ModulePaths }).Count -gt 0) {
-        throw [System.IO.InvalidDataException]::new('Applied identity output must cover exactly the discovered root modules.')
-    }
-    $mapping = [ordered]@{}
-    foreach ($path in $ModulePaths) {
-        $identity = $Identities[$path]
-        $name = Get-AvmBicepModuleIdentityName -ModulePath $path
-        $expectedId = "/subscriptions/$($settings.TEST_BAMI_ADMIN_SUBSCRIPTION_ID)/resourceGroups/$($settings.TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME)/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$name"
-        if ($identity -isnot [System.Collections.IDictionary] -or $identity.Count -ne 3 -or
-            $identity['tenant_id'] -ine $settings.TEST_BAMI_TENANT_ID -or
-            $identity['identity_resource_id'] -ine $expectedId) {
-            throw [System.IO.InvalidDataException]::new('Applied identity output does not belong to its expected module and BAMI resource group.')
-        }
-        $mapping[$path] = $identity['client_id']
-    }
-    $null = ConvertTo-AvmBicepModuleClientIdJson -ClientIds $mapping `
-        -ForbiddenClientIds @($settings.TEST_BAMI_CONTROLLER_CLIENT_ID, $settings.TEST_BAMI_BICEP_CLIENT_ID)
-    return $mapping
+    if ($PassThru) { return $renames }
 }
 
 function Invoke-AvmBicepModuleIdentitySync {
@@ -148,6 +125,7 @@ function Invoke-AvmBicepModuleIdentitySync {
         [Parameter(Mandatory)] [string] $BicepRoot,
         [Parameter(Mandatory)] [string] $TerraformRoot,
         [Parameter(Mandatory)] [string] $MappingPath,
+        [string] $IdentityMigrationPath,
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Configuration,
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Values,
         [Parameter(Mandatory)] [hashtable] $Backend,
@@ -182,8 +160,17 @@ function Invoke-AvmBicepModuleIdentitySync {
         $result.PlanOnly = $true
         return [pscustomobject]$result
     }
-    if (Test-Path -LiteralPath $MappingPath) {
-        throw [System.IO.IOException]::new('The mapping output path already exists; preserve it and choose an unused path.')
+    $publicationContext = $null
+    if ($IdentityMigrationPath) {
+        $publicationContext = Get-AvmBicepIdentityPublicationContext
+        if ([IO.Path]::GetFullPath($IdentityMigrationPath) -ieq [IO.Path]::GetFullPath($MappingPath)) {
+            throw [System.ArgumentException]::new('Identity migration evidence and the client-ID mapping require different output paths.')
+        }
+    }
+    foreach ($path in @($MappingPath, $IdentityMigrationPath)) {
+        if ($path -and (Test-Path -LiteralPath $path)) {
+            throw [System.IO.IOException]::new('An identity publication output path already exists; preserve it and choose an unused path.')
+        }
     }
     $context = Resolve-AvmBicepIdentitySyncContext
     $environment = Get-RepositorySyncTerraformEnvironment -Root $TerraformRoot -Settings $settings
@@ -208,13 +195,16 @@ function Invoke-AvmBicepModuleIdentitySync {
         )
         $plan = Invoke-RepositorySyncTerraform -Root $TerraformRoot -Environment $environment `
             -Arguments @('show', '-json', $planPath) -Json
-        Assert-AvmBicepIdentityPlan -Plan $plan -Settings $settings -Modules $modules -Context $context
+        $previousIdentities = Assert-AvmBicepIdentityPlan -Plan $plan -Settings $settings -Modules $modules -Context $context -PassThru
         $changes = @($plan['resource_changes'] | Where-Object { $_['mode'] -ceq 'managed' })
         $creates = @($changes | Where-Object { $_['change']['actions'] -contains 'create' }).Count
         $updates = @($changes | Where-Object { $_['change']['actions'] -contains 'update' }).Count
         $removals = @($changes | Where-Object { $_['change']['actions'] -contains 'delete' }).Count
-        Write-Information "Verified Bicep identity plan: $($paths.Count) modules, $creates creates, $updates updates, $removals membership removals." -InformationAction Continue
+        Write-Information "Verified Bicep identity plan: $($paths.Count) modules, $creates creates, $updates updates, $removals removals, $($previousIdentities.Count) identity renames." -InformationAction Continue
         if (-not $applying) { return [pscustomobject]$result }
+        if ($previousIdentities.Count -gt 0 -and -not $IdentityMigrationPath) {
+            throw [System.InvalidOperationException]::new('Identity renames require an IdentityMigrationPath for verified mapping publication before applying.')
+        }
         if (-not $PSCmdlet.ShouldProcess('BAMI Bicep module identities', 'Apply the verified saved plan and write its client-ID mapping')) {
             $result.Status = 'Preview'
             $result.PlanOnly = $true
@@ -227,6 +217,18 @@ function Invoke-AvmBicepModuleIdentitySync {
         $mapping = ConvertTo-AvmBicepIdentityMapping -Identities $identities -ModulePaths $paths -Settings $settings
         $json = ConvertTo-AvmBicepModuleClientIdJson -ClientIds $mapping `
             -ForbiddenClientIds @($settings.TEST_BAMI_CONTROLLER_CLIENT_ID, $settings.TEST_BAMI_BICEP_CLIENT_ID)
+        if ($IdentityMigrationPath) {
+            $replacements = [ordered]@{}
+            foreach ($path in $previousIdentities.Keys) { $replacements[$path] = $identities[$path] }
+            $migration = [ordered]@{
+                schemaVersion = 1
+                context = $publicationContext
+                before = $previousIdentities
+                after = $replacements
+            }
+            $null = ConvertFrom-AvmBicepIdentityMigration -Migration $migration -ClientIds $mapping -Settings $settings
+            [IO.File]::WriteAllText($IdentityMigrationPath, (ConvertTo-Json -InputObject $migration -Depth 8 -Compress), [Text.UTF8Encoding]::new($false))
+        }
         [IO.File]::WriteAllText($MappingPath, $json, [Text.UTF8Encoding]::new($false))
         $result.Status = 'Applied'
         return [pscustomobject]$result

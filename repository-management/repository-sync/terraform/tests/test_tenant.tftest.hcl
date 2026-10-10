@@ -62,7 +62,7 @@ override_resource {
   target          = module.bami[0].azapi_resource.identity
   override_during = plan
   values = {
-    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-example-repo"
+    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-terraform-azurerm-avm-ptn-example-repo"
     output = {
       properties = {
         principalId = "10000000-0000-4000-8000-000000000007"
