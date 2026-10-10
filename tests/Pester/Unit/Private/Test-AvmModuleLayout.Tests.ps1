@@ -185,6 +185,8 @@ Describe 'Module Resources packaging' {
             )
             'module-call' = @(
                 'propagate_telemetry.mptf.hcl'
+            )
+            'variable-order' = @(
                 'sort_variables.mptf.hcl'
             )
             root = @(

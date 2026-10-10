@@ -144,15 +144,34 @@ function Get-AvmTerraformTelemetryMockResourceId {
     [OutputType([string])]
     param(
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Test,
-        [Parameter(Mandatory)] [string] $Path
+        [Parameter(Mandatory)] [string] $Path,
+        [string] $ProviderName = 'azapi'
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
-    if (-not $Test.mock_providers.Contains('azapi')) {
+    if (-not $Test.mock_providers.Contains($ProviderName)) {
         return $null
     }
-    $mock = $Test.mock_providers.azapi
+    $mock = $Test.mock_providers[$ProviderName]
+    if ($ProviderName -cne 'azapi') {
+        $alias = [regex]::Match($ProviderName, '\Aazapi\.(?<alias>[A-Za-z_][A-Za-z0-9_-]*)\z')
+        if (-not $alias.Success -or
+            $mock -isnot [System.Collections.IDictionary] -or
+            $mock['mptf'] -isnot [System.Collections.IDictionary] -or
+            $mock.mptf['is_empty'] -isnot [bool] -or $mock.mptf.is_empty -ne $false -or
+            $mock.mptf['attributes'] -isnot [System.Collections.IDictionary] -or
+            $mock.mptf.attributes['alias'] -cne $alias.Groups['alias'].Value -or
+            $mock.mptf['block_address'] -cne "mock_provider.$ProviderName" -or
+            $mock.mptf['block_type'] -cne 'mock_provider' -or
+            $mock.mptf['block_labels'] -isnot [System.Collections.IList] -or
+            @($mock.mptf.block_labels).Count -ne 1 -or
+            $mock.mptf.block_labels[0] -cne 'azapi' -or
+            $mock.mptf.attributes.Contains('source')) {
+            throw [AvmConfigurationException]::new(
+                "Cannot automatically migrate unit test '$Path': AzAPI alias '$ProviderName' requires literal, source-free native mock metadata.")
+        }
+    }
     if ($mock -isnot [System.Collections.IDictionary] -or
         $mock['mptf'] -isnot [System.Collections.IDictionary] -or
         $mock.mptf['is_empty'] -isnot [bool]) {
@@ -246,36 +265,89 @@ function Get-AvmTerraformUnitTestRequiredProvider {
     return $providers
 }
 
-function Test-AvmTerraformUnitTestProviderMapping {
+function Get-AvmTerraformRetiredTestProviderReferenceCount {
     [CmdletBinding()]
-    [OutputType([bool])]
+    [OutputType([int])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Text,
+        [Parameter(Mandatory)] [ValidateSet('modtm', 'random')] [string] $Provider
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+    $trivia = '(?>(?:\s|#[^\r\n]*|//[^\r\n]*|/\*[\s\S]*?\*/)*)'
+    $resource = if ($Provider -ceq 'random') { '(?:_[A-Za-z0-9_]+)?' } else { '' }
+    $pattern = '(?<![A-Za-z0-9_])' + $Provider + $resource + '\.|=' +
+    $trivia + $Provider + '(?=[ \t\r\n,}.]|$)'
+    return [regex]::Matches($Text, $pattern,
+        [System.Text.RegularExpressions.RegexOptions]::CultureInvariant, [TimeSpan]::FromSeconds(1)).Count
+}
+
+function ConvertFrom-AvmTerraformUnitTestProviderMapping {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)] [AllowNull()] [object] $Expression,
-        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $ProviderNames
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $ProviderNames,
+        [AllowEmptyCollection()] [string[]] $MockProviderNames = $ProviderNames,
+        [AllowEmptyCollection()] [string[]] $RetiredProviderNames = @()
     )
 
     Set-StrictMode -Version 3.0
     if ($Expression -isnot [string]) {
-        return $false
+        return $null
     }
     $trivia = '(?>(?:\s|#[^\r\n]*|//[^\r\n]*|/\*[\s\S]*?\*/)*)'
     $identifier = '[A-Za-z_][A-Za-z0-9_-]*'
-    $entry = '(?:"(?<name>' + $identifier + ')"|(?<name>' + $identifier + '))' +
-    $trivia + '=' + $trivia + '\k<name>'
-    $pattern = '\A' + $trivia + '\{' + $trivia + '(?:' + $entry + $trivia +
-    '(?:,' + $trivia + ')?)*\}' + $trivia + '\z'
+    $entry = '(?<entry>(?:"(?<name>' + $identifier + ')"|(?<name>' + $identifier + '))' +
+    '(?<before_equals>' + $trivia + ')=(?<after_equals>' + $trivia + ')' +
+    '(?<reference>' + $identifier + '(?:\.' + $identifier + ')?)' +
+    '(?<after_reference>' + $trivia + ')(?:,)?(?<after_separator>' + $trivia + '))'
+    $pattern = '\A' + $trivia + '\{' + $trivia + '(?:' + $entry + ')*\}' + $trivia + '\z'
     $match = [regex]::Match($Expression, $pattern,
         [System.Text.RegularExpressions.RegexOptions]::CultureInvariant, [TimeSpan]::FromSeconds(1))
     if (-not $match.Success) {
-        return $false
+        return $null
     }
-    $names = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-    foreach ($capture in $match.Groups['name'].Captures) {
-        if (-not $names.Add($capture.Value)) {
-            return $false
+    $bindings = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::Ordinal)
+    $retained = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $retiredEntries = [System.Collections.Generic.List[int]]::new()
+    for ($index = 0; $index -lt $match.Groups['name'].Captures.Count; $index++) {
+        $name = $match.Groups['name'].Captures[$index].Value
+        $reference = $match.Groups['reference'].Captures[$index].Value
+        if (-not $bindings.TryAdd($name, $reference) -or
+            $reference -cnotin $MockProviderNames -or
+            ($reference -cne $name -and -not $reference.StartsWith("$name.", [System.StringComparison]::Ordinal))) {
+            return $null
+        }
+        if ($name -cin $RetiredProviderNames) {
+            if ($reference -cne $name) { return $null }
+            $retiredEntries.Add($index)
+        }
+        else {
+            $null = $retained.Add($name)
         }
     }
-    return $names.SetEquals($ProviderNames)
+    if (-not $retained.SetEquals($ProviderNames)) { return $null }
+
+    $updated = $Expression
+    foreach ($index in @($retiredEntries | Sort-Object -Descending)) {
+        $capture = $match.Groups['entry'].Captures[$index]
+        $remainingTrivia = foreach ($group in @('before_equals', 'after_equals', 'after_reference', 'after_separator')) {
+            $match.Groups[$group].Captures[$index].Value
+        }
+        $updated = $updated.Remove($capture.Index, $capture.Length).Insert($capture.Index, ($remainingTrivia -join ''))
+    }
+    $retiredReferences = @{ modtm = 0; random = 0 }
+    foreach ($provider in $RetiredProviderNames) {
+        $retiredReferences[$provider] = Get-AvmTerraformRetiredTestProviderReferenceCount -Text $Expression -Provider $provider
+    }
+    return [pscustomobject]@{
+        Expression        = $updated
+        Changed           = $updated -cne $Expression
+        Bindings          = $bindings
+        RetiredReferences = $retiredReferences
+    }
 }
 
 function ConvertFrom-AvmTerraformProviderTree {
@@ -421,9 +493,10 @@ function Get-AvmTerraformUnitTestMockProviderName {
 
     Set-StrictMode -Version 3.0
     foreach ($name in $ProviderNames) {
-        $source = if ($RequiredProviders.Contains($name)) { $RequiredProviders[$name]['source'] } else { $null }
+        $baseName = ($name -split '\.', 2)[0]
+        $source = if ($RequiredProviders.Contains($baseName)) { $RequiredProviders[$baseName]['source'] } else { $null }
         if ([string]::IsNullOrWhiteSpace($source)) {
-            $source = "hashicorp/$name"
+            $source = "hashicorp/$baseName"
         }
         if (@($source -split '/').Count -eq 2) {
             $source = "registry.terraform.io/$source"
@@ -489,10 +562,16 @@ function Invoke-AvmTerraformUnitTestMigration {
         $instrumentedTargets = @($ModuleTargets |
                 Where-Object { $targetPaths.Contains($_.Path) -and $_.Profiles -contains 'root' })
         $migratesTelemetry = $scope.Owner.Profiles -contains 'root' -or $instrumentedTargets.Count -gt 0
-        $telemetryResourceId = if ($migratesTelemetry) {
-            Get-AvmTerraformTelemetryMockResourceId -Test $after.test -Path $scope.File.FullName
+        $telemetryResourceIds = @{}
+        if ($migratesTelemetry) {
+            foreach ($name in @($after.test.mock_providers.Keys | Where-Object { $_ -cmatch '^azapi(\.|$)' })) {
+                $resourceId = Get-AvmTerraformTelemetryMockResourceId `
+                    -Test $after.test -Path $scope.File.FullName -ProviderName $name
+                if ($null -ne $resourceId) {
+                    $telemetryResourceIds[$name] = $resourceId
+                }
+            }
         }
-        else { $null }
         $hasEmptyModtm = $after.test.mock_providers.Contains('modtm') -and
         $after.test.mock_providers.modtm.mptf.is_empty
         $hasEmptyAzapi = $after.test.mock_providers.Contains('azapi') -and
@@ -532,19 +611,26 @@ function Invoke-AvmTerraformUnitTestMigration {
         }
         [string[]]$mockProviderNames = @($providerNames)
         [Array]::Sort($mockProviderNames, [System.StringComparer]::Ordinal)
+        [string[]]$defaultMockProviderNames = @($mockProviderNames | Where-Object { $_ -cnotmatch '\.' })
         $providerMockBindings = @{}
         foreach ($name in $after.test.run_modules.Keys) {
             $targetPath = $after.test.run_modules[$name].dir
             if ($missingRandomRequirements.Contains($targetPath) -and
                 -not $after.test.runs[$name].mptf.attributes.Contains('providers')) {
-                $providerMockBindings[$name] = @(Get-AvmTerraformUnitTestMockProviderName `
-                        -ProviderNames $mockProviderNames -RequiredProviders $requiredProviders[$targetPath] `
+                $names = @(Get-AvmTerraformUnitTestMockProviderName `
+                        -ProviderNames $defaultMockProviderNames -RequiredProviders $requiredProviders[$targetPath] `
                         -ProviderSources $providerSources[$targetPath])
+                $providerMockBindings[$name] = "{`n" + (($names | ForEach-Object { "  $_ = $_" }) -join "`n") + "`n}"
             }
         }
-        if ($newLocations.Count -gt 0 -or
-            $missingRandomRequirements.Count -gt 0 -or
-            ($migratesTelemetry -and ($hasEmptyModtm -or $hasEmptyAzapi -or $null -ne $telemetryResourceId))) {
+        $retiredProviderReferences = @{ modtm = 0; random = 0 }
+        $hasProviderMappings = @($after.test.runs.Values |
+                Where-Object { $_.mptf.attributes.Contains('providers') }).Count -gt 0
+        $validateMocks = $newLocations.Count -gt 0 -or
+        $missingRandomRequirements.Count -gt 0 -or
+        ($migratesTelemetry -and ($hasEmptyModtm -or $hasEmptyAzapi -or $telemetryResourceIds.Count -gt 0 -or
+            ($hasProviderMappings -and $hasRandomMock -and -not $randomMockRetained)))
+        if ($validateMocks) {
             $requiresAzapiMock = $missingRandomRequirements.Count -gt 0 -or
             @($instrumentedTargets | Where-Object { $newLocations.Contains($_.Path) }).Count -gt 0
             $hasAzureMock = $after.test.mock_providers.Contains('azapi') -or
@@ -554,9 +640,11 @@ function Invoke-AvmTerraformUnitTestMigration {
                     $missingRandomRequirements.Count -gt 0 -or $_ -cmatch '^(azapi|azurerm)(\.|$)'
                 })
             $aliasedMocks = @($after.test.mock_providers.Keys | Where-Object {
-                    $_ -cmatch '^(azapi|azurerm|modtm)\.' -or
-                    ($missingRandomRequirements.Count -gt 0 -and $_ -cnotmatch '\A[A-Za-z_][A-Za-z0-9_-]*\z')
+                    $_ -cmatch '^(azurerm|modtm)\.' -or
+                    ($missingRandomRequirements.Count -gt 0 -and
+                    $_ -cnotmatch '\A(?:[A-Za-z_][A-Za-z0-9_-]*|azapi\.[A-Za-z_][A-Za-z0-9_-]*)\z')
                 })
+            $mappedAzapiRuns = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
             $unsafeMappings = @(
                 foreach ($name in $after.test.runs.Keys) {
                     $run = $after.test.runs[$name]
@@ -572,15 +660,39 @@ function Invoke-AvmTerraformUnitTestMigration {
                     }
                     $names = @(Get-AvmTerraformUnitTestMockProviderName -ProviderNames $mockProviderNames `
                             -RequiredProviders $requiredProviders[$targetPath] -ProviderSources $providerSources[$targetPath])
-                    if (-not (Test-AvmTerraformUnitTestProviderMapping -Expression $run.mptf.attributes.providers -ProviderNames $names)) {
+                    $baseNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+                    foreach ($provider in $names) { $null = $baseNames.Add(($provider -split '\.', 2)[0]) }
+                    $names = @($baseNames)
+                    $retiredNames = @(
+                        if ($migratesTelemetry -and $hasEmptyModtm) { 'modtm' }
+                        if ($migratesTelemetry -and $after.test.mock_providers.Contains('random') -and
+                            $after.test.mock_providers.random.mptf.is_empty -and $names -cnotcontains 'random') { 'random' }
+                    )
+                    $mapping = ConvertFrom-AvmTerraformUnitTestProviderMapping `
+                        -Expression $run.mptf.attributes.providers -ProviderNames $names `
+                        -MockProviderNames @($after.test.mock_providers.Keys) -RetiredProviderNames $retiredNames
+                    if ($null -eq $mapping) {
                         $name
+                    }
+                    else {
+                        if ($mapping.Bindings.ContainsKey('azapi')) {
+                            $null = $mappedAzapiRuns.Add($name)
+                        }
+                        if ($mapping.Changed) {
+                            $providerMockBindings[$name] = $mapping.Expression
+                        }
+                        foreach ($provider in @('modtm', 'random')) {
+                            $retiredProviderReferences[$provider] += $mapping.RetiredReferences[$provider]
+                        }
                     }
                 }
             )
+            $hasAzureMock = $hasAzureMock -or
+            ($after.test.runs.Count -gt 0 -and $mappedAzapiRuns.Count -eq $after.test.runs.Count)
             if (-not $hasAzureMock -or $realProviders.Count -gt 0 -or
                 $aliasedMocks.Count -gt 0 -or $unsafeMappings.Count -gt 0) {
                 throw [AvmConfigurationException]::new(
-                    "Cannot automatically migrate unit test '$($scope.File.FullName)': use unaliased mocks for introduced providers, without real-provider declarations or partial/remapped run provider mappings.")
+                    "Cannot automatically migrate unit test '$($scope.File.FullName)': introduced providers need default mocks or complete known alias bindings; run provider mappings must use the same provider, without real providers, unknown aliases, or aliased target keys.")
             }
         }
         $encoded = (ConvertTo-Json -InputObject @($newLocations) -Compress).Replace('${', '$${').Replace('%{', '%%{')
@@ -589,40 +701,51 @@ function Invoke-AvmTerraformUnitTestMigration {
             '--mptf-dir', $Options.ProfileDirs['unit-test'],
             '--mptf-var', ("new_location_modules=$encoded")
         )
-        if ($null -ne $telemetryResourceId) {
-            $resourceIdJson = ConvertTo-Json -InputObject $telemetryResourceId -Compress
-            $arguments += @('--mptf-var', "telemetry_subscription_resource_id=$resourceIdJson")
+        if ($telemetryResourceIds.Count -gt 0) {
+            $resourceIdsJson = ConvertTo-Json -InputObject $telemetryResourceIds -Compress
+            $arguments += @('--mptf-var', "telemetry_subscription_resource_ids=$resourceIdsJson")
         }
         if ($providerMockBindings.Count -gt 0) {
             $bindingsJson = (ConvertTo-Json -InputObject $providerMockBindings -Depth 5 -Compress).Replace('${', '$${').Replace('%{', '%%{')
             $arguments += @('--mptf-var', "provider_mock_bindings=$bindingsJson")
         }
         $plans.Add([pscustomobject]@{
-                Path                            = $scope.File.FullName
-                Scope                           = $scope
-                TargetPaths                     = @($targetPaths)
-                NewLocationPaths                = @($newLocations)
-                TelemetrySubscriptionResourceId = $telemetryResourceId
-                ProviderMockBindings            = $providerMockBindings
-                Arguments                       = $arguments
+                Path                             = $scope.File.FullName
+                Scope                            = $scope
+                TargetPaths                      = @($targetPaths)
+                NewLocationPaths                 = @($newLocations)
+                TelemetrySubscriptionResourceIds = $telemetryResourceIds
+                ProviderMockBindings             = $providerMockBindings
+                MockMigrationValidated           = $validateMocks
+                AddDefaultAzapiMock              = $migratesTelemetry -and $hasEmptyModtm -and
+                -not $after.test.mock_providers.Contains('azapi')
+                RetiredProviderReferences        = $retiredProviderReferences
+                Arguments                        = $arguments
             })
     }
 
     foreach ($plan in $plans | Where-Object {
-            $null -ne $_.TelemetrySubscriptionResourceId -or $_.ProviderMockBindings.Count -gt 0
+            $_.TelemetrySubscriptionResourceIds.Count -gt 0 -or $_.ProviderMockBindings.Count -gt 0
         }) {
         $capabilities = [System.Collections.Generic.List[string]]::new()
         $capabilityName = 'label-safe object merging'
-        if ($null -ne $plan.TelemetrySubscriptionResourceId) {
+        foreach ($name in $plan.TelemetrySubscriptionResourceIds.Keys) {
+            $nameJson = ConvertTo-Json -InputObject $name -Compress
+            $addressJson = ConvertTo-Json -InputObject "mock_provider.$name" -Compress
+            $idJson = ConvertTo-Json -InputObject $plan.TelemetrySubscriptionResourceIds[$name] -Compress
+            $body = "mock_data `"azapi_client_config`" {`n  defaults = {`n    subscription_resource_id = $idJson`n  }`n}"
+            $bodyJson = ConvertTo-Json -InputObject $body -Compress
             $capabilities.Add(
-                'try(transform.update_in_place.telemetry_mock.azapi.match_nested_block_labels, false) && try(transform.update_in_place.telemetry_mock.azapi.merge_object_attributes, false)')
+                "try(transform.update_in_place.telemetry_mock[$nameJson].match_nested_block_labels, false) && " +
+                "try(transform.update_in_place.telemetry_mock[$nameJson].merge_object_attributes, false) && " +
+                "try(transform.update_in_place.telemetry_mock[$nameJson].target_block_address == $addressJson, false) && " +
+                "try(trimspace(transform.update_in_place.telemetry_mock[$nameJson].dynamic_block_body) == $bodyJson, false)")
         }
         if ($plan.ProviderMockBindings.Count -gt 0) {
             $capabilityName = 'label-safe object merging and explicit mock provider bindings'
             foreach ($name in $plan.ProviderMockBindings.Keys) {
-                $body = "providers = {`n" +
-                (($plan.ProviderMockBindings[$name] | ForEach-Object { "  $_ = $_" }) -join "`n") + "`n}`n"
-                $bodyJson = ConvertTo-Json -InputObject $body -Compress
+                $body = "providers = $($plan.ProviderMockBindings[$name])`n"
+                $bodyJson = (ConvertTo-Json -InputObject $body -Compress).Replace('${', '$${').Replace('%{', '%%{')
                 $nameJson = (ConvertTo-Json -InputObject $name -Compress).Replace('${', '$${').Replace('%{', '%%{')
                 $capabilities.Add("try(transform.update_in_place.provider_mocks[$nameJson].dynamic_block_body == $bodyJson, false)")
             }
@@ -648,7 +771,7 @@ function Invoke-AvmTerraformUnitTestMigration {
     Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets $ModuleTargets -UnitTestPlans $plans.ToArray()
     foreach ($plan in $plans |
             Where-Object {
-                $_.NewLocationPaths.Count -gt 0 -or $null -ne $_.TelemetrySubscriptionResourceId -or
+                $_.NewLocationPaths.Count -gt 0 -or $_.TelemetrySubscriptionResourceIds.Count -gt 0 -or
                 $_.ProviderMockBindings.Count -gt 0
             }) {
         try {

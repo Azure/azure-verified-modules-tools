@@ -93,9 +93,17 @@ BeforeAll {
     }
 
     function New-CustomTelemetryMock {
-        param([object] $Defaults = @{})
+        param([object] $Defaults = @{}, [string] $Alias)
+        $attributes = @{}
+        if ($Alias) { $attributes.alias = $Alias }
         @{
-            mptf      = @{ is_empty = $false; attributes = @{} }
+            mptf      = @{
+                is_empty = $false
+                attributes = $attributes
+                block_type = 'mock_provider'
+                block_labels = @('azapi')
+                block_address = if ($Alias) { "mock_provider.azapi.$Alias" } else { 'mock_provider.azapi' }
+            }
             mock_data = @(
                 @{
                     mptf = @{
@@ -463,7 +471,7 @@ Providers required by state:
         It 'matches declared provider sources and inferred HashiCorp names without unrelated mocks' {
             InModuleScope Avm.Authoring {
                 $result = @(Get-AvmTerraformUnitTestMockProviderName `
-                    -ProviderNames @('azapi', 'random', 'time', 'custom') `
+                    -ProviderNames @('azapi', 'azapi.alternate', 'random', 'time', 'custom') `
                     -RequiredProviders @{
                         azapi = @{ source = 'Azure/azapi' }
                         custom = @{ source = 'example.com/team/custom' }
@@ -473,7 +481,7 @@ Providers required by state:
                         'registry.terraform.io/hashicorp/random',
                         'example.com/team/custom'
                     ))
-                $result | Should -Be @('azapi', 'random', 'custom')
+                $result | Should -Be @('azapi', 'azapi.alternate', 'random', 'custom')
             }
         }
     }
@@ -484,6 +492,7 @@ Providers required by state:
             @{ Shape = 'quoted keys and comments'; Expression = "{`n# keep`n`"random`" = random, /* keep */ azapi = azapi`n}"; Valid = $true }
             @{ Shape = 'partial bindings'; Expression = '{ azapi = azapi }'; Valid = $false }
             @{ Shape = 'remapped binding'; Expression = '{ azapi = azapi.alternate, random = random }'; Valid = $false }
+            @{ Shape = 'different provider'; Expression = '{ azapi = random, random = random }'; Valid = $false }
             @{ Shape = 'aliased key'; Expression = '{ azapi.alternate = azapi, random = random }'; Valid = $false }
             @{ Shape = 'additional binding'; Expression = '{ azapi = azapi, random = random, time = time }'; Valid = $false }
             @{ Shape = 'duplicate binding'; Expression = '{ azapi = azapi, random = random, random = random }'; Valid = $false }
@@ -496,8 +505,54 @@ Providers required by state:
             param($Expression, $Valid)
             InModuleScope Avm.Authoring -Parameters @{ Expression = $Expression; Valid = $Valid } {
                 param($Expression, $Valid)
-                Test-AvmTerraformUnitTestProviderMapping -Expression $Expression -ProviderNames @('azapi', 'random') |
-                    Should -Be $Valid
+                $mapping = ConvertFrom-AvmTerraformUnitTestProviderMapping -Expression $Expression -ProviderNames @('azapi', 'random')
+                ($null -ne $mapping) | Should -Be $Valid
+                if ($Valid) {
+                    $mapping.Expression | Should -BeExactly $Expression
+                    $mapping.Changed | Should -BeFalse
+                }
+            }
+        }
+
+        It 'preserves complete bindings to a known same-provider alias' {
+            InModuleScope Avm.Authoring {
+                $expression = '{ azapi = azapi.alternate, random = random }'
+                $mapping = ConvertFrom-AvmTerraformUnitTestProviderMapping -Expression $expression `
+                    -ProviderNames @('azapi', 'random') -MockProviderNames @('azapi', 'azapi.alternate', 'random')
+                $mapping.Expression | Should -BeExactly $expression
+                $mapping.Changed | Should -BeFalse
+            }
+        }
+
+        It 'removes only proven retired bindings while retaining every comment and remaining expression' {
+            InModuleScope Avm.Authoring {
+                $expression = @'
+{
+  # ${literal} and %{directive} remain comments.
+  azapi = azapi.alternate /* retained */,
+  "modtm" /* middle */ = /* before value */ modtm, // end
+  random = random # final
+}
+'@
+                $expected = @'
+{
+  # ${literal} and %{directive} remain comments.
+  azapi = azapi.alternate /* retained */,
+   /* middle */  /* before value */  // end
+     # final
+}
+'@
+                $mapping = ConvertFrom-AvmTerraformUnitTestProviderMapping -Expression $expression `
+                    -ProviderNames @('azapi') -MockProviderNames @('azapi.alternate', 'modtm', 'random') `
+                    -RetiredProviderNames @('modtm', 'random')
+                $mapping.Expression | Should -BeExactly $expected
+                $mapping.Changed | Should -BeTrue
+                $mapping.RetiredReferences.modtm | Should -Be 1
+                $mapping.RetiredReferences.random | Should -Be 1
+                $repeat = ConvertFrom-AvmTerraformUnitTestProviderMapping -Expression $mapping.Expression `
+                    -ProviderNames @('azapi') -MockProviderNames @('azapi.alternate')
+                $repeat.Changed | Should -BeFalse
+                $repeat.Expression | Should -BeExactly $expected
             }
         }
     }
@@ -537,7 +592,7 @@ Providers required by state:
             $testTarget = [pscustomobject]@{
                 Path     = Join-Path $script:fixture.Root 'tests' 'unit'
                 Scope    = 'test'
-                Profiles = @('module-call', 'provider-cleanup', 'test')
+                Profiles = @('module-call', 'variable-order', 'provider-cleanup', 'test')
             }
             $script:fixture.Targets += $testTarget
             $result = InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {
@@ -655,7 +710,8 @@ Providers required by state:
                 Should -Invoke Get-AvmTerraformUnitTestRequiredProvider -ModuleName Avm.Authoring -Exactly 2
                 Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
                     $ArgumentList[0] -eq 'transform' -and
-                    $ArgumentList -ccontains 'provider_mock_bindings={"child":["azapi","azurerm","random"]}'
+                    $ArgumentList -ccontains ('provider_mock_bindings=' +
+                        (ConvertTo-Json -InputObject @{ child = "{`n  azapi = azapi`n  azurerm = azurerm`n  random = random`n}" } -Compress))
                 }
                 Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
                     $ArgumentList[0] -eq 'debug' -and
@@ -669,7 +725,10 @@ Providers required by state:
                 Invoke-UnitMigrationFixture -Fixture $script:fixture
                 Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
                     $ArgumentList[0] -eq 'transform' -and
-                    @($ArgumentList | Where-Object { $_ -like 'provider_mock_bindings=*' -and $_.Contains('["azapi","random"]') }).Count -eq 1
+                    @($ArgumentList | Where-Object {
+                            $_ -like 'provider_mock_bindings=*' -and
+                            $_.Contains('azapi = azapi') -and $_.Contains('random = random') -and -not $_.Contains('modtm')
+                        }).Count -eq 1
                 }
             }
 
@@ -805,8 +864,8 @@ Providers required by state:
                         Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                             $ArgumentList[0] -eq 'transform' -and
                             $ArgumentList[8] -ceq 'new_location_modules=[]' -and
-                            $ArgumentList[10] -ceq ('telemetry_subscription_resource_id=' +
-                                (ConvertTo-Json -InputObject $ResourceId -Compress))
+                            $ArgumentList[10] -ceq ('telemetry_subscription_resource_ids=' +
+                                (ConvertTo-Json -InputObject @{ azapi = $ResourceId } -Compress))
                         }
                         Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'clean-backup' }
                     }
@@ -827,7 +886,7 @@ Providers required by state:
                     Invoke-UnitMigrationFixture -Fixture $script:fixture
                     Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
                         $ArgumentList[0] -eq 'transform' -and
-                        $ArgumentList[10] -ceq 'telemetry_subscription_resource_id="/subscriptions/00000000-0000-0000-0000-000000000000"'
+                        $ArgumentList[10] -ceq 'telemetry_subscription_resource_ids={"azapi":"/subscriptions/00000000-0000-0000-0000-000000000000"}'
                     }
                 }
 
@@ -842,7 +901,7 @@ Providers required by state:
                     Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
                         $ArgumentList[0] -eq 'transform' -and
                         $ArgumentList[8] -ceq 'new_location_modules=[]' -and
-                        $ArgumentList[10] -ceq 'telemetry_subscription_resource_id="/subscriptions/00000000-0000-0000-0000-000000000000"'
+                        $ArgumentList[10] -ceq 'telemetry_subscription_resource_ids={"azapi":"/subscriptions/00000000-0000-0000-0000-000000000000"}'
                     }
                 }
 
@@ -852,7 +911,7 @@ Providers required by state:
                     $script:fixture.After.test.runs.root.mptf.attributes.providers | Should -BeExactly '{ azapi = azapi }'
                     Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
                         $ArgumentList[0] -eq 'transform' -and
-                        $ArgumentList -ccontains 'telemetry_subscription_resource_id="/subscriptions/00000000-0000-0000-0000-000000000000"'
+                        $ArgumentList -ccontains 'telemetry_subscription_resource_ids={"azapi":"/subscriptions/00000000-0000-0000-0000-000000000000"}'
                     }
                 }
 
@@ -969,6 +1028,132 @@ Providers required by state:
                     Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
                     Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 0
                 }
+        }
+
+        Context 'supported AzAPI aliases' {
+            BeforeEach {
+                foreach ($target in $script:fixture.Targets) {
+                    $script:fixture.Before.modules[$target.Path].variables.location = @{ required = $true }
+                }
+                $script:fixture.After.test.mock_providers.azapi = New-CustomTelemetryMock -Defaults @{
+                    subscription_id = '11111111-1111-1111-1111-111111111111'
+                    tenant_id = 'default-tenant'
+                }
+                $script:fixture.After.test.mock_providers['azapi.alternate'] = New-CustomTelemetryMock -Alias alternate -Defaults @{
+                    subscription_id = '22222222-2222-2222-2222-222222222222'
+                    tenant_id = 'alternate-tenant'
+                }
+                $script:fixture.After.test.mock_providers.modtm = @{ mptf = @{ is_empty = $true } }
+                $script:fixture.After.test.mock_providers.random = @{ mptf = @{ is_empty = $true } }
+                Mock Test-AvmTerraformScopedRandomProviderInUse -ModuleName Avm.Authoring { $false }
+                Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
+                    [pscustomobject]@{ ExitCode = 0; StdOut = 'true'; StdErr = '' }
+                } -ParameterFilter { $ArgumentList[0] -eq 'debug' }
+            }
+
+            It 'plans distinct default and aliased client IDs and lossless retired bindings' {
+                $script:fixture.After.test.runs.root.mptf.attributes.providers =
+                    '{ azapi = azapi.alternate, modtm = modtm, random = random }'
+                $before = $script:fixture.After.test | ConvertTo-Json -Depth 20 -Compress
+                Invoke-UnitMigrationFixture -Fixture $script:fixture
+                ($script:fixture.After.test | ConvertTo-Json -Depth 20 -Compress) | Should -BeExactly $before
+                Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                    $UnitTestPlans[0].MockMigrationValidated -and
+                    -not $UnitTestPlans[0].AddDefaultAzapiMock -and
+                    $UnitTestPlans[0].TelemetrySubscriptionResourceIds.azapi -ceq '/subscriptions/11111111-1111-1111-1111-111111111111' -and
+                    $UnitTestPlans[0].TelemetrySubscriptionResourceIds['azapi.alternate'] -ceq '/subscriptions/22222222-2222-2222-2222-222222222222' -and
+                    $UnitTestPlans[0].RetiredProviderReferences.modtm -eq 1 -and
+                    $UnitTestPlans[0].RetiredProviderReferences.random -eq 1 -and
+                    $UnitTestPlans[0].ProviderMockBindings.root -ceq '{ azapi = azapi.alternate,       }'
+                }
+                Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                    $ArgumentList[0] -eq 'debug' -and
+                    $ArgumentList[-1].Contains('telemetry_mock["azapi"].match_nested_block_labels') -and
+                    $ArgumentList[-1].Contains('telemetry_mock["azapi.alternate"].merge_object_attributes') -and
+                    $ArgumentList[-1].Contains('provider_mocks["root"].dynamic_block_body')
+                }
+            }
+
+            It 'requests a default replacement without confusing it with the existing alias' {
+                $script:fixture.After.test.mock_providers.Remove('azapi')
+                Invoke-UnitMigrationFixture -Fixture $script:fixture
+                Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                    $UnitTestPlans[0].AddDefaultAzapiMock -and
+                    $UnitTestPlans[0].TelemetrySubscriptionResourceIds.Count -eq 1 -and
+                    $UnitTestPlans[0].TelemetrySubscriptionResourceIds.ContainsKey('azapi.alternate')
+                }
+            }
+
+            It 'accepts an alias-only mock when every run explicitly binds that known alias' {
+                $script:fixture.After.test.mock_providers.Remove('azapi')
+                $script:fixture.After.test.mock_providers.Remove('modtm')
+                foreach ($run in $script:fixture.After.test.runs.Values) {
+                    $run.mptf.attributes.providers = '{ azapi = azapi.alternate }'
+                }
+                Invoke-UnitMigrationFixture -Fixture $script:fixture
+                Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                    $UnitTestPlans[0].MockMigrationValidated -and
+                    -not $UnitTestPlans[0].AddDefaultAzapiMock -and
+                    $UnitTestPlans[0].ProviderMockBindings.Count -eq 0 -and
+                    $UnitTestPlans[0].TelemetrySubscriptionResourceIds.Count -eq 1
+                }
+            }
+
+            It 'does not treat an unbound alias as a default provider' {
+                $script:fixture.After.test.mock_providers.Remove('azapi')
+                $script:fixture.After.test.mock_providers.Remove('modtm')
+                $script:fixture.After.test.runs.root.mptf.attributes.providers = '{ azapi = azapi.alternate }'
+                { Invoke-UnitMigrationFixture -Fixture $script:fixture } | Should -Throw '*introduced providers need default mocks*'
+                Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+                Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 0
+            }
+
+            It 'preserves already complete alias bindings and client defaults without a native rewrite' {
+                foreach ($name in @('azapi', 'azapi.alternate')) {
+                    $script:fixture.After.test.mock_providers[$name].mock_data[0].mptf.attributes.defaults.subscription_resource_id =
+                        '/subscriptions/33333333-3333-3333-3333-333333333333'
+                }
+                $script:fixture.After.test.runs.root.mptf.attributes.providers = '{ azapi = azapi.alternate }'
+                Invoke-UnitMigrationFixture -Fixture $script:fixture
+                Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+                Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                    $UnitTestPlans[0].ProviderMockBindings.Count -eq 0 -and
+                    $UnitTestPlans[0].TelemetrySubscriptionResourceIds.Count -eq 0
+                }
+            }
+
+            It 'does not generate an aliased target key when binding inherited defaults' {
+                Mock Test-AvmTerraformScopedRandomProviderInUse -ModuleName Avm.Authoring { $true }
+                Invoke-UnitMigrationFixture -Fixture $script:fixture
+                Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                    $UnitTestPlans[0].ProviderMockBindings.Count -eq 2 -and
+                    $UnitTestPlans[0].ProviderMockBindings.root -ceq "{`n  azapi = azapi`n  random = random`n}" -and
+                    $UnitTestPlans[0].ProviderMockBindings.child -ceq "{`n  azapi = azapi`n  random = random`n}"
+                }
+            }
+
+            It 'rejects unproven alias metadata before any write: <Invalid>' -TestCases @(
+                @{ Invalid = 'address' }
+                @{ Invalid = 'alias' }
+                @{ Invalid = 'labels' }
+                @{ Invalid = 'type' }
+                @{ Invalid = 'source' }
+                @{ Invalid = 'empty' }
+            ) {
+                param($Invalid)
+                $mock = $script:fixture.After.test.mock_providers['azapi.alternate']
+                switch ($Invalid) {
+                    address { $mock.mptf.block_address = 'mock_provider.azapi' }
+                    alias { $mock.mptf.attributes.alias = '${var.alias}' }
+                    labels { $mock.mptf.block_labels = @('azapi', 'alternate') }
+                    type { $mock.mptf.block_type = 'provider' }
+                    source { $mock.mptf.attributes.source = './mocks' }
+                    empty { $mock.mptf.is_empty = $true }
+                }
+                { Invoke-UnitMigrationFixture -Fixture $script:fixture } | Should -Throw '*AzAPI alias*requires literal*'
+                Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+                Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 0
+            }
         }
 
         It 'does not repair a pre-existing input or invent a value for an optional or absent input' -TestCases @(

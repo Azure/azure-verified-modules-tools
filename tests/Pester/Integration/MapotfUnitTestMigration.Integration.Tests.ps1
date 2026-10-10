@@ -130,8 +130,8 @@ run "child" {
                     '--mptf-var', "new_location_modules=$encoded"
                 )
                 if ($ResourceId) {
-                    $arguments += @('--mptf-var', ('telemetry_subscription_resource_id=' +
-                        (ConvertTo-Json -InputObject $ResourceId -Compress)))
+                    $arguments += @('--mptf-var', ('telemetry_subscription_resource_ids=' +
+                        (ConvertTo-Json -InputObject @{ azapi = $ResourceId } -Compress)))
                 }
                 $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList $arguments -WorkingDirectory $Fixture.Root
                 $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList @(
@@ -452,6 +452,8 @@ run "root" { command = plan }
     It 'rejects a selected profile without <Capability> before retiring any mock' -TestCases @(
         @{ Capability = 'label matching'; Setting = 'match_nested_block_labels' }
         @{ Capability = 'object merging'; Setting = 'merge_object_attributes' }
+        @{ Capability = 'alias targeting'; Setting = 'target_block_address' }
+        @{ Capability = 'distinct alias values'; Setting = 'subscription_resource_id' }
     ) {
         param($Setting)
         $fixture = New-NativeTestFixture
@@ -459,6 +461,14 @@ run "root" { command = plan }
 mock_provider "modtm" {}
 mock_provider "azapi" {
   mock_resource "azapi_resource" {}
+}
+mock_provider "azapi" {
+  alias = "alternate"
+  mock_data "azapi_client_config" {
+    defaults = {
+      subscription_id = "11111111-1111-1111-1111-111111111111"
+    }
+  }
 }
 run "root" { command = plan }
 '@
@@ -473,8 +483,21 @@ run "root" { command = plan }
         }
         $rule = Join-Path $profile 'telemetry.mptf.hcl'
         $content = [System.IO.File]::ReadAllText($rule)
-        $content = [regex]::Replace($content, "(?m)^([ \t]*$Setting[ \t]*=[ \t]*)true(?=\r?$)", '${1}false')
-        $content | Should -Match "(?m)^[ \t]*$Setting[ \t]*=[ \t]*false(?=\r?$)"
+        if ($Setting -eq 'target_block_address') {
+            $content = [regex]::Replace($content,
+                '(?m)^([ \t]*target_block_address[ \t]*=[ \t]*)each\.value\.mptf\.block_address(?=\r?$)',
+                '${1}"mock_provider.azapi"')
+            $content | Should -Match 'target_block_address\s*=\s*"mock_provider.azapi"'
+        }
+        elseif ($Setting -eq 'subscription_resource_id') {
+            $content = $content.Replace('var.telemetry_subscription_resource_ids[each.key]',
+                'var.telemetry_subscription_resource_ids["azapi"]')
+            $content | Should -Not -Match 'var.telemetry_subscription_resource_ids\[each\.key\]'
+        }
+        else {
+            $content = [regex]::Replace($content, "(?m)^([ \t]*$Setting[ \t]*=[ \t]*)true(?=\r?$)", '${1}false')
+            $content | Should -Match "(?m)^[ \t]*$Setting[ \t]*=[ \t]*false(?=\r?$)"
+        }
         [System.IO.File]::WriteAllText($rule, $content, $script:utf8)
         $options = [pscustomobject]@{
             ToolPath = $script:options.ToolPath

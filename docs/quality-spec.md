@@ -639,15 +639,17 @@ created, so the first transform already satisfies drift checks.
 
 Instrumented roots and children run the `root,module,common` profiles; other
 module scopes run `module,common`. Profiles execute sequentially so module
-provider rules see the generated telemetry. A second `module-call,common`
+provider rules see the generated telemetry. A second `module-call,variable-order,common`
 pass visits local modules from deepest to root after their inputs exist.
 Examples run `example,provider-cleanup,common`; standalone test modules run
-`module-call,provider-cleanup` followed by any consumer `test` profile, from
+`module-call,variable-order,provider-cleanup` followed by any consumer `test` profile, from
 deepest to shallowest after modules and examples finish. Test-wrapper mode
 forwards only missing required locations through local calls, adding a required
 wrapper input only when needed. Authored call locations, omitted optional
 location defaults and telemetry opt-outs are preserved; test wrappers do not
 gain `enable_telemetry` inputs or instrumentation. MaPoTF subprocesses
+sort variables in a separate profile after creating wrapper inputs, so native
+inspection includes the new declarations on the first pass. These subprocesses
 clear `TF_PLUGIN_CACHE_DIR` and use target-local providers, so independent
 targets can run in parallel without racing Terraform's shared provider cache.
 
@@ -741,11 +743,12 @@ mocks, and standard references to the old telemetry resource. Direct unit
 tests receive a missing AzAPI mock when retiring their empty modtm mock;
 empty AzAPI mocks, including comment-only bodies, receive a valid synthetic
 subscription resource ID for `azapi_client_config` without losing comments.
-Non-empty AzAPI mocks receive only a missing
+Default and literally named aliased AzAPI mocks receive only a missing
 client-config block or `subscription_resource_id` default, matching nested
 blocks by type and labels and merging object fields without replacing authored
 defaults. Before modifying any test file, native reflection must confirm that
-the selected binary and profile enable label matching and object merging;
+the selected binary and profile enable label matching and object merging at
+each intended mock address with the exact missing-field update;
 older overrides that silently ignore either feature fail with upgrade guidance.
 Use an authored literal `subscription_id` to construct its matching
 `/subscriptions/<guid>` value; otherwise use the synthetic subscription.
@@ -767,11 +770,20 @@ provider-mocked tests. Existing global and per-run values, including nulls
 and expressions, remain authored. This test-only value is not a production
 default and never replaces per-hub regions or repairs unrelated pre-existing
 missing inputs. Assertions, targets and telemetry opt-outs are preserved.
-Real-provider declarations, aliased mocks and partial or remapped provider
+Real-provider declarations, unproven aliases and partial or cross-provider
 bindings still require review rather than being silently changed; an AzureRM
-mock alone cannot cover new AzAPI telemetry. A complete same-name mapping of
-the target's retained unaliased mocks is preserved. Integration tests do not receive
-new mocks or locations.
+mock alone cannot cover new AzAPI telemetry. AzAPI aliases must have consistent
+literal native names, labels and addresses and no external mock source.
+Complete mappings may bind an unaliased target name to its known default mock
+or a known alias of the same provider. Aliased target keys still require review.
+Preserve safe authored bindings; remove only bindings to a retired empty ModTM
+mock or an empty random mock whose provider is absent from that target's
+configuration dependency tree. Preserve all remaining expression text and
+comments. Before cleanup, account for every retired provider reference in
+validated mappings; unexplained references still fail. A default AzAPI
+replacement must not be confused with an existing alias. Verify the exact native
+mapping update body before modifying any test file. Integration tests do not
+receive new mocks or locations.
 Non-empty modtm test mocks and remaining
 author-owned `modtm` resources or data sources fail with
 actionable diagnostics instead of being silently rewritten. When random was

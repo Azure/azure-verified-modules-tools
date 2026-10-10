@@ -1151,6 +1151,14 @@ terraform {
 }
 '@
         }
+        foreach ($target in @($wrapper, $inner)) {
+            Set-Content -LiteralPath (Join-Path $target 'variables.tf') -Encoding utf8NoBOM -Value @'
+variable "firewall_enabled" {
+  type    = bool
+  default = true
+}
+'@
+        }
         Set-Content -LiteralPath (Join-Path $wrapper 'main.tf') -Encoding utf8NoBOM -Value @'
 module "inner" {
   source = "./inner"
@@ -1249,14 +1257,17 @@ run "optional_location" {
         foreach ($path in $snapshot.Keys) {
             [System.IO.File]::ReadAllBytes($path) | Should -Be $snapshot[$path]
         }
-        foreach ($target in @($wrapper, $inner, $authored, $optional)) {
+        foreach ($target in @($authored, $optional)) {
             Join-Path $target 'variables.tf' | Should -Not -Exist
         }
         (Invoke-TelemetryEngine -Root $root).Status | Should -Be 'pass'
         foreach ($target in @($wrapper, $inner)) {
             $variables = Get-Content -LiteralPath (Join-Path $target 'variables.tf') -Raw
             $variables | Should -Match '(?s)variable "location" \{[^}]*nullable\s*=\s*false'
-            $variables | Should -Not -Match '\bdefault\s*=|variable "enable_telemetry"'
+            $variables | Should -Not -Match '(?s)variable "location" \{[^}]*\bdefault\s*=|variable "enable_telemetry"'
+            $variables | Should -Match '(?s)variable "firewall_enabled" \{[^}]*default\s*=\s*true'
+            $variables.IndexOf('variable "location"', [StringComparison]::Ordinal) |
+                Should -BeLessThan $variables.IndexOf('variable "firewall_enabled"', [StringComparison]::Ordinal)
             Get-Content -LiteralPath (Join-Path $target 'main.tf') -Raw |
                 Should -Match '(?m)^\s*location\s*=\s*var\.location'
         }
@@ -1590,6 +1601,196 @@ run "clock" {
         $result = Invoke-TelemetryProcess -FilePath $script:terraformPath `
             -ArgumentList @('test', '-no-color', ('-test-directory=' + [System.IO.Path]::Combine('tests', 'unit'))) -Root $root
         $result.StdOut | Should -Match 'Success! 4 passed, 0 failed'
+        $result.StdOut | Should -Not -Match 'Warning:'
+        $result.StdErr | Should -BeNullOrEmpty
+    }
+
+    It 'preserves aliased telemetry mocks through the full pipeline for <Shape>' -TestCases @(
+        @{ Shape = 'default and aliased root runs'; AliasOnly = $false }
+        @{ Shape = 'an alias-only selected wrapper'; AliasOnly = $true }
+    ) {
+        param($AliasOnly)
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $root -WithLegacy -WithLocation
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+data "azapi_client_config" "authored" {}
+data "azapi_resource_list" "authored" {
+  type      = "Microsoft.Resources/resourceGroups@2025-04-01"
+  parent_id = "/subscriptions/11111111-1111-1111-1111-111111111111"
+}
+'@
+        Set-Content -LiteralPath (Join-Path $root 'outputs.tf') -Encoding utf8NoBOM -Value @'
+output "identity" {
+  value = {
+    subscription = data.azapi_client_config.authored.subscription_resource_id
+    tenant       = data.azapi_client_config.authored.tenant_id
+    resources    = data.azapi_resource_list.authored.output.value
+    location     = var.location
+  }
+}
+output "telemetry_count" {
+  value = length(modtm_telemetry.telemetry)
+}
+output "telemetry_parent" {
+  value = try(azapi_resource.telemetry[0].parent_id, null)
+}
+'@
+        if ($AliasOnly) {
+            $wrapper = Join-Path $root 'tests' 'aliased'
+            $null = New-Item -ItemType Directory -Path $wrapper -Force
+            Set-Content -LiteralPath (Join-Path $wrapper 'main.tf') -Encoding utf8NoBOM -Value @'
+terraform {
+  required_providers {
+    azapi = {
+      source                = "Azure/azapi"
+      version               = "~> 2.12"
+      configuration_aliases = [azapi.alternate]
+    }
+    modtm = {
+      source  = "Azure/modtm"
+      version = "~> 0.3"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+  }
+}
+module "test" {
+  source           = "../.."
+  enable_telemetry = false
+  location         = "westus2"
+  providers = {
+    azapi = azapi.alternate
+  }
+}
+output "identity" {
+  value = module.test.identity
+}
+output "telemetry_count" {
+  value = module.test.telemetry_count
+}
+output "telemetry_parent" {
+  value = module.test.telemetry_parent
+}
+'@
+        }
+        $unit = Join-Path $root 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $unit -Force
+        $testPath = Join-Path $unit 'aliases.tftest.hcl'
+        $mock = @'
+mock_provider "azapi" {
+__ALIAS__
+  mock_data "azapi_client_config" {
+    defaults = {
+      subscription_id = "__SUBSCRIPTION__"
+      tenant_id       = "__TENANT__"
+    }
+  }
+  mock_data "azapi_resource_list" {
+    defaults = { output = { value = ["__NAME__"] } }
+  }
+}
+'@
+        $source = "mock_provider `"modtm`" {}`nmock_provider `"random`" {}`n"
+        $source += $mock.Replace('__ALIAS__', '  alias = "alternate"').
+            Replace('__SUBSCRIPTION__', '22222222-2222-2222-2222-222222222222').
+            Replace('__TENANT__', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb').
+            Replace('__NAME__', 'alternate') + "`n"
+        if (-not $AliasOnly) {
+            $source += $mock.Replace('__ALIAS__', '').
+                Replace('__SUBSCRIPTION__', '11111111-1111-1111-1111-111111111111').
+                Replace('__TENANT__', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa').
+                Replace('__NAME__', 'default') + "`n"
+        }
+        $run = @'
+run "__NAME__" {
+  command = apply
+__TARGET__
+  assert {
+    condition = (
+      output.identity.subscription == "/subscriptions/__SUBSCRIPTION__" &&
+      output.identity.tenant == "__TENANT__" &&
+      output.identity.resources[0] == "__NAME__" &&
+      output.identity.location == "__REGION__"
+    )
+    error_message = "Retain the selected mock's identity, other data defaults and authored region."
+  }
+  assert {
+    condition     = output.telemetry_count == __COUNT__ && output.telemetry_parent == __PARENT__
+    error_message = "Retain the telemetry opt-out or use the matching subscription."
+  }
+}
+'@
+        $mapping = @'
+  providers = {
+    # ${literal} and %{directive} must remain comments.
+    azapi = __PROVIDER__
+    "modtm" /* keep middle */ = /* keep before value */ modtm, // keep end
+    random = random # keep final
+  }
+  variables {
+    location = "swedencentral"
+  }
+'@
+        $target = if ($AliasOnly) { '  module { source = "./tests/aliased" }' } else {
+            $mapping.Replace('__PROVIDER__', 'azapi.alternate')
+        }
+        $source += $run.Replace('__NAME__', 'alternate').Replace('__TARGET__', $target).
+            Replace('__SUBSCRIPTION__', '22222222-2222-2222-2222-222222222222').
+            Replace('__TENANT__', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb').
+            Replace('__REGION__', $(if ($AliasOnly) { 'westus2' } else { 'swedencentral' })).
+            Replace('__COUNT__', $(if ($AliasOnly) { '0' } else { '1' })).
+            Replace('__PARENT__', $(if ($AliasOnly) { 'null' } else { '"/subscriptions/22222222-2222-2222-2222-222222222222"' })) + "`n"
+        if (-not $AliasOnly) {
+            $source += $run.Replace('__NAME__', 'default').
+                Replace('__TARGET__', $mapping.Replace('__PROVIDER__', 'azapi')).
+                Replace('__SUBSCRIPTION__', '11111111-1111-1111-1111-111111111111').
+                Replace('__TENANT__', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa').
+                Replace('__REGION__', 'swedencentral').Replace('__COUNT__', '1').
+                Replace('__PARENT__', '"/subscriptions/11111111-1111-1111-1111-111111111111"') + "`n"
+        }
+        [System.IO.File]::WriteAllText($testPath, $source, [System.Text.UTF8Encoding]::new($false))
+        $inspect = {
+            InModuleScope Avm.Authoring -Parameters @{ Root = $root; Tool = $script:mapotfPath; Profiles = $script:profilesRoot } {
+                param($Root, $Tool, $Profiles)
+                $targets = @(Get-AvmTerraformTransformTarget -Root $Root)
+                Get-AvmTerraformUnitTestSnapshot -Root $Root -ModuleTargets $targets -Options ([pscustomobject]@{
+                        ToolPath = $Tool
+                        ProfileDirs = @{ 'unit-test-inspect' = Join-Path $Profiles 'unit-test-inspect' }
+                        EnvVars = @{}
+                    })
+            }
+        }
+        $before = & $inspect
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'fail'
+        [System.IO.File]::ReadAllText($testPath) | Should -BeExactly $source
+        (Invoke-TelemetryEngine -Root $root).Status | Should -Be 'pass'
+        $after = & $inspect
+        foreach ($name in $before.Before.test.runs.Keys) {
+            ($after.Before.test.runs[$name].assert | ForEach-Object { $_.mptf.attributes } | ConvertTo-Json -Depth 20 -Compress) |
+                Should -BeExactly ($before.Before.test.runs[$name].assert | ForEach-Object { $_.mptf.attributes } | ConvertTo-Json -Depth 20 -Compress)
+        }
+        $first = [System.IO.File]::ReadAllText($testPath)
+        $first | Should -Not -Match 'mock_provider "modtm"'
+        [regex]::Matches($first, 'mock_provider "azapi"').Count | Should -Be 2
+        if (-not $AliasOnly) {
+            foreach ($comment in @('# ${literal} and %{directive} must remain comments.', '/* keep middle */',
+                    '/* keep before value */', '// keep end', '# keep final')) {
+                $first.Contains($comment) | Should -BeTrue
+            }
+            $first | Should -Not -Match 'mock_provider "random"|=[ \t]*modtm\b|=[ \t]*random\b'
+        }
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'pass'
+        [System.IO.File]::ReadAllText($testPath) | Should -BeExactly $first
+        (Invoke-TelemetryEngine -Root $root).Changed | Should -BeNullOrEmpty
+        [System.IO.File]::ReadAllText($testPath) | Should -BeExactly $first
+        $testDirectory = [System.IO.Path]::Combine('tests', 'unit')
+        Assert-TelemetryTerraformValid -Root $root -TestDirectory $testDirectory
+        $result = Invoke-TelemetryProcess -FilePath $script:terraformPath `
+            -ArgumentList @('test', '-no-color', "-test-directory=$testDirectory") -Root $root
+        $expectedRuns = if ($AliasOnly) { 1 } else { 2 }
+        $result.StdOut | Should -Match "Success! $expectedRuns passed, 0 failed"
         $result.StdOut | Should -Not -Match 'Warning:'
         $result.StdErr | Should -BeNullOrEmpty
     }

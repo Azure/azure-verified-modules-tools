@@ -81,7 +81,10 @@ Describe 'Invoke-AvmTerraformTransform' {
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $ArgumentList[0] -eq 'transform' -and
                 $ArgumentList -contains '/fake/module-call' -and
-                $ArgumentList -contains '/fake/common'
+                $ArgumentList -contains '/fake/variable-order' -and
+                $ArgumentList -contains '/fake/common' -and
+                ([array]::IndexOf($ArgumentList, '/fake/module-call')) -lt ([array]::IndexOf($ArgumentList, '/fake/variable-order')) -and
+                ([array]::IndexOf($ArgumentList, '/fake/variable-order')) -lt ([array]::IndexOf($ArgumentList, '/fake/common'))
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $FilePath -eq '/fake/mapotf' -and
@@ -187,7 +190,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                     @(
                         [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
                         [pscustomobject]@{ Path = '/fake/example'; Scope = 'example'; Profiles = @('example', 'provider-cleanup', 'common') }
-                        [pscustomobject]@{ Path = '/fake/test'; Scope = 'test'; Profiles = @('module-call', 'provider-cleanup', 'test') }
+                        [pscustomobject]@{ Path = '/fake/test'; Scope = 'test'; Profiles = @('module-call', 'variable-order', 'provider-cleanup', 'test') }
                     )
                 }
                 Mock Invoke-AvmParallel
@@ -224,8 +227,8 @@ Describe 'Invoke-AvmTerraformTransform' {
                     [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
                     [pscustomobject]@{ Path = $child; Scope = 'module'; Profiles = @('module', 'common') }
                     [pscustomobject]@{ Path = $example; Scope = 'example'; Profiles = @('example', 'provider-cleanup', 'common') }
-                    [pscustomobject]@{ Path = $wrapper; Scope = 'test'; Profiles = @('module-call', 'provider-cleanup', 'test') }
-                    [pscustomobject]@{ Path = $inner; Scope = 'test'; Profiles = @('module-call', 'provider-cleanup', 'test') }
+                    [pscustomobject]@{ Path = $wrapper; Scope = 'test'; Profiles = @('module-call', 'variable-order', 'provider-cleanup', 'test') }
+                    [pscustomobject]@{ Path = $inner; Scope = 'test'; Profiles = @('module-call', 'variable-order', 'provider-cleanup', 'test') }
                 )
             }
             $script:wrapperTransformBatches = [System.Collections.Generic.List[string]]::new()
@@ -247,6 +250,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                 ToolPath = '/fake/mapotf'
                 ProfileDirs = @{
                     'module-call' = '/fake/module-call'
+                    'variable-order' = '/fake/variable-order'
                     'provider-cleanup' = '/fake/provider-cleanup'
                 }
                 EnvVars = @{}
@@ -256,12 +260,14 @@ Describe 'Invoke-AvmTerraformTransform' {
                 Invoke-AvmMapotfTransformTarget -Target ([pscustomobject]@{
                         Path = $TestDrive
                         Scope = $scope
-                        Profiles = @('module-call', 'provider-cleanup')
+                        Profiles = @('module-call', 'variable-order', 'provider-cleanup')
                     }) -Options $options
             }
 
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
-                $ArgumentList -contains '--mptf-var' -and $ArgumentList -contains 'test_wrapper=true'
+                $ArgumentList -contains '--mptf-var' -and $ArgumentList -contains 'test_wrapper=true' -and
+                ([array]::IndexOf($ArgumentList, '/fake/module-call')) -lt ([array]::IndexOf($ArgumentList, '/fake/variable-order')) -and
+                ([array]::IndexOf($ArgumentList, '/fake/variable-order')) -lt ([array]::IndexOf($ArgumentList, '/fake/provider-cleanup'))
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $ArgumentList -notcontains '--mptf-var'
@@ -540,6 +546,66 @@ mock_provider "azapi" {
         [System.IO.File]::ReadAllText($testFile) | Should -Not -Match 'mock_provider'
     }
 
+    It 'requires complete native accounting before retiring aliased test mocks: <ExtraProvider>' -TestCases @(
+        @{ ExtraProvider = '' }
+        @{ ExtraProvider = 'modtm' }
+        @{ ExtraProvider = 'random' }
+    ) {
+        param($ExtraProvider)
+        $unit = Join-Path $script:moduleDir 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $unit -Force
+        $testFile = Join-Path $unit 'aliases.tftest.hcl'
+        $alias = @'
+mock_provider "azapi" {
+  alias = "alternate"
+  mock_data "azapi_resource_list" {
+    defaults = { output = { value = ["authored"] } }
+  }
+}
+'@
+        $source = $alias + @'
+
+mock_provider "modtm" {}
+mock_provider "random" {}
+run "aliased" {
+  providers = { azapi = azapi.alternate, modtm = modtm, random = random }
+}
+'@
+        if ($ExtraProvider) {
+            $source += "`nvariables { unexpected = /* outside the validated map */ $ExtraProvider }`n"
+        }
+        [System.IO.File]::WriteAllText($testFile, $source, [System.Text.UTF8Encoding]::new($false))
+        $invoke = {
+            InModuleScope Avm.Authoring -Parameters @{ Root = $script:moduleDir; TestFile = $testFile } {
+                param($Root, $TestFile)
+                Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets @(
+                    [pscustomobject]@{ Path = $Root; Profiles = @('root') }
+                ) -UnitTestPlans @(
+                    [pscustomobject]@{
+                        Path = $TestFile
+                        TargetPaths = @($Root)
+                        MockMigrationValidated = $true
+                        AddDefaultAzapiMock = $true
+                        RetiredProviderReferences = @{ modtm = 1; random = 1 }
+                    }
+                )
+            }
+        }
+        if ($ExtraProvider) {
+            $invoke | Should -Throw '*review*'
+            [System.IO.File]::ReadAllText($testFile) | Should -BeExactly $source
+        }
+        else {
+            & $invoke
+            $updated = [System.IO.File]::ReadAllText($testFile)
+            $updated.Contains($alias) | Should -BeTrue
+            [regex]::Matches($updated, 'mock_provider "azapi"').Count | Should -Be 2
+            $updated | Should -Not -Match 'mock_provider "(modtm|random)"'
+            $updated | Should -Match 'subscription_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000"'
+            $updated | Should -Match 'providers = \{ azapi = azapi.alternate, modtm = modtm, random = random \}'
+        }
+    }
+
     It 'preserves random mocks when a module dependency is not scanned' -TestCases @(
         @{ Source = 'Azure/naming/azurerm' }
         @{ Source = './unscanned-child' }
@@ -727,7 +793,7 @@ run "wrapper" {
             param($Root, $Wrapper, $TestFile)
             Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets @(
                 [pscustomobject]@{ Path = $Root; Profiles = @('root') }
-                [pscustomobject]@{ Path = $Wrapper; Profiles = @('module-call', 'provider-cleanup', 'test') }
+                [pscustomobject]@{ Path = $Wrapper; Profiles = @('module-call', 'variable-order', 'provider-cleanup', 'test') }
             ) -UnitTestPlans @(
                 [pscustomobject]@{ Path = $TestFile; TargetPaths = @($Wrapper) }
             )
@@ -1539,8 +1605,8 @@ Describe 'Get-AvmTerraformTransformTarget' {
         ($targets | Where-Object Path -eq $direct).Profiles | Should -Be @('root', 'module', 'common')
         ($targets | Where-Object Path -eq $nested).Profiles | Should -Be @('module', 'common')
         ($targets | Where-Object Path -eq $example).Profiles | Should -Be @('example', 'provider-cleanup', 'common')
-        ($targets | Where-Object Path -eq $testWrapper).Profiles | Should -Be @('module-call', 'provider-cleanup', 'test')
-        ($targets | Where-Object Path -eq $childWrapper).Profiles | Should -Be @('module-call', 'provider-cleanup', 'test')
+        ($targets | Where-Object Path -eq $testWrapper).Profiles | Should -Be @('module-call', 'variable-order', 'provider-cleanup', 'test')
+        ($targets | Where-Object Path -eq $childWrapper).Profiles | Should -Be @('module-call', 'variable-order', 'provider-cleanup', 'test')
         @($targets.Path) | Should -Not -Contain $notModule
         @($targets.Path) | Should -Not -Contain $helperWrapper
     }

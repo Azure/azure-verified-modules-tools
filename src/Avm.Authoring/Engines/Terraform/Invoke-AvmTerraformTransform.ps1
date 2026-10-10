@@ -21,7 +21,7 @@ function Resolve-AvmMapotfConfigDir {
         'config/mapotf/<profile>' override. Pass $Context.Root.
 
     .PARAMETER Profile
-        Config profile to resolve: common, module, root, module-call, example,
+        Config profile to resolve: common, module, root, module-call, variable-order, example,
         provider-cleanup, unit-test-inspect, unit-test, or an optional test override.
 
     .PARAMETER Optional
@@ -37,7 +37,7 @@ function Resolve-AvmMapotfConfigDir {
         [string] $Root,
 
         [Parameter(Mandatory)]
-        [ValidateSet('common', 'module', 'root', 'module-call', 'example', 'provider-cleanup', 'test', 'unit-test-inspect', 'unit-test')]
+        [ValidateSet('common', 'module', 'root', 'module-call', 'variable-order', 'example', 'provider-cleanup', 'test', 'unit-test-inspect', 'unit-test')]
         [string] $ProfileName,
 
         [switch] $Optional
@@ -210,7 +210,7 @@ function Get-AvmTerraformTransformTarget {
                 $targets.Add([pscustomobject]@{
                         Path     = $testRoot
                         Scope    = 'test'
-                        Profiles = @('module-call', 'provider-cleanup', 'test')
+                        Profiles = @('module-call', 'variable-order', 'provider-cleanup', 'test')
                     })
             }
         }
@@ -358,6 +358,10 @@ function Remove-AvmLegacyTelemetryTestMock {
         $file = $scope.File
         $owner = $scope.Owner
         $unitPlan = $UnitTestPlans | Where-Object { $_.Path -ceq $file.FullName } | Select-Object -First 1
+        $validatedMocks = $null -ne $unitPlan -and
+        $null -ne $unitPlan.PSObject.Properties['MockMigrationValidated'] -and
+        $unitPlan.MockMigrationValidated -eq $true
+        $retiredProviderReferences = if ($validatedMocks) { $unitPlan.RetiredProviderReferences } else { @{ modtm = 0; random = 0 } }
         $instrumentedTargets = @($ModuleTargets |
                 Where-Object { $null -ne $unitPlan -and $_.Path -cin $unitPlan.TargetPaths -and $_.Profiles -contains 'root' })
         if ($owner.Profiles -notcontains 'root' -and $instrumentedTargets.Count -eq 0) {
@@ -374,12 +378,14 @@ function Remove-AvmLegacyTelemetryTestMock {
         }
         $emptyAzapi = [regex]::Match($updated, $emptyAzapiMock)
         $hasAzapiMock = [regex]::IsMatch($updated, $azapiMock)
-        $needsAzapiMock = $retiredMock.Success -and -not $hasAzapiMock
-        if ($isUnitTest -and ($retiredMock.Success -or $emptyAzapi.Success)) {
+        $needsAzapiMock = $retiredMock.Success -and
+        (-not $hasAzapiMock -or ($validatedMocks -and $unitPlan.AddDefaultAzapiMock))
+        if ($isUnitTest -and ($retiredMock.Success -or $emptyAzapi.Success -or $validatedMocks)) {
+            $modtmReferences = Get-AvmTerraformRetiredTestProviderReferenceCount -Text $updated -Provider modtm
             if ($updated -match '(?m)^[ \t]*provider[ \t]+"azapi"[ \t]*\{' -or
                 ($null -eq $unitPlan -and $updated -match '(?m)^[ \t]*module[ \t]*\{') -or
-                $updated -match '=[ \t]*modtm(?=[ \t\r\n,}.]|$)' -or
-                ($hasAzapiMock -and $updated -match '\balias[ \t]*=')) {
+                $modtmReferences -ne $retiredProviderReferences.modtm -or
+                (-not $validatedMocks -and $hasAzapiMock -and $updated -match '\balias[ \t]*=')) {
                 throw [AvmConfigurationException]::new(
                     "Cannot automatically migrate telemetry mocks in '$($file.FullName)': an authored provider, alias, provider mapping, or delegated test module needs review.")
             }
@@ -413,9 +419,9 @@ mock_provider "azapi" {
                 -ModuleTargets $ModuleTargets -TargetPaths $targetPaths -Cache $randomUse
             if (-not $randomInUse) {
                 $withoutEmptyMocks = [regex]::Replace($updated, $emptyRandomMock, '')
+                $randomReferences = Get-AvmTerraformRetiredTestProviderReferenceCount -Text $withoutEmptyMocks -Provider random
                 if ([regex]::IsMatch($withoutEmptyMocks, $randomMock) -or
-                    $withoutEmptyMocks -match '(?<![A-Za-z0-9_])random(?:_[A-Za-z0-9_]+)?\.' -or
-                    $withoutEmptyMocks -match '=[ \t]*random(?=[ \t\r\n,}.]|$)' -or
+                    $randomReferences -ne $retiredProviderReferences.random -or
                     ($null -eq $unitPlan -and $withoutEmptyMocks -match '(?m)^[ \t]*module[ \t]*\{')) {
                     throw [AvmConfigurationException]::new(
                         "Test file '$($file.FullName)' still uses a random mock or resource after the telemetry-only random provider was removed; review it manually.")
@@ -590,7 +596,7 @@ function Invoke-AvmTerraformTransform {
 
         Metadata-backed roots and child modules with a telemetryIdPrefix run
         root, module, common. Children without a prefix run module, common.
-        Module calls then run module-call, common from deepest to root after
+        Module calls then run module-call, variable-order, common from deepest to root after
         every child has its inputs, forwarding location and enable_telemetry
         where supported. That pass sorts variables after missing location
         inputs are generated, keeping the first transform idempotent.
@@ -601,7 +607,8 @@ function Invoke-AvmTerraformTransform {
         Unknown run targets are rejected rather than rewritten.
         Examples run example, provider-cleanup, common after the module calls
         have settled. Standalone test-module directories run module-call,
-        provider-cleanup and an optional consumer test profile, deepest first.
+        variable-order, provider-cleanup and an optional consumer test profile,
+        deepest first.
         Their module calls receive only missing required locations; authored
         locations, optional defaults and telemetry opt-outs remain unchanged.
         Empty modtm test mocks,
@@ -695,6 +702,7 @@ function Invoke-AvmTerraformTransform {
         module              = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'module'
         root                = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'root'
         'module-call'       = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'module-call'
+        'variable-order'    = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'variable-order'
         example             = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'example'
         'provider-cleanup'  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'provider-cleanup'
         'unit-test-inspect' = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'unit-test-inspect'
@@ -782,7 +790,7 @@ function Invoke-AvmTerraformTransform {
                     Path     = $_.Path
                     Scope    = $_.Scope
                     Depth    = @($relativePath -split '[\\/]').Count
-                    Profiles = @('module-call', 'common')
+                    Profiles = @('module-call', 'variable-order', 'common')
                 }
             })
         if ($moduleCallTargets.Count -gt 0) {

@@ -1,10 +1,10 @@
-variable "telemetry_subscription_resource_id" {
-  type    = string
-  default = null
+variable "telemetry_subscription_resource_ids" {
+  type    = map(string)
+  default = {}
 }
 
 variable "provider_mock_bindings" {
-  type    = map(set(string))
+  type    = map(string)
   default = {}
 }
 
@@ -12,8 +12,7 @@ locals {
   telemetry_mock_updates = {
     for name, mock in local.test_file.mock_providers : name => mock
     if (
-      name == "azapi" &&
-      var.telemetry_subscription_resource_id != null &&
+      contains(keys(var.telemetry_subscription_resource_ids), name) &&
       length([
         for config in try(mock.mock_data, []) : config
         if (
@@ -22,10 +21,6 @@ locals {
         )
       ]) == 0
     )
-  }
-  provider_mock_runs = {
-    for name, providers in var.provider_mock_bindings : name => local.test_file.runs[name]
-    if !contains(keys(local.test_file.runs[name].mptf.attributes), "providers")
   }
 }
 
@@ -37,14 +32,14 @@ transform "update_in_place" "telemetry_mock" {
   dynamic_block_body        = <<-BODY
     mock_data "azapi_client_config" {
       defaults = {
-        subscription_resource_id = ${jsonencode(var.telemetry_subscription_resource_id)}
+        subscription_resource_id = ${jsonencode(var.telemetry_subscription_resource_ids[each.key])}
       }
     }
   BODY
 }
 
 transform "update_in_place" "provider_mocks" {
-  for_each             = local.provider_mock_runs
-  target_block_address = each.value.mptf.block_address
-  dynamic_block_body   = "providers = {\n${join("\n", [for name in sort(tolist(var.provider_mock_bindings[each.key])) : "  ${name} = ${name}"])}\n}\n"
+  for_each             = var.provider_mock_bindings
+  target_block_address = local.test_file.runs[each.key].mptf.block_address
+  dynamic_block_body   = "providers = ${each.value}\n"
 }
