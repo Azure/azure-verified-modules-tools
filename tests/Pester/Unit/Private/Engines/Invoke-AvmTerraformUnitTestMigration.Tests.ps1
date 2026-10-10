@@ -552,6 +552,30 @@ Providers required by state:
             }
         }
 
+        It 'does not promote an example to a unit-test file owner' {
+            $script:fixture.Targets += [pscustomobject]@{
+                Path     = Join-Path $script:fixture.Root 'examples' 'default'
+                Scope    = 'example'
+                Profiles = @('example', 'provider-cleanup', 'common')
+            }
+            Mock Get-AvmTerraformFile -ModuleName Avm.Authoring {
+                [pscustomobject]@{
+                    Name     = 'example.tftest.hcl'
+                    FullName = [System.IO.Path]::Combine($Root, 'examples', 'default', 'tests', 'unit', 'example.tftest.hcl')
+                }
+            }
+            InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {
+                param($Fixture)
+                $scope = @(Get-AvmTerraformTestFileScope -Root $Fixture.Root -ModuleTargets $Fixture.Targets)
+                $scope | Should -HaveCount 1
+                $scope[0].Owner.Path | Should -BeExactly $Fixture.Root
+                $scope[0].IsUnitTest | Should -BeFalse
+                @(Get-AvmTerraformUnitTestSnapshot -Root $Fixture.Root `
+                        -ModuleTargets $Fixture.Targets -Options $Fixture.Options) | Should -HaveCount 0
+            }
+            Should -Invoke Get-AvmTerraformUnitTestInspection -ModuleName Avm.Authoring -Exactly 0
+        }
+
         It 'rejects a path outside every known owner' {
             Mock Get-AvmTerraformFile -ModuleName Avm.Authoring {
                 [pscustomobject]@{ Name = 'outside.tftest.hcl'; FullName = $Root + '-outside.tftest.hcl' }

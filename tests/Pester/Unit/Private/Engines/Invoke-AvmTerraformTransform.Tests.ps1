@@ -113,6 +113,10 @@ Describe 'Invoke-AvmTerraformTransform' {
 
             Invoke-AvmTerraformTransform -Context $C | Out-Null
 
+            Should -Invoke Get-AvmTerraformUnitTestSnapshot -Exactly 1 -ParameterFilter {
+                $ModuleTargets.Count -eq 3 -and
+                @($ModuleTargets | Where-Object { $_.Path -ceq $Example -and $_.Profiles -contains 'example' }).Count -eq 1
+            }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $ArgumentList[0] -eq 'transform' -and
                 $WorkingDirectory -eq $Example -and
@@ -572,15 +576,61 @@ mock_provider "azapi" {
         $testFile = Join-Path $testDir 'random.tftest.hcl'
         Set-Content -LiteralPath $testFile -Value 'mock_provider "random" {}' -Encoding utf8NoBOM
 
-        InModuleScope Avm.Authoring -Parameters @{ Root = $script:moduleDir } {
-            param($Root)
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:moduleDir; Example = $example } {
+            param($Root, $Example)
             Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets @(
-                [pscustomobject]@{ Path = $Root; Profiles = @('root') })
+                [pscustomobject]@{ Path = $Root; Profiles = @('root') }
+                [pscustomobject]@{ Path = $Example; Profiles = @('example', 'provider-cleanup', 'common') })
         }
 
         Get-Content -LiteralPath $testFile -Raw | Should -Not -Match 'mock_provider "random"'
         Get-Content -LiteralPath (Join-Path $example 'main.tf') -Raw |
             Should -Match 'resource "random_integer"'
+    }
+
+    It 'checks random use in the selected example without including other examples' -TestCases @(
+        @{ UsesRandom = $true }
+        @{ UsesRandom = $false }
+    ) {
+        param($UsesRandom)
+        $example = Join-Path $script:moduleDir 'examples' 'selected'
+        $unselected = Join-Path $script:moduleDir 'examples' 'unselected'
+        $unit = Join-Path $script:moduleDir 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $example, $unselected, $unit -Force
+        $source = if ($UsesRandom) { 'resource "random_string" "suffix" { length = 4 }' } else { 'locals {}' }
+        Set-Content -LiteralPath (Join-Path $example 'main.tf') -Encoding utf8NoBOM -Value $source
+        Set-Content -LiteralPath (Join-Path $unselected 'main.tf') -Encoding utf8NoBOM `
+            -Value 'resource "random_string" "suffix" { length = 4 }'
+        $testFile = Join-Path $unit 'selected.tftest.hcl'
+        Set-Content -LiteralPath $testFile -Encoding utf8NoBOM -Value @'
+mock_provider "modtm" {}
+mock_provider "random" {}
+run "selected" {
+  module {
+    source = "./examples/selected"
+  }
+}
+'@
+        InModuleScope Avm.Authoring -Parameters @{
+            Root = $script:moduleDir
+            Example = $example
+            Unselected = $unselected
+            TestFile = $testFile
+        } {
+            param($Root, $Example, $Unselected, $TestFile)
+            Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets @(
+                [pscustomobject]@{ Path = $Root; Profiles = @('root') }
+                [pscustomobject]@{ Path = $Example; Profiles = @('example', 'provider-cleanup', 'common') }
+                [pscustomobject]@{ Path = $Unselected; Profiles = @('example', 'provider-cleanup', 'common') }
+            ) -UnitTestPlans @(
+                [pscustomobject]@{ Path = $TestFile; TargetPaths = @($Example) }
+            )
+        }
+        $updated = [System.IO.File]::ReadAllText($testFile)
+        $updated | Should -Not -Match 'mock_provider "modtm"'
+        $updated | Should -Match 'mock_provider "azapi"'
+        $updated | Should -Match 'source = "\./examples/selected"'
+        [regex]::IsMatch($updated, 'mock_provider "random"') | Should -Be $UsesRandom
     }
 
     It 'migrates a native-validated sibling target and checks its actual random use' -TestCases @(

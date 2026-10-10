@@ -1121,6 +1121,165 @@ run "telemetry" {
         $unitResult.StdOut | Should -Match 'Success! 1 passed, 0 failed'
     }
 
+    It 'preserves mocked selected examples without retaining unrelated root mocks' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $example = Join-Path $root 'examples' 'default'
+        $unit = Join-Path $root 'tests' 'unit'
+        $exampleUnit = Join-Path $example 'tests' 'unit'
+        New-TelemetryModule -Root $root -WithLegacy -WithLocation
+        $null = New-Item -ItemType Directory -Path $exampleUnit, $unit -Force
+        Set-Content -LiteralPath (Join-Path $example 'terraform.tf') -Encoding utf8NoBOM -Value @'
+terraform {
+  required_version = ">= 1.9.0, < 2.0.0"
+  required_providers {
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.12"
+    }
+    modtm = {
+      source  = "Azure/modtm"
+      version = "~> 0.3"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+  }
+}
+'@
+        Set-Content -LiteralPath (Join-Path $example 'main.tf') -Encoding utf8NoBOM -Value @'
+resource "random_string" "suffix" {
+  length  = 8
+  special = false
+}
+
+resource "random_string" "overridden" {
+  length  = 8
+  special = false
+}
+
+module "test" {
+  source           = "../../"
+  location         = "westus2"
+  enable_telemetry = var.enable_telemetry
+}
+
+output "name" {
+  value = random_string.suffix.result
+}
+
+output "overridden_name" {
+  value = random_string.overridden.result
+}
+
+output "telemetry_count" {
+  value = module.test.telemetry_count
+}
+'@
+        Set-Content -LiteralPath (Join-Path $example 'variables.tf') -Encoding utf8NoBOM -Value @'
+variable "enable_telemetry" {
+  type    = bool
+  default = true
+}
+'@
+        $exampleOwnedTest = Join-Path $exampleUnit 'example-owned.tftest.hcl'
+        Set-Content -LiteralPath $exampleOwnedTest -Encoding utf8NoBOM -Value @'
+run "example_owned" {
+  command = plan
+  module {
+    source = "./undiscovered-target"
+  }
+}
+'@
+        $exampleOwnedContent = [System.IO.File]::ReadAllBytes($exampleOwnedTest)
+        $rootTest = Join-Path $unit 'root.tftest.hcl'
+        Set-Content -LiteralPath $rootTest -Encoding utf8NoBOM -Value @'
+mock_provider "modtm" {}
+mock_provider "random" {}
+
+variables {
+  enable_telemetry = false
+}
+
+run "root" {
+  command = apply
+  assert {
+    condition     = output.telemetry_count == 0
+    error_message = "The root must preserve its telemetry opt-out."
+  }
+}
+'@
+        $exampleTest = Join-Path $unit 'examples.tftest.hcl'
+        Set-Content -LiteralPath $exampleTest -Encoding utf8NoBOM -Value @'
+mock_provider "modtm" {}
+mock_provider "azapi" {
+  mock_data "azapi_client_config" {
+    defaults = {
+      subscription_id = "11111111-1111-1111-1111-111111111111"
+    }
+  }
+}
+mock_provider "random" {
+  mock_resource "random_string" {
+    defaults = {
+      result = "authored-example"
+    }
+  }
+}
+
+variables {
+  enable_telemetry = false
+}
+
+run "example" {
+  command = apply
+  module {
+    source = "./examples/default"
+  }
+  override_resource {
+    target = random_string.overridden
+    values = {
+      result = "authored-override"
+    }
+  }
+  assert {
+    condition     = output.name == "authored-example" && output.telemetry_count == 0
+    error_message = "The example must preserve its mock default and telemetry opt-out."
+  }
+  assert {
+    condition     = output.overridden_name == "authored-override" && output.telemetry_count == 0
+    error_message = "The example must preserve its resource override and telemetry opt-out."
+  }
+}
+'@
+        $snapshot = InModuleScope Avm.Authoring -Parameters @{ Root = $root } {
+            param($Root)
+            Get-AvmFileSnapshot -Path @((Get-AvmTerraformFile -Root $Root).FullName)
+        }
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'fail'
+        foreach ($path in $snapshot.Keys) {
+            [System.IO.File]::ReadAllBytes($path) | Should -Be $snapshot[$path]
+        }
+        (Invoke-TelemetryEngine -Root $root).Status | Should -Be 'pass'
+        Get-Content -LiteralPath $rootTest -Raw | Should -Not -Match 'mock_provider "(random|modtm)"'
+        $content = [System.IO.File]::ReadAllText($exampleTest)
+        $content | Should -Not -Match 'mock_provider "modtm"'
+        $content | Should -Match 'mock_provider "random"'
+        $content | Should -Match 'target\s*=\s*random_string\.overridden'
+        $content | Should -Match 'subscription_resource_id\s*=\s*"/subscriptions/11111111-1111-1111-1111-111111111111"'
+        Get-Content -LiteralPath (Join-Path $example 'main.tf') -Raw | Should -Match 'location\s*=\s*"westus2"'
+        [System.IO.File]::ReadAllBytes($exampleOwnedTest) | Should -Be $exampleOwnedContent
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'pass'
+        [System.IO.File]::ReadAllText($exampleTest) | Should -BeExactly $content
+        [System.IO.File]::ReadAllBytes($exampleOwnedTest) | Should -Be $exampleOwnedContent
+        Assert-TelemetryTerraformValid -Root $root -TestDirectory ([System.IO.Path]::Combine('tests', 'unit'))
+        $result = Invoke-TelemetryProcess -FilePath $script:terraformPath `
+            -ArgumentList @('test', '-no-color', ('-test-directory=' + [System.IO.Path]::Combine('tests', 'unit'))) -Root $root
+        $result.StdOut | Should -Match 'Success! 2 passed, 0 failed'
+        $result.StdOut | Should -Not -Match 'Warning:'
+        $result.StdErr | Should -BeNullOrEmpty
+    }
+
     It 'preserves inherited random mock values in root and selected child runs' {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $child = Join-Path $root 'modules' 'child'

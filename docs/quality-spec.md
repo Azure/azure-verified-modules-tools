@@ -750,10 +750,10 @@ Published dependencies and legacy telemetry
 in scopes without a telemetry prefix are not migrated by the root profile.
 Native MaPoTF inspects each direct `tests/unit/*.tftest.hcl` file before source
 transformation. Root runs and explicitly selected, known local module
-targets, including discovered standalone test setup and wrapper modules,
+targets, including discovered examples and standalone test setup and wrapper modules,
 are supported; remote or unknown targets fail without fetching them.
-Only root and child modules establish test-file ownership; standalone
-test targets do not change which files are direct unit tests.
+Only root and child modules establish test-file ownership; example and
+standalone test targets do not change which files are direct unit tests.
 After source transformation, only a target that gained a previously absent,
 required `location` input receives a per-run `location = "eastus"` in its
 provider-mocked tests. Existing global and per-run values, including nulls
@@ -771,7 +771,8 @@ actionable diagnostics instead of being silently rewritten. When random was
 used only by retired telemetry, standard empty `mock_provider "random"`
 blocks in direct unit tests are removed if the owner, selected local test
 targets, their known local children, and test setup no longer need that
-provider. Non-empty mocks or remaining random
+provider. Unselected examples do not retain an owner's random mock; explicitly
+selected examples are checked for their own provider use. Non-empty mocks or remaining random
 references fail for manual review; mocks for other random use are preserved.
 JSON configurations and module dependencies that cannot be checked locally
 also retain their random mocks rather than assuming the provider is unused.

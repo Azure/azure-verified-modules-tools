@@ -239,6 +239,9 @@ function Test-AvmTerraformRandomProviderInUse {
     $modulePrefix = $ModulePath + [System.IO.Path]::DirectorySeparatorChar
     $directories = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($target in $ModuleTargets) {
+        if ($target.Profiles -contains 'example' -and $target.Path -cne $ModulePath) {
+            continue
+        }
         if ($target.Path -cne $ModulePath -and
             -not $target.Path.StartsWith($modulePrefix, [System.StringComparison]::Ordinal)) {
             continue
@@ -748,11 +751,10 @@ function Invoke-AvmTerraformTransform {
         }
         $moduleTargets = @($targets | Where-Object { $_.Scope -in @('root', 'module') })
         $testTargets = @($targets | Where-Object { $_.Scope -eq 'test' })
-        $unitTestTargets = @($moduleTargets + $testTargets)
+        $exampleTargets = @($targets | Where-Object { $_.Scope -eq 'example' })
+        $unitTestTargets = @($moduleTargets + $testTargets + $exampleTargets)
         $unitSnapshots = @(Get-AvmTerraformUnitTestSnapshot -Root $Context.Root `
                 -ModuleTargets $unitTestTargets -Options $transformOptions)
-
-        $exampleTargets = @($targets | Where-Object { $_.Scope -eq 'example' })
 
         Invoke-AvmParallel `
             -InputObject $moduleTargets `
