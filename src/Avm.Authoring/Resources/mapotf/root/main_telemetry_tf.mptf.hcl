@@ -67,6 +67,31 @@ locals {
   modtm_provider_exists      = try(data.terraform.providers.required_providers.modtm != null, false)
   random_provider_exists     = try(data.terraform.providers.required_providers.random != null, false)
 
+  legacy_deployment = try(data.resource.all_resources.result["azurerm_resource_group_template_deployment"].telemetry, null)
+  legacy_deployment_exists = try(
+    trimspace(local.legacy_deployment.count) == "var.enable_telemetry ? 1 : 0" &&
+    trim(trimspace(local.legacy_deployment.deployment_mode), "\"") == "Incremental" &&
+    trimspace(local.legacy_deployment.name) == "local.telem_arm_deployment_name" &&
+    trimspace(local.legacy_deployment.template_content) == "local.telem_arm_template_content",
+    false
+  )
+  legacy_random_id = try(data.resource.all_resources.result["random_id"].telem, null)
+  legacy_random_root = try(local.legacy_random_id.mptf.module.abs_dir, null)
+  legacy_reference_gap = "(?:[[:space:]]|/[*](?s:.*?)[*]/|//[^\\r\\n]*|#[^\\r\\n]*)*"
+  legacy_random_referenced = local.legacy_random_root == null || local.legacy_random_root == "" ? true : (
+    length(fileset(local.legacy_random_root, "*.tf.json")) > 0 ||
+    anytrue([
+      for filename in fileset(local.legacy_random_root, "*.tf") :
+      length(regexall("(^|[^A-Za-z0-9_])random_id${local.legacy_reference_gap}[.]${local.legacy_reference_gap}telem([^A-Za-z0-9_]|$)", file("${local.legacy_random_root}/${filename}"))) > 0
+    ])
+  )
+  legacy_random_id_exists = local.legacy_deployment_exists && try(
+    trimspace(local.legacy_random_id.count) == "var.enable_telemetry ? 1 : 0" &&
+    tostring(local.legacy_random_id.byte_length) == "4" &&
+    !local.legacy_random_referenced,
+    false
+  )
+
   other_modtm_resources = flatten([
     for resource_type, by_name in data.resource.all_resources.result : [
       for name, resource in by_name : name
@@ -82,7 +107,9 @@ locals {
   other_random_resources = flatten([
     for resource_type, by_name in data.resource.all_resources.result : [
       for name, resource in by_name : name
-      if startswith(resource_type, "random_") && !(resource_type == "random_uuid" && name == "telemetry")
+      if startswith(resource_type, "random_") &&
+      !(resource_type == "random_uuid" && name == "telemetry") &&
+      !(local.legacy_random_id_exists && resource_type == "random_id" && name == "telem")
     ]
   ])
   other_random_data = flatten([
@@ -205,6 +232,42 @@ transform "new_block" "forget_random_uuid" {
   depends_on = [transform.remove_block.random_uuid]
 }
 
+transform "remove_block" "legacy_deployment" {
+  for_each             = local.legacy_deployment_exists ? toset([1]) : toset([])
+  target_block_address = "resource.azurerm_resource_group_template_deployment.telemetry"
+}
+
+transform "new_block" "forget_legacy_deployment" {
+  for_each       = local.legacy_deployment_exists ? toset([1]) : toset([])
+  new_block_type = "removed"
+  filename       = "main.telemetry.tf"
+  asraw {
+    from = azurerm_resource_group_template_deployment.telemetry
+    lifecycle {
+      destroy = false
+    }
+  }
+  depends_on = [transform.remove_block.legacy_deployment]
+}
+
+transform "remove_block" "legacy_random_id" {
+  for_each             = local.legacy_random_id_exists ? toset([1]) : toset([])
+  target_block_address = "resource.random_id.telem"
+}
+
+transform "new_block" "forget_legacy_random_id" {
+  for_each       = local.legacy_random_id_exists ? toset([1]) : toset([])
+  new_block_type = "removed"
+  filename       = "main.telemetry.tf"
+  asraw {
+    from = random_id.telem
+    lifecycle {
+      destroy = false
+    }
+  }
+  depends_on = [transform.remove_block.legacy_random_id]
+}
+
 transform "remove_block_element" "drop_modtm_provider" {
   for_each             = local.modtm_provider_exists && length(local.other_modtm_resources) == 0 && length(local.other_modtm_data) == 0 ? toset([1]) : toset([])
   target_block_address = "terraform"
@@ -216,10 +279,13 @@ transform "remove_block_element" "drop_modtm_provider" {
 }
 
 transform "remove_block_element" "drop_unused_random_provider" {
-  for_each             = local.random_uuid_exists && local.random_provider_exists && length(local.other_random_resources) == 0 && length(local.other_random_data) == 0 ? toset([1]) : toset([])
+  for_each             = (local.random_uuid_exists || local.legacy_random_id_exists) && local.random_provider_exists && length(local.other_random_resources) == 0 && length(local.other_random_data) == 0 ? toset([1]) : toset([])
   target_block_address = "terraform"
   paths                = ["required_providers.random"]
-  depends_on           = [transform.remove_block.random_uuid]
+  depends_on = [
+    transform.remove_block.random_uuid,
+    transform.remove_block.legacy_random_id,
+  ]
 }
 
 transform "ensure_local" "main_location" {

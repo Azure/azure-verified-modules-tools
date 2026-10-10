@@ -700,7 +700,15 @@ upgrade guidance. Authored rule-disabling overrides retain their warnings.
 
 The old `modtm_telemetry.telemetry` and `random_uuid.telemetry` instances are
 retired through `removed` blocks with `destroy = false`, so upgrading does
-not delete their remote objects. Terraform must still install their former
+not delete their remote objects. The older
+`azurerm_resource_group_template_deployment.telemetry` transport and its
+`random_id.telem` helper are retired the same way. Recognize the legacy
+deployment's name/template expressions, incremental mode and telemetry gate,
+and the helper's gate and four-byte length; matching resource names alone
+must not remove other authored deployments or random resources.
+Retain the helper and its provider if any Terraform source still references
+it or the scope contains JSON configuration that needs review.
+Terraform must still install their former
 providers once when an existing state references them; after the state
 forgets those addresses, new installations do not require `modtm`. The
 random provider requirement is removed only if no other random resources

@@ -57,7 +57,7 @@ Describe 'Integration: MAPOTF Terraform deployment telemetry' -Tag 'Integration'
             param([string] $Root, [string] $TestDirectory = 'tests')
 
             $null = Invoke-TelemetryProcess -FilePath $script:terraformPath `
-                -ArgumentList @('fmt', '-recursive', $Root) -Root $Root
+                -ArgumentList @('fmt', '-no-color', '-recursive', $Root) -Root $Root
             $init = Invoke-TelemetryProcess -FilePath $script:terraformPath `
                 -ArgumentList @('init', '-backend=false', '-input=false', '-upgrade', '-no-color', "-test-directory=$TestDirectory") -Root $Root
             $init.StdOut | Should -Not -Match 'Finding Azure/modtm versions'
@@ -175,6 +175,27 @@ output "telemetry_count" {
             }
         }
 
+        function Add-LegacyResourceGroupTelemetry {
+            param([string] $Root, [string] $Tags = 'null')
+
+            Add-Content -LiteralPath (Join-Path $Root 'main.telemetry.tf') -Encoding utf8NoBOM -Value @"
+
+resource "random_id" "telem" {
+  count       = var.enable_telemetry ? 1 : 0
+  byte_length = 4
+}
+
+resource "azurerm_resource_group_template_deployment" "telemetry" {
+  count               = var.enable_telemetry ? 1 : 0
+  deployment_mode     = "Incremental"
+  name                = local.telem_arm_deployment_name
+  resource_group_name = var.resource_group_name
+  tags                = $Tags
+  template_content    = local.telem_arm_template_content
+}
+"@
+        }
+
         function New-AzureResourceHelper {
             param([string] $Root)
 
@@ -249,6 +270,155 @@ resource "azapi_resource" "example" {
         Get-Content -LiteralPath (Join-Path $root 'main.telemetry.tf') -Raw | Should -BeExactly $telemetry
         Get-Content -LiteralPath (Join-Path $root 'terraform.tf') -Raw | Should -BeExactly $providers
         Get-Content -LiteralPath (Join-Path $root 'variables.tf') -Raw | Should -BeExactly $variables
+        Assert-TelemetryTerraformValid -Root $root
+    }
+
+    It 'retires older resource-group telemetry without destroying state: <Case>' -ForEach @(
+        @{ Case = 'older transport only'; WithModtm = $false; OtherRandom = $false; Tags = 'null' }
+        @{ Case = 'both legacy transports'; WithModtm = $true; OtherRandom = $false; Tags = 'null' }
+        @{ Case = 'authored tags and other random use'; WithModtm = $true; OtherRandom = $true; Tags = '{ module = "avm-res-kusto-cluster" }' }
+    ) {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $root -WithLocation -WithLegacy:$WithModtm
+        if (-not $WithModtm) {
+            Set-Content -LiteralPath (Join-Path $root 'terraform.tf') -Encoding utf8NoBOM -Value @'
+terraform {
+  required_version = ">= 1.9.0, < 2.0.0"
+  required_providers {
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+  }
+}
+'@
+        }
+        Add-LegacyResourceGroupTelemetry -Root $root -Tags $Tags
+        if ($OtherRandom) {
+            Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+resource "random_id" "naming" {
+  byte_length = 8
+}
+'@
+        }
+
+        Invoke-TelemetryProfiles -Root $root
+
+        $telemetry = Get-Content -LiteralPath (Join-Path $root 'main.telemetry.tf') -Raw
+        $providers = Get-Content -LiteralPath (Join-Path $root 'terraform.tf') -Raw
+        $telemetry | Should -Not -Match 'resource "azurerm_resource_group_template_deployment" "telemetry"'
+        $telemetry | Should -Not -Match 'resource "random_id" "telem"'
+        $telemetry | Should -Not -Match 'local\.telem_arm_'
+        $telemetry | Should -Match '(?s)removed \{\s*from\s*=\s*azurerm_resource_group_template_deployment\.telemetry\s*lifecycle \{\s*destroy\s*=\s*false'
+        $telemetry | Should -Match '(?s)removed \{\s*from\s*=\s*random_id\.telem\s*lifecycle \{\s*destroy\s*=\s*false'
+        @([regex]::Matches($telemetry, '(?m)^removed \{')) |
+            Should -HaveCount $(if ($WithModtm) { 4 } else { 2 })
+        if ($OtherRandom) {
+            $providers | Should -Match '(?m)^\s*random\s*='
+            Get-Content -LiteralPath (Join-Path $root 'main.tf') -Raw |
+                Should -Match '(?s)resource "random_id" "naming" \{\s*byte_length\s*=\s*8'
+        }
+        else {
+            $providers | Should -Not -Match '(?m)^\s*random\s*='
+        }
+
+        Invoke-TelemetryProfiles -Root $root
+        Get-Content -LiteralPath (Join-Path $root 'main.telemetry.tf') -Raw | Should -BeExactly $telemetry
+        Get-Content -LiteralPath (Join-Path $root 'terraform.tf') -Raw | Should -BeExactly $providers
+        Assert-TelemetryTerraformValid -Root $root
+    }
+
+    It 'preserves nonstandard resource-group deployments and random helpers: <Case>' -ForEach @(
+        @{ Case = 'custom deployment name'; Attribute = 'name'; Expression = '"business-deployment"'; RemoveDeployment = $false }
+        @{ Case = 'custom template'; Attribute = 'template_content'; Expression = '"{}"'; RemoveDeployment = $false }
+        @{ Case = 'different deployment gate'; Attribute = 'count'; Expression = '1'; RemoveDeployment = $false }
+        @{ Case = 'different deployment mode'; Attribute = 'deployment_mode'; Expression = '"Complete"'; RemoveDeployment = $false }
+        @{ Case = 'different helper length'; Attribute = 'byte_length'; Expression = '8'; RemoveDeployment = $true }
+        @{ Case = 'different helper gate'; Attribute = 'helper_count'; Expression = '1'; RemoveDeployment = $true }
+    ) {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $root -WithLocation -WithLegacy
+        $properties = @{
+            count            = 'var.enable_telemetry ? 1 : 0'
+            deployment_mode  = '"Incremental"'
+            name             = 'local.telem_arm_deployment_name'
+            template_content = 'local.telem_arm_template_content'
+            byte_length      = '4'
+            helper_count     = 'var.enable_telemetry ? 1 : 0'
+        }
+        $properties[$Attribute] = $Expression
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @"
+resource "azurerm_resource_group_template_deployment" "telemetry" {
+  count               = $($properties.count)
+  deployment_mode     = $($properties.deployment_mode)
+  name                = $($properties.name)
+  resource_group_name = "business-resources"
+  template_content    = $($properties.template_content)
+}
+
+resource "random_id" "telem" {
+  count       = $($properties.helper_count)
+  byte_length = $($properties.byte_length)
+}
+"@
+
+        Invoke-TelemetryProfiles -Root $root
+
+        $main = Get-Content -LiteralPath (Join-Path $root 'main.tf') -Raw
+        $telemetry = Get-Content -LiteralPath (Join-Path $root 'main.telemetry.tf') -Raw
+        if ($RemoveDeployment) {
+            $main | Should -Not -Match 'resource "azurerm_resource_group_template_deployment" "telemetry"'
+            $telemetry | Should -Match 'from\s*=\s*azurerm_resource_group_template_deployment\.telemetry'
+        }
+        else {
+            $main | Should -Match 'resource "azurerm_resource_group_template_deployment" "telemetry"'
+            $telemetry | Should -Not -Match 'from\s*=\s*azurerm_resource_group_template_deployment\.telemetry'
+        }
+        $main | Should -Match ([regex]::Escape($Expression))
+        $main | Should -Match 'resource "random_id" "telem"'
+        $telemetry | Should -Not -Match 'from\s*=\s*random_id\.telem'
+        Get-Content -LiteralPath (Join-Path $root 'terraform.tf') -Raw |
+            Should -Match '(?m)^\s*random\s*='
+    }
+
+    It 'retains a legacy random helper still needed by authored <SourceKind>' -ForEach @(
+        @{ SourceKind = 'locals'; Filename = 'locals.tf'; Source = 'locals { legacy_instance = try(random_id.telem[0].hex, null) }' }
+        @{
+            SourceKind = 'outputs'
+            Filename = 'outputs.tf'
+            Source = @'
+output "legacy_instance" {
+  value = try(random_id.telem[0].hex, null)
+}
+'@
+        }
+        @{
+            SourceKind = 'commented traversals'
+            Filename = 'outputs.tf'
+            Source = @'
+output "legacy_instance" {
+  value = try(random_id /* retained */ .telem[0].hex, null)
+}
+'@
+        }
+        @{ SourceKind = 'JSON configuration'; Filename = 'instance.tf.json'; Source = '{"locals":{"legacy_instance":"${try(random_id.telem[0].hex, null)}"}}' }
+    ) {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $root -WithLocation -WithLegacy
+        Add-LegacyResourceGroupTelemetry -Root $root
+        $sourceFile = Join-Path $root $Filename
+        Set-Content -LiteralPath $sourceFile -Encoding utf8NoBOM -Value $Source
+
+        Invoke-TelemetryProfiles -Root $root
+
+        $telemetry = Get-Content -LiteralPath (Join-Path $root 'main.telemetry.tf') -Raw
+        $telemetry | Should -Not -Match 'resource "azurerm_resource_group_template_deployment" "telemetry"'
+        $telemetry | Should -Match 'from\s*=\s*azurerm_resource_group_template_deployment\.telemetry'
+        $telemetry | Should -Match 'resource "random_id" "telem"'
+        $telemetry | Should -Not -Match 'from\s*=\s*random_id\.telem'
+        Get-Content -LiteralPath $sourceFile -Raw | Should -Match 'telem\[0\]\.hex'
+        Get-Content -LiteralPath (Join-Path $root 'terraform.tf') -Raw |
+            Should -Match '(?m)^\s*random\s*='
         Assert-TelemetryTerraformValid -Root $root
     }
 
