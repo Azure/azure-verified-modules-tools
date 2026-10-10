@@ -1312,7 +1312,13 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
 - Consumers wrap `Invoke-ScriptAnalyzer` results in `@(...)`; a no-finding
   result can otherwise be `$AutomationNull` on non-Windows hosts.
 - The build retry wrapper may retry only PSScriptAnalyzer's known transient
-  `NullReferenceException`. It must never retry or hide analyzer findings.
+  `NullReferenceException` or a `CommandNotFoundException` whose `CommandName`
+  is exactly `Get-Command`, including either failure inside an exception chain.
+  Matching message text alone does not qualify a command-resolution failure.
+  Both share the `AVM_LINT_MAX_ATTEMPTS` budget (eight total attempts by default)
+  and the existing 500 ms incremental backoff. Exhaustion rethrows the original
+  final error; unrelated exceptions fail immediately. The wrapper must never
+  retry or hide analyzer findings.
 - A `pre-commit` Pester suite runs:
   - Manifest layout (`Test-AvmModuleLayout`).
   - Encoding check (no BOM, LF line endings).

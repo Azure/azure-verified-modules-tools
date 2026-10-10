@@ -153,14 +153,6 @@ function script:Invoke-AvmPester {
     }
 }
 
-# PSScriptAnalyzer occasionally throws NullReferenceException from inside its
-# own rule pipeline (no file/line in our code is named). Across runners we
-# have seen the same NRE on both windows-latest and ubuntu-latest on the same
-# commits that pass on re-run, so the failure is a transient analyzer-engine
-# race rather than a lint finding. This wrapper retries ONLY that specific
-# failure (matched by exception type or message), in a fresh analyzer
-# invocation, up to AVM_LINT_MAX_ATTEMPTS times. Real findings come back as
-# DiagnosticRecord objects -- not exceptions -- and never trigger a retry.
 function script:Invoke-ScriptAnalyzerWithRetry {
     param(
         [Parameter(Mandatory)] [hashtable] $Params
@@ -174,18 +166,23 @@ function script:Invoke-ScriptAnalyzerWithRetry {
             return Invoke-ScriptAnalyzer @Params
         }
         catch {
-            $isNre = $false
+            $retryReason = $null
             $ex = $_.Exception
             while ($ex) {
                 if ($ex -is [System.NullReferenceException] -or
                     $ex.Message -match 'Object reference not set to an instance of an object') {
-                    $isNre = $true
+                    $retryReason = 'threw NullReferenceException'
+                    break
+                }
+                if ($ex -is [System.Management.Automation.CommandNotFoundException] -and
+                    $ex.CommandName -ceq 'Get-Command') {
+                    $retryReason = 'could not resolve Get-Command'
                     break
                 }
                 $ex = $ex.InnerException
             }
-            if (-not $isNre -or $attempt -eq $max) { throw }
-            Write-Information ("PSScriptAnalyzer threw NullReferenceException on attempt {0}/{1}; retrying. This is a known transient analyzer-engine race." -f $attempt, $max) -InformationAction Continue
+            if (-not $retryReason -or $attempt -eq $max) { throw }
+            Write-Information ("PSScriptAnalyzer {0} on attempt {1}/{2}; retrying." -f $retryReason, $attempt, $max) -InformationAction Continue
             Start-Sleep -Milliseconds (500 * $attempt)
         }
     }
