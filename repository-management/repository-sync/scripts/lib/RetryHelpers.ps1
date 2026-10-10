@@ -185,11 +185,15 @@ function Assert-RepositorySyncNoCompetingWriter {
         }
         $page++
     } while ($jobs.Count -lt $expected)
+    $workerPattern = '^Sync (?<repository>terraform-(?:azure|azurerm|azapi)-' +
+        [regex]::Escape($RepoId) + ')(?: / Prepare \k<repository>)?$'
+    $repositoryName = $Repository.Split('/')[1]
+    $workerNames = @("Sync $repositoryName", "Sync $repositoryName / Prepare $repositoryName")
     $matching = @($jobs | Where-Object {
-        $_['status'] -ceq 'in_progress' -and $_['name'] -cmatch ('^Sync terraform-(azure|azurerm|azapi)-' + [regex]::Escape($RepoId) + '$')
+        $_['status'] -ceq 'in_progress' -and $_['name'] -cmatch $workerPattern
     })
     if ($jobs.Count -ne $expected -or $matching.Count -ne 1 -or
-        $matching[0]['name'] -cne "Sync $($Repository.Split('/')[1])" -or $matching[0]['runner_name'] -cne $env:RUNNER_NAME) {
+        $matching[0]['name'] -cnotin $workerNames -or $matching[0]['runner_name'] -cne $env:RUNNER_NAME) {
         throw [System.InvalidOperationException]::new('An active competing state writer or unverified current worker prevents automatic lock recovery.')
     }
     if (-not [string]::IsNullOrWhiteSpace($LockOwner)) {

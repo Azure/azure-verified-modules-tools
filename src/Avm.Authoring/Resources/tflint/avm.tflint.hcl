@@ -6,7 +6,7 @@ plugin "terraform" {
 
 plugin "avm" {
   enabled   = true
-  version   = "1.0.0"
+  version   = "1.3.0"
   source    = "github.com/Azure/tflint-ruleset-avm"
   signature = "attestation"
 }
@@ -78,6 +78,10 @@ rule "terraform_unused_required_providers" {
 
 rule "terraform_workspace_remote" {
   enabled = true
+}
+
+rule "avm_provider_modtm_version_constraint" {
+  enabled = false
 }
 
 rule "avm_azapi_data_response_export_values_required" {

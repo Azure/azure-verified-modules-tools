@@ -28,6 +28,8 @@ param(
     ),
     [switch]$forceFileUpdate,
     [hashtable]$bamiSettings = @{},
+    [string]$candidateOutputDirectory = "",
+    [string]$authoringModulePath = "",
     [string]$repositorySyncRepositoryId = $env:GITHUB_REPOSITORY_ID
 )
 
@@ -41,6 +43,7 @@ $libDir = Join-Path $PSScriptRoot "lib"
 . (Join-Path $libDir "RepositoryConfig.ps1")
 . (Join-Path $libDir "RepoTree.ps1")
 . (Join-Path $libDir "AvmPreCommit.ps1")
+. (Join-Path $libDir "RepositoryCandidate.ps1")
 . (Join-Path $libDir "ManagedFilesUpgrade.ps1")
 . (Join-Path $libDir "BranchProtection.ps1")
 . (Join-Path $libDir "UnmanagedRulesets.ps1")
@@ -84,9 +87,8 @@ $selectedTestTenant = if ($repositoryCreationModeEnabled) { 'none' } else { $set
 if (-not $repositoryCreationModeEnabled -and $selectedTestTenant -cne 'bami') {
     throw [System.InvalidOperationException]::new('The legacy test tenant is retired. Normal repository sync requires testTenant bami.')
 }
-if ($selectedTestTenant -ceq 'bami' -and $env:GITHUB_ACTIONS -eq 'true' -and
-    ($env:GITHUB_REPOSITORY -cne 'Azure/azure-verified-modules-tools' -or $env:GITHUB_REF -cne 'refs/heads/main')) {
-    throw [System.InvalidOperationException]::new('BAMI repository sync requires trusted Azure/azure-verified-modules-tools main in GitHub Actions.')
+if ($selectedTestTenant -ceq 'bami' -and $env:GITHUB_ACTIONS -eq 'true') {
+    Assert-AvmBamiRepositorySyncRunContext -PlanOnly $planOnly
 }
 $testTenant = if ($repositoryCreationModeEnabled) {
     [pscustomobject]@{ TestTenant = 'none'; Settings = $null }
@@ -98,15 +100,18 @@ $repoSplit = $repoUrl.Split("/")
 $orgName = $repoSplit[3]
 $repoName = $repoSplit[4]
 $orgAndRepoName = "$orgName/$repoName"
-
 if (-not $PSCmdlet.ShouldProcess($orgAndRepoName, ($planOnly ? 'Plan repository sync' : 'Apply repository sync'))) {
     return [pscustomobject]@{ Status = 'Preview'; Repository = $orgAndRepoName }
+}
+if ($candidateOutputDirectory) {
+    Set-RepositorySyncCandidatePhase -Directory $candidateOutputDirectory `
+        -Repository $orgAndRepoName -Phase initializing -PlanOnly $planOnly
 }
 Write-Information "Repository: $orgAndRepoName; plan only: $planOnly; force file update: $($forceFileUpdate.IsPresent)." -InformationAction Continue
 $discovery = Invoke-RepositorySyncLogGroup -Name 'GitHub repository and team discovery' -Action {
     $context = if ($repositoryCreationModeEnabled) { $null } else {
         Resolve-AvmRepositorySyncContext -RepoId $repoId -Repository $orgAndRepoName `
-            -RepositorySyncRepositoryId $repositorySyncRepositoryId
+            -RepositorySyncRepositoryId $repositorySyncRepositoryId -PlanOnly $planOnly
     }
     $tree = if ($repositoryCreationModeEnabled) { $null } else {
         Get-RepositoryDefaultBranchTree -orgAndRepoName $orgAndRepoName
@@ -202,6 +207,47 @@ $issueLog = @(Invoke-RepositorySyncLogGroup -Name 'Terraform repository configur
 })
 Write-Information ($planOnly ? 'Terraform plan completed; nothing applied.' : 'Terraform apply completed.') -InformationAction Continue
 
+$candidatePlan = $null
+if (-not $repositoryCreationModeEnabled -and $candidateOutputDirectory) {
+    $arguments = if ($planOnly) {
+        @('show', '-json', (Join-Path $terraformModulePath "$repoId.tfplan"))
+    } else {
+        @('output', '-json')
+    }
+    $candidatePlan = Invoke-RepositorySyncTerraform -Arguments $arguments `
+        -Root $terraformModulePath -Environment $environment -Json
+    if ($planOnly) {
+        $pendingIdentityChanges = @($candidatePlan['resource_changes'] | Where-Object {
+            $_['mode'] -ceq 'managed' -and
+            $_['address'].StartsWith('module.bami[0].', [StringComparison]::Ordinal) -and
+            (@($_['change']['actions']) -join ',') -cne 'no-op'
+        })
+        if ($pendingIdentityChanges.Count -gt 0) {
+            Set-RepositorySyncCandidatePhase -Directory $candidateOutputDirectory `
+                -Repository $orgAndRepoName -Phase skipped -PlanOnly $planOnly
+            Write-Warning "${orgAndRepoName}: PendingCandidateIdentity. Reconcile the test identity before preparing a validation candidate."
+            return [pscustomobject]@{ Status = 'PendingCandidateIdentity'; ConsumerSettings = $null }
+        }
+    } else {
+        $candidatePlan = @{ planned_values = @{ outputs = $candidatePlan } }
+    }
+    $outputs = $candidatePlan['planned_values']['outputs']
+    if ($outputs -isnot [System.Collections.IDictionary] -or
+        $outputs['test_identity'] -isnot [System.Collections.IDictionary] -or
+        $outputs['test_settings'] -isnot [System.Collections.IDictionary] -or
+        $outputs['test_identity']['value'] -isnot [System.Collections.IDictionary] -or
+        $outputs['test_settings']['value'] -isnot [System.Collections.IDictionary]) {
+        throw [System.InvalidOperationException]::new('Candidate preparation requires complete dedicated test identity and settings outputs.')
+    }
+    $verifiedSettings = ConvertTo-AvmBamiConsumerSettings -Identity $outputs['test_identity']['value'] `
+        -Settings $testTenant.Settings -Repository $repositorySyncContext.Repository
+    $expected = ConvertTo-RepositorySyncTestSettings -Settings $verifiedSettings | ConvertTo-Json -Depth 6 -Compress
+    $actual = ConvertTo-RepositorySyncTestSettings -Settings $outputs['test_settings']['value'] | ConvertTo-Json -Depth 6 -Compress
+    if ($actual -cne $expected) {
+        throw [System.InvalidOperationException]::new('Candidate test settings do not match the verified repository identity and configured test subscriptions.')
+    }
+}
+
 if (!$repositoryCreationModeEnabled) {
     $issueLog = @(Invoke-RepositorySyncLogGroup -Name 'GitHub policy and access cleanup' -Action {
         $issues = @((Remove-LegacyBranchProtection `
@@ -225,6 +271,10 @@ if (!$repositoryCreationModeEnabled) {
 # its own .avm/managed-files-version.json.
 if (!$repositoryCreationModeEnabled) {
     if (@($issueLog | Where-Object { $_.severity -ne 'warning' }).Count -gt 0) {
+        if ($candidateOutputDirectory) {
+            Set-RepositorySyncCandidatePhase -Directory $candidateOutputDirectory `
+                -Repository $orgAndRepoName -Phase skipped -PlanOnly $planOnly
+        }
         Write-Warning "Skipping file updates for $orgAndRepoName because repository sync reported errors."
     } else {
         $preCommitResult = Invoke-RepositorySyncLogGroup -Name 'Managed files and authoring checks' -Action {
@@ -237,9 +287,14 @@ if (!$repositoryCreationModeEnabled) {
             -defaultBranch $repoTree.DefaultBranch `
             -planOnly $planOnly `
             -forceFileUpdate $forceFileUpdate.IsPresent `
+            -candidateOutputDirectory $candidateOutputDirectory `
+            -authoringModulePath $authoringModulePath `
             -issueLog $issueLog
         }
         $issueLog = @($preCommitResult.IssueLog)
+        if ($candidateOutputDirectory -and $preCommitResult.HasChanges) {
+            Save-RepositorySyncCandidateTestSettings -Plan $candidatePlan -Directory $candidateOutputDirectory
+        }
         Write-Information ($preCommitResult.HasChanges ? 'Managed-file changes prepared.' : 'Managed files are unchanged.') -InformationAction Continue
     }
 }

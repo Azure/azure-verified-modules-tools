@@ -161,7 +161,11 @@ Describe 'Repository state-lock recovery' -Tag Component {
         Should -Invoke Start-Process -Exactly 0
     }
 
-    It 'rechecks and force-unlocks only the matching initialized backend, without claiming abandonment' {
+    It 'rechecks only the matching initialized backend for the <Layout> worker, without claiming abandonment' -ForEach @(
+        @{ Layout = 'original'; Worker = 'Sync terraform-azurerm-avm-ptn-example-repo' }
+        @{ Layout = 'reusable'; Worker = 'Sync terraform-azurerm-avm-ptn-example-repo / Prepare terraform-azurerm-avm-ptn-example-repo' }
+    ) {
+        $script:fixture.JobPages[0].jobs[1].name = $Worker
         Clear-TerraformStateLock @script:parameters | Should -BeTrue
         Should -Invoke Write-Warning -Exactly 1 -ParameterFilter {
             $Message -match 'unverified lock' -and $Message -notmatch 'stale|abandoned'
@@ -239,6 +243,7 @@ Describe 'Repository state-lock recovery' -Tag Component {
         @{ Name = 'GITHUB_ACTIONS'; Value = '' }
         @{ Name = 'GITHUB_REPOSITORY'; Value = 'fork/azure-verified-modules-tools' }
         @{ Name = 'GITHUB_REF'; Value = 'refs/pull/246/merge' }
+        @{ Name = 'GITHUB_REF'; Value = 'refs/heads/telemetry-rehearsal' }
         @{ Name = 'GITHUB_WORKFLOW_REF'; Value = 'Azure/azure-verified-modules-tools/.github/workflows/other.yml@refs/heads/main' }
         @{ Name = 'GITHUB_RUN_ID'; Value = '' }
         @{ Name = 'GITHUB_RUN_ATTEMPT'; Value = '0' }
@@ -319,10 +324,14 @@ Describe 'Repository state-lock recovery' -Tag Component {
         $script:fixture.BlobReads | Should -Be 0
     }
 
-    It 'refuses another active worker for the same state across provider prefixes' {
+    It 'refuses another active <Layout> worker for the same state across provider prefixes' -ForEach @(
+        @{ Layout = 'original'; Worker = 'Sync terraform-azapi-avm-ptn-example-repo' }
+        @{ Layout = 'reusable'; Worker = 'Sync terraform-azapi-avm-ptn-example-repo / Prepare terraform-azapi-avm-ptn-example-repo' }
+        @{ Layout = 'same-repository reusable'; Worker = 'Sync terraform-azurerm-avm-ptn-example-repo / Prepare terraform-azurerm-avm-ptn-example-repo' }
+    ) {
         $script:fixture.JobPages[0].total_count++
         $script:fixture.JobPages[0].jobs += @{
-            id = 3; name = 'Sync terraform-azapi-avm-ptn-example-repo'; status = 'in_progress'; runner_name = 'other-worker'
+            id = 3; name = $Worker; status = 'in_progress'; runner_name = 'other-worker'
         }
         { Clear-TerraformStateLock @script:parameters } | Should -Throw '*active competing state writer*'
         $script:fixture.BlobReads | Should -Be 0
@@ -363,6 +372,9 @@ Describe 'Repository state-lock recovery' -Tag Component {
         @{ Case = 'other repository'; Change = { param($f) $f.Run.head_repository.full_name = 'fork/tools' }; Message = '*current trusted sync run*' }
         @{ Case = 'wrong runner'; Change = { param($f) $f.JobPages[0].jobs[1].runner_name = 'someone-else' }; Message = '*unverified current worker*' }
         @{ Case = 'missing current job'; Change = { param($f) $f.JobPages[0].jobs[1].status = 'queued' }; Message = '*unverified current worker*' }
+        @{ Case = 'validation job'; Change = { param($f) $f.JobPages[0].jobs[1].name = 'Sync terraform-azurerm-avm-ptn-example-repo / Validate terraform-azurerm-avm-ptn-example-repo' }; Message = '*unverified current worker*' }
+        @{ Case = 'mismatched child repository'; Change = { param($f) $f.JobPages[0].jobs[1].name = 'Sync terraform-azurerm-avm-ptn-example-repo / Prepare terraform-azapi-avm-ptn-example-repo' }; Message = '*unverified current worker*' }
+        @{ Case = 'partial child name'; Change = { param($f) $f.JobPages[0].jobs[1].name = 'Sync terraform-azurerm-avm-ptn-example-repo / Prepare' }; Message = '*unverified current worker*' }
         @{ Case = 'duplicate jobs'; Change = { param($f) $f.JobPages[0].jobs[1].id = 1 }; Message = '*job inventory is ambiguous*' }
         @{ Case = 'empty jobs'; Change = { param($f) $f.JobPages[0].jobs = @() }; Message = '*job inventory is incomplete*' }
         @{ Case = 'overfull page'; Change = { param($f) $f.JobPages[0].total_count = 1 }; Message = '*unverified current worker*' }

@@ -1,0 +1,456 @@
+---
+name: 'Reusable: Repo Sync'
+
+on:
+  workflow_call:
+    inputs:
+      repo_id:
+        required: true
+        type: string
+      repo_name:
+        required: true
+        type: string
+      repo_url:
+        required: true
+        type: string
+      repo_metadata_json:
+        required: true
+        type: string
+      plan_only:
+        required: true
+        type: boolean
+      use_workflow_authoring_source:
+        required: true
+        type: boolean
+      force_file_update:
+        required: true
+        type: boolean
+      sync_project_items:
+        required: true
+        type: boolean
+      include_closed_project_items:
+        required: true
+        type: boolean
+      project_lookback_days:
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  PROJECT_URL: 'https://github.com/orgs/Azure/projects/1011'
+
+defaults:
+  run:
+    working-directory: ./repository-management/repository-sync
+
+jobs:
+  run-sync:
+    name: Prepare ${{ inputs.repo_name }}
+    runs-on: ubuntu-latest
+    environment: avm
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: latest
+          terraform_wrapper: false
+
+      - name: Install Avm.Authoring
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $maxAttempts = 3
+          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            try {
+              Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
+              break
+            }
+            catch {
+              if ($attempt -eq $maxAttempts) {
+                throw
+              }
+              $delaySeconds = 5 * [math]::Pow(2, $attempt - 1)
+              Write-Warning "Avm.Authoring installation failed on attempt $attempt of ${maxAttempts}: $($_.Exception.Message). Retrying in $delaySeconds seconds."
+              Start-Sleep -Seconds $delaySeconds
+            }
+          }
+          Import-Module Avm.Authoring
+          if (-not (Get-Command Invoke-AvmPreCommit).Parameters.ContainsKey('RepoId')) {
+            throw 'The released Avm.Authoring version does not support repository sync options on avm pre-commit.'
+          }
+
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AVM_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Resolve state backend
+        id: state-backend
+        shell: pwsh
+        env:
+          ARM_BACKEND_TENANT_ID: ${{ vars.ARM_BACKEND_TENANT_ID }}
+          ARM_BACKEND_SUBSCRIPTION_ID: ${{ vars.ARM_BACKEND_SUBSCRIPTION_ID }}
+          ARM_BACKEND_CLIENT_ID: ${{ vars.ARM_BACKEND_CLIENT_ID }}
+          ARM_BACKEND_STORAGE_ACCOUNT_NAME: ${{ vars.ARM_BACKEND_STORAGE_ACCOUNT_NAME }}
+          ARM_BACKEND_STORAGE_CONTAINER_NAME: ${{ vars.ARM_BACKEND_STORAGE_CONTAINER_NAME }}
+        run: |
+          . ./scripts/lib/TerraformOperations.ps1
+          $backend = @{
+            TenantId = $env:ARM_BACKEND_TENANT_ID
+            SubscriptionId = $env:ARM_BACKEND_SUBSCRIPTION_ID
+            ClientId = $env:ARM_BACKEND_CLIENT_ID
+            StorageAccountName = $env:ARM_BACKEND_STORAGE_ACCOUNT_NAME
+            ContainerName = $env:ARM_BACKEND_STORAGE_CONTAINER_NAME
+          }
+          $state = Resolve-RepositorySyncStateConfiguration -Backend $backend
+          "tenant-id=$($state.TenantId)" >> $env:GITHUB_OUTPUT
+          "subscription-id=$($state.SubscriptionId)" >> $env:GITHUB_OUTPUT
+          "client-id=$($state.ClientId)" >> $env:GITHUB_OUTPUT
+          "storage-account=$($state.StorageAccountName)" >> $env:GITHUB_OUTPUT
+          "container=$($state.ContainerName)" >> $env:GITHUB_OUTPUT
+
+      - name: Sign in with the state backend identity
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        with:
+          tenant-id: ${{ steps.state-backend.outputs.tenant-id }}
+          subscription-id: ${{ steps.state-backend.outputs.subscription-id }}
+          client-id: ${{ steps.state-backend.outputs.client-id }}
+
+      - name: Run sync for ${{ inputs.repo_id }}
+        run: |
+
+          $triggerType = "${{ github.event_name }}"
+
+          $planOnly = $false
+          $forceFileUpdate = $false
+
+          if($triggerType -eq "workflow_dispatch") {
+            $planOnly = "${{ inputs.plan_only }}".ToLower() -eq "true"
+            $forceFileUpdate = "${{ inputs.force_file_update }}".ToLower() -eq "true"
+          }
+          $authoringModulePath = ''
+          if ($planOnly -and $triggerType -eq 'workflow_dispatch' -and
+              "${{ inputs.use_workflow_authoring_source }}".ToLower() -eq 'true') {
+            $authoringModulePath = Join-Path $env:GITHUB_WORKSPACE 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
+          }
+          $candidateDirectory = Join-Path $env:RUNNER_TEMP 'avm-sync-candidates' $env:SYNC_REPO_NAME
+
+          Write-Output "Plan Only: $planOnly"
+          Write-Output "Force File Update: $forceFileUpdate"
+          Write-Output "Avm.Authoring source: $(if ($authoringModulePath) { 'workflow checkout' } else { 'PowerShell Gallery' })"
+
+          $bamiSettings = @{
+            TEST_BAMI_TENANT_ID = $env:TEST_BAMI_TENANT_ID
+            TEST_BAMI_CONTROLLER_CLIENT_ID = $env:TEST_BAMI_CONTROLLER_CLIENT_ID
+            TEST_BAMI_ADMIN_SUBSCRIPTION_ID = $env:TEST_BAMI_ADMIN_SUBSCRIPTION_ID
+            TEST_BAMI_SUBSCRIPTION_IDS = $env:TEST_BAMI_SUBSCRIPTION_IDS
+            TEST_BAMI_MANAGEMENT_GROUP_ID = $env:TEST_BAMI_MANAGEMENT_GROUP_ID
+            TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME = $env:TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME
+            TEST_BAMI_BICEP_CLIENT_ID = $env:TEST_BAMI_BICEP_CLIENT_ID
+            TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID = $env:TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
+          }
+
+          $repoMetaDataJson = $env:REPO_META_DATA_JSON
+          $repoMetaData = $null
+          if ($repoMetaDataJson -and $repoMetaDataJson -ne 'null') {
+            $repoMetaData = $repoMetaDataJson | ConvertFrom-Json
+          }
+
+          Write-Host "Running repo sync"
+          $moduleToLoad = if ($authoringModulePath) { $authoringModulePath } else { 'Avm.Authoring' }
+          Import-Module -Name $moduleToLoad -Force -ErrorAction Stop
+          ./scripts/Invoke-RepositorySync.ps1 `
+            -planOnly $planOnly `
+            -stateStorageAccountName $env:ARM_BACKEND_STORAGE_ACCOUNT_NAME `
+            -stateContainerName $env:ARM_BACKEND_STORAGE_CONTAINER_NAME `
+            -stateTenantId $env:ARM_BACKEND_TENANT_ID `
+            -stateSubscriptionId $env:ARM_BACKEND_SUBSCRIPTION_ID `
+            -stateClientId $env:ARM_BACKEND_CLIENT_ID `
+            -repoId $env:REPO_ID `
+            -repoUrl $env:REPO_URL `
+            -repoMetaData $repoMetaData `
+            -outputDirectory "${{ github.workspace }}" `
+            -bamiSettings $bamiSettings `
+            -candidateOutputDirectory $candidateDirectory `
+            -authoringModulePath $authoringModulePath `
+            -forceFileUpdate:$forceFileUpdate
+
+        shell: pwsh
+        env:
+          SYNC_REPO_NAME: ${{ inputs.repo_name }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ACTIONS_STATE_LOCK_TOKEN: ${{ github.token }}
+          AVM_APP_BOT_LOGIN: ${{ vars.AVM_APP_BOT_LOGIN }}
+          AVM_APP_BOT_USER_ID: ${{ vars.AVM_APP_BOT_USER_ID }}
+          ARM_BACKEND_TENANT_ID: ${{ steps.state-backend.outputs.tenant-id }}
+          ARM_BACKEND_SUBSCRIPTION_ID: ${{ steps.state-backend.outputs.subscription-id }}
+          ARM_BACKEND_CLIENT_ID: ${{ steps.state-backend.outputs.client-id }}
+          ARM_BACKEND_STORAGE_ACCOUNT_NAME: ${{ steps.state-backend.outputs.storage-account }}
+          ARM_BACKEND_STORAGE_CONTAINER_NAME: ${{ steps.state-backend.outputs.container }}
+          TEST_BAMI_TENANT_ID: ${{ vars.TEST_BAMI_TENANT_ID }}
+          TEST_BAMI_CONTROLLER_CLIENT_ID: ${{ vars.TEST_BAMI_CONTROLLER_CLIENT_ID }}
+          TEST_BAMI_ADMIN_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_ADMIN_SUBSCRIPTION_ID }}
+          TEST_BAMI_SUBSCRIPTION_IDS: ${{ vars.TEST_BAMI_SUBSCRIPTION_IDS }}
+          TEST_BAMI_MANAGEMENT_GROUP_ID: ${{ vars.TEST_BAMI_MANAGEMENT_GROUP_ID }}
+          TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME: ${{ vars.TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME }}
+          TEST_BAMI_BICEP_CLIENT_ID: ${{ vars.TEST_BAMI_BICEP_CLIENT_ID }}
+          TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID }}
+          REPO_META_DATA_JSON: ${{ inputs.repo_metadata_json }}
+          REPO_ID: ${{ inputs.repo_id }}
+          REPO_URL: ${{ inputs.repo_url }}
+
+      - name: Upload prepared candidate
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: candidate-${{ inputs.repo_name }}
+          path: ${{ runner.temp }}/avm-sync-candidates/${{ inputs.repo_name }}
+          if-no-files-found: warn
+
+      - name: Upload issue log JSON
+        if: always() && hashFiles('issue.log.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.repo_id }}.issue.log.json
+          path: issue.log.json
+
+      - name: Report sync issues
+        if: always() && hashFiles('issue.log.json') != ''
+        run: |
+          $issueLogJson = Get-Content -Path "${{ github.workspace }}/issue.log.json" -Raw
+          $issueLog = ConvertFrom-Json $issueLogJson
+          $hasError = $false
+          $issueLog | ForEach-Object {
+            $severity = if ($_.severity) { $_.severity } else { "error" }
+            if ($severity -eq "warning") {
+              echo "::warning title=${{ inputs.repo_id }} has issues::$($_.message) Check the log file artifact for ${{ inputs.repo_id }} to see the full details."
+            } else {
+              echo "::error title=${{ inputs.repo_id }} has issues::$($_.message) Check the log file artifact for ${{ inputs.repo_id }} to see the full details."
+              $hasError = $true
+            }
+          }
+          if ($hasError) { exit 1 }
+        shell: pwsh
+
+      - name: Add repository items to the AVM All Up project
+        if: ${{ always() && steps.app-token.outcome == 'success' && steps.app-token.outputs.token != '' && (github.event_name != 'workflow_dispatch' || inputs.sync_project_items) }}
+        run: |
+
+          $triggerType = "${{ github.event_name }}"
+
+          $planOnly = $false
+          $includeClosed = $false
+          $projectUrl = $env:PROJECT_URL
+          # Default look-back: scheduled/dispatch-by-event runs only consider items
+          # updated in the last 3 days, which keeps steady-state runs well under the
+          # GitHub API rate limits. A manual dispatch can override this (0 = full
+          # sweep for the one-off initial back-fill).
+          $lookbackDays = 3
+
+          if ($triggerType -eq "workflow_dispatch") {
+            $planOnly = "${{ inputs.plan_only }}".ToLower() -eq "true"
+            $includeClosed = "${{ inputs.include_closed_project_items }}".ToLower() -eq "true"
+            $parsedLookback = 0
+            if ([int]::TryParse("${{ inputs.project_lookback_days }}".Trim(), [ref]$parsedLookback)) {
+              $lookbackDays = $parsedLookback
+            }
+            else {
+              Write-Output "Could not parse project_lookback_days '${{ inputs.project_lookback_days }}'; using default $lookbackDays."
+            }
+          }
+
+          Write-Output "Project URL: $projectUrl"
+          Write-Output "Include Closed: $includeClosed"
+          Write-Output "Look-back Days: $lookbackDays"
+          Write-Output "Plan Only: $planOnly"
+
+          ./scripts/Add-RepositoryItemsToProject.ps1 `
+            -repoUrl "${{ inputs.repo_url }}" `
+            -projectUrl $projectUrl `
+            -includeClosed $includeClosed `
+            -lookbackDays $lookbackDays `
+            -planOnly $planOnly `
+            -outputDirectory "${{ github.workspace }}"
+
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+
+      - name: Report skipped project synchronization
+        if: ${{ always() && (steps.app-token.outcome != 'success' || steps.app-token.outputs.token == '') && (github.event_name != 'workflow_dispatch' || inputs.sync_project_items) }}
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+        run: |
+          Write-Output 'Project synchronization skipped because GitHub App token setup did not provide a token. See the earlier setup steps for the original failure or skip.'
+
+      - name: Upload project sync log JSON
+        if: always() && hashFiles('project-sync.log.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.repo_id }}.project-sync.log.json
+          path: project-sync.log.json
+
+      - name: Report project sync issues
+        if: always() && hashFiles('project-sync.log.json') != ''
+        run: |
+          $projectSyncLogJson = Get-Content -Path "${{ github.workspace }}/project-sync.log.json" -Raw
+          $projectSyncLog = ConvertFrom-Json $projectSyncLogJson
+          $hasError = $false
+          $projectSyncLog | ForEach-Object {
+            $severity = if ($_.severity) { $_.severity } else { "warning" }
+            if ($severity -eq "warning") {
+              echo "::warning title=${{ inputs.repo_id }} project sync::$($_.message) Check the log file artifact for ${{ inputs.repo_id }} to see the full details."
+            } else {
+              echo "::error title=${{ inputs.repo_id }} project sync::$($_.message) Check the log file artifact for ${{ inputs.repo_id }} to see the full details."
+              $hasError = $true
+            }
+          }
+          if ($hasError) { exit 1 }
+        shell: pwsh
+
+  validate-candidate:
+    name: Validate ${{ inputs.repo_name }}
+    if: ${{ needs.run-sync.result == 'success' }}
+    needs: run-sync
+    runs-on: ubuntu-latest
+    environment: avm-validation
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout validation scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download prepared candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-${{ inputs.repo_name }}
+          path: ${{ runner.temp }}/avm-sync-candidates/${{ inputs.repo_name }}
+
+      - name: Configure validation tool cache
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $avmHome = Join-Path $env:RUNNER_TEMP 'avm-home'
+          $cache = Join-Path $env:RUNNER_TEMP 'tf-plugin-cache'
+          New-Item -ItemType Directory -Force -Path $avmHome, $cache | Out-Null
+          "AVM_HOME=$avmHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TF_PLUGIN_CACHE_DIR=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install candidate authoring release
+        shell: pwsh
+        env:
+          CANDIDATE_DIRECTORY: ${{ runner.temp }}/avm-sync-candidates/${{ inputs.repo_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidate = Get-Content -LiteralPath (Join-Path $env:CANDIDATE_DIRECTORY 'candidate.json') -Raw |
+            ConvertFrom-Json -AsHashtable
+          if ($candidate.hasChanges -and $candidate.authoringSource -eq 'gallery') {
+            $maxAttempts = 3
+            for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+              try {
+                Install-PSResource -Name Avm.Authoring -Version $candidate.authoringVersion `
+                  -Scope CurrentUser -TrustRepository -ErrorAction Stop
+                break
+              }
+              catch {
+                if ($attempt -eq $maxAttempts) { throw }
+                Start-Sleep -Seconds (5 * [math]::Pow(2, $attempt - 1))
+              }
+            }
+          }
+
+      - name: Run candidate checks
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SYNC_REPOSITORY: Azure/${{ inputs.repo_name }}
+          CANDIDATE_DIRECTORY: ${{ runner.temp }}/avm-sync-candidates/${{ inputs.repo_name }}
+          RECEIPT_DIRECTORY: ${{ runner.temp }}/avm-sync-validation/${{ inputs.repo_name }}
+        run: |
+          ./scripts/Invoke-RepositoryCandidate.ps1 -Mode Validate -Repository $env:SYNC_REPOSITORY `
+            -CandidateDirectory $env:CANDIDATE_DIRECTORY -ReceiptDirectory $env:RECEIPT_DIRECTORY
+
+      - name: Upload validation receipt
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: validated-${{ inputs.repo_name }}
+          path: ${{ runner.temp }}/avm-sync-validation/${{ inputs.repo_name }}
+          if-no-files-found: error
+
+  publish-candidate:
+    name: Publish ${{ inputs.repo_name }}
+    if: ${{ needs.validate-candidate.result == 'success' && !inputs.plan_only }}
+    needs: validate-candidate
+    runs-on: ubuntu-latest
+    environment: avm
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout publication scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download prepared candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-${{ inputs.repo_name }}
+          path: ${{ runner.temp }}/avm-sync-candidates/${{ inputs.repo_name }}
+
+      - name: Download validation receipt
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: validated-${{ inputs.repo_name }}
+          path: ${{ runner.temp }}/avm-sync-validation/${{ inputs.repo_name }}
+
+      - name: Inspect candidate
+        id: candidate
+        shell: pwsh
+        env:
+          CANDIDATE_DIRECTORY: ${{ runner.temp }}/avm-sync-candidates/${{ inputs.repo_name }}
+        run: |
+          $candidate = Get-Content -LiteralPath (Join-Path $env:CANDIDATE_DIRECTORY 'candidate.json') -Raw |
+            ConvertFrom-Json -AsHashtable
+          "has-changes=$([string]$candidate.hasChanges).ToLowerInvariant()" |
+            Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Create GitHub App token
+        if: steps.candidate.outputs.has-changes == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AVM_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Publish validated candidate
+        shell: pwsh
+        env:
+          SYNC_REPOSITORY: Azure/${{ inputs.repo_name }}
+          CANDIDATE_DIRECTORY: ${{ runner.temp }}/avm-sync-candidates/${{ inputs.repo_name }}
+          RECEIPT_DIRECTORY: ${{ runner.temp }}/avm-sync-validation/${{ inputs.repo_name }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          AVM_APP_BOT_LOGIN: ${{ vars.AVM_APP_BOT_LOGIN }}
+          AVM_APP_BOT_USER_ID: ${{ vars.AVM_APP_BOT_USER_ID }}
+        run: |
+          ./scripts/Invoke-RepositoryCandidate.ps1 -Mode Publish -Repository $env:SYNC_REPOSITORY `
+            -CandidateDirectory $env:CANDIDATE_DIRECTORY -ReceiptDirectory $env:RECEIPT_DIRECTORY

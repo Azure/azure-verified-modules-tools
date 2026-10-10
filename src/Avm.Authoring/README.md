@@ -166,7 +166,7 @@ select the authored format:
   "moduleDisplayName": "Storage Accounts",
   "moduleDescription": "Deploys a Storage Account.",
   "canonicalType": "Microsoft.Storage/storageAccounts",
-  "telemetryIdPrefix": "46d3xtrf.res.storage-storageaccount",
+  "telemetryIdPrefix": "46d3xtrf.res.a1b2c3d",
   "owners": ["owner-one", "@Azure/team-name"]
 }
 ```
@@ -269,7 +269,14 @@ rolled back on failure.
 Bicep's optional `Initialize-AvmModuleMetadata -UpdateSource` loads only its
 telemetry prefix; a helper without a prefix leaves source unchanged.
 Terraform rejects `-UpdateSource` before writes and never
-generates `main.metadata.tf`; later telemetry changes belong in MaPoTF.
+generates `main.metadata.tf`; MaPoTF generates the empty AzAPI deployment
+telemetry from the module's metadata for prefixed roots and children. Its
+required `var.location` is used for the deployment, including when the
+module's Azure resources are globally scoped. MaPoTF creates the input on
+non-exempt roots and Azure-resource children when absent, while
+`enable_telemetry = false` still opts out. Terraform prefixes
+end in seven lowercase hex characters, and deployment telemetry is reported
+by its versioned name rather than resource tags.
 Existing authored source files are preserved. Metadata-only initialization
 does not rewrite source. Pre-commit and PR checks require valid metadata on
 every module root and child. Required tools resolve first; metadata validation
@@ -416,9 +423,10 @@ It warns if the checkout's root module or a direct `modules/` configuration is
 not reached by an example. Registry/Git copies and test-only helper modules do
 not count. Coverage gaps are non-failing; no examples returns `skipped`.
 
-The Terraform lint bundle pins TFLint 0.64.0 and `tflint-ruleset-avm` 1.0.0.
+The Terraform lint bundle pins TFLint 0.64.0 and `tflint-ruleset-avm` 1.3.0.
 All three packaged configurations require GitHub Artifact Attestation; there is
-no PGP signing-key fallback.
+no PGP signing-key fallback. AzureRM remains optional, but its version constraint
+must exclude 5.0.0 and later.
 
 AVM rules use the canonical `avm_*` names and are enabled by default in the
 ruleset. The packaged configurations declare scope-specific disables plus native

@@ -119,13 +119,14 @@ Describe 'State identity wiring' {
         $jobs = [regex]::Match($workflow, '(?ms)^jobs:\r?\n(?<jobs>.*)$')
         $jobs.Success | Should -BeTrue
         @([regex]::Matches($jobs.Groups['jobs'].Value, '(?m)^  ([a-z][a-z0-9-]+):\r?$') |
-            ForEach-Object { $_.Groups[1].Value }) | Should -Be @('generate-matrix', 'run-sync')
-        $worker = [regex]::Match($jobs.Value, '(?ms)^  run-sync:\r?\n(?<header>.*?)^    steps:')
+            ForEach-Object { $_.Groups[1].Value }) | Should -Be @('generate-matrix', 'sync-repository')
+        $worker = [regex]::Match($jobs.Value, '(?ms)^  sync-repository:\r?\n(?<header>.*?)^    uses:')
         $worker.Success | Should -BeTrue
         $dependencies = [regex]::Matches($worker.Groups['header'].Value, '(?m)^    needs: (.+)\r?$')
         $dependencies | Should -HaveCount 1
         $dependencies[0].Groups[1].Value.Trim() | Should -BeExactly 'generate-matrix'
-        $worker.Groups['header'].Value | Should -Not -Match '(?m)^    if:'
+        $worker.Groups['header'].Value | Should -Match "(?m)^    if: needs.generate-matrix.result == 'success'"
+        $workflow | Should -Match '(?m)^    uses: \./\.github/workflows/repository-management-sync-repository\.yml'
         $worker.Groups['header'].Value | Should -Match 'include: \$\{\{ fromJson\(needs\.generate-matrix\.outputs\.matrix\) \}\}'
         $workflow | Should -Match '(?m)^  group: repository-sync\r?$'
         $workflow | Should -Match '(?m)^  cancel-in-progress: false\r?$'
@@ -137,7 +138,7 @@ Describe 'State identity wiring' {
         $planOnly.Value | Should -Match '(?m)^        type: boolean\r?$'
         @([regex]::Matches($dispatch.Value, '(?m)^      ([a-z][a-z0-9_]+):\r?$') |
             ForEach-Object { $_.Groups[1].Value }) | Should -Be @(
-            'repositories', 'repositories_to_skip', 'plan_only', 'force_file_update',
+            'repositories', 'repositories_to_skip', 'plan_only', 'use_workflow_authoring_source', 'force_file_update',
             'sync_project_items', 'include_closed_project_items', 'project_lookback_days'
         )
     }
@@ -184,6 +185,9 @@ Describe 'State identity wiring' {
 
     It 'uses backend-only CLI recovery authentication without changing provider OIDC' {
         $workflow = Get-Content -LiteralPath (Join-Path $script:repoRoot (
+            '.github/workflows/repository-management-sync-repository.yml'
+        )) -Raw
+        $dispatcher = Get-Content -LiteralPath (Join-Path $script:repoRoot (
             '.github/workflows/repository-management-sync.yml'
         )) -Raw
         $syncStep = [regex]::Match(
@@ -191,9 +195,11 @@ Describe 'State identity wiring' {
             '(?ms)^      - name: Run sync for .*?(?=^      - name:)'
         ).Value
         $syncStep | Should -Not -BeNullOrEmpty
-        $workflow | Should -Match '(?s)Import-Module Avm\.Authoring -Force -ErrorAction Stop\s+\./scripts/Invoke-RepositorySync\.ps1'
+        $workflow | Should -Match '(?s)Write-Host "Running repo sync"\s+\$moduleToLoad = .*?Import-Module -Name \$moduleToLoad -Force -ErrorAction Stop\s+\./scripts/Invoke-RepositorySync\.ps1'
+        $worker = [regex]::Match($workflow, '(?ms)^  run-sync:.*?(?=^  [a-z][a-z0-9-]+:|\z)').Value
+        $worker | Should -Not -BeNullOrEmpty
         foreach ($name in 'TENANT', 'SUBSCRIPTION', 'CLIENT') {
-            $workflow | Should -Not -Match ('(?m)^\s*ARM_' + $name + '_ID:\s*')
+            $worker | Should -Not -Match ('(?m)^\s*ARM_' + $name + '_ID:\s*')
             $workflow | Should -Match ('ARM_BACKEND_' + $name + '_ID: \$\{\{ vars\.ARM_BACKEND_' + $name + '_ID \}\}')
         }
         foreach ($name in @('TEST_BAMI_TENANT_ID', 'TEST_BAMI_CONTROLLER_CLIENT_ID', 'TEST_BAMI_ADMIN_SUBSCRIPTION_ID')) {
@@ -201,8 +207,7 @@ Describe 'State identity wiring' {
             $syncStep | Should -Match ($name + '\s*=\s*\$env:' + $name + '\b')
         }
         $syncStep | Should -Match '-bamiSettings \$bamiSettings'
-        $worker = [regex]::Match($workflow, '(?ms)^  run-sync:.*$').Value
-        $worker | Should -Not -BeNullOrEmpty
+        $syncStep | Should -Not -Match '-(?:managementGroupId|testSubscriptionIds|identityResourceGroupName)\b'
         $worker | Should -Not -Match 'gh auth login'
         $login = [regex]::Match($worker, '(?ms)^      - name: Sign in with the state backend identity\r?\n.*?(?=^      - name:)').Value
         $login | Should -Match 'uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c'
@@ -215,6 +220,10 @@ Describe 'State identity wiring' {
         $worker | Should -Match '(?m)^      contents: read\r?$'
         $worker | Should -Match '(?m)^      id-token: write\r?$'
         $syncStep | Should -Match 'ACTIONS_STATE_LOCK_TOKEN: \$\{\{ github\.token \}\}'
+        $caller = [regex]::Match($dispatcher, '(?ms)^  sync-repository:.*$').Value
+        foreach ($permission in @('actions: read', 'contents: read', 'id-token: write')) {
+            $caller | Should -Match ('(?m)^      ' + [regex]::Escape($permission) + '\r?$')
+        }
         $workflow | Should -Match '-stateTenantId \$env:ARM_BACKEND_TENANT_ID'
         $workflow | Should -Match '-stateClientId \$env:ARM_BACKEND_CLIENT_ID'
         $workflow | Should -Match '-stateSubscriptionId \$env:ARM_BACKEND_SUBSCRIPTION_ID'
@@ -227,7 +236,7 @@ Describe 'State identity wiring' {
         $workflow | Should -Not -Match 'stateResourceGroupName|STORAGE_ACCOUNT_RESOURCE_GROUP_NAME'
         $workflow | Should -Not -Match '(?<![A-Z_])STORAGE_ACCOUNT_(CONTAINER_)?NAME'
         $workflow | Should -Not -Match 'ARM_BACKEND_ENVIRONMENT_VARIABLE_SUFFIX|ARM_OIDC_TOKEN:'
-        $workflow | Should -Match 'cancel-in-progress: false'
+        $dispatcher | Should -Match 'cancel-in-progress: false'
         $workflow | Should -Not -Match 'AVM_SYNC_PAUSED'
     }
 
@@ -346,7 +355,7 @@ Describe 'State backend workflow resolution' {
         @{ Mode = 'missing' }
         @{ Mode = 'partial' }
     ) {
-        $workflow = Get-Content -Raw (Join-Path $script:repoRoot '.github/workflows/repository-management-sync.yml')
+        $workflow = Get-Content -Raw (Join-Path $script:repoRoot '.github/workflows/repository-management-sync-repository.yml')
         $step = [regex]::Match($workflow, '(?ms)^      - name: Resolve state backend\r?\n.*?^        run: \|\r?\n(?<body>.*?)(?=^      - name:)')
         $step.Success | Should -BeTrue
         $bindings = @([regex]::Matches($step.Value, '(?m)^          ([A-Z_]+): \$\{\{ vars\.\1 \}\}') |

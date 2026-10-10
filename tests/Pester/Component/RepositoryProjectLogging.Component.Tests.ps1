@@ -1,5 +1,6 @@
 BeforeAll {
     $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
+    Import-Module (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
     $script:projectDriver = Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'Add-RepositoryItemsToProject.ps1'
     . (Join-Path (Split-Path $script:projectDriver -Parent) 'lib' 'Logging.ps1')
     . (Join-Path (Split-Path $script:projectDriver -Parent) 'lib' 'RetryHelpers.ps1')
@@ -7,9 +8,9 @@ BeforeAll {
 
 Describe 'Repository sync project prerequisites' -Tag Component {
     BeforeAll {
-        $workflow = Get-Content -LiteralPath (Join-Path $script:root '.github' 'workflows' 'repository-management-sync.yml') -Raw
+        $workflow = Get-Content -LiteralPath (Join-Path $script:root '.github' 'workflows' 'repository-management-sync-repository.yml') -Raw
         $script:steps = @{}
-        foreach ($name in @('Install Avm.Authoring', 'Create GitHub App token', 'Add repository items to the AVM All Up project', 'Report skipped project synchronization')) {
+        foreach ($name in @('Install Avm.Authoring', 'Create GitHub App token', 'Add repository items to the AVM All Up project', 'Report skipped project synchronization', 'Report project sync issues')) {
             $match = [regex]::Match($workflow, '(?ms)^      - name: ' + [regex]::Escape($name) + '\r?\n.*?(?=^      - name:|\z)')
             $match.Success | Should -BeTrue
             $script:steps[$name] = $match.Value
@@ -62,6 +63,30 @@ Describe 'Repository sync project prerequisites' -Tag Component {
         $records[0] | Should -Not -Match 'permission|::group::|::error::|completed'
         Should -Invoke Invoke-GitHubCliWithRetry -Exactly 0
         Should -Invoke Invoke-RepositorySyncProcess -Exactly 0
+    }
+
+    It 'reports a project <Severity> with exit code <ExitCode>' -ForEach @(
+        @{ Severity = 'warning'; ExitCode = 0 }
+        @{ Severity = 'error'; ExitCode = 1 }
+    ) {
+        $step = $script:steps['Report project sync issues']
+        $match = [regex]::Match($step, '(?ms)^        run: \|\r?\n(?<code>.*?)(?=^        [a-z]|\z)')
+        $match.Success | Should -BeTrue
+        $code = ($match.Groups['code'].Value -replace '(?m)^          ', '').
+            Replace('${{ github.workspace }}', $TestDrive).
+            Replace('${{ inputs.repo_id }}', 'avm-ptn-example-repo')
+        $scriptPath = Join-Path $TestDrive 'report-project-issues.ps1'
+        [System.IO.File]::WriteAllText($scriptPath, $code)
+        @{ severity = $Severity; message = 'Synthetic project issue.' } | ConvertTo-Json |
+            Set-Content -LiteralPath (Join-Path $TestDrive 'project-sync.log.json')
+        $result = InModuleScope Avm.Authoring -Parameters @{ ScriptPath = $scriptPath } {
+            param($ScriptPath)
+            Invoke-AvmProcess -FilePath (Get-Process -Id $PID).Path `
+                -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $ScriptPath) `
+                -IgnoreExitCode -TimeoutSec 30
+        }
+        $result.ExitCode | Should -Be $ExitCode
+        $result.StdOut | Should -Match ("::$Severity title=avm-ptn-example-repo project sync::Synthetic project issue\.")
     }
 }
 

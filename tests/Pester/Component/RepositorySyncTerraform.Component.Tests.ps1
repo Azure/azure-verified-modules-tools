@@ -21,6 +21,7 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
             Plan = New-AvmTestRepositorySyncPlan -KnownClient
             Calls = [System.Collections.Generic.List[object]]::new()
             FailAt = ''
+            FailureOutput = 'native failure detail'
             InvalidJson = $false
             LockAt = ''
             LocksRemaining = 0
@@ -40,7 +41,7 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
                 return @{ ExitCode = 23; StdOut = ''; StdErr = $fixture.LockText }
             }
             if ($fixture.FailAt -ceq $Arguments[0]) {
-                return @{ ExitCode = 7; StdOut = 'failed native output'; StdErr = 'native failure detail' }
+                return @{ ExitCode = 7; StdOut = 'failed native output'; StdErr = $fixture.FailureOutput }
             }
             $text = if ($Arguments[0] -ceq 'show') {
                 $fixture.InvalidJson ? 'not JSON with private material' : (ConvertTo-Json -InputObject $fixture.Plan -Depth 100)
@@ -277,6 +278,49 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
         $script:fixture.InvalidJson = $true
         { Invoke-TerraformPlanAndApply @script:parameters } | Should -Throw '*invalid plan JSON*'
         $script:fixture.Calls.Count | Should -Be 2
+    }
+
+    It 'does not recover a lock <Failure> failure during a plan with plan-only <PlanOnly>' -ForEach @(
+        @{ Failure = 'acquiring'; PlanOnly = $true }
+        @{ Failure = 'releasing'; PlanOnly = $true }
+        @{ Failure = 'acquiring'; PlanOnly = $false }
+        @{ Failure = 'releasing'; PlanOnly = $false }
+    ) {
+        $script:parameters.planOnly = $PlanOnly
+        $script:fixture.FailAt = 'plan'
+        $script:fixture.FailureOutput = "Error $Failure the state lock"
+        Mock Clear-TerraformStateLock { throw 'State-lock repair is forbidden.' }
+        { Invoke-TerraformPlanAndApply @script:parameters } | Should -Throw "*Error $Failure the state lock*"
+        $script:fixture.Calls.Count | Should -Be 1
+        $script:fixture.Calls[0].Arguments[0] | Should -Be 'plan'
+        Should -Invoke Clear-TerraformStateLock -Exactly 0
+        Should -Invoke Start-Process -Exactly 0
+    }
+
+    It 'does not recover a lock <Failure> failure during initialization with local backend <Local>' -ForEach @(
+        @{ Failure = 'acquiring'; Local = $true }
+        @{ Failure = 'releasing'; Local = $true }
+        @{ Failure = 'acquiring'; Local = $false }
+        @{ Failure = 'releasing'; Local = $false }
+    ) {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $root
+        $script:fixture.FailAt = 'init'
+        $script:fixture.FailureOutput = "Error $Failure the state lock"
+        Mock Clear-TerraformStateLock { throw 'State-lock repair is forbidden.' }
+        {
+            Invoke-TerraformInit -terraformModulePath $root -repositoryCreationModeEnabled $Local `
+                -repoId 'example' -orgAndRepoName 'Azure/example' `
+                -stateStorageAccountName 'storage' -stateContainerName 'state' `
+                -stateTenantId '44444444-4444-4444-8444-444444444444' `
+                -stateSubscriptionId '55555555-5555-4555-8555-555555555555' `
+                -stateClientId '66666666-6666-4666-8666-666666666666' `
+                -environment $script:parameters.environment -issueLog @()
+        } | Should -Throw "*Error $Failure the state lock*"
+        $script:fixture.Calls.Count | Should -Be 1
+        $script:fixture.Calls[0].Arguments[0] | Should -Be 'init'
+        Should -Invoke Clear-TerraformStateLock -Exactly 0
+        Should -Invoke Start-Process -Exactly 0
     }
 
     It 'does not invoke Terraform for WhatIf' {

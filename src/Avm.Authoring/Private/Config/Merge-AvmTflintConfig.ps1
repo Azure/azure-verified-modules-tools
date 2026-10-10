@@ -187,7 +187,7 @@ function Merge-AvmTflintConfig {
     if ($plugins.Count -eq 1) {
         $body = $plugins[0].Groups['body'].Value
         $currentPlugin = [regex]::Matches($body, '(?m)^\s*(?:version|source|enabled)\s*=').Count -eq 3 -and
-        $body -cmatch '(?m)^\s*version\s*=\s*"1\.0\.0"\s*$' -and
+        $body -cmatch '(?m)^\s*version\s*=\s*"(?:1\.0\.0|1\.2\.0|1\.3\.0)"\s*$' -and
         $body -cmatch '(?m)^\s*source\s*=\s*"github\.com/Azure/tflint-ruleset-avm"\s*$' -and
         $body -cmatch '(?m)^\s*enabled\s*=\s*true\s*$'
     }
@@ -297,6 +297,49 @@ function Get-AvmTflintScopeOverridePath {
     return $null
 }
 
+function Test-AvmTflintRootClassConfiguration {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path,
+
+        [Parameter(Mandatory)]
+        [ValidateSet('resource', 'pattern', 'utility')]
+        [string] $ModuleClass
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    $text = [System.IO.File]::ReadAllText($Path)
+    $attributes = [regex]::Matches($text, '(?m)^[ \t]*module_class[ \t]*=[ \t]*(?<value>[^\r\n]*)')
+    if ($attributes.Count -eq 0) {
+        if ($ModuleClass -ne 'resource') {
+            throw [AvmConfigurationException]::new("TFLint root configuration '$Path' is missing module_class '$ModuleClass'.")
+        }
+        return $true
+    }
+    $value = [regex]::Match($attributes[0].Groups['value'].Value.Trim(),
+        '^"(?<class>resource|pattern|utility)"(?:[ \t]*(?:(?:#|//).*)?)$')
+    if ($attributes.Count -ne 1 -or -not $value.Success -or $value.Groups['class'].Value -cne $ModuleClass) {
+        throw [AvmConfigurationException]::new(
+            "TFLint module_class in '$Path' does not match repository class '$ModuleClass'; remove the class override and let repository identity select it.")
+    }
+
+    $plugin = [regex]::Match($text, '(?ms)^[ \t]*plugin[ \t]+"avm"[ \t]*\{(?<body>[^{}]*)\}')
+    $versionValue = [regex]::Match($plugin.Groups['body'].Value, '(?m)^[ \t]*version[ \t]*=[ \t]*"(?<version>[^"]+)"')
+    if ($versionValue.Success) {
+        $version = $null
+        if (-not [version]::TryParse($versionValue.Groups['version'].Value, [ref]$version) -or
+            $version -lt [version]'1.2.0') {
+            throw [AvmConfigurationException]::new(
+                "TFLint module_class requires AVM ruleset 1.2.0 or later; update your custom AVM plugin pin or use the packaged configuration. Effective configuration: '$Path'.")
+        }
+    }
+    return $true
+}
+
 function New-AvmTflintConfigSet {
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Low')]
     [OutputType([pscustomobject])]
@@ -307,7 +350,10 @@ function New-AvmTflintConfigSet {
         [Parameter(Mandatory)]
         [string] $BaseConfigDir,
 
-        [object[]] $Scopes = @()
+        [object[]] $Scopes = @(),
+
+        [ValidateSet('resource', 'pattern', 'utility')]
+        [string] $RootModuleClass = 'resource'
     )
 
     $names = @(
@@ -343,7 +389,11 @@ function New-AvmTflintConfigSet {
         }
     }
 
-    if ($overrides.Count -eq 0 -and $scopeOverrides.Count -eq 0) {
+    if ($overrides.Count -eq 0 -and $scopeOverrides.Count -eq 0 -and $RootModuleClass -eq 'resource') {
+        if ($names -contains 'avm.tflint.hcl') {
+            $null = Test-AvmTflintRootClassConfiguration `
+                -Path (Join-Path $BaseConfigDir 'avm.tflint.hcl') -ModuleClass $RootModuleClass
+        }
         return [pscustomobject]@{
             ConfigDir        = $BaseConfigDir
             OverridePaths    = @()
@@ -364,9 +414,30 @@ function New-AvmTflintConfigSet {
     New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
 
     try {
+        $classOverridePath = $null
+        if ($RootModuleClass -ne 'resource') {
+            $classOverridePath = Join-Path $stageDir 'root-module-class.override.hcl'
+            $baseRoot = [System.IO.File]::ReadAllText((Join-Path $BaseConfigDir 'avm.tflint.hcl'))
+            $enabled = if ([regex]::IsMatch($baseRoot, '(?m)^[ \t]*rule[ \t]+"avm_output_resource_id_required"[ \t]*\{')) {
+                ''
+            }
+            else {
+                "  enabled = true`n"
+            }
+            [System.IO.File]::WriteAllText(
+                $classOverridePath,
+                "rule `"avm_output_resource_id_required`" {`n${enabled}  module_class = `"$RootModuleClass`"`n}`n",
+                [System.Text.UTF8Encoding]::new($false))
+        }
         foreach ($name in $names) {
             $basePath = Join-Path $BaseConfigDir $name
             $destinationPath = Join-Path $stageDir $name
+            if ($name -ceq 'avm.tflint.hcl' -and $classOverridePath) {
+                $classBasePath = Join-Path $stageDir 'root-module-class.base.hcl'
+                Merge-AvmTflintConfig -BasePath $basePath -OverridePath $classOverridePath `
+                    -DestinationPath $classBasePath
+                $basePath = $classBasePath
+            }
             if ($overrides.ContainsKey($name)) {
                 Merge-AvmTflintConfig `
                     -BasePath $basePath `
@@ -375,6 +446,9 @@ function New-AvmTflintConfigSet {
             }
             else {
                 Copy-Item -LiteralPath $basePath -Destination $destinationPath
+            }
+            if ($name -ceq 'avm.tflint.hcl') {
+                $null = Test-AvmTflintRootClassConfiguration -Path $destinationPath -ModuleClass $RootModuleClass
             }
         }
 

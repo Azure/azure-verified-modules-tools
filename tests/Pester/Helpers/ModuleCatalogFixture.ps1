@@ -22,12 +22,13 @@ function Save-CatalogMetadata {
     param([object] $Module, [switch] $Child)
     $marker = if ($Module.Ecosystem -eq 'bicep') { '46d3xbcp' } else { '46d3xtrf' }
     $kind = @{ resource = 'res'; pattern = 'ptn'; utility = 'utl' }[$Module.ModuleType]
+    $suffix = if ($Module.Ecosystem -eq 'bicep') { 'test-module' } else { 'a1b2c3d' }
     $data = [ordered]@{
         '$schema' = $metadataSchemaId
         moduleDisplayName = 'Authoritative module'
         moduleDescription = 'Deploys reviewed module.'
         canonicalType = $Module.Canonical
-        telemetryIdPrefix = "$marker.$kind.test-module"
+        telemetryIdPrefix = "$marker.$kind.$suffix"
     }
     if (-not $Child) {
         $data.owners = @('owner-one', 'owner-two', 'owner-three', '@Azure/avm-core-modules')

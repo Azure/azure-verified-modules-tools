@@ -3,7 +3,7 @@ output "example_resource_counts" {
   value = {
     resource_groups           = length(azapi_resource.example_rg)
     singleton_resource_groups = length(azapi_resource.example_rg_singleton)
-    telemetry                 = length(modtm_telemetry.telemetry)
+    telemetry                 = length(azapi_resource.telemetry)
   }
 }
 

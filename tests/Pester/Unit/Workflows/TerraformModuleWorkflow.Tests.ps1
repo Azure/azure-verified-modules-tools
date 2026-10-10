@@ -158,7 +158,8 @@ Describe 'terraform-module fork isolation' {
                 $Name | Should -Be 'Avm.Authoring'
             }
             function Invoke-AvmPrCheck { param([string] $Path) }
-            function avm { throw 'Checks must not execute with an older module.' }
+            function Invoke-ForkTestCommand { throw 'Checks must not execute with an older module.' }
+            Set-Alias -Name avm -Value Invoke-ForkTestCommand -Scope Local
 
             { & $script:forkCheckScript } | Should -Throw '*Fork checks require an Avm.Authoring release with -ExcludeSteps*'
         }
@@ -171,10 +172,11 @@ Describe 'terraform-module fork isolation' {
                 $Name | Should -Be 'Avm.Authoring'
             }
             function Invoke-AvmPrCheck { param([string[]] $ExcludeSteps) }
-            function avm {
+            function Invoke-ForkTestCommand {
                 param([string] $Verb, [string[]] $ExcludeSteps)
                 [pscustomobject]@{ Verb = $Verb; Exclusions = $ExcludeSteps }
             }
+            Set-Alias -Name avm -Value Invoke-ForkTestCommand -Scope Local
 
             & $script:forkCheckScript
         }
@@ -350,6 +352,8 @@ Describe 'CI workflow' {
         $component.Value | Should -Match 'os: \[ubuntu-latest, windows-latest, macos-latest\]'
         foreach ($job in @($unit, $component)) {
             $job.Value | Should -Match '(?m)^    timeout-minutes: 25\r?$'
+            $job.Value | Should -Match 'fail-fast:\s*false'
+            $job.Value | Should -Not -Match 'continue-on-error:\s*true'
             $job.Value | Should -Match 'Install-AvmBuildPrerequisites\.ps1 -IncludePSScriptAnalyzer'
         }
         $component.Value | Should -Match 'run: \./build\.ps1 ci-component -TestGroup Authoring'

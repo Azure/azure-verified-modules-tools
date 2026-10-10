@@ -65,6 +65,42 @@ function Assert-AvmPreCommitResult {
     throw "avm pre-commit returned status '$status'.$detail"
 }
 
+function Add-RepositorySyncManagedFiles {
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        [Parameter(Mandatory)] [object]$PreCommitResult
+    )
+
+    $steps = $PreCommitResult.PSObject.Properties['Steps']
+    if ($null -eq $steps) {
+        return
+    }
+    $sync = @($steps.Value | Where-Object { $null -ne $_ -and $_.Step -ceq 'sync' })
+    if ($sync.Count -eq 0) {
+        return
+    }
+    if ($sync.Count -ne 1 -or $sync[0].Status -cne 'pass' -or
+        $null -eq $sync[0].Result -or $null -eq $sync[0].Result.PSObject.Properties['Added']) {
+        throw [System.IO.InvalidDataException]::new('The managed-file sync did not return its added-file list.')
+    }
+
+    $added = @($sync[0].Result.Added)
+    foreach ($path in $added) {
+        if ($path -isnot [string] -or [string]::IsNullOrWhiteSpace($path) -or
+            $path -cmatch '(^/|\\|(^|/)\.\.?(/|$)|(^|/)\.git(/|$)|[\r\n])' -or
+            $path -cmatch '^[A-Za-z]:') {
+            throw [System.IO.InvalidDataException]::new('The managed-file sync returned an unsafe added path.')
+        }
+        $fullPath = Join-Path $Root ($path.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
+        if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
+            throw [System.IO.InvalidDataException]::new("The managed-file sync did not create '$path'.")
+        }
+    }
+    if ($added.Count -gt 0) {
+        $null = Invoke-RepositoryGit -WorkingDirectory $Root -Arguments (@('add', '--force', '--') + $added)
+    }
+}
+
 function Remove-AvmMetadataFileConflict {
     param(
         [string]$repoRoot,
@@ -86,7 +122,8 @@ function Invoke-AvmPreCommitWithUpgradeRetry {
     param(
         [string]$repoId,
         [string]$repositoryConfigDir,
-        [bool]$upgradeManagedFiles = $false
+        [bool]$upgradeManagedFiles = $false,
+        [string]$modulePath
     )
 
     $preCommitParameters = @{
@@ -98,8 +135,12 @@ function Invoke-AvmPreCommitWithUpgradeRetry {
     if ($upgradeManagedFiles) {
         $preCommitParameters.Upgrade = $true
     }
+    if ($modulePath) {
+        $preCommitParameters.SkipModuleVersionCheck = $true
+    }
 
-    Import-Module Avm.Authoring -Force -ErrorAction Stop
+    $moduleName = if ($modulePath) { $modulePath } else { 'Avm.Authoring' }
+    Import-Module -Name $moduleName -Force -ErrorAction Stop
     try {
         return Invoke-AvmPreCommit @preCommitParameters
     } catch {
@@ -110,6 +151,9 @@ function Invoke-AvmPreCommitWithUpgradeRetry {
         )
         if (-not $isModuleUpgradeRequired) {
             throw
+        }
+        if ($modulePath) {
+            throw [System.InvalidOperationException]::new('The checked-out Avm.Authoring source cannot be replaced by a Gallery upgrade during a plan-only preview.')
         }
 
         Write-Host "A newer Avm.Authoring release became available. Upgrading the module and retrying avm pre-commit once." -ForegroundColor Yellow
@@ -135,13 +179,19 @@ function Invoke-AvmPreCommitForRepository {
         [string]$defaultBranch,
         [bool]$planOnly,
         [bool]$forceFileUpdate = $false,
+        [string]$candidateOutputDirectory,
+        [string]$authoringModulePath,
         [array]$issueLog
     )
 
     $result = @{ IssueLog = $issueLog; HasChanges = $false }
 
     try {
-        Import-Module Avm.Authoring -ErrorAction Stop
+        if ($authoringModulePath -and -not $planOnly) {
+            throw [System.ArgumentException]::new('Checked-out Avm.Authoring source is only supported for plan-only repository sync.')
+        }
+        $moduleName = if ($authoringModulePath) { $authoringModulePath } else { 'Avm.Authoring' }
+        Import-Module -Name $moduleName -ErrorAction Stop
         $template = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' '..' 'CODEOWNERS.template') -Raw -ErrorAction Stop
         $codeowners = ConvertTo-TerraformCodeowners -Organization $orgAndRepoName.Split('/')[0] `
             -DefaultTeams $codeOwnersDefaultTeams -FileProtectionTeams $codeOwnersFileProtectionTeams -Template $template
@@ -150,9 +200,11 @@ function Invoke-AvmPreCommitForRepository {
             RepositoryConfigDir = $repositoryConfigDir
             ForceFileUpdate = $forceFileUpdate
             CodeownersContent = $codeowners
+            AuthoringModulePath = $authoringModulePath
+            StageManagedFiles = (-not $planOnly -or -not [string]::IsNullOrWhiteSpace($candidateOutputDirectory))
         }
         $published = Invoke-RepositoryFileSync -Repository $orgAndRepoName -DefaultBranch $defaultBranch `
-            -PlanOnly:$planOnly -State $prepareState -Prepare {
+            -PlanOnly:$planOnly -CandidateOutputDirectory $candidateOutputDirectory -State $prepareState -Prepare {
                 param($context)
                 $mode = if ($context.PlanOnly) { '[PLAN]' } else { '[APPLY]' }
                 $null = Remove-AvmMetadataFileConflict -repoRoot $context.Root -orgAndRepoName $context.Repository.full_name -modeTag $mode
@@ -160,10 +212,28 @@ function Invoke-AvmPreCommitForRepository {
                     -repoRoot $context.Root -forceFileUpdate $context.State.ForceFileUpdate
                 Write-Host "$mode $($context.Repository.full_name) - managed files: $($upgrade.Reason)." -ForegroundColor DarkGray
                 $prepared = Invoke-AvmPreCommitWithUpgradeRetry -repoId $context.State.RepoId `
-                    -repositoryConfigDir $context.State.RepositoryConfigDir -upgradeManagedFiles $upgrade.Upgrade
+                    -repositoryConfigDir $context.State.RepositoryConfigDir -upgradeManagedFiles $upgrade.Upgrade `
+                    -modulePath $context.State.AuthoringModulePath
                 Assert-AvmPreCommitResult -preCommitResult $prepared
+                if ($context.State.StageManagedFiles) {
+                    Add-RepositorySyncManagedFiles -Root $context.Root -PreCommitResult $prepared
+                }
                 Set-TerraformCodeowners -RepositoryRoot $context.Root -Content $context.State.CodeownersContent
             }
+        if ($candidateOutputDirectory -and $published.HasChanges) {
+            $manifestPath = Join-Path $candidateOutputDirectory 'candidate.json'
+            $candidate = Get-Content -LiteralPath $manifestPath -Raw -ErrorAction Stop | ConvertFrom-Json -AsHashtable
+            $module = (Get-Command -Name Invoke-AvmPreCommit -CommandType Function -ErrorAction Stop).Module
+            if (-not $module) {
+                throw [System.InvalidOperationException]::new('The candidate has no loaded Avm.Authoring module version.')
+            }
+            $candidate.authoringSource = if ($authoringModulePath) { 'checkout' } else { 'gallery' }
+            $candidate.authoringVersion = $module.Version.ToString()
+            [System.IO.File]::WriteAllText(
+                $manifestPath,
+                (ConvertTo-Json -InputObject $candidate -Depth 8) + "`n",
+                [System.Text.UTF8Encoding]::new($false))
+        }
         $result.HasChanges = $published.HasChanges
         return $result
     } catch {

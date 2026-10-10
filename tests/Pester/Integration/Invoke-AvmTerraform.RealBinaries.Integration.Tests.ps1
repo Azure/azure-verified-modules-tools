@@ -302,19 +302,11 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
       source  = "Azure/azapi"
       version = "~> 2.12"
     }
-    modtm = {
-      source  = "Azure/modtm"
-      version = "~> 0.3"
-    }
 '@
             $canonical = @'
     azapi = {
       source  = "Azure/azapi"
       version = "~> 2.12"
-    }
-    modtm = {
-      source  = "Azure/modtm"
-      version = "~> 0.3"
     }
     random = {
       source  = "hashicorp/random"
@@ -338,11 +330,9 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             $result.Tool | Should -Be ('mapotf/{0}' -f $script:MapotfVersion)
             $transformed = Get-Content -LiteralPath $terraformPath -Raw
             $azapiIndex = $transformed.IndexOf('    azapi = {')
-            $modtmIndex = $transformed.IndexOf('    modtm = {')
             $randomIndex = $transformed.IndexOf('    random = {')
             $azapiIndex | Should -BeGreaterThan -1
-            $modtmIndex | Should -BeGreaterThan $azapiIndex
-            $randomIndex | Should -BeGreaterThan $modtmIndex
+            $randomIndex | Should -BeGreaterThan $azapiIndex
         }
 
         It 'pr-check runs every step, evaluates plan policies, and resolves tools from the AVM cache' {

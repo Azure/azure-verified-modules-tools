@@ -310,6 +310,7 @@ AND
 function New-AvmTestRepositorySyncPlan {
     param(
         [switch] $KnownClient,
+        [switch] $ValidationPending,
         [switch] $OwnerMigration,
         [switch] $LegacyMembershipMigration,
         [switch] $NamingMigration,
@@ -319,7 +320,8 @@ function New-AvmTestRepositorySyncPlan {
     )
 
     $plan = New-AvmTestBamiPlan -ModuleAddress 'module.bami[0]' -KnownClient:$KnownClient `
-        -OwnerMigration:$OwnerMigration -LegacyMembershipMigration:$LegacyMembershipMigration -NamingMigration:$NamingMigration `
+        -ValidationPending:$ValidationPending -OwnerMigration:$OwnerMigration `
+        -LegacyMembershipMigration:$LegacyMembershipMigration -NamingMigration:$NamingMigration `
         -IdentityName $IdentityName -PreviousIdentityName $PreviousIdentityName
     $repositoryName = $Repository.Split('/')[1]
     $github = @{

@@ -310,6 +310,47 @@ function Test-AvmInlineAvmNotice {
     )
 }
 
+function Test-AvmGeneratedTelemetryTflintIgnore {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $RelativePath,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string[]] $Lines,
+
+        [Parameter(Mandatory)]
+        [int] $LineIndex
+    )
+
+    if (
+        $RelativePath -cnotmatch '^(?:modules/[^/]+/)?main\.telemetry\.tf$' -or
+        $Lines[$LineIndex] -cne '# tflint-ignore: avm_azapi_resource_tags_required' -or
+        $LineIndex + 1 -ge $Lines.Count -or
+        $Lines[$LineIndex + 1] -cne 'resource "azapi_resource" "telemetry" {'
+    ) {
+        return $false
+    }
+
+    $hasTelemetryType = $false
+    for ($nextIndex = $LineIndex + 2; $nextIndex -lt $Lines.Count; $nextIndex++) {
+        $line = $Lines[$nextIndex]
+        if ($line -cmatch '^  type\s*=\s*"Microsoft.Resources/deployments@2025-04-01"\s*$') {
+            $hasTelemetryType = $true
+        }
+        if ($line -cmatch '^  tags\s*=') {
+            return $false
+        }
+        if ($line -cmatch '^  body\s*=' -or $line -cmatch '^}') {
+            return $hasTelemetryType
+        }
+    }
+
+    return $false
+}
+
 function Get-AvmTflintInlineIgnoreWarning {
     [CmdletBinding()]
     [OutputType([object[]])]
@@ -425,6 +466,10 @@ function Get-AvmTflintInlineIgnoreWarning {
                         Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
                 )
                 if ($rules.Count -eq 0) {
+                    continue
+                }
+                if (Test-AvmGeneratedTelemetryTflintIgnore `
+                        -RelativePath $relativePath -Lines $lines -LineIndex $index) {
                     continue
                 }
                 $warnings.Add([pscustomobject][ordered]@{
@@ -549,10 +594,12 @@ function Invoke-AvmTerraformLint {
     $sourceScopes = @(
         Get-AvmTflintScope -Root $Context.Root -ConfigDir $baseConfigDir
     )
+    $rootModuleClass = Get-AvmTflintRootModuleClass -Context $Context
     $configSet = New-AvmTflintConfigSet `
         -Root $Context.Root `
         -BaseConfigDir $baseConfigDir `
-        -Scopes $sourceScopes
+        -Scopes $sourceScopes `
+        -RootModuleClass $rootModuleClass
     foreach ($warning in (Get-AvmTflintOverrideWarning `
                 -Root $Context.Root `
                 -OverridePaths $configSet.OverridePaths)) {

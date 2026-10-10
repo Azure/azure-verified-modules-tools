@@ -64,9 +64,10 @@ Terraform sync, including new and otherwise unlisted repositories. The legacy
 tenant is retired; normal sync explicitly rejects that selection instead of
 accessing an old provider. Normal sync requires the
 [complete BAMI bundle](../README.md#test-tenant-selection)
-before cleanup, Terraform, or repository mutations. GitHub Actions executions
-require the trusted Tools repository and `refs/heads/main`. Repository creation
-does not provision or publish test identities.
+before cleanup, Terraform, or repository mutations. BAMI apply runs require
+the trusted Tools repository on `refs/heads/main`; manually dispatched
+`plan_only=true` previews can also run from its feature branches. Repository
+creation does not provision or publish test identities.
 
 The [ordinary root](terraform/main.tf) owns live BAMI objects at `module.bami[0]`
 alongside `module.github`. GitHub repository/owner IDs feed federation, and
@@ -209,6 +210,48 @@ existing consumer precedence; audit them when verifying a repository's effective
 test identity. Do not run another writer outside the serialized sync workflow.
 Do not change the backend, move state, grant permissions, or reuse the
 controller as an execution identity to bypass a failed prerequisite.
+
+## Candidate validation before publication
+
+After `avm pre-commit`, a changed module is committed locally and transferred
+as an artifact; the preparation job no longer pushes it. A separate
+`avm-validation` job runs `avm pr-check` and `avm test unit` against that exact
+file tree with the module's existing test identity and a randomly selected
+configured test subscription. Static-check failures and failures in existing
+unit tests block publication. A module with no discovered unit tests skips that
+tier without blocking validation. Once the static checks and any unit tests
+pass, a job with the GitHub App token checks that the target branch has not moved
+and that the patch recreates the validated Git tree before pushing and merging
+the generated change. An unchanged module needs neither checks nor publication.
+Each matrix entry calls the per-repository reusable workflow so a failed
+preparation skips only its own validation and publication; other repositories
+continue through their own checks.
+Failed validation logs show the failing check steps and their structured lint,
+policy, and test diagnostics. An absent unit-test tier is reported as skipped,
+not as a passing check.
+Validation uses the module's actual repository ID and the same checked-out
+managed-file configuration as preparation; added managed files are staged
+explicitly even if the module ignores their path. Other ignored files stay
+excluded from the candidate.
+
+Manual plan-only runs perform the same candidate checks without publishing.
+They use the authoring source from the selected workflow branch by default;
+set `use_workflow_authoring_source=false` to test the released Gallery module.
+Scheduled and manually requested apply runs continue to use Gallery.
+Plan-only does not provision a missing `avm-validation` federated credential:
+apply that prerequisite separately before the first preview. BAMI's
+trusted-main restriction remains in force for applies; a manually dispatched
+branch preview is plan-only. If its identity or validation federation is
+still pending, BAMI preparation stops and no module checks run for that
+repository. The validation job can run
+module-owned PowerShell hooks and Terraform unit-test apply blocks, so
+plan-only prevents repository publication and governance apply, **not** every
+possible Azure-side test action.
+
+Plan-only initialization and planning never force-unlock state or break storage
+leases. A state-lock failure stops the preview without repairing the lock;
+resolve it separately through an approved operation. Apply-enabled sync retains
+its existing lock recovery.
 
 ## BAMI group access and migration
 
