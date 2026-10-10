@@ -43,7 +43,7 @@ variable "identity_resource_group_name" {
 
 variable "identity_name" {
   type        = string
-  description = "Optional dedicated module identity name; repository identities retain their existing names."
+  description = "Optional dedicated Bicep module identity name; Terraform repository names use id-test-terraform- and the complete repository stem."
   default     = null
 
   validation {
@@ -71,11 +71,29 @@ variable "github_repository_owner" {
 variable "github_repository_name" {
   type        = string
   description = "Name of the GitHub repository."
+
+  validation {
+    condition = var.identity_name != null ? true : (
+      length("id-test-terraform-${trimprefix(lower(var.github_repository_name), "terraform-")}") <= 90 &&
+      can(regex("^terraform-(azure|azurerm|azapi)-avm-(res|ptn|utl)-[a-z0-9]+(-[a-z0-9]+)*$", lower(var.github_repository_name)))
+    )
+    error_message = "Default test identity naming requires an AVM Terraform repository whose complete identity name fits the repository's 90-character limit."
+  }
 }
 
 variable "github_repository_environment_names" {
   type        = set(string)
   description = "Names of the GitHub environments to create federated identity credentials for. The OIDC subject claim uses the `context` claim, which expands to `environment:<name>` for env-gated jobs, so one credential is created per environment."
+
+  validation {
+    condition = alltrue([
+      for name in var.github_repository_environment_names :
+      can(regex("^[A-Za-z0-9][A-Za-z0-9_-]{2,119}$",
+        var.github_workflow_ref == null ? "${local.owner_repo_name}-${name}" : "${local.owner_repo_name}-module-${name}"
+      ))
+    ])
+    error_message = "Environment suffixes must keep federated credential names within 120 characters, including the optional module- prefix."
+  }
 }
 
 variable "location" {

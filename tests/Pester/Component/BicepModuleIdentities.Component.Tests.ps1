@@ -19,6 +19,7 @@ BeforeAll {
     }
     foreach ($name in @($script:values.Keys) + @($script:backendValues.Keys) + @(
         'GITHUB_ACTIONS', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_ID', 'GITHUB_REF',
+        'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_SHA', 'GITHUB_WORKFLOW_REF',
         'GH_TOKEN', 'AVM_OFFLINE', 'TF_CLI_ARGS', 'ARM_CLIENT_SECRET'
     )) {
         $script:originalEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
@@ -31,6 +32,7 @@ Describe 'Bicep module identity entry points with real files and mocked services
         $script:toolsRoot = Join-Path $caseRoot 'tools'
         $script:sourceRoot = Join-Path $caseRoot 'bicep-source'
         $script:mappingPath = Join-Path $caseRoot 'client-ids.json'
+        $script:migrationPath = Join-Path $caseRoot 'identity-renames.json'
         $script:terraformRoot = Join-Path $script:toolsRoot 'repository-management' 'bicep-test-tenant-sync' 'terraform'
         $script:entryPath = Join-Path $script:toolsRoot 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'Invoke-BicepModuleIdentitySync.ps1'
         $script:publisherPath = Join-Path $script:toolsRoot 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'Invoke-BicepTestTenantSync.ps1'
@@ -64,6 +66,10 @@ Describe 'Bicep module identity entry points with real files and mocked services
         $env:GITHUB_REPOSITORY = 'Azure/azure-verified-modules-tools'
         $env:GITHUB_REPOSITORY_ID = '1239632211'
         $env:GITHUB_REF = 'refs/heads/main'
+        $env:GITHUB_RUN_ID = '123456789'
+        $env:GITHUB_RUN_ATTEMPT = '1'
+        $env:GITHUB_SHA = '0123456789012345678901234567890123456789'
+        $env:GITHUB_WORKFLOW_REF = 'Azure/azure-verified-modules-tools/.github/workflows/repository-management-bicep-sync.yml@refs/heads/main'
         $env:GH_TOKEN = 'fixture-token'
         $env:AVM_OFFLINE = '0'
         $env:TF_CLI_ARGS = '-destroy'
@@ -206,12 +212,14 @@ Describe 'Bicep module identity entry points with real files and mocked services
     }
 
     It 'plans from the real entry point without applying or producing a consumable mapping' {
-        $result = & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath |
+        $script:state.Plan = New-AvmTestBicepIdentityPlan -NamingMigration
+        $result = & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath -IdentityMigrationPath $script:migrationPath |
             ConvertFrom-Json -AsHashtable
         $result.Status | Should -BeExactly 'Planned'
         $result.ModuleCount | Should -Be 2
         $result.PlanOnly | Should -BeTrue
         Test-Path -LiteralPath $script:mappingPath | Should -BeFalse
+        Test-Path -LiteralPath $script:migrationPath | Should -BeFalse
         @($script:state.Calls | Where-Object Command -CEQ 'terraform' | ForEach-Object { $_.Arguments[0] }) |
             Should -Be @('init', 'plan', 'show')
     }
@@ -240,15 +248,93 @@ Describe 'Bicep module identity entry points with real files and mocked services
             Should -Be @('init', 'plan', 'show', 'apply', 'output')
     }
 
+    It 'replaces legacy module identities and updates only exactly matching old client bindings from the same run' {
+        $script:state.Plan = New-AvmTestBicepIdentityPlan -NamingMigration
+        $previous = (New-AvmTestBicepIdentityMigration).before
+        $oldMapping = ConvertTo-AvmBicepIdentityMapping -Identities $previous -ModulePaths @($previous.Keys) -Settings $script:values -Legacy
+        $script:state.Variables.VALIDATE_MODULE_CLIENT_IDS = @{
+            name = 'VALIDATE_MODULE_CLIENT_IDS'; value = ConvertTo-AvmBicepModuleClientIdJson -ClientIds $oldMapping
+            created_at = '2026-10-01T00:00:00Z'; updated_at = '2026-10-01T00:00:00Z'
+        }
+        $result = & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath `
+            -IdentityMigrationPath $script:migrationPath -Apply | ConvertFrom-Json -AsHashtable
+        $result.Status | Should -BeExactly 'Applied'
+        $evidence = Get-Content -LiteralPath $script:migrationPath -Raw | ConvertFrom-Json -AsHashtable
+        $evidence.before['avm/res/fabric/capacity'].client_id | Should -BeExactly $oldMapping['avm/res/fabric/capacity']
+        $evidence.after['avm/res/fabric/capacity'].client_id | Should -BeExactly '10000000-0000-4000-8000-000000000006'
+        $evidence.context.runId | Should -BeExactly $env:GITHUB_RUN_ID
+        $publication = & $script:publisherPath -ModuleClientIdPath $script:mappingPath `
+            -IdentityMigrationPath $script:migrationPath -Apply | ConvertFrom-Json -AsHashtable
+        $publication.Status | Should -BeExactly 'Published'
+        $script:state.Writes | Should -Be @('VALIDATE_MODULE_CLIENT_IDS')
+        $remaining = [ordered]@{}
+        foreach ($name in $script:state.Variables.Keys) {
+            if ($name -cne 'VALIDATE_MODULE_CLIENT_IDS') { $remaining[$name] = $script:state.Variables[$name] }
+        }
+        ConvertTo-Json -InputObject $remaining -Depth 5 -Compress | Should -BeExactly $script:beforeVariables
+        (& $script:publisherPath -ModuleClientIdPath $script:mappingPath -IdentityMigrationPath $script:migrationPath -Apply |
+            ConvertFrom-Json -AsHashtable).Status | Should -BeExactly 'NoChange'
+        $script:state.Writes | Should -HaveCount 1
+    }
+
+    It 'refuses a naming apply without a path for its verified publication evidence' {
+        $script:state.Plan = New-AvmTestBicepIdentityPlan -NamingMigration
+        { & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath -Apply } |
+            Should -Throw '*IdentityMigrationPath*before applying*'
+        @($script:state.Calls | Where-Object { $_.Command -ceq 'terraform' -and $_.Arguments[0] -ceq 'apply' }) |
+            Should -HaveCount 0
+    }
+
+    It 'rejects stale, foreign or malformed rename evidence before publication: <Case>' -ForEach @(
+        @{ Case = 'run'; Edit = { param($m) $m.context.runId = '987654321' } }
+        @{ Case = 'attempt'; Edit = { param($m) $m.context.runAttempt = '2' } }
+        @{ Case = 'commit'; Edit = { param($m) $m.context.commit = 'ffffffffffffffffffffffffffffffffffffffff' } }
+        @{ Case = 'workflow'; Edit = { param($m) $m.context.workflowRef = 'untrusted' } }
+        @{ Case = 'repository'; Edit = { param($m) $m.context.repositoryId = '9999' } }
+        @{ Case = 'old resource'; Edit = { param($m) $m.before['avm/res/fabric/capacity'].identity_resource_id = '/foreign/identity' } }
+        @{ Case = 'old tenant'; Edit = { param($m) $m.before['avm/res/fabric/capacity'].tenant_id = '90000000-0000-4000-8000-000000000001' } }
+        @{ Case = 'old client differs from published value'; Edit = { param($m) $m.before['avm/res/fabric/capacity'].client_id = '90000000-0000-4000-8000-000000000001' } }
+        @{ Case = 'new client differs from mapping'; Edit = { param($m) $m.after['avm/res/fabric/capacity'].client_id = '90000000-0000-4000-8000-000000000001' } }
+        @{ Case = 'new resource'; Edit = { param($m) $m.after['avm/res/fabric/capacity'].identity_resource_id = $m.before['avm/res/fabric/capacity'].identity_resource_id } }
+        @{ Case = 'old controller'; Edit = { param($m) $m.before['avm/res/fabric/capacity'].client_id = '10000000-0000-4000-8000-000000000002' } }
+        @{ Case = 'old shared identity'; Edit = { param($m) $m.before['avm/res/fabric/capacity'].client_id = '10000000-0000-4000-8000-000000000004' } }
+        @{ Case = 'missing entry'; Edit = { param($m) $m.after.Remove('avm/res/fabric/capacity') } }
+        @{ Case = 'empty exception'; Edit = { param($m) $m.before = @{}; $m.after = @{} } }
+        @{ Case = 'invalid version'; Edit = { param($m) $m.schemaVersion = $true } }
+    ) {
+        $migration = New-AvmTestBicepIdentityMigration
+        $previous = ConvertTo-AvmBicepIdentityMapping -Identities $migration.before -ModulePaths @($migration.before.Keys) -Settings $script:values -Legacy
+        $script:state.Variables.VALIDATE_MODULE_CLIENT_IDS = @{
+            name = 'VALIDATE_MODULE_CLIENT_IDS'; value = ConvertTo-AvmBicepModuleClientIdJson -ClientIds $previous
+            created_at = '2026-10-01T00:00:00Z'; updated_at = '2026-10-01T00:00:00Z'
+        }
+        $mapping = ConvertTo-AvmBicepIdentityMapping -Identities $migration.after -ModulePaths @($migration.after.Keys) -Settings $script:values
+        [IO.File]::WriteAllText($script:mappingPath, (ConvertTo-AvmBicepModuleClientIdJson -ClientIds $mapping))
+        & $Edit $migration
+        [IO.File]::WriteAllText($script:migrationPath, (ConvertTo-Json -InputObject $migration -Depth 10 -Compress))
+        { & $script:publisherPath -ModuleClientIdPath $script:mappingPath -IdentityMigrationPath $script:migrationPath -Apply } |
+            Should -Throw
+        $script:state.Writes | Should -HaveCount 0
+    }
+
+    It 'refuses naming receipts outside the trusted workflow run before invoking Terraform' {
+        $env:GITHUB_RUN_ID = ''
+        { & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath -IdentityMigrationPath $script:migrationPath -Apply } |
+            Should -Throw '*current trusted Bicep Sync run*'
+        $script:state.Calls | Should -HaveCount 0
+    }
+
     It 'stops on <Operation> failure without retrying apply, repairing state or publishing' -ForEach @(
         @{ Operation = 'init' }, @{ Operation = 'plan' }, @{ Operation = 'show' }, @{ Operation = 'apply' }, @{ Operation = 'output' }
     ) {
+        $script:state.Plan = New-AvmTestBicepIdentityPlan -NamingMigration
         $script:state.FailOperation = $Operation
-        { & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath -Apply } |
+        { & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath -IdentityMigrationPath $script:migrationPath -Apply } |
             Should -Throw "*Terraform $Operation failed*"
         @($script:state.Calls | Where-Object { $_.Command -ceq 'terraform' -and $_.Arguments[0] -ceq $Operation }) |
             Should -HaveCount 1
         Test-Path -LiteralPath $script:mappingPath | Should -BeFalse
+        Test-Path -LiteralPath $script:migrationPath | Should -BeFalse
         $script:state.Writes | Should -HaveCount 0
     }
 
@@ -261,13 +347,15 @@ Describe 'Bicep module identity entry points with real files and mocked services
     }
 
     It 'does not export a partial, shared or wrong-tenant post-apply mapping' -ForEach @('partial', 'shared', 'tenant') {
+        $script:state.Plan = New-AvmTestBicepIdentityPlan -NamingMigration
         switch ($_) {
             'partial' { $script:state.Outputs.Remove('avm/res/fabric/capacity') }
             'shared' { $script:state.Outputs['avm/res/fabric/capacity'].client_id = $script:values.TEST_BAMI_BICEP_CLIENT_ID }
             'tenant' { $script:state.Outputs['avm/res/fabric/capacity'].tenant_id = $script:backendValues.ARM_BACKEND_TENANT_ID }
         }
-        { & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath -Apply } | Should -Throw
+        { & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath -IdentityMigrationPath $script:migrationPath -Apply } | Should -Throw
         Test-Path -LiteralPath $script:mappingPath | Should -BeFalse
+        Test-Path -LiteralPath $script:migrationPath | Should -BeFalse
         $script:state.Writes | Should -HaveCount 0
     }
 
@@ -294,6 +382,19 @@ Describe 'Bicep module identity entry points with real files and mocked services
         $null = New-Item -ItemType $linkType -Path $inventory -Target $target
         { & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath -Apply } |
             Should -Throw '*directory link*'
+        $script:state.Calls | Should -HaveCount 0
+    }
+
+    It 'rejects ambiguous or overlong discovered identity names before any service call' -ForEach @(
+        @{ Paths = @('avm/res/a-b/c', 'avm/res/a/b-c'); ExpectedError = '*unique*' }
+        @{ Paths = @('avm/res/a/' + ('b' * 59)); ExpectedError = '*68 characters*' }
+    ) {
+        foreach ($path in $Paths) {
+            $directory = Join-Path $script:sourceRoot ($path.Replace('/', [IO.Path]::DirectorySeparatorChar))
+            $null = New-Item -ItemType Directory -Path $directory -Force
+            [IO.File]::WriteAllText((Join-Path $directory 'main.bicep'), "targetScope = 'resourceGroup'`n")
+        }
+        { & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath -Apply } | Should -Throw $ExpectedError
         $script:state.Calls | Should -HaveCount 0
     }
 

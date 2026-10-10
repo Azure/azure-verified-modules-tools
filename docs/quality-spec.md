@@ -1362,6 +1362,38 @@ This section is the implementation-level expression of the **Security stance** p
 - `scripts/Update-AvmPins.ps1` is the only sanctioned path to rotate a hash; the PR that lands the rotation must record what was updated and which upstream release notes were reviewed.
 - The repo bundles no precompiled binaries. Everything is fetched at first use and cached under the user's standard cache root (section 7).
 
+### Test identity naming and replacement
+
+- Terraform test identities use `id-test-terraform-` plus the lowercase repository
+  name without its leading `terraform-`; the owner is excluded. Bicep test
+  identities use `id-test-bicep-` plus the complete canonical root path with
+  slashes replaced by hyphens. Neither convention hashes, truncates or
+  abbreviates names. Preserve the 90-character repository identity bound and
+  68-character canonical Bicep path bound; reject Bicep flattening collisions
+  before provisioning and validate complete federated credential names against
+  Azure's 120-character maximum.
+- Saved-plan guards may permit naming replacement only from the exact known
+  legacy name to the computed current name for the same repository/module and
+  tenant. Verify before/after resource identity, old dedicated client/principal,
+  immutable repository/workflow federation, provider context and state-owned
+  membership edges. A matching name alone is not ownership evidence. Retained
+  federation and memberships must transition to the new identity; deletion of
+  unrelated identities, shared groups, foreign principals, imported/moved
+  identities or widened trust remains forbidden.
+- Bicep mapping rebinding requires a trusted current-run/current-attempt
+  job-local record produced from the verified saved plan and validated applied
+  outputs. Bind it to the Tools repository ID, workflow ref and commit; accept
+  only the verified old client or the already-published new client for each
+  existing module. Preserve the other five execution values, drift/readback
+  checks and no-write-retry rule. No receipt is emitted for a plan-only run or
+  failed apply/output validation. Lost evidence or partial migration requires
+  separately approved recovery, never synthesized ownership or a general
+  rebinding override.
+- This exception requires recorded SFI sign-off before merge. It does not
+  authorize live execution, change conditional Owner permissions, rename
+  backend/controller/shared identities, or cut over Bicep validation consumers
+  or their OIDC subject template.
+
 ### Module manifest and release pipeline
 
 - `LICENSE` at the repo root is referenced from the manifest's `LicenseUri`. The manifest fails its own self-check if the file isn't reachable.
@@ -1435,7 +1467,13 @@ Integration runs on every pull request via the `integration` job in the `ci` wor
 - Consumers wrap `Invoke-ScriptAnalyzer` results in `@(...)`; a no-finding
   result can otherwise be `$AutomationNull` on non-Windows hosts.
 - The build retry wrapper may retry only PSScriptAnalyzer's known transient
-  `NullReferenceException`. It must never retry or hide analyzer findings.
+  `NullReferenceException` or a `CommandNotFoundException` whose `CommandName`
+  is exactly `Get-Command`, including either failure inside an exception chain.
+  Matching message text alone does not qualify a command-resolution failure.
+  Both share the `AVM_LINT_MAX_ATTEMPTS` budget (eight total attempts by default)
+  and the existing 500 ms incremental backoff. Exhaustion rethrows the original
+  final error; unrelated exceptions fail immediately. The wrapper must never
+  retry or hide analyzer findings.
 - A `pre-commit` Pester suite runs:
   - Manifest layout (`Test-AvmModuleLayout`).
   - Encoding check (no BOM, LF line endings).

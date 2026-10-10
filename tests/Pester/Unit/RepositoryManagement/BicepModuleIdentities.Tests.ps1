@@ -64,11 +64,23 @@ Describe 'Bicep module identity configuration' {
         { Resolve-AvmBicepModuleSettings -ModulePaths $Paths -Configuration $Config } | Should -Throw
     }
 
-    It 'keeps identity names stable and distinguishes paths that flatten to the same text' {
+    It 'keeps the complete readable path without a hash or duplicated avm prefix' {
         Get-AvmBicepModuleIdentityName -ModulePath 'avm/res/storage/storage-account' |
+            Should -BeExactly 'id-test-bicep-avm-res-storage-storage-account'
+        Get-AvmTestIdentityName -ModulePath 'avm/res/storage/storage-account' -Legacy |
             Should -BeExactly 'id-avm-bicep-avm-res-storage-storage-account-3ecbb5ba'
-        (Get-AvmBicepModuleIdentityName -ModulePath 'avm/res/a-b/c') |
-            Should -Not -Be (Get-AvmBicepModuleIdentityName -ModulePath 'avm/res/a/b-c')
+        $longest = 'avm/res/a/' + ('b' * 58)
+        (Get-AvmBicepModuleIdentityName -ModulePath $longest) | Should -BeExactly ('id-test-bicep-' + $longest.Replace('/', '-'))
+        (Get-AvmTestIdentityName -ModulePath $longest -Legacy).Length | Should -Be 90
+        { Get-AvmBicepModuleIdentityName -ModulePath ($longest + 'b') } | Should -Throw '*68 characters*'
+    }
+
+    It 'rejects future flattened-path collisions instead of hashing or truncating them' {
+        $paths = @('avm/res/a-b/c', 'avm/res/a/b-c')
+        (Get-AvmBicepModuleIdentityName -ModulePath $paths[0]) |
+            Should -BeExactly (Get-AvmBicepModuleIdentityName -ModulePath $paths[1])
+        { Resolve-AvmBicepModuleSettings -ModulePaths $paths -Configuration $script:configuration } |
+            Should -Throw '*unique*'
     }
 
     It 'rejects noncanonical roots' -ForEach @(
@@ -141,6 +153,57 @@ Describe 'Bicep module client-ID mapping' {
     }
 }
 
+Describe 'Bicep module identity rename evidence' {
+    BeforeEach {
+        Mock Get-AvmBicepIdentityPublicationContext {
+            [ordered]@{
+                repositoryId = '1239632211'
+                workflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/repository-management-bicep-sync.yml@refs/heads/main'
+                commit = '0123456789012345678901234567890123456789'
+                runId = '123456789'
+                runAttempt = '1'
+            }
+        }
+        $script:settings = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)
+        $script:migration = New-AvmTestBicepIdentityMigration
+        $script:mapping = ConvertTo-AvmBicepIdentityMapping -Identities $script:migration.after `
+            -ModulePaths @($script:migration.after.Keys) -Settings $script:settings
+    }
+
+    It 'accepts a partial rename without requiring unchanged modules in its before and after evidence' {
+        $script:migration.before.Remove('avm/res/storage/storage-account')
+        $script:migration.after.Remove('avm/res/storage/storage-account')
+        $previous = ConvertFrom-AvmBicepIdentityMigration -Migration $script:migration -ClientIds $script:mapping -Settings $script:settings
+        $previous.Count | Should -Be 1
+        $previous['avm/res/fabric/capacity'] | Should -BeExactly '10000000-0000-4000-8000-000000000106'
+    }
+
+    It 'rejects untyped, additional or misbound migration evidence: <Case>' -ForEach @(
+        @{ Case = 'string version'; Edit = { param($m) $m.schemaVersion = '1' } }
+        @{ Case = 'floating version'; Edit = { param($m) $m.schemaVersion = [double]1 } }
+        @{ Case = 'additional field'; Edit = { param($m) $m.approved = $true } }
+        @{ Case = 'additional context'; Edit = { param($m) $m.context.approved = $true } }
+        @{ Case = 'current rather than legacy before resource'; Edit = { param($m) $m.before['avm/res/fabric/capacity'].identity_resource_id = $m.after['avm/res/fabric/capacity'].identity_resource_id } }
+        @{ Case = 'duplicate previous client'; Edit = { param($m) $m.before['avm/res/fabric/capacity'].client_id = $m.before['avm/res/storage/storage-account'].client_id } }
+        @{ Case = 'different after module'; Edit = { param($m)
+            $m.after['avm/res/new/module'] = $m.after['avm/res/fabric/capacity']
+            $m.after.Remove('avm/res/fabric/capacity')
+        } }
+    ) {
+        & $Edit $script:migration
+        { ConvertFrom-AvmBicepIdentityMigration -Migration $script:migration -ClientIds $script:mapping -Settings $script:settings } |
+            Should -Throw
+    }
+
+    It 'rejects reuse of an old client anywhere in a matching proposed mapping' {
+        $oldClient = $script:migration.before['avm/res/fabric/capacity'].client_id
+        $script:migration.after['avm/res/storage/storage-account'].client_id = $oldClient
+        $script:mapping['avm/res/storage/storage-account'] = $oldClient
+        { ConvertFrom-AvmBicepIdentityMigration -Migration $script:migration -ClientIds $script:mapping -Settings $script:settings } |
+            Should -Throw '*stale or reused IDs*'
+    }
+}
+
 Describe 'Bicep identity saved-plan ownership guard' {
     BeforeEach {
         $script:settings = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)
@@ -153,6 +216,34 @@ Describe 'Bicep identity saved-plan ownership guard' {
     It 'accepts both existing identities and new identities with explicitly unknown outputs' -ForEach @($true, $false) {
         $script:guard.Plan = New-AvmTestBicepIdentityPlan -KnownClient:$_
         { Assert-AvmBicepIdentityPlan @script:guard } | Should -Not -Throw
+    }
+
+    It 'accepts only the verified legacy hashed module identity transition: known outputs <_>' -ForEach @($true, $false) {
+        $script:guard.Plan = New-AvmTestBicepIdentityPlan -NamingMigration -KnownClient:$_
+        { Assert-AvmBicepIdentityPlan @script:guard } | Should -Not -Throw
+        $previous = Assert-AvmBicepIdentityPlan @script:guard -PassThru
+        $previous.Count | Should -Be 2
+        $previous['avm/res/storage/storage-account'].identity_resource_id |
+            Should -BeLike '*/id-avm-bicep-avm-res-storage-storage-account-3ecbb5ba'
+        $previous['avm/res/storage/storage-account'].client_id | Should -BeExactly '10000000-0000-4000-8000-000000000116'
+        $previous['avm/res/storage/storage-account'].Count | Should -Be 3
+    }
+
+    It 'rejects a forged old module path, hash, tenant or client during replacement: <Case>' -ForEach @(
+        @{ Case = 'different module'; Edit = { param($p) $p.resource_changes[0].change.before.name = 'id-avm-bicep-avm-res-storage-storage-account-3ecbb5ba' } }
+        @{ Case = 'different hash'; Edit = { param($p) $p.resource_changes[0].change.before.name = 'id-avm-bicep-avm-res-fabric-capacity-00000000' } }
+        @{ Case = 'another tenant'; Edit = { param($p) $p.resource_changes[0].change.before.output.properties.tenantId = '90000000-0000-4000-8000-000000000001' } }
+        @{ Case = 'shared client'; Edit = { param($p) $p.resource_changes[0].change.before.output.properties.clientId = '10000000-0000-4000-8000-000000000004' } }
+        @{ Case = 'another caller'; Edit = { param($p) $p.resource_changes[3].change.before.body.properties.subject += ':untrusted' } }
+    ) {
+        $script:guard.Plan = New-AvmTestBicepIdentityPlan -NamingMigration
+        & $Edit $script:guard.Plan
+        { Assert-AvmBicepIdentityPlan @script:guard } | Should -Throw
+    }
+
+    It 'checks flattened-name uniqueness independently of discovery before examining a plan' {
+        $script:guard.Modules = @{ 'avm/res/a-b/c' = @(); 'avm/res/a/b-c' = @() }
+        { Assert-AvmBicepIdentityPlan @script:guard } | Should -Throw '*unique identity names*'
     }
 
     It 'keeps module and Tools federation names distinct and binds caller and reusable workflows' {

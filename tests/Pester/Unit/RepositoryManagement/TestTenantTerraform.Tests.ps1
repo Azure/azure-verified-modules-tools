@@ -11,6 +11,39 @@ BeforeAll {
     }
 }
 
+Describe 'Test identity naming' {
+    It 'drops only the owner and leading terraform prefix, preserving provider and full lowercase module text' -ForEach @(
+        @{ Repository = 'Azure/terraform-azurerm-avm-res-storage-storageaccount'; Expected = 'id-test-terraform-azurerm-avm-res-storage-storageaccount' }
+        @{ Repository = 'Azure/terraform-azapi-avm-res-windows-terraform-example'; Expected = 'id-test-terraform-azapi-avm-res-windows-terraform-example' }
+        @{ Repository = 'Azure/terraform-azure-avm-utl-naming'; Expected = 'id-test-terraform-azure-avm-utl-naming' }
+        @{ Repository = 'AnotherOwner/Terraform-AzAPI-avm-res-Windows-example'; Expected = 'id-test-terraform-azapi-avm-res-windows-example' }
+    ) {
+        Get-AvmTestIdentityName -Repository $Repository | Should -BeExactly $Expected
+        Get-AvmTestIdentityName -Repository $Repository | Should -BeExactly (Get-AvmTestIdentityName -Repository $Repository)
+    }
+
+    It 'retains the old owner and windows substitution only for legacy ownership verification' {
+        Get-AvmTestIdentityName -Repository 'Azure/terraform-azurerm-avm-res-compute-windows' -Legacy |
+            Should -BeExactly 'Azure-terraform-azurerm-avm-res-compute-w5s'
+    }
+
+    It 'accepts the full 90-character name and refuses longer names without shortening them' {
+        $prefix = 'id-test-terraform-azapi-avm-res-'
+        $stem = 'a' * (90 - $prefix.Length)
+        Get-AvmTestIdentityName -Repository "Azure/terraform-azapi-avm-res-$stem" | Should -BeExactly ($prefix + $stem)
+        { Get-AvmTestIdentityName -Repository "Azure/terraform-azapi-avm-res-${stem}a" } |
+            Should -Throw '*90 characters*never truncated*'
+    }
+
+    It 'rejects invalid or ambiguous repository names' -ForEach @(
+        'terraform-azurerm-avm-res-example', 'Azure/not-terraform-azurerm-avm-res-example',
+        'Azure/terraform-other-avm-res-example', 'Azure/terraform-azurerm-avm-res-example/child',
+        'Azure/terraform-azurerm-avm-res-example--name'
+    ) {
+        { Get-AvmTestIdentityName -Repository $_ } | Should -Throw
+    }
+}
+
 Describe 'Tools repository federation context' {
     BeforeEach {
         $script:previousGitHubContext = @{}
@@ -133,6 +166,17 @@ Describe 'Candidate plan and output safety' {
             Should -Not -Throw
     }
 
+    It 'validates naming replacements through the ordinary root and refuses incomplete root plans' {
+        $plan = New-AvmTestRepositorySyncPlan -NamingMigration
+        $arguments = @{
+            Plan = $plan; Settings = $script:settings; Repository = $script:repository
+            RepositorySyncRepositoryId = '1239632211'; EntraGroupNames = $script:planArguments.EntraGroupNames
+        }
+        { Assert-AvmRepositorySyncPlan @arguments } | Should -Not -Throw
+        $plan.complete = $false
+        { Assert-AvmRepositorySyncPlan @arguments } | Should -Throw '*incomplete*'
+    }
+
     It 'requires the refreshed snapshot rather than configured values or planned data: <Case>' -ForEach @(
         @{ Case = 'missing'; Snapshot = $null }
         @{ Case = 'wrong snapshot type'; Snapshot = 'not a state document' }
@@ -238,6 +282,86 @@ Describe 'Candidate plan and output safety' {
         }
     }
 
+    It 'accepts exact naming replacements with known or unknown new identities and retains their old ownership evidence' -ForEach @($true, $false) {
+        $migration = New-AvmTestBamiPlan -NamingMigration -KnownClient:$_
+        foreach ($order in @(@('delete', 'create'), @('create', 'delete'))) {
+            foreach ($change in $migration.resource_changes) { $change.change.actions = $order }
+            { Assert-AvmBamiIdentityPlan -Plan $migration @script:planArguments } | Should -Not -Throw
+            $previous = Assert-AvmBamiIdentityPlan -Plan $migration @script:planArguments -PassThru
+            $previous.client_id | Should -BeExactly '10000000-0000-4000-8000-000000000106'
+            $previous.identity_resource_id | Should -BeLike '*/Azure-terraform-azurerm-avm-ptn-example-repo'
+        }
+    }
+
+    It 'uses only the old dedicated principal for membership revocation and obsolete Owner removal during a rename' {
+        $migration = New-AvmTestBamiPlan -NamingMigration -OwnerMigration -LegacyMembershipMigration
+        { Assert-AvmBamiIdentityPlan -Plan $migration @script:planArguments } | Should -Not -Throw
+        $migration.resource_changes[-1].change.before.member_object_id = '90000000-0000-4000-8000-000000000001'
+        { Assert-AvmBamiIdentityPlan -Plan $migration @script:planArguments } | Should -Throw '*individual membership edge*'
+    }
+
+    It 'rejects incomplete, unrelated or widened naming transitions: <Case>' -ForEach @(
+        @{ Case = 'wrong old name'; Edit = { param($p) $p.resource_changes[0].change.before.name = 'Azure-terraform-azurerm-avm-res-foreign' } }
+        @{ Case = 'wrong old resource'; Edit = { param($p) $p.resource_changes[0].change.before.id = '/foreign/identity' } }
+        @{ Case = 'wrong old parent'; Edit = { param($p) $p.resource_changes[0].change.before.parent_id = '/foreign/group' } }
+        @{ Case = 'old tenant mismatch'; Edit = { param($p) $p.resource_changes[0].change.before.output.properties.tenantId = '90000000-0000-4000-8000-000000000001' } }
+        @{ Case = 'old controller principal'; Edit = { param($p) $p.resource_changes[0].change.before.output.properties.principalId = '10000000-0000-4000-8000-000000000011' } }
+        @{ Case = 'old shared client'; Edit = { param($p) $p.resource_changes[0].change.before.output.properties.clientId = '10000000-0000-4000-8000-000000000004' } }
+        @{ Case = 'missing old client'; Edit = { param($p) $p.resource_changes[0].change.before.output.properties.Remove('clientId') } }
+        @{ Case = 'missing old output'; Edit = { param($p) $p.resource_changes[0].change.before.output = $null } }
+        @{ Case = 'name update without replacement'; Edit = { param($p) $p.resource_changes[0].change.actions = @('update') } }
+        @{ Case = 'wrong planned new name'; Edit = { param($p) $p.planned_values.root_module.child_modules[0].resources[0].values.name = 'id-test-terraform-foreign' } }
+        @{ Case = 'inconsistent new after name'; Edit = { param($p) $p.resource_changes[0].change.after.name = 'id-test-terraform-foreign' } }
+        @{ Case = 'unknown output not marked'; Edit = { param($p) $p.resource_changes[0].change.after_unknown = @{} } }
+        @{ Case = 'foreign old membership'; Edit = { param($p) $p.resource_changes[1].change.before.member_object_id = '10000000-0000-4000-8000-000000000011' } }
+        @{ Case = 'membership not replaced'; Edit = { param($p) $p.resource_changes[1].change.actions = @('update') } }
+        @{ Case = 'unmarked new membership'; Edit = { param($p) $p.resource_changes[1].change.after_unknown = @{} } }
+        @{ Case = 'inconsistent new membership'; Edit = { param($p) $p.resource_changes[1].change.after.member_object_id = '10000000-0000-4000-8000-000000000107' } }
+        @{ Case = 'foreign old federation parent'; Edit = { param($p) $p.resource_changes[3].change.before.parent_id = '/foreign/identity' } }
+        @{ Case = 'foreign old federation name'; Edit = { param($p) $p.resource_changes[3].change.before.name = 'foreign-federation' } }
+        @{ Case = 'old federation widened'; Edit = { param($p) $p.resource_changes[3].change.before.body.properties.subject = 'repo:Azure/foreign:environment:pr-check' } }
+        @{ Case = 'new federation widened'; Edit = { param($p) $p.resource_changes[3].change.after.body.properties.subject = 'repo:Azure/foreign:environment:pr-check' } }
+        @{ Case = 'new alternative trust'; Edit = { param($p) $p.resource_changes[3].change.after.body.properties.claimsMatchingExpression = @{ languageVersion = 1; value = '*' } } }
+        @{ Case = 'federation not replaced'; Edit = { param($p) $p.resource_changes[3].change.actions = @('update') } }
+        @{ Case = 'unmarked new federation parent'; Edit = { param($p) $p.resource_changes[3].change.after_unknown = @{} } }
+        @{ Case = 'state move'; Edit = { param($p) $p.resource_changes[0].previous_address = 'module.foreign.azapi_resource.identity' } }
+        @{ Case = 'import'; Edit = { param($p) $p.resource_changes[0].change.importing = @{ id = '/foreign/identity' } } }
+        @{ Case = 'delete only'; Edit = { param($p) $p.resource_changes[0].change.actions = @('delete') } }
+        @{ Case = 'unrelated deletion'; Edit = { param($p) $p.resource_changes += @{ address = 'module.azure.azapi_resource.foreign'; type = 'azapi_resource'; mode = 'managed'; change = @{ actions = @('delete'); before = @{}; after = $null } } } }
+    ) {
+        $migration = New-AvmTestBamiPlan -NamingMigration
+        & $Edit $migration
+        { Assert-AvmBamiIdentityPlan -Plan $migration @script:planArguments } | Should -Throw
+    }
+
+    It 'rejects stale client or principal outputs on a replacement' -ForEach @('clientId', 'principalId') {
+        $migration = New-AvmTestBamiPlan -NamingMigration -KnownClient
+        $migration.planned_values.root_module.child_modules[0].resources[0].values.output.properties[$_] =
+            $migration.resource_changes[0].change.before.output.properties[$_]
+        $migration.resource_changes[0].change.after.output.properties[$_] =
+            $migration.resource_changes[0].change.before.output.properties[$_]
+        { Assert-AvmBamiIdentityPlan -Plan $migration @script:planArguments } | Should -Throw '*must then be new*'
+    }
+
+    It 'requires old module federation rather than relying on a colliding legacy name alone' {
+        $migration = New-AvmTestBamiPlan -NamingMigration
+        foreach ($change in @($migration.resource_changes | Where-Object { $_.address -like '*federated_credential*' })) {
+            $change.change.before = $null
+            $change.change.actions = @('create')
+        }
+        { Assert-AvmBamiIdentityPlan -Plan $migration @script:planArguments } | Should -Throw '*existing module federation*'
+    }
+
+    It 'allows a missing credential to be created when another old module credential proves repository ownership' {
+        $migration = New-AvmTestBamiPlan -NamingMigration
+        $credential = @($migration.resource_changes | Where-Object { $_.address -ceq 'module.azure.azapi_resource.identity_federated_credentials["pr-check"]' })[0]
+        $credential.change.before = $null
+        $credential.change.actions = @('create')
+        { Assert-AvmBamiIdentityPlan -Plan $migration @script:planArguments } | Should -Not -Throw
+        $migration.complete = $false
+        { Assert-AvmBamiIdentityPlan -Plan $migration @script:planArguments } | Should -Throw '*incomplete*'
+    }
+
     It 'rejects partial, extra or wrong-target planned resources' {
         $script:plan.planned_values.root_module.child_modules[0].resources += @{
             address = 'module.azure.azapi_resource.extra_owner'; mode = 'managed'; values = @{}
@@ -325,6 +449,7 @@ Describe 'Candidate plan and output safety' {
         $invalid = New-AvmTestBamiPlan -KnownClient
         $invalid.planned_values.root_module.child_modules[0].resources[0].values.output.properties.principalId =
             '10000000-0000-4000-8000-000000000011'
+        $invalid.resource_changes[0].change.after.output.properties.principalId = '10000000-0000-4000-8000-000000000011'
         { Assert-AvmBamiIdentityPlan -Plan $invalid @script:planArguments } | Should -Throw '*never the controller*'
     }
 

@@ -116,6 +116,7 @@ function Invoke-AvmBicepTestTenantSync {
     param(
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Values,
         [System.Collections.IDictionary] $ModuleClientIds,
+        [System.Collections.IDictionary] $IdentityMigration,
         [Parameter(ParameterSetName = 'Plan')] [switch] $PlanOnly = $true,
         [Parameter(Mandatory, ParameterSetName = 'Apply')] [switch] $Apply
     )
@@ -139,6 +140,12 @@ function Invoke-AvmBicepTestTenantSync {
     if ($PSBoundParameters.ContainsKey('ModuleClientIds')) {
         $moduleJson = ConvertTo-AvmBicepModuleClientIdJson -ClientIds $ModuleClientIds -ForbiddenClientIds $forbidden
     }
+    if ($PSBoundParameters.ContainsKey('IdentityMigration')) {
+        if (-not $PSBoundParameters.ContainsKey('ModuleClientIds') -or $null -eq $IdentityMigration) {
+            throw [System.ArgumentException]::new('Identity rename evidence requires its complete proposed module client-ID mapping.')
+        }
+        $null = ConvertFrom-AvmBicepIdentityMigration -Migration $IdentityMigration -ClientIds $ModuleClientIds -Settings $bundle
+    }
     $snapshot = Get-AvmBicepTestTenantSnapshot
     $retargetedNames = @(
         foreach ($name in $projection.Keys) {
@@ -154,7 +161,7 @@ function Invoke-AvmBicepTestTenantSync {
         $projection['VALIDATE_MODULE_CLIENT_IDS'] = $moduleJson
         if ($null -ne $snapshot['VALIDATE_MODULE_CLIENT_IDS']) {
             Assert-AvmBicepModuleMappingExtension -ExistingJson $snapshot['VALIDATE_MODULE_CLIENT_IDS'].Value `
-                -ClientIds $ModuleClientIds -ForbiddenClientIds $forbidden
+                -ClientIds $ModuleClientIds -ForbiddenClientIds $forbidden -IdentityMigration $IdentityMigration -Settings $bundle
         }
     }
     $changes = @(
@@ -172,7 +179,7 @@ function Invoke-AvmBicepTestTenantSync {
         ChangedNames = $changes
     }
     if (-not $publishing) { return [pscustomobject]$result }
-    if ($changes.Count -gt 0 -and -not $PSCmdlet.ShouldProcess($result.Target, 'Publish nonsecret Bicep variables without retargeting existing identities')) {
+    if ($changes.Count -gt 0 -and -not $PSCmdlet.ShouldProcess($result.Target, 'Publish nonsecret Bicep variables with only verified module naming transitions')) {
         $result.Status = 'Preview'
         $result.PlanOnly = $true
         return [pscustomobject]$result

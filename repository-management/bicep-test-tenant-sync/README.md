@@ -15,6 +15,20 @@ state-only identity and the existing eight-field BAMI bundle for provisioning.
 Only the identity job can request OpenID Connect (OIDC) tokens; the mapping
 publisher uses a separate, target-scoped Actions Variables token.
 
+## Identity names
+
+Bicep uses `id-test-bicep-` followed by the complete canonical root path with
+slashes replaced by hyphens. For example, `avm/res/storage/storage-account`
+becomes `id-test-bicep-avm-res-storage-storage-account`. There is no hash,
+truncation or duplicated `avm` prefix. Child modules do not create another name.
+
+Discovery, the plan guard and Terraform reject flattened-name collisions.
+The existing canonical-path limit remains 68 characters; identity names retain
+the repository's 90-character bound. These are repository policies, not Azure's
+absolute limits: Azure allows [3-128 identity name characters](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-name-rules#microsoftmanagedidentity)
+and [3-120 federated credential name characters](https://learn.microsoft.com/en-us/azure/templates/microsoft.managedidentity/userassignedidentities/federatedidentitycredentials).
+Terraform checks complete credential names, including the `module-` discriminator.
+
 ## Group configuration
 
 [`bicep-config/config.json`](../bicep-config/config.json) mirrors Terraform's
@@ -59,17 +73,52 @@ module identity resource ID, tenant and unique client ID. It publishes
 
 Client IDs are not credentials. The publisher checks the actual UTF-8 size
 against the 48 KiB variable limit and refuses empty, incomplete, duplicate,
-shared/controller or retargeted bindings. It uses a request file rather than
+shared/controller or arbitrarily retargeted bindings. It uses a request file rather than
 putting the mapping on the command line. Existing variables are protected by
 the shared pre-write and readback checks; unacknowledged writes are never
 retried or rolled back automatically.
 
-The plan guard rejects foreign state, identity deletion or replacement, direct
+The plan guard rejects foreign state, unrelated identity deletion or replacement, direct
 role assignments, moved/imported identities, widened federation and incomplete
 group/provider evidence. Removing a configured membership is allowed only for
 that module's verified principal. Missing modules stop the run rather than
 destroying their identities. Raw plans and output documents are not streamed
 to workflow logs. No state repair, force-unlock or automatic apply retry is used.
+
+### Existing identity naming transition
+
+The sole naming exception replaces the exact former
+`id-avm-bicep-<flattened-path>-<hash8>` identity with its computed hash-free name
+for the same module and tenant. The legacy suffix is still checked against the
+first eight lowercase SHA-256 characters of the original canonical path.
+Before allowing replacement, the guard verifies the old resource, tenant,
+dedicated client/principal and existing repository/caller federation. All
+retained credentials and membership edges must move to the new identity;
+only the verified old principal's edges can be removed. Permissions and
+federation trust do not broaden.
+
+The identity step supplies `-IdentityMigrationPath` for a separate, unused
+job-local JSON file. After the saved plan succeeds and outputs are validated,
+that file records the verified old and applied new identity tuples, bound to
+the Tools repository ID, workflow ref, commit, run ID and attempt. The publisher
+accepts only matching evidence from that same trusted run. Existing module
+bindings must equal either the verified old client or the already-published
+new client; third values, removed modules, stale evidence and reused clients
+are rejected. The other five execution values remain immutable.
+
+This file relies on the trusted job's local-file boundary, like the mapping
+output; it is not a signed artifact or an operator-supplied rebinding override.
+Plan-only and failed apply/output validation produce neither consumable file.
+Do not replace an existing evidence file or run a second writer. If apply
+succeeds but the job loses its evidence before publication, a later run cannot
+reconstruct ownership of a deleted identity: routine rebinding fails closed.
+Stop for separately approved recovery using preserved plan/state evidence;
+do not synthesize evidence, roll back automatically or blindly retry a write.
+
+This narrow replacement/publication exception requires recorded SFI sign-off
+before merge. Source changes do not authorize a live apply or publication.
+Coordinate the first approved reconciliation with active test runs because
+identity replacement changes client IDs and invalidates the old federation.
 
 ## Separate consumer cutover
 
@@ -106,4 +155,5 @@ BAMI identity only after that cutover is complete.
 
 The Terraform task uses mocked providers only. It runs the actual Bicep root's
 plan through the production ownership guard and checks the applied mapping,
-without provisioning Azure resources or editing GitHub variables.
+checks both ecosystems' legacy replacement plans and unchanged subsequent
+Bicep plans, without provisioning Azure resources or editing GitHub variables.
