@@ -534,7 +534,15 @@ Describe 'Terraform effective contract and state wiring' {
         $azure = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'azure' 'main.tf')
         $original = [regex]::Match($azure, '(?sm)^resource "azapi_resource" "identity_federated_credentials" \{.*?^\}').Value
         $original | Should -Match 'for_each\s*=\s*var.github_repository_environment_names'
-        $original | Should -Match 'subject\s*=\s*"repository_owner_id:\$\{var.github_organization_id\}:repository_id:\$\{var.github_repository_id\}:environment:\$\{each.value\}:job_workflow_ref:\$\{var.github_job_workflow_ref\}"'
+        $baseSubject = 'repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:${each.value}:job_workflow_ref:${var.github_job_workflow_ref}'
+        $callerBinding = 'var.github_workflow_ref == null ? "" : ":workflow_ref:${var.github_workflow_ref}"'
+        $original | Should -Match ('(?s)subject\s*=\s*join\("",\s*\[\s*"' +
+            [regex]::Escape($baseSubject) + '",\s*' + [regex]::Escape($callerBinding) + '\s*\]\)')
+        $variables = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'azure' 'variables.tf')
+        foreach ($name in @('identity_name', 'github_workflow_ref')) {
+            $variable = [regex]::Match($variables, '(?sm)^variable "' + $name + '" \{.*?^\}').Value
+            $variable | Should -Match '\bdefault\s*=\s*null\b'
+        }
         $validation = [regex]::Match($azure, '(?sm)^resource "azapi_resource" "validation_federated_credential" \{.*?^\}').Value
         $validation | Should -Not -BeNullOrEmpty
         $validation | Should -Match 'parent_id\s*=\s*azapi_resource.identity.id'
@@ -547,6 +555,7 @@ Describe 'Terraform effective contract and state wiring' {
         $ordinary | Should -Match 'source\s*=\s*"\./modules/azure"'
         $ordinary | Should -Match 'repository_sync_repository_id\s*=\s*var.repository_sync_repository_id'
         $ordinary | Should -Not -Match 'resource\s+"azapi_resource"\s+"identity"'
+        $ordinary | Should -Not -Match '(?m)^\s*(identity_name|github_workflow_ref)\s*='
     }
 
     It 'exposes only the verified BAMI test settings to plan-only consumers' {

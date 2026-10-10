@@ -176,7 +176,10 @@ There is no fallback to retired-tenant settings. See the
 [unified ownership and execution prerequisites](repository-sync/README.md#unified-bami-ownership).
 
 Bicep variable sync retains its existing eight-field source and five-field
-execution projections. Configured Entra names are not Bicep target Variables.
+execution projection. It also publishes a separate, generated module client-ID
+mapping after identity provisioning. Configured Entra names are not Bicep target Variables.
+See [Bicep test identities](bicep-test-tenant-sync/README.md) for module inventory,
+group exceptions and rollout boundaries.
 
 | BAMI source field | Consumer target Variable |
 | --- | --- |
@@ -186,7 +189,7 @@ execution projections. Configured Entra names are not Bicep target Variables.
 | `TEST_BAMI_MANAGEMENT_GROUP_ID` | `VALIDATE_MANAGEMENT_GROUP_ID` |
 | `TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID` | `VALIDATE_PERSISTENT_SUBSCRIPTION_ID` |
 
-Only these five generic Variables are managed. Old `TEST_BAMI_*` aliases,
+These five generic Variables and `VALIDATE_MODULE_CLIENT_IDS` are managed. Old `TEST_BAMI_*` aliases,
 the retired `TEST_BAMI_MODULE_PATHS` selector, and legacy customer keys are
 outside the managed snapshot and write allowlist. The publisher neither
 writes nor deletes them and never reads or writes Secrets. The five execution
@@ -206,11 +209,12 @@ the Tools-controller credential as the Bicep execution identity.
 
 ### Bicep variable publication
 
-The separate `sync-test-tenant-variables` job in Bicep Sync requires trusted
-Tools `main`. Scheduled runs use `33 2-23/4 * * *` (02:33, 06:33, 10:33,
-14:33, 18:33 and 22:33 UTC); manual dispatch has no inputs. Both call the
-entry point with `-Apply` and reconcile the five generic execution Variables.
-There is no workflow enable flag, preview flag or global activation variable.
+Both jobs in Bicep Sync require trusted Tools `main`. Scheduled runs use
+`33 2-23/4 * * *` (02:33, 06:33, 10:33, 14:33, 18:33 and 22:33 UTC)
+and apply changes. Manual dispatch defaults `plan_only` to `true`; clear it
+only for an approved apply. The first job reconciles the existing five
+execution Variables. The second provisions module identities and, only after
+a successful apply, publishes their mapping. No consumer cutover is performed.
 The App must separately be approved for Actions Variables (`actions_variables: write`) on
 `Azure/bicep-registry-modules`. Its variable token has no content, secret,
 workflow, or pull-request write permission.
@@ -229,6 +233,9 @@ defaults to a read-only plan. Standalone publication requires an explicit,
 operator-approved `-Apply`; `-PlanOnly:$false` is rejected, and `-Apply -WhatIf`
 is write-free. The script uses eight named environment variables, plus
 `GH_TOKEN`; it accepts no target or configuration override.
+The optional `-ModuleClientIdPath` reads the compact JSON produced by the
+identity job. Existing mappings may gain modules but cannot lose paths or
+change existing client IDs. The five execution values remain immutable.
 
 All eight source values are required even for plans. The publisher treats
 upstream BAMI execution as always active: any present generic target value that

@@ -5,6 +5,11 @@ on:
   schedule:
     - cron: '33 2-23/4 * * *'
   workflow_dispatch:
+    inputs:
+      plan_only:
+        description: Plan identity and variable changes without applying
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -44,6 +49,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.variables-token.outputs.token }}
           AVM_APP_SLUG: ${{ steps.variables-token.outputs.app-slug }}
+          BICEP_SYNC_PLAN_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.plan_only }}
           TEST_BAMI_TENANT_ID: ${{ vars.TEST_BAMI_TENANT_ID }}
           TEST_BAMI_CONTROLLER_CLIENT_ID: ${{ vars.TEST_BAMI_CONTROLLER_CLIENT_ID }}
           TEST_BAMI_ADMIN_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_ADMIN_SUBSCRIPTION_ID }}
@@ -56,4 +62,87 @@ jobs:
           if ($env:AVM_APP_SLUG -cne 'azure-verified-modules') {
             throw 'The configured GitHub App is not azure-verified-modules.'
           }
-          & (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'Invoke-BicepTestTenantSync.ps1') -Apply
+          $options = if ($env:BICEP_SYNC_PLAN_ONLY -ceq 'true') { @{ PlanOnly = $true } } else { @{ Apply = $true } }
+          & (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'Invoke-BicepTestTenantSync.ps1') @options
+
+  sync-module-identities:
+    name: Sync module test identities
+    needs: sync-test-tenant-variables
+    if: >-
+      github.repository == 'Azure/azure-verified-modules-tools' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: avm
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write # Authenticate the BAMI controller and separate state backend.
+    env:
+      TEST_BAMI_TENANT_ID: ${{ vars.TEST_BAMI_TENANT_ID }}
+      TEST_BAMI_CONTROLLER_CLIENT_ID: ${{ vars.TEST_BAMI_CONTROLLER_CLIENT_ID }}
+      TEST_BAMI_ADMIN_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_ADMIN_SUBSCRIPTION_ID }}
+      TEST_BAMI_SUBSCRIPTION_IDS: ${{ vars.TEST_BAMI_SUBSCRIPTION_IDS }}
+      TEST_BAMI_MANAGEMENT_GROUP_ID: ${{ vars.TEST_BAMI_MANAGEMENT_GROUP_ID }}
+      TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME: ${{ vars.TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME }}
+      TEST_BAMI_BICEP_CLIENT_ID: ${{ vars.TEST_BAMI_BICEP_CLIENT_ID }}
+      TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID }}
+    steps:
+      - name: Checkout trusted tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Checkout Bicep source inventory
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Azure/bicep-registry-modules
+          ref: main
+          path: bicep-source
+          persist-credentials: false
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: latest
+          terraform_wrapper: false
+
+      - name: Provision dedicated module identities
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BICEP_SYNC_PLAN_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.plan_only }}
+          ARM_BACKEND_TENANT_ID: ${{ vars.ARM_BACKEND_TENANT_ID }}
+          ARM_BACKEND_SUBSCRIPTION_ID: ${{ vars.ARM_BACKEND_SUBSCRIPTION_ID }}
+          ARM_BACKEND_CLIENT_ID: ${{ vars.ARM_BACKEND_CLIENT_ID }}
+          ARM_BACKEND_STORAGE_ACCOUNT_NAME: ${{ vars.ARM_BACKEND_STORAGE_ACCOUNT_NAME }}
+          ARM_BACKEND_STORAGE_CONTAINER_NAME: ${{ vars.ARM_BACKEND_STORAGE_CONTAINER_NAME }}
+        run: |
+          $options = if ($env:BICEP_SYNC_PLAN_ONLY -ceq 'true') { @{ PlanOnly = $true } } else { @{ Apply = $true } }
+          & (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'Invoke-BicepModuleIdentitySync.ps1') `
+            -BicepRoot (Join-Path $env:GITHUB_WORKSPACE 'bicep-source') `
+            -MappingPath (Join-Path $env:RUNNER_TEMP 'bicep-module-client-ids.json') @options
+
+      - name: Create target-scoped Variables token
+        if: github.event_name != 'workflow_dispatch' || !inputs.plan_only
+        id: variables-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AVM_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
+          owner: Azure
+          repositories: bicep-registry-modules
+          permission-actions-variables: write
+
+      - name: Publish nonsecret module client IDs
+        if: github.event_name != 'workflow_dispatch' || !inputs.plan_only
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.variables-token.outputs.token }}
+          AVM_APP_SLUG: ${{ steps.variables-token.outputs.app-slug }}
+        run: |
+          if ($env:AVM_APP_SLUG -cne 'azure-verified-modules') {
+            throw 'The configured GitHub App is not azure-verified-modules.'
+          }
+          & (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'Invoke-BicepTestTenantSync.ps1') `
+            -ModuleClientIdPath (Join-Path $env:RUNNER_TEMP 'bicep-module-client-ids.json') -Apply

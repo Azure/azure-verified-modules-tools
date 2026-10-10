@@ -93,3 +93,26 @@ function ConvertTo-AvmEntraGroupNames {
     }
     return ,$result.ToArray()
 }
+
+function Resolve-AvmGroupEntraGroups {
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Groups,
+        [Parameter(Mandatory)] [string] $SelectorProperty,
+        [Parameter(Mandatory)] [string] $Item
+    )
+
+    foreach ($entry in $Groups) {
+        $group = ConvertTo-AvmSettingDictionary -Value $entry
+        if ($group.Contains('entraGroups')) {
+            $null = ConvertTo-AvmEntraGroupNames -Names $group['entraGroups']
+        }
+    }
+    $names = @(
+        foreach ($entry in @(Get-AvmOrderedGroup -Groups $Groups -SelectorProperty $SelectorProperty -Item $Item)) {
+            if ($entry.Group.Contains('entraGroups')) { $entry.Group['entraGroups'] }
+        }
+    )
+    return ConvertTo-AvmEntraGroupNames -Names $names
+}

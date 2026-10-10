@@ -10,6 +10,7 @@ on:
       - .github/workflows/repository-management-sync-repository.yml
       - .github/workflows/repository-management-bicep-sync.yml
       - repository-management/repository-config/config.json
+      - repository-management/bicep-config/**
       - repository-management/labels/**
       - repository-management/shared/**
       - repository-management/bicep-test-tenant-sync/**
@@ -17,6 +18,7 @@ on:
       - repository-management/repository-sync/scripts/lib/TestTenant.ps1
       - tests/Pester/Unit/RepositoryManagement/**
       - tests/fixtures/TestTenant.ps1
+      - tests/fixtures/BicepIdentities.ps1
       - repository-management/repository-sync/scripts/Invoke-RepositorySync.ps1
       - repository-management/repository-sync/scripts/Invoke-RepositoryCandidate.ps1
       - repository-management/repository-sync/scripts/lib/AvmPreCommit.ps1

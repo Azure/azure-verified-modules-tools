@@ -147,7 +147,12 @@ function Assert-AvmBamiIdentityPlan {
         [Parameter(Mandatory)] [string] $RepositorySyncRepositoryId,
         [string] $JobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main',
         [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $EntraGroupNames,
-        [ValidateSet('module.azure', 'module.bami[0]')] [string] $ModuleAddress = 'module.azure'
+        [ValidatePattern('^module\.(azure|bami\[0\]|bicep\["avm/(res|ptn|utl)/[a-z0-9-]+/[a-z0-9-]+"\])$')]
+        [string] $ModuleAddress = 'module.azure',
+        [string] $IdentityName,
+        [string] $WorkflowRef,
+        [ValidatePattern('^[a-z][a-z0-9-]*$')]
+        [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test')
     )
 
     $Settings = Get-AvmBamiSettings -Values $Settings
@@ -171,13 +176,10 @@ function Assert-AvmBamiIdentityPlan {
         $key = ConvertTo-Json -InputObject $groupName -Compress
         $membershipNames["$ModuleAddress.azuread_group_member.test_permissions[$key]"] = $groupName
     }
-    $allowed = @(
-        $identityAddress,
-        "$ModuleAddress.azapi_resource.identity_federated_credentials[`"pr-check`"]",
-        "$ModuleAddress.azapi_resource.identity_federated_credentials[`"integration-test`"]",
-        "$ModuleAddress.azapi_resource.identity_federated_credentials[`"examples-test`"]",
-        $validationCredentialAddress
-    )
+    $allowed = @($identityAddress, $validationCredentialAddress)
+    foreach ($environment in $Environments) {
+        $allowed += "$ModuleAddress.azapi_resource.identity_federated_credentials[`"$environment`"]"
+    }
     $allowed += @($membershipNames.Keys)
     $managed = @($resources | Where-Object { $_['mode'] -ceq 'managed' })
     $addresses = @($managed | ForEach-Object { $_['address'] } | Select-Object -Unique)
@@ -207,7 +209,7 @@ function Assert-AvmBamiIdentityPlan {
     }
     $identity = @($managed | Where-Object { $_['address'] -ceq $identityAddress })[0]['values']
     $parentId = "/subscriptions/$($Settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'])/resourceGroups/$($Settings['TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME'])"
-    $name = $Repository.Replace('/', '-').Replace('windows', 'w5s')
+    $name = if ($IdentityName) { $IdentityName } else { $Repository.Replace('/', '-').Replace('windows', 'w5s') }
     $identityId = "$parentId/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$name"
     if ($identity['parent_id'] -cne $parentId -or $identity['name'] -cne $name -or
         ($null -ne $identity['id'] -and $identity['id'] -ine $identityId) -or
@@ -285,10 +287,21 @@ function Assert-AvmBamiIdentityPlan {
             throw [System.InvalidOperationException]::new('Candidate membership must bind only the resolved configured group and dedicated repository principal.')
         }
     }
-    foreach ($environment in @('pr-check', 'integration-test', 'examples-test', 'avm-validation')) {
-        $address = if ($environment -ceq 'avm-validation') { $validationCredentialAddress } else {
-            $ModuleAddress + '.azapi_resource.identity_federated_credentials["' + $environment + '"]'
+    $federation = [ordered]@{}
+    foreach ($environment in $Environments) {
+        $address = "$ModuleAddress.azapi_resource.identity_federated_credentials[`"$environment`"]"
+        $subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:${environment}:job_workflow_ref:$JobWorkflowRef"
+        if ($WorkflowRef) { $subject += ":workflow_ref:$WorkflowRef" }
+        $federation[$address] = @{
+            Name = if ($WorkflowRef) { "$name-module-$environment" } else { "$name-$environment" }
+            Subject = $subject
         }
+    }
+    $federation[$validationCredentialAddress] = @{
+        Name = "$name-avm-validation"
+        Subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
+    }
+    foreach ($address in $federation.Keys) {
         $credential = @($managed | Where-Object { $_['address'] -ceq $address })[0]['values']
         if ($credential['body'] -isnot [System.Collections.IDictionary] -or
             $credential['body']['properties'] -isnot [System.Collections.IDictionary]) {
@@ -296,18 +309,13 @@ function Assert-AvmBamiIdentityPlan {
         }
         $properties = $credential['body']['properties']
         $audiences = @($properties['audiences'])
-        $subject = if ($environment -ceq 'avm-validation') {
-            "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
-        }
-        else {
-            "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:${environment}:job_workflow_ref:$JobWorkflowRef"
-        }
         if ($credential['type'] -cne 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview' -or
-            $credential['name'] -cne "$name-$environment" -or
+            $credential['name'] -cne $federation[$address].Name -or
             ($null -ne $credential['parent_id'] -and $credential['parent_id'] -cne $identityId) -or
             ($null -eq $credential['parent_id'] -and -not (Test-AvmTerraformPlanUnknownField -Change $changes[$address]['change'] -Path 'parent_id')) -or
             $properties['issuer'] -cne 'https://token.actions.githubusercontent.com' -or
-            $audiences.Count -ne 1 -or $audiences[0] -cne 'api://AzureADTokenExchange' -or $properties['subject'] -cne $subject) {
+            $audiences.Count -ne 1 -or $audiences[0] -cne 'api://AzureADTokenExchange' -or
+            $properties['subject'] -cne $federation[$address].Subject) {
             throw [System.InvalidOperationException]::new('Candidate federation, including validation federation, must retain the exact repository, environment, workflow, and identity binding.')
         }
     }
