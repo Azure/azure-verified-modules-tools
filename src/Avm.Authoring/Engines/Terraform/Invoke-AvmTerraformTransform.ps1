@@ -210,7 +210,7 @@ function Get-AvmTerraformTransformTarget {
                 $targets.Add([pscustomobject]@{
                         Path     = $testRoot
                         Scope    = 'test'
-                        Profiles = @('provider-cleanup', 'test')
+                        Profiles = @('module-call', 'provider-cleanup', 'test')
                     })
             }
         }
@@ -308,7 +308,15 @@ function Test-AvmTerraformScopedRandomProviderInUse {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
     $testDirectory = Split-Path -Parent $Scope.File.FullName
+    $ownerPrefix = $Scope.Owner.Path + [System.IO.Path]::DirectorySeparatorChar
+    $ownerScannedPaths = @($ModuleTargets | Where-Object {
+            $_.Profiles -notcontains 'example' -and
+            $_.Path.StartsWith($ownerPrefix, [System.StringComparison]::Ordinal)
+        } | ForEach-Object { $_.Path })
     foreach ($path in @($Scope.Owner.Path) + $TargetPaths) {
+        if ($path -cin $ownerScannedPaths) {
+            continue
+        }
         $key = "$path|$testDirectory"
         if (-not $Cache.ContainsKey($key)) {
             $Cache[$key] = Test-AvmTerraformRandomProviderInUse `
@@ -537,6 +545,10 @@ function Invoke-AvmMapotfTransformTarget {
     }
     $transformArguments.Add('--tf-dir')
     $transformArguments.Add($Target.Path)
+    if ($Target.Scope -eq 'test' -and $Target.Profiles -contains 'module-call') {
+        $transformArguments.Add('--mptf-var')
+        $transformArguments.Add('test_wrapper=true')
+    }
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $transform = Invoke-AvmProcess `
@@ -588,8 +600,11 @@ function Invoke-AvmTerraformTransform {
         required input and neither global nor run variables already set it.
         Unknown run targets are rejected rather than rewritten.
         Examples run example, provider-cleanup, common after the module calls
-        have settled. Standalone test-module directories run provider-cleanup
-        and an optional consumer test profile. Empty modtm test mocks,
+        have settled. Standalone test-module directories run module-call,
+        provider-cleanup and an optional consumer test profile, deepest first.
+        Their module calls receive only missing required locations; authored
+        locations, optional defaults and telemetry opt-outs remain unchanged.
+        Empty modtm test mocks,
         telemetry references, and empty random mocks in direct unit tests
         with no remaining random provider usage are migrated. Custom mocks
         that cannot be removed safely fail with an actionable error. The
@@ -787,11 +802,16 @@ function Invoke-AvmTerraformTransform {
                 -ThrottleLimit $ThrottleLimit
         }
         if ($testTargets.Count -gt 0) {
-            Invoke-AvmParallel `
-                -InputObject $testTargets `
-                -FunctionName 'Invoke-AvmMapotfTransformTarget' `
-                -Argument $transformOptions `
-                -ThrottleLimit $ThrottleLimit
+            $testDepthGroups = @($testTargets | Group-Object {
+                    @([System.IO.Path]::GetRelativePath($Context.Root, $_.Path) -split '[\\/]').Count
+                } | Sort-Object { [int]$_.Name } -Descending)
+            foreach ($depthGroup in $testDepthGroups) {
+                Invoke-AvmParallel `
+                    -InputObject @($depthGroup.Group) `
+                    -FunctionName 'Invoke-AvmMapotfTransformTarget' `
+                    -Argument $transformOptions `
+                    -ThrottleLimit $ThrottleLimit
+            }
         }
         Invoke-AvmTerraformUnitTestMigration -Root $Context.Root -ModuleTargets $unitTestTargets `
             -Snapshots $unitSnapshots -Options $transformOptions

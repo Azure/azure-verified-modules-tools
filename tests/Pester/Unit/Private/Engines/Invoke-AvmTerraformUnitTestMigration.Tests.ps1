@@ -537,7 +537,7 @@ Providers required by state:
             $testTarget = [pscustomobject]@{
                 Path     = Join-Path $script:fixture.Root 'tests' 'unit'
                 Scope    = 'test'
-                Profiles = @('provider-cleanup', 'test')
+                Profiles = @('module-call', 'provider-cleanup', 'test')
             }
             $script:fixture.Targets += $testTarget
             $result = InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {

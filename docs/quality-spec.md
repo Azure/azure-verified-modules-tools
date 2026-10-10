@@ -640,7 +640,12 @@ module scopes run `module,common`. Profiles execute sequentially so module
 provider rules see the generated telemetry. A second `module-call,common`
 pass visits local modules from deepest to root after their inputs exist.
 Examples run `example,provider-cleanup,common`; standalone test modules run
-`provider-cleanup` followed by any consumer `test` profile. MaPoTF subprocesses
+`module-call,provider-cleanup` followed by any consumer `test` profile, from
+deepest to shallowest after modules and examples finish. Test-wrapper mode
+forwards only missing required locations through local calls, adding a required
+wrapper input only when needed. Authored call locations, omitted optional
+location defaults and telemetry opt-outs are preserved; test wrappers do not
+gain `enable_telemetry` inputs or instrumentation. MaPoTF subprocesses
 clear `TF_PLUGIN_CACHE_DIR` and use target-local providers, so independent
 targets can run in parallel without racing Terraform's shared provider cache.
 
@@ -774,6 +779,9 @@ targets, their known local children, and test setup no longer need that
 provider. Unselected examples do not retain an owner's random mock; explicitly
 selected examples are checked for their own provider use. Non-empty mocks or remaining random
 references fail for manual review; mocks for other random use are preserved.
+The owner's inspection already covers its known non-example descendants;
+selected test wrappers reuse that result rather than treating a previously
+inspected ancestor dependency as unknown.
 JSON configurations and module dependencies that cannot be checked locally
 also retain their random mocks rather than assuming the provider is unused.
 When an instrumented unit-test target has no direct random requirement but

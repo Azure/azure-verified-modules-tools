@@ -1121,6 +1121,167 @@ run "telemetry" {
         $unitResult.StdOut | Should -Match 'Success! 1 passed, 0 failed'
     }
 
+    It 'propagates missing locations through nested test wrappers without changing authored calls' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $child = Join-Path $root 'modules' 'child'
+        $wrapper = Join-Path $root 'tests' 'wrapper'
+        $inner = Join-Path $wrapper 'inner'
+        $authored = Join-Path $root 'tests' 'authored'
+        $optional = Join-Path $root 'tests' 'optional'
+        $optionalLeaf = Join-Path $optional 'leaf'
+        $unit = Join-Path $root 'tests' 'unit'
+        New-TelemetryModule -Root $root -WithLegacy
+        New-TelemetryModule -Root $child -WithLegacy -WithLocation -Child
+        Set-Content -LiteralPath (Join-Path $child 'variables.tf') -Encoding utf8NoBOM -Value @'
+variable "location" {
+  type     = string
+  nullable = false
+}
+'@
+        $null = New-Item -ItemType Directory -Path $inner, $authored, $optionalLeaf, $unit -Force
+        foreach ($target in @($wrapper, $authored)) {
+            Set-Content -LiteralPath (Join-Path $target 'terraform.tf') -Encoding utf8NoBOM -Value @'
+terraform {
+  required_providers {
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.12"
+    }
+  }
+}
+'@
+        }
+        Set-Content -LiteralPath (Join-Path $wrapper 'main.tf') -Encoding utf8NoBOM -Value @'
+module "inner" {
+  source = "./inner"
+}
+
+output "telemetry_count" {
+  value = module.inner.telemetry_count
+}
+'@
+        Set-Content -LiteralPath (Join-Path $inner 'main.tf') -Encoding utf8NoBOM -Value @'
+module "test" {
+  source           = "../../.."
+  enable_telemetry = false
+}
+
+output "telemetry_count" {
+  value = module.test.telemetry_count
+}
+'@
+        Set-Content -LiteralPath (Join-Path $authored 'main.tf') -Encoding utf8NoBOM -Value @'
+module "test" {
+  source           = "../../modules/child"
+  enable_telemetry = false
+  location         = "westus2"
+}
+
+output "telemetry_count" {
+  value = module.test.telemetry_count
+}
+'@
+        $authoredContent = [System.IO.File]::ReadAllBytes((Join-Path $authored 'main.tf'))
+        Set-Content -LiteralPath (Join-Path $optional 'main.tf') -Encoding utf8NoBOM -Value @'
+module "leaf" {
+  source = "./leaf"
+}
+
+output "location" {
+  value = module.leaf.location
+}
+'@
+        Set-Content -LiteralPath (Join-Path $optionalLeaf 'main.tf') -Encoding utf8NoBOM -Value @'
+variable "location" {
+  type    = string
+  default = "westeurope"
+}
+
+output "location" {
+  value = var.location
+}
+'@
+        $optionalContent = [System.IO.File]::ReadAllBytes((Join-Path $optional 'main.tf'))
+        $testPath = Join-Path $unit 'wrappers.tftest.hcl'
+        Set-Content -LiteralPath $testPath -Encoding utf8NoBOM -Value @'
+mock_provider "modtm" {}
+mock_provider "random" {}
+mock_provider "azapi" {}
+
+run "nested_wrapper" {
+  command = apply
+  module {
+    source = "./tests/wrapper"
+  }
+  assert {
+    condition     = output.telemetry_count == 0
+    error_message = "The nested wrapper must preserve the module's authored telemetry opt-out."
+  }
+}
+
+run "authored_location" {
+  command = apply
+  module {
+    source = "./tests/authored"
+  }
+  assert {
+    condition     = output.telemetry_count == 0
+    error_message = "The fixed-region wrapper must preserve its authored inputs."
+  }
+}
+
+run "optional_location" {
+  command = plan
+  module {
+    source = "./tests/optional"
+  }
+  assert {
+    condition     = output.location == "westeurope"
+    error_message = "An omitted optional input must retain the target's authored default."
+  }
+}
+'@
+        $snapshot = InModuleScope Avm.Authoring -Parameters @{ Root = $root } {
+            param($Root)
+            Get-AvmFileSnapshot -Path @((Get-AvmTerraformFile -Root $Root).FullName)
+        }
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'fail'
+        foreach ($path in $snapshot.Keys) {
+            [System.IO.File]::ReadAllBytes($path) | Should -Be $snapshot[$path]
+        }
+        foreach ($target in @($wrapper, $inner, $authored, $optional)) {
+            Join-Path $target 'variables.tf' | Should -Not -Exist
+        }
+        (Invoke-TelemetryEngine -Root $root).Status | Should -Be 'pass'
+        foreach ($target in @($wrapper, $inner)) {
+            $variables = Get-Content -LiteralPath (Join-Path $target 'variables.tf') -Raw
+            $variables | Should -Match '(?s)variable "location" \{[^}]*nullable\s*=\s*false'
+            $variables | Should -Not -Match '\bdefault\s*=|variable "enable_telemetry"'
+            Get-Content -LiteralPath (Join-Path $target 'main.tf') -Raw |
+                Should -Match '(?m)^\s*location\s*=\s*var\.location'
+        }
+        Get-Content -LiteralPath (Join-Path $inner 'main.tf') -Raw |
+            Should -Match '(?m)^\s*enable_telemetry\s*=\s*false'
+        Join-Path $authored 'variables.tf' | Should -Not -Exist
+        Join-Path $optional 'variables.tf' | Should -Not -Exist
+        [System.IO.File]::ReadAllBytes((Join-Path $authored 'main.tf')) | Should -Be $authoredContent
+        [System.IO.File]::ReadAllBytes((Join-Path $optional 'main.tf')) | Should -Be $optionalContent
+        $content = [System.IO.File]::ReadAllText($testPath)
+        [regex]::Matches($content, '(?m)^\s*location\s*=\s*"eastus"').Count | Should -Be 1
+        $content | Should -Not -Match 'mock_provider "(modtm|random)"'
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'pass'
+        [System.IO.File]::ReadAllText($testPath) | Should -BeExactly $content
+        [System.IO.File]::ReadAllBytes((Join-Path $authored 'main.tf')) | Should -Be $authoredContent
+        [System.IO.File]::ReadAllBytes((Join-Path $optional 'main.tf')) | Should -Be $optionalContent
+        (Invoke-TelemetryEngine -Root $root).Changed | Should -BeNullOrEmpty
+        Assert-TelemetryTerraformValid -Root $root -TestDirectory ([System.IO.Path]::Combine('tests', 'unit'))
+        $result = Invoke-TelemetryProcess -FilePath $script:terraformPath `
+            -ArgumentList @('test', '-no-color', ('-test-directory=' + [System.IO.Path]::Combine('tests', 'unit'))) -Root $root
+        $result.StdOut | Should -Match 'Success! 3 passed, 0 failed'
+        $result.StdOut | Should -Not -Match 'Warning:'
+        $result.StdErr | Should -BeNullOrEmpty
+    }
+
     It 'preserves mocked selected examples without retaining unrelated root mocks' {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $example = Join-Path $root 'examples' 'default'

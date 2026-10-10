@@ -1,3 +1,8 @@
+variable "test_wrapper" {
+  type    = bool
+  default = false
+}
+
 data "module" "local_calls" {}
 
 data "variable" "location" {
@@ -24,11 +29,11 @@ data "module_source" "local_calls" {
 locals {
   location_calls = {
     for name, source in try(data.module_source.local_calls, {}) : name => local.local_calls[name]
-    if contains(keys(source.variables), "location")
+    if contains(keys(source.variables), "location") && (!var.test_wrapper || try(source.variables.location.required, false))
   }
   telemetry_calls = {
     for name, source in try(data.module_source.local_calls, {}) : name => local.local_calls[name]
-    if contains(keys(source.variables), "location") && contains(keys(source.variables), "enable_telemetry")
+    if !var.test_wrapper && contains(keys(source.variables), "location") && contains(keys(source.variables), "enable_telemetry")
   }
   missing_location_calls = {
     for name, call in local.location_calls : name => call
@@ -49,7 +54,7 @@ locals {
 }
 
 transform "new_block" "parent_location" {
-  for_each       = length(local.location_calls) > 0 && length(data.variable.location.result) == 0 ? toset([1]) : toset([])
+  for_each       = length(var.test_wrapper ? local.missing_location_calls : local.location_calls) > 0 && length(data.variable.location.result) == 0 ? toset([1]) : toset([])
   new_block_type = "variable"
   labels         = ["location"]
   filename       = "variables.tf"

@@ -187,7 +187,7 @@ Describe 'Invoke-AvmTerraformTransform' {
                     @(
                         [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
                         [pscustomobject]@{ Path = '/fake/example'; Scope = 'example'; Profiles = @('example', 'provider-cleanup', 'common') }
-                        [pscustomobject]@{ Path = '/fake/test'; Scope = 'test'; Profiles = @('provider-cleanup', 'test') }
+                        [pscustomobject]@{ Path = '/fake/test'; Scope = 'test'; Profiles = @('module-call', 'provider-cleanup', 'test') }
                     )
                 }
                 Mock Invoke-AvmParallel
@@ -204,6 +204,67 @@ Describe 'Invoke-AvmTerraformTransform' {
             }
             finally {
                 $env:TF_PLUGIN_CACHE_DIR = $savedPluginCache
+            }
+        }
+    }
+
+    It 'finishes modules and examples before forwarding nested test wrapper inputs' {
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context } {
+            param($C)
+            $child = Join-Path $C.Root 'modules' 'child'
+            $example = Join-Path $C.Root 'examples' 'default'
+            $wrapper = Join-Path $C.Root 'tests' 'wrapper'
+            $inner = Join-Path $wrapper 'inner'
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Resolve-AvmMapotfConfigDir { "/fake/$ProfileName" }
+            Mock Get-AvmTerraformTransformTarget {
+                @(
+                    [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
+                    [pscustomobject]@{ Path = $child; Scope = 'module'; Profiles = @('module', 'common') }
+                    [pscustomobject]@{ Path = $example; Scope = 'example'; Profiles = @('example', 'provider-cleanup', 'common') }
+                    [pscustomobject]@{ Path = $wrapper; Scope = 'test'; Profiles = @('module-call', 'provider-cleanup', 'test') }
+                    [pscustomobject]@{ Path = $inner; Scope = 'test'; Profiles = @('module-call', 'provider-cleanup', 'test') }
+                )
+            }
+            $script:wrapperTransformBatches = [System.Collections.Generic.List[string]]::new()
+            Mock Invoke-AvmParallel { $script:wrapperTransformBatches.Add(($InputObject.Path -join '|')) }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Mock Get-AvmRemainingModtmIssue { @() }
+
+            Invoke-AvmTerraformTransform -Context $C -ThrottleLimit 4 | Out-Null
+
+            $script:wrapperTransformBatches.ToArray() |
+                Should -Be @(("$($C.Root)|$child"), $child, $C.Root, $example, $inner, $wrapper)
+            Should -Invoke Invoke-AvmParallel -Exactly 6 -ParameterFilter { $ThrottleLimit -eq 4 }
+        }
+    }
+
+    It 'restricts module-call propagation to required locations only for test wrappers' {
+        InModuleScope 'Avm.Authoring' {
+            $options = [pscustomobject]@{
+                ToolPath = '/fake/mapotf'
+                ProfileDirs = @{
+                    'module-call' = '/fake/module-call'
+                    'provider-cleanup' = '/fake/provider-cleanup'
+                }
+                EnvVars = @{}
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            foreach ($scope in @('root', 'test')) {
+                Invoke-AvmMapotfTransformTarget -Target ([pscustomobject]@{
+                        Path = $TestDrive
+                        Scope = $scope
+                        Profiles = @('module-call', 'provider-cleanup')
+                    }) -Options $options
+            }
+
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList -contains '--mptf-var' -and $ArgumentList -contains 'test_wrapper=true'
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList -notcontains '--mptf-var'
             }
         }
     }
@@ -630,6 +691,49 @@ run "selected" {
         $updated | Should -Not -Match 'mock_provider "modtm"'
         $updated | Should -Match 'mock_provider "azapi"'
         $updated | Should -Match 'source = "\./examples/selected"'
+        [regex]::IsMatch($updated, 'mock_provider "random"') | Should -Be $UsesRandom
+    }
+
+    It 'uses owner-wide random inspection for a selected wrapper calling its ancestor' -TestCases @(
+        @{ UsesRandom = $true }
+        @{ UsesRandom = $false }
+    ) {
+        param($UsesRandom)
+        $wrapper = Join-Path $script:moduleDir 'tests' 'wrapper'
+        $unit = Join-Path $script:moduleDir 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $wrapper, $unit -Force
+        $source = if ($UsesRandom) { 'resource "random_string" "suffix" { length = 4 }' } else { 'locals {}' }
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'main.tf') -Encoding utf8NoBOM -Value $source
+        Set-Content -LiteralPath (Join-Path $wrapper 'main.tf') -Encoding utf8NoBOM -Value @'
+module "test" {
+  source = "../../"
+}
+'@
+        $testFile = Join-Path $unit 'wrapper.tftest.hcl'
+        Set-Content -LiteralPath $testFile -Encoding utf8NoBOM -Value @'
+mock_provider "modtm" {}
+mock_provider "random" {}
+run "wrapper" {
+  module {
+    source = "./tests/wrapper"
+  }
+}
+'@
+        InModuleScope Avm.Authoring -Parameters @{
+            Root = $script:moduleDir
+            Wrapper = $wrapper
+            TestFile = $testFile
+        } {
+            param($Root, $Wrapper, $TestFile)
+            Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets @(
+                [pscustomobject]@{ Path = $Root; Profiles = @('root') }
+                [pscustomobject]@{ Path = $Wrapper; Profiles = @('module-call', 'provider-cleanup', 'test') }
+            ) -UnitTestPlans @(
+                [pscustomobject]@{ Path = $TestFile; TargetPaths = @($Wrapper) }
+            )
+        }
+        $updated = [System.IO.File]::ReadAllText($testFile)
+        $updated | Should -Not -Match 'mock_provider "modtm"'
         [regex]::IsMatch($updated, 'mock_provider "random"') | Should -Be $UsesRandom
     }
 
@@ -1435,8 +1539,8 @@ Describe 'Get-AvmTerraformTransformTarget' {
         ($targets | Where-Object Path -eq $direct).Profiles | Should -Be @('root', 'module', 'common')
         ($targets | Where-Object Path -eq $nested).Profiles | Should -Be @('module', 'common')
         ($targets | Where-Object Path -eq $example).Profiles | Should -Be @('example', 'provider-cleanup', 'common')
-        ($targets | Where-Object Path -eq $testWrapper).Profiles | Should -Be @('provider-cleanup', 'test')
-        ($targets | Where-Object Path -eq $childWrapper).Profiles | Should -Be @('provider-cleanup', 'test')
+        ($targets | Where-Object Path -eq $testWrapper).Profiles | Should -Be @('module-call', 'provider-cleanup', 'test')
+        ($targets | Where-Object Path -eq $childWrapper).Profiles | Should -Be @('module-call', 'provider-cleanup', 'test')
         @($targets.Path) | Should -Not -Contain $notModule
         @($targets.Path) | Should -Not -Contain $helperWrapper
     }
