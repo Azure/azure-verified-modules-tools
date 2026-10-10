@@ -708,6 +708,21 @@ and the helper's gate and four-byte length; matching resource names alone
 must not remove other authored deployments or random resources.
 Retain the helper and its provider if any Terraform source still references
 it or the scope contains JSON configuration that needs review.
+For an undeclared legacy `avm_azapi_header` local, retire the standard
+telemetry-only AzAPI operation headers and preserve a wildcard `If-Match`
+delete precondition when it is merged with that header. Match the complete
+known expression, not just the local name. Retire the complete canonical
+`avm_azapi_header`, `avm_azapi_headers`, `fork_avm` and
+`valid_module_source_regex` helper bundle only when its declaration and
+reference counts prove that no source or Terraform test uses it outside the
+bundle. Check HCL tests at the root and under `tests/`; retain the bundle
+when JSON configuration or JSON tests prevent that proof. Native metadata
+must identify one source directory, even after earlier resource retirement.
+Remove only those local attributes, not neighboring authored values.
+Preserve duplicate declarations, other declared header locals, custom gates
+and mixed headers for review; never invent a fallback header or remove
+unrelated request headers. Commented-out resources are not active header
+usages.
 Terraform must still install their former
 providers once when an existing state references them; after the state
 forgets those addresses, new installations do not require `modtm`. The

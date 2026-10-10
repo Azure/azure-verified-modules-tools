@@ -50,6 +50,12 @@ data "local" "avm_telemetry_version_token" {
   name = "avm_telemetry_version_token"
 }
 
+data "local" "avm_azapi_header" {
+  name = "avm_azapi_header"
+}
+
+data "local" "legacy_azapi_helpers" {}
+
 locals {
   enable_telemetry_exists    = length(data.variable.enable_telemetry.result) == 1
   main_location_exists       = length(data.local.main_location.result) == 1
@@ -90,6 +96,104 @@ locals {
     tostring(local.legacy_random_id.byte_length) == "4" &&
     !local.legacy_random_referenced,
     false
+  )
+
+  dangling_header_resources = {
+    for name, resource in try(data.resource.azapi_resource.result["azapi_resource"], {}) :
+    resource.mptf.block_address => resource
+    if length(data.local.avm_azapi_header.result) == 0 && try(
+      length(resource.mptf.module.abs_dir) > 0 &&
+      length(fileset(resource.mptf.module.abs_dir, "*.tf.json")) == 0,
+      false
+    )
+  }
+  legacy_user_agent_expression = "var[.]enable_telemetry[[:space:]]*[?][[:space:]]*[{][[:space:]]*\"User-Agent\"[[:space:]]*[:=][[:space:]]*local[.]avm_azapi_header[[:space:]]*,?[[:space:]]*[}][[:space:]]*:[[:space:]]*"
+  dangling_header_paths = {
+    for address, resource in local.dangling_header_resources : address => [
+      for header in ["create_headers", "read_headers", "update_headers", "delete_headers"] : header
+      if can(regex("^${local.legacy_user_agent_expression}(null|[{][[:space:]]*[}])$", trimspace(try(resource[header], ""))))
+    ]
+  }
+  dangling_if_match_headers = {
+    for address, resource in local.dangling_header_resources : address => resource
+    if can(regex(
+      "^merge[(][[:space:]]*[{][[:space:]]*\"If-Match\"[[:space:]]*[:=][[:space:]]*\"[*]\"[[:space:]]*,?[[:space:]]*[}][[:space:]]*,[[:space:]]*${local.legacy_user_agent_expression}[{][[:space:]]*[}][[:space:]]*,?[[:space:]]*[)]$",
+      trimspace(try(resource.delete_headers, ""))
+    ))
+  }
+
+  legacy_header_definitions = {
+    avm_azapi_header = "join(\" \", [for k, v in local.avm_azapi_headers : \"$${k}=$${v}\"])"
+    avm_azapi_headers = <<-EOT
+!var.enable_telemetry ? {} : (local.fork_avm ? {
+  fork_avm  = "true"
+  random_id = one(random_uuid.telemetry).result
+  } : {
+  avm                = "true"
+  random_id          = one(random_uuid.telemetry).result
+  avm_module_source  = one(data.modtm_module_source.telemetry).module_source
+  avm_module_version = one(data.modtm_module_source.telemetry).module_version
+})
+EOT
+    fork_avm = "!anytrue([for r in local.valid_module_source_regex : can(regex(r, one(data.modtm_module_source.telemetry).module_source))])"
+    valid_module_source_regex = <<-EOT
+[
+  "registry.terraform.io/[A|a]zure/.+",
+  "registry.opentofu.io/[A|a]zure/.+",
+  "git::https://github\\.com/[A|a]zure/.+",
+  "git::ssh:://git@github\\.com/[A|a]zure/.+",
+]
+EOT
+  }
+  legacy_header_values = {
+    for name, definition in local.legacy_header_definitions :
+    name => try(data.local.legacy_azapi_helpers.result[name], "")
+  }
+  legacy_header_bundle_matches = alltrue([
+    for name, definition in local.legacy_header_definitions :
+    trimspace(replace(replace(local.legacy_header_values[name], "\r\n", "\n"), "/(?m)^[\\t ]+/", "")) ==
+    trimspace(replace(definition, "/(?m)^[\\t ]+/", ""))
+  ])
+  legacy_header_roots = try(distinct(concat(
+    flatten([
+      for resource_type, by_name in data.resource.all_resources.result : [
+        for name, resource in by_name : resource.mptf.module.abs_dir
+      ]
+    ]),
+    [for variable in values(data.variable.enable_telemetry.result) : variable.mptf.module.abs_dir]
+  )), [])
+  legacy_header_root = length(local.legacy_header_roots) == 1 ? local.legacy_header_roots[0] : null
+  legacy_header_source_known = local.legacy_header_root == null || local.legacy_header_root == "" ? false : (
+    length(fileset(local.legacy_header_root, "*.tf.json")) == 0 &&
+    length(fileset(local.legacy_header_root, "*.tftest.json")) == 0 &&
+    length(fileset(local.legacy_header_root, "tests/**/*.tftest.json")) == 0
+  )
+  legacy_header_source = local.legacy_header_bundle_matches && local.legacy_header_source_known ? join("\n", [
+    for filename in concat(
+      tolist(fileset(local.legacy_header_root, "*.tf")),
+      tolist(fileset(local.legacy_header_root, "*.tftest.hcl")),
+      tolist(fileset(local.legacy_header_root, "tests/**/*.tftest.hcl"))
+    ) :
+    file("${local.legacy_header_root}/${filename}")
+  ]) : ""
+  legacy_header_reference_patterns = {
+    for name, definition in local.legacy_header_definitions :
+    name => "(^|[^A-Za-z0-9_])local${local.legacy_reference_gap}[.]${local.legacy_reference_gap}${name}\\b"
+  }
+  legacy_header_assignment_patterns = {
+    for name, definition in local.legacy_header_definitions :
+    name => "(^|[^A-Za-z0-9_])${name}${local.legacy_reference_gap}=[^=]"
+  }
+  legacy_header_bundle_unused = (
+    local.legacy_header_bundle_matches && local.legacy_header_source_known &&
+    length(regexall("(^|[^A-Za-z0-9_])local${local.legacy_reference_gap}\\[", local.legacy_header_source)) == 0 &&
+    alltrue([
+      for name, pattern in local.legacy_header_reference_patterns :
+      length(regexall(local.legacy_header_assignment_patterns[name], local.legacy_header_source)) ==
+      1 + sum([for value in values(local.legacy_header_values) : length(regexall(local.legacy_header_assignment_patterns[name], value))]) &&
+      length(regexall(pattern, local.legacy_header_source)) ==
+      sum([for value in values(local.legacy_header_values) : length(regexall(pattern, value))])
+    ])
   )
 
   other_modtm_resources = flatten([
@@ -286,6 +390,26 @@ transform "remove_block_element" "drop_unused_random_provider" {
     transform.remove_block.random_uuid,
     transform.remove_block.legacy_random_id,
   ]
+}
+
+transform "remove_block_element" "dangling_telemetry_headers" {
+  for_each             = { for address, paths in local.dangling_header_paths : address => paths if length(paths) > 0 }
+  target_block_address = each.key
+  paths                = each.value
+}
+
+transform "update_in_place" "retain_delete_precondition" {
+  for_each             = local.dangling_if_match_headers
+  target_block_address = each.key
+  asraw {
+    delete_headers = { "If-Match" = "*" }
+  }
+}
+
+transform "remove_block_element" "unused_legacy_header_helpers" {
+  for_each             = local.legacy_header_bundle_unused ? toset(keys(local.legacy_header_definitions)) : toset([])
+  target_block_address = "local.${each.value}"
+  paths                = [each.value]
 }
 
 transform "ensure_local" "main_location" {

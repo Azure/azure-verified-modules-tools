@@ -196,6 +196,46 @@ resource "azurerm_resource_group_template_deployment" "telemetry" {
 "@
         }
 
+        function Add-LegacyAzapiHeaderHelpers {
+            param([string] $Root, [switch] $SplitBlocks, [string] $HeaderExpression)
+
+            $values = [ordered]@{
+                avm_azapi_header = 'join(" ", [for k, v in local.avm_azapi_headers : "${k}=${v}"])'
+                avm_azapi_headers = @'
+!var.enable_telemetry ? {} : (local.fork_avm ? {
+  fork_avm  = "true"
+  random_id = one(random_uuid.telemetry).result
+  } : {
+  avm                = "true"
+  random_id          = one(random_uuid.telemetry).result
+  avm_module_source  = one(data.modtm_module_source.telemetry).module_source
+  avm_module_version = one(data.modtm_module_source.telemetry).module_version
+})
+'@
+                fork_avm = '!anytrue([for r in local.valid_module_source_regex : can(regex(r, one(data.modtm_module_source.telemetry).module_source))])'
+                valid_module_source_regex = @'
+[
+  "registry.terraform.io/[A|a]zure/.+",
+  "registry.opentofu.io/[A|a]zure/.+",
+  "git::https://github\\.com/[A|a]zure/.+",
+  "git::ssh:://git@github\\.com/[A|a]zure/.+",
+]
+'@
+            }
+            if ($HeaderExpression) {
+                $values['avm_azapi_header'] = $HeaderExpression
+            }
+            $attributes = @($values.GetEnumerator() | ForEach-Object { "  $($_.Key) = $($_.Value)" })
+            $attributes += '  customer_value = "keep"'
+            $source = if ($SplitBlocks) {
+                ($attributes | ForEach-Object { "locals {`n$_`n}" }) -join "`n`n"
+            }
+            else {
+                "locals {`n$($attributes -join "`n")`n}"
+            }
+            Add-Content -LiteralPath (Join-Path $Root 'main.telemetry.tf') -Encoding utf8NoBOM -Value "`n$source"
+        }
+
         function New-AzureResourceHelper {
             param([string] $Root)
 
@@ -419,6 +459,320 @@ output "legacy_instance" {
         Get-Content -LiteralPath $sourceFile -Raw | Should -Match 'telem\[0\]\.hex'
         Get-Content -LiteralPath (Join-Path $root 'terraform.tf') -Raw |
             Should -Match '(?m)^\s*random\s*='
+        Assert-TelemetryTerraformValid -Root $root
+    }
+
+    It 'retires dangling AzAPI telemetry headers: <Case>' -ForEach @(
+        @{
+            Case = 'all operation headers'
+            IfMatch = $false
+            Headers = @'
+  create_headers = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
+  read_headers = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
+  update_headers = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : {}
+  delete_headers = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
+'@
+        }
+        @{
+            Case = 'multiline equals syntax'
+            IfMatch = $false
+            Headers = @'
+  create_headers = var.enable_telemetry ? {
+    "User-Agent" = local.avm_azapi_header,
+  } : {}
+'@
+        }
+        @{
+            Case = 'mandatory deletion precondition'
+            IfMatch = $true
+            Headers = @'
+  # Preserve the service deletion precondition.
+  delete_headers = merge({ "If-Match" = "*" }, var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : {})
+'@
+        }
+    ) {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $root -WithLocation
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @"
+resource "azapi_resource" "business" {
+  type = "Microsoft.Resources/resourceGroups@2024-03-01"
+  name = "business"
+  parent_id = "/subscriptions/00000000-0000-0000-0000-000000000000"
+  location = var.location
+  body = {}
+$Headers
+}
+
+resource "azapi_resource" "custom" {
+  type = "Microsoft.Resources/resourceGroups@2024-03-01"
+  name = "custom"
+  parent_id = "/subscriptions/00000000-0000-0000-0000-000000000000"
+  location = var.location
+  body = {}
+  create_headers = { "X-Business" = "keep" }
+  delete_headers = { "User-Agent" = "authored-client" }
+}
+"@
+        Invoke-TelemetryProfiles -Root $root
+
+        $main = Get-Content -LiteralPath (Join-Path $root 'main.tf') -Raw
+        $main | Should -Not -Match 'avm_azapi_header'
+        $main | Should -Match '"X-Business"\s*=\s*"keep"'
+        $main | Should -Match '"User-Agent"\s*=\s*"authored-client"'
+        if ($IfMatch) {
+            $main | Should -Match 'delete_headers\s*=\s*\{\s*"If-Match"\s*=\s*"\*"'
+            $main | Should -Match '# Preserve the service deletion precondition\.'
+        }
+        Invoke-TelemetryProfiles -Root $root
+        Get-Content -LiteralPath (Join-Path $root 'main.tf') -Raw | Should -BeExactly $main
+
+        if ($IfMatch) {
+            $tests = Join-Path $root 'tests'
+            $null = New-Item -ItemType Directory -Path $tests -Force
+            Set-Content -LiteralPath (Join-Path $tests 'headers.tftest.hcl') -Encoding utf8NoBOM -Value @'
+mock_provider "azapi" {
+  mock_data "azapi_client_config" {
+    defaults = {
+      subscription_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000"
+    }
+  }
+}
+
+run "telemetry_enabled" {
+  command = plan
+  variables {
+    enable_telemetry = true
+  }
+  assert {
+    condition = azapi_resource.business.delete_headers == tomap({ "If-Match" = "*" }) && length(azapi_resource.telemetry) == 1
+    error_message = "Keep the deletion precondition without the retired User-Agent while deployment telemetry is enabled."
+  }
+}
+
+run "telemetry_disabled" {
+  command = plan
+  variables {
+    enable_telemetry = false
+  }
+  assert {
+    condition = azapi_resource.business.delete_headers == tomap({ "If-Match" = "*" }) && length(azapi_resource.telemetry) == 0
+    error_message = "Keep the deletion precondition when telemetry is disabled."
+  }
+}
+'@
+        }
+        Assert-TelemetryTerraformValid -Root $root
+        if ($IfMatch) {
+            $result = Invoke-TelemetryProcess -FilePath $script:terraformPath `
+                -ArgumentList @('test', '-json', '-no-color') -Root $root
+            $events = @($result.StdOut -split '\r?\n' | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
+            $summary = @($events | Where-Object type -EQ 'test_summary')
+            $summary | Should -HaveCount 1
+            $summary[0].test_summary.passed | Should -Be 2
+            $summary[0].test_summary.failed | Should -Be 0
+            $summary[0].test_summary.skipped | Should -Be 0
+        }
+    }
+
+    It 'preserves ambiguous AzAPI telemetry headers: <Case>' -ForEach @(
+        @{ Case = 'declared header local'; Header = 'var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null'; Declaration = 'locals { avm_azapi_header = "authored-client" }'; Json = $false }
+        @{ Case = 'JSON configuration'; Header = 'var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null'; Declaration = ''; Json = $true }
+        @{ Case = 'authored header input'; Header = 'var.enable_telemetry ? { "User-Agent" : var.avm_azapi_header } : null'; Declaration = ''; Json = $false }
+        @{ Case = 'different gate'; Header = 'var.enable_business_headers ? { "User-Agent" : local.avm_azapi_header } : null'; Declaration = ''; Json = $false }
+        @{ Case = 'mixed header fields'; Header = 'var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header, "X-Business" = "keep" } : null'; Declaration = ''; Json = $false }
+        @{ Case = 'authored deletion condition'; Header = 'merge({ "If-Match" = var.etag }, var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : {})'; Declaration = ''; Json = $false }
+    ) {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $root -WithLocation
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @"
+$Declaration
+resource "azapi_resource" "business" {
+  type = "Microsoft.Resources/resourceGroups@2024-03-01"
+  name = "business"
+  parent_id = "/subscriptions/00000000-0000-0000-0000-000000000000"
+  location = var.location
+  body = {}
+  delete_headers = $Header
+}
+"@
+        if ($Json) {
+            Set-Content -LiteralPath (Join-Path $root 'headers.tf.json') -Encoding utf8NoBOM -Value `
+                '{"locals":{"avm_azapi_header":"authored-json-client"}}'
+        }
+        $null = Invoke-TelemetryProcess -FilePath $script:terraformPath `
+            -ArgumentList @('fmt', '-no-color', $root) -Root $root
+        $headerPattern = '(?m)^\s*delete_headers\s*=\s*(.+)$'
+        $before = [regex]::Match((Get-Content -LiteralPath (Join-Path $root 'main.tf') -Raw), $headerPattern)
+        $before.Success | Should -BeTrue
+        Invoke-TelemetryProfiles -Root $root
+        $main = Get-Content -LiteralPath (Join-Path $root 'main.tf') -Raw
+        $after = @([regex]::Matches($main, $headerPattern))
+        $after | Should -HaveCount 1
+        $after[0].Groups[1].Value | Should -BeExactly $before.Groups[1].Value
+        if ($Declaration) {
+            $main | Should -Match ([regex]::Escape($Declaration))
+        }
+        if ($Json) {
+            (Get-Content -LiteralPath (Join-Path $root 'headers.tf.json') -Raw).Trim() |
+                Should -BeExactly '{"locals":{"avm_azapi_header":"authored-json-client"}}'
+        }
+        Invoke-TelemetryProfiles -Root $root
+        Get-Content -LiteralPath (Join-Path $root 'main.tf') -Raw | Should -BeExactly $main
+    }
+
+    It 'retires unused legacy AzAPI header helpers: <Case>' -ForEach @(
+        @{ Case = 'separate local blocks'; SplitBlocks = $true; AlreadyRetired = $false; NoResources = $false }
+        @{ Case = 'shared block with an authored value'; SplitBlocks = $false; AlreadyRetired = $false; NoResources = $false }
+        @{ Case = 'previously retired telemetry providers'; SplitBlocks = $false; AlreadyRetired = $true; NoResources = $false }
+        @{ Case = 'helpers without remaining resources'; SplitBlocks = $false; AlreadyRetired = $true; NoResources = $true }
+    ) {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $root -WithLocation -WithLegacy
+        if ($AlreadyRetired) {
+            Invoke-TelemetryProfiles -Root $root
+        }
+        if ($NoResources) {
+            Set-Content -LiteralPath (Join-Path $root 'main.telemetry.tf') -Encoding utf8NoBOM -Value ''
+        }
+        Add-LegacyAzapiHeaderHelpers -Root $root -SplitBlocks:$SplitBlocks
+        Invoke-TelemetryProfiles -Root $root
+
+        $telemetry = Get-Content -LiteralPath (Join-Path $root 'main.telemetry.tf') -Raw
+        $telemetry | Should -Not -Match '(?m)^\s*(avm_azapi_headers?|fork_avm|valid_module_source_regex)\s*='
+        $telemetry | Should -Match 'customer_value\s*=\s*"keep"'
+        $telemetry | Should -Match 'main_location\s*=\s*var\.location'
+        Invoke-TelemetryProfiles -Root $root
+        Get-Content -LiteralPath (Join-Path $root 'main.telemetry.tf') -Raw | Should -BeExactly $telemetry
+        Assert-TelemetryTerraformValid -Root $root
+    }
+
+    It 'preserves authored or referenced legacy AzAPI header helpers: <Case>' -ForEach @(
+        @{ Case = 'custom header'; HeaderExpression = '"authored-client"'; Source = ''; Kind = 'source' }
+        @{
+            Case = 'resource header'
+            HeaderExpression = ''
+            Kind = 'source'
+            Source = @'
+resource "azapi_resource" "business" {
+  type = "Microsoft.Resources/resourceGroups@2024-03-01"
+  name = "business"
+  parent_id = "/subscriptions/00000000-0000-0000-0000-000000000000"
+  location = var.location
+  create_headers = var.enable_telemetry ? { "User-Agent" = local.avm_azapi_header } : null
+}
+'@
+        }
+        @{
+            Case = 'output reference'
+            HeaderExpression = ''
+            Kind = 'source'
+            Source = @'
+output "legacy_header" {
+  value = local.avm_azapi_header
+}
+'@
+        }
+        @{ Case = 'identical alias expression'; HeaderExpression = ''; Kind = 'source'; Source = 'locals { authored_alias = join(" ", [for k, v in local.avm_azapi_headers : "${k}=${v}"]) }' }
+        @{ Case = 'duplicate declaration'; HeaderExpression = ''; Kind = 'early_source'; Source = 'locals { avm_azapi_header = "authored-client" }' }
+        @{
+            Case = 'commented traversal'
+            HeaderExpression = ''
+            Kind = 'source'
+            Source = @'
+output "legacy_fork" {
+  value = local /* preserve */ . fork_avm
+}
+'@
+        }
+        @{
+            Case = 'Terraform test assertion'
+            HeaderExpression = ''
+            Kind = 'test'
+            Source = @'
+run "authored_assertion" {
+  command = plan
+  assert {
+    condition = local.fork_avm
+    error_message = "Retain the authored fork assertion."
+  }
+}
+'@
+        }
+        @{
+            Case = 'root Terraform test assertion'
+            HeaderExpression = ''
+            Kind = 'root_test'
+            Source = @'
+run "authored_assertion" {
+  command = plan
+  assert {
+    condition = local.fork_avm
+    error_message = "Retain the authored fork assertion."
+  }
+}
+'@
+        }
+        @{
+            Case = 'JSON Terraform test assertion'
+            HeaderExpression = ''
+            Kind = 'json_test'
+            Source = '{"run":{"authored_assertion":{"command":"plan","assert":[{"condition":"${local.fork_avm}","error_message":"Retain the authored fork assertion."}]}}}'
+        }
+        @{
+            Case = 'root JSON Terraform test assertion'
+            HeaderExpression = ''
+            Kind = 'root_json_test'
+            Source = '{"run":{"authored_assertion":{"command":"plan","assert":[{"condition":"${local.fork_avm}","error_message":"Retain the authored fork assertion."}]}}}'
+        }
+        @{ Case = 'JSON configuration'; HeaderExpression = ''; Kind = 'json'; Source = '{"locals":{"authored_alias":"${local.avm_azapi_header}"}}' }
+    ) {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $root -WithLocation -WithLegacy
+        Add-LegacyAzapiHeaderHelpers -Root $root -HeaderExpression $HeaderExpression
+        if ($Source) {
+            $file = switch ($Kind) {
+                'test' { Join-Path $root 'tests' 'unit' 'header.tftest.hcl' }
+                'root_test' { Join-Path $root 'header.tftest.hcl' }
+                'json_test' { Join-Path $root 'tests' 'unit' 'header.tftest.json' }
+                'root_json_test' { Join-Path $root 'header.tftest.json' }
+                'json' { Join-Path $root 'headers.tf.json' }
+                'early_source' { Join-Path $root 'authored.tf' }
+                default { Join-Path $root 'outputs.tf' }
+            }
+            $null = New-Item -ItemType Directory -Path (Split-Path -Parent $file) -Force
+            Set-Content -LiteralPath $file -Encoding utf8NoBOM -Value $Source
+        }
+        Invoke-TelemetryProfiles -Root $root
+        $telemetry = Get-Content -LiteralPath (Join-Path $root 'main.telemetry.tf') -Raw
+        foreach ($name in @('avm_azapi_header', 'avm_azapi_headers', 'fork_avm', 'valid_module_source_regex')) {
+            $telemetry | Should -Match "(?m)^\s*$name\s*="
+        }
+        $telemetry | Should -Match 'customer_value\s*=\s*"keep"'
+        if ($HeaderExpression) {
+            $telemetry | Should -Match ([regex]::Escape($HeaderExpression))
+        }
+    }
+
+    It 'preserves commented-out AzAPI telemetry headers' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $root -WithLocation -WithLegacy
+        $comment = @'
+/*
+resource "azapi_resource" "old_connection" {
+  create_headers = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
+  delete_headers = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
+}
+*/
+'@
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @"
+$comment
+resource "terraform_data" "business" {
+  input = "keep"
+}
+"@
+        Invoke-TelemetryProfiles -Root $root
+        Get-Content -LiteralPath (Join-Path $root 'main.tf') -Raw |
+            Should -Match ([regex]::Escape($comment))
         Assert-TelemetryTerraformValid -Root $root
     }
 
