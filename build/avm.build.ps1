@@ -129,6 +129,10 @@ function script:Invoke-AvmPester {
             $paths = @($result.Containers | Where-Object Result -eq 'Failed' | ForEach-Object { $_.Item })
             throw "$($result.FailedContainersCount) Pester test file(s) failed to load or run: $($paths -join ', ')"
         }
+        if ($result.FailedBlocksCount -gt 0) {
+            $names = @($result.FailedBlocks | ForEach-Object Name)
+            throw "$($result.FailedBlocksCount) Pester setup or teardown block(s) failed: $($names -join ', ')"
+        }
         if ($script:testNameFilter.Count -gt 0 -and $result.TotalCount -eq 0) {
             throw "No tests matched TestName: $($script:testNameFilter -join ', ')."
         }

@@ -23,7 +23,7 @@ This reference is generated from the comment-based help on the public PowerShell
 | [Invoke-AvmDoctor](Invoke-AvmDoctor.md) | `avm doctor` | Diagnoses the local environment for running Avm.Authoring. |
 | [Invoke-AvmFormat](Invoke-AvmFormat.md) | `avm format` | Format all source files in the resolved module under $Path. |
 | [Invoke-AvmLint](Invoke-AvmLint.md) | `avm lint` | Lint all source files in the resolved module under $Path. |
-| [Invoke-AvmPrCheck](Invoke-AvmPrCheck.md) | `avm pr-check` | Run the pull-request linting and drift gauntlet against the resolved module:<br>metadata -> initialize -> sync -> format -> transform -> lint -> check policy -><br>check convention -> validate -> docs. |
+| [Invoke-AvmPrCheck](Invoke-AvmPrCheck.md) | `avm pr-check` | Run the pull-request linting and drift gauntlet against the resolved module:<br>metadata -> sync -> format -> transform -> lint -> check policy -><br>check convention -> validate -> docs. |
 | [Invoke-AvmPreCommit](Invoke-AvmPreCommit.md) | `avm pre-commit` | Run the standard pre-commit gauntlet against the resolved module:<br>bicep:     metadata -> format -> lint -> validate -> transform -> docs.<br>terraform: metadata -> initialize -> sync -> check convention -> transform -> format -> docs. |
 | [Invoke-AvmSync](Invoke-AvmSync.md) | `avm sync` | Synchronise the current Terraform module repository's managed files<br>against the AVM governance source-of-truth (file sync only, no PR). |
 | [Invoke-AvmTest](Invoke-AvmTest.md) | `avm test` | Build Bicep sources or validate Terraform examples under $Path. |

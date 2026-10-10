@@ -309,19 +309,19 @@ Describe 'Bicep workflow regional validation classification' {
         InModuleScope Avm.Authoring -Parameters @{ C = $Code; M = $Message; Expected = $Expected } {
             param($C, $M, $Expected)
             $node = @{ error = @{ code = 'InvalidTemplateDeployment'; details = @(@{ code = $C; message = $M }) } }
-            (Test-AvmBicepRegionalErrorNode -Node $node) | Should -Be $Expected
+            (Test-AvmBicepRetryErrorNode -Node $node) | Should -Be $Expected
         }
     }
 
     It 'rejects mixed, empty, malformed and cyclic error trees' {
         InModuleScope Avm.Authoring {
             $regional = @{ code = 'AllocationFailed'; message = 'No capacity in this region.' }
-            (Test-AvmBicepRegionalErrorNode -Node @($regional, @{ code = 'AuthorizationFailed' })) | Should -BeFalse
-            (Test-AvmBicepRegionalErrorNode -Node @()) | Should -BeFalse
-            (Test-AvmBicepRegionalErrorNode -Node @{ code = 'DeploymentFailed'; details = $regional }) | Should -BeFalse
+            (Test-AvmBicepRetryErrorNode -Node @($regional, @{ code = 'AuthorizationFailed' })) | Should -BeFalse
+            (Test-AvmBicepRetryErrorNode -Node @()) | Should -BeFalse
+            (Test-AvmBicepRetryErrorNode -Node @{ code = 'DeploymentFailed'; details = $regional }) | Should -BeFalse
             $cycle = @{ code = 'DeploymentFailed' }
             $cycle.details = @($cycle)
-            (Test-AvmBicepRegionalErrorNode -Node $cycle) | Should -BeFalse
+            (Test-AvmBicepRetryErrorNode -Node $cycle) | Should -BeFalse
         }
     }
 

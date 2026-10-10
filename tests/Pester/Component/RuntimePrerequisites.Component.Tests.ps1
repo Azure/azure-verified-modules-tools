@@ -6,11 +6,12 @@ BeforeAll {
     Import-Module (Join-Path $moduleRoot 'Avm.Authoring.psd1') -Force
 
     function New-RuntimeModulePackage {
-        param([string] $Root, [string] $Name, [string] $Version, [string] $Dependency)
+        param([string] $Root, [string] $Name, [string] $Version, [string] $Dependency, [string] $Initializer)
 
         $directory = Join-Path $Root $Name $Version
         $null = New-Item -ItemType Directory -Path $directory -Force
         $required = if ($Dependency) { "@(@{ ModuleName = '$Dependency'; ModuleVersion = '1.0.0' })" } else { '@()' }
+        $scripts = if ($Initializer) { "@('AvmFixtureInitializer.ps1')" } else { '@()' }
         [System.IO.File]::WriteAllText((Join-Path $directory "$Name.psd1"), @"
 @{
     RootModule = '$Name.psm1'
@@ -18,9 +19,13 @@ BeforeAll {
     GUID = '08b4772f-d6e5-4cde-b714-ae2151b8c692'
     FunctionsToExport = @('Get-AvmFixtureValue')
     RequiredModules = $required
+    ScriptsToProcess = $scripts
 }
 "@)
         [System.IO.File]::WriteAllText((Join-Path $directory "$Name.psm1"), "function Get-AvmFixtureValue { '$Version' }")
+        if ($Initializer) {
+            [System.IO.File]::WriteAllText((Join-Path $directory 'AvmFixtureInitializer.ps1'), $Initializer)
+        }
         $archive = Join-Path $Root "$Name-$Version.zip"
         [System.IO.Compression.ZipFile]::CreateFromDirectory($directory, $archive)
         [pscustomobject]@{
@@ -109,7 +114,7 @@ Describe 'Component: runtime prerequisites' -Tag Component {
 
     AfterEach {
         InModuleScope Avm.Authoring {
-            foreach ($name in @('AvmFixturePrerequisite', 'AvmFixtureDependency')) {
+            foreach ($name in @('AvmFixturePrerequisite', 'AvmFixtureDependency', 'AvmFixtureInitializer')) {
                 Remove-Module -Name $name -Force -ErrorAction SilentlyContinue
             }
         }
@@ -152,6 +157,60 @@ Describe 'Component: runtime prerequisites' -Tag Component {
         }
     }
 
+    It 'selects exact module identity separately from actual manifest initializer metadata' {
+        $package = New-RuntimeModulePackage -Root (Join-Path $script:fixture.Root 'initializer-package') `
+            -Name AvmFixtureDependency -Version '1.0.0' -Initializer '$script:AvmFixtureInitializerRan = $true'
+        $script:fixture.Packages['https://www.powershellgallery.com/api/v2/package/AvmFixtureDependency/1.0.0'] = $package.Archive
+        $script:fixture.Pins.powerShellModules.AvmFixtureDependency.sha256 = $package.Sha256
+        Save-RuntimePins -Fixture $script:fixture
+        InModuleScope Avm.Authoring -Parameters @{ F = $script:fixture } {
+            param($F)
+            $loaded = @(Import-AvmPowerShellModule -Name AvmFixtureDependency -PinsPath $F.PinsPath -ModuleRoot $F.Root)
+            $loaded.Count | Should -Be 1
+            $loaded[0].Name | Should -BeExactly 'AvmFixtureDependency'
+            $loaded[0].Version | Should -Be ([version]'1.0.0')
+            & $loaded[0].ExportedCommands['Get-AvmFixtureValue'] | Should -Be '1.0.0'
+            $manifest = Join-Path $loaded[0].ModuleBase 'AvmFixtureDependency.psd1'
+            $raw = @(Import-Module -Name $manifest -Force -PassThru)
+            $raw.Name | Should -Contain 'AvmFixtureInitializer'
+            @($raw | Where-Object Name -CEQ AvmFixtureDependency).Count | Should -Be 1
+            Should -Invoke Invoke-WebRequest -Exactly 1
+        }
+    }
+
+    It 'still rejects invalid import identity or initialization: <Failure>' -ForEach @(
+        @{ Failure = 'duplicate exact name'; Message = '*exactly one module*' }
+        @{ Failure = 'only initializer'; Message = '*exactly one module*' }
+        @{ Failure = 'wrong case'; Message = '*exactly one module*' }
+        @{ Failure = 'wrong version'; Message = '*loaded module does not match*' }
+        @{ Failure = 'wrong directory'; Message = '*loaded module does not match*' }
+        @{ Failure = 'initializer failure'; Message = '*Fixture initializer failed*' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ F = $script:fixture; Failure = $Failure; Message = $Message } {
+            param($F, $Failure, $Message)
+            $tool = Resolve-AvmTool -Name AvmFixtureDependency -PinsPath $F.PinsPath -ModuleRoot $F.Root
+            $script:importRecord = [pscustomobject]@{
+                Name = 'AvmFixtureDependency'; Version = [version]'1.0.0'
+                ModuleBase = [IO.Path]::GetDirectoryName($tool.Path); RequiredModules = @()
+            }
+            $script:importFailure = $Failure
+            Mock Import-Module {
+                $initializer = [pscustomobject]@{ Name = 'AvmFixtureInitializer'; Version = [version]'0.0' }
+                switch ($script:importFailure) {
+                    'duplicate exact name' { $script:importRecord; $script:importRecord }
+                    'only initializer' { $initializer }
+                    'wrong case' { $script:importRecord.Name = 'avmfixturedependency'; $script:importRecord }
+                    'wrong version' { $script:importRecord.Version = [version]'2.0.0'; $script:importRecord }
+                    'wrong directory' { $script:importRecord.ModuleBase = 'foreign-path'; $script:importRecord }
+                    'initializer failure' { $initializer; throw [InvalidOperationException]::new('Fixture initializer failed.') }
+                }
+            }
+            { Import-AvmPowerShellModule -Name AvmFixtureDependency -PinsPath $F.PinsPath -ModuleRoot $F.Root } |
+                Should -Throw -ExpectedMessage $Message
+            Should -Invoke Import-Module -Exactly 1
+        }
+    }
+
     It 'ignores older installed modules and acquires the configured version' {
         $installedRoot = Join-Path $script:fixture.Root 'old-installed'
         $null = New-RuntimeModulePackage -Root $installedRoot -Name AvmFixturePrerequisite -Version '0.9.0'
@@ -186,6 +245,39 @@ Describe 'Component: runtime prerequisites' -Tag Component {
             Import-Module (Join-Path $Old.Directory 'AvmFixturePrerequisite.psd1')
             { Import-AvmPowerShellModule -Name AvmFixturePrerequisite -PinsPath $F.PinsPath -ModuleRoot $F.Root } |
                 Should -Throw '*0.9.0*already loaded*configured version is 1.0.0*fresh PowerShell session*'
+            Should -Invoke Invoke-WebRequest -Exactly 0
+        }
+    }
+
+    It 'rejects same-version Pester from another path before importing a second engine' {
+        $pester = Get-Module -Name Pester
+        $script:fixture.Pins.powerShellModules.Pester = @{ version = $pester.Version.ToString(); sha256 = '0' * 64 }
+        Save-RuntimePins -Fixture $script:fixture
+        InModuleScope Avm.Authoring -Parameters @{ F = $script:fixture } {
+            param($F)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Path = Join-Path $F.Root 'different Pester' 'Pester.psd1' }
+            } -ParameterFilter { $Name -ceq 'Pester' }
+            Mock Import-Module { throw 'A second Pester engine must not be imported.' }
+            { Import-AvmPowerShellModule -Name Pester -PinsPath $F.PinsPath -ModuleRoot $F.Root } |
+                Should -Throw '*already loaded*not the configured path*fresh PowerShell session*'
+            Should -Invoke Import-Module -Exactly 0
+            Should -Invoke Invoke-WebRequest -Exactly 0
+        }
+    }
+
+    It 'reuses the configured Pester engine when its version and path already match' {
+        $pester = Get-Module -Name Pester
+        $script:fixture.Pins.powerShellModules.Pester = @{ version = $pester.Version.ToString(); sha256 = '0' * 64 }
+        Save-RuntimePins -Fixture $script:fixture
+        InModuleScope Avm.Authoring -Parameters @{ F = $script:fixture; Pester = $pester } {
+            param($F, $Pester)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Path = Join-Path $Pester.ModuleBase 'Pester.psd1' }
+            } -ParameterFilter { $Name -ceq 'Pester' }
+            $loaded = Import-AvmPowerShellModule -Name Pester -PinsPath $F.PinsPath -ModuleRoot $F.Root
+            $loaded.Version | Should -Be $Pester.Version
+            $loaded.ModuleBase | Should -BeExactly $Pester.ModuleBase
             Should -Invoke Invoke-WebRequest -Exactly 0
         }
     }

@@ -181,7 +181,7 @@ Describe 'Component: Bicep native scoped workflow and hosted completion' -Tag Co
         $script:fixture.Calls | Should -Contain ('remove:' + $script:fixture.CreatedId)
     }
 
-    It 'removes a wholly regional failure and its record before relocating to an unused region' {
+    It 'retains a wholly regional failure until final cleanup after retrying in an unused region' {
         $script:options.Remove('ResourceLocation')
         $script:fixture.RegionalFailures = 1
         $result = Invoke-AvmTestE2e @script:options
@@ -190,30 +190,32 @@ Describe 'Component: Bicep native scoped workflow and hosted completion' -Tag Co
         @($script:fixture.NativeInputs | Where-Object Operation -eq 'Create' | ForEach-Object { $_.Parameters['resourceLocation'] }) |
             Should -Be @('eastus', 'centralus')
         $deleted = @($script:fixture.Calls | Where-Object { $_ -like 'delete-record:*' })
-        $deleted.Count | Should -Be 1
-        $script:fixture.Calls.IndexOf($deleted[0]) | Should -BeLessThan ($script:fixture.Calls.LastIndexOf('create'))
+        $deleted.Count | Should -Be 0
+        $firstRemoval = @($script:fixture.Calls | Where-Object { $_ -like 'remove:*' })[0]
+        $script:fixture.Calls.IndexOf($firstRemoval) | Should -BeGreaterThan ($script:fixture.Calls.LastIndexOf('create'))
+        (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).deployments.Count | Should -Be 2
         $script:fixture.Calls | Should -Contain 'pester'
     }
 
-    It 'stops relocation but still runs ordinary cleanup when a regional failure record cannot be removed' {
+    It 'does not depend on deleting a deployment record to start a fresh retry' {
         $script:options.Remove('ResourceLocation')
         $script:fixture.RegionalFailures = 1
         $script:fixture.RecordDeleteFails = $true
         $result = Invoke-AvmTestE2e @script:options
-        $result.Status | Should -Be 'fail'
-        @($script:fixture.Calls | Where-Object { $_ -eq 'create' }).Count | Should -Be 1
-        $script:fixture.Calls | Should -Not -Contain 'pester'
-        @($result.Issues | ForEach-Object Code) | Should -Contain 'avm.bicep.e2e-relocation-blocked'
-        @($result.Issues | Where-Object Message -like '*ended with*outcome*').Count | Should -Be 0
+        $result.Status | Should -Be 'pass'
+        @($script:fixture.Calls | Where-Object { $_ -eq 'create' }).Count | Should -Be 2
+        $script:fixture.Calls | Should -Contain 'pester'
+        $result.Issues.Count | Should -Be 0
+        @($script:fixture.Calls | Where-Object { $_ -like 'delete-record:*' }).Count | Should -Be 0
         $script:fixture.Calls | Should -Contain ('remove:' + $script:fixture.CreatedId)
     }
 
-    It 'retries a regional failure in place when the region is pinned' {
+    It 'does not silently change a fresh regional policy into an in-place retry when the region is pinned' {
         $script:fixture.RegionalFailures = 1
         $result = Invoke-AvmTestE2e @script:options
-        $result.Status | Should -Be 'pass'
+        $result.Status | Should -Be 'fail'
         @($script:fixture.NativeInputs | Where-Object Operation -eq 'Create' | ForEach-Object { $_.Parameters['resourceLocation'] }) |
-            Should -Be @('eastus', 'eastus')
+            Should -Be @('eastus')
         @($script:fixture.Calls | Where-Object { $_ -like 'delete-record:*' }).Count | Should -Be 0
     }
 

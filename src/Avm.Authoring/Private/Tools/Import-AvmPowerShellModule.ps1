@@ -40,6 +40,10 @@ function Import-AvmPowerShellModule {
         $directory = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($tool.Path))
         $comparison = if ($IsWindows) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
         foreach ($loaded in @(Get-Module -All -Name $Name)) {
+            if ($Name -ceq 'Pester' -and -not [string]::Equals($loaded.ModuleBase, $directory, $comparison)) {
+                throw [System.IO.InvalidDataException]::new(
+                    "Pester $($loaded.Version) is already loaded from '$($loaded.ModuleBase)', not the configured path '$directory'.")
+            }
             if (-not [string]::Equals($loaded.ModuleBase, $directory, $comparison) -and
                 (Test-Path -LiteralPath (Join-Path $loaded.ModuleBase '.unverified') -PathType Leaf)) {
                 throw [System.IO.InvalidDataException]::new("An unverified '$Name' override is already loaded from '$($loaded.ModuleBase)'.")
@@ -67,8 +71,13 @@ function Import-AvmPowerShellModule {
                 }
             }
         }
-        $module = Import-Module -Name $tool.Path -Global:$Global -PassThru -DisableNameChecking -ErrorAction Stop
-        if ($module.Name -cne $Name -or $module.Version -ne [version]$pin.version -or
+        $imported = @(Import-Module -Name $tool.Path -Global:$Global -PassThru -DisableNameChecking -ErrorAction Stop |
+                Where-Object Name -CEQ $Name)
+        if ($imported.Count -ne 1) {
+            throw [System.IO.InvalidDataException]::new("Import did not return exactly one module named '$Name'.")
+        }
+        $module = $imported[0]
+        if ($module.Version -ne [version]$pin.version -or
             -not [string]::Equals($module.ModuleBase, $directory, $comparison)) {
             throw [System.IO.InvalidDataException]::new("The loaded module does not match '$Name' $($pin.version) at '$directory'.")
         }

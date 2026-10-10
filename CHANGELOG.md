@@ -107,6 +107,41 @@ section when cutting a release.
 
 ### Changed
 
+- Bicep end-to-end retries use one bounded loop and packaged
+  `Resources/bicep/retry-policy.json` rules. In-place retries preserve the exact
+  deployment and inputs; fresh retries regenerate the external naming context
+  and normally choose another eligible region. Fixed caller values and names
+  inside Bicep remain unchanged. Neither mode deletes resources between
+  attempts. Final cleanup combines saved and current operation evidence from
+  every attempt, safely deduplicating shared resource IDs. `KeepResources`,
+  split Deploy/Complete and interrupted-run recovery retain their explicit
+  resource-retention behavior.
+- Bicep native reads, recovery and dependency handling incorporate the registry
+  updates through
+  [`76810a5`](https://github.com/Azure/bicep-registry-modules/commit/76810a51c9f8d25230a0d4f8de66858cc45b617d):
+  independently bounded timeout reads, strictly identified subscription-scope
+  nested-read recovery, exact nested-preflight and existing-Graph evidence,
+  and resumable deployment-record deletion for retained cleanup state.
+  Management-group HTTP 403 submissions observe the exact original deployment
+  using its captured Azure context; only confirmed success recovers outputs,
+  and authorization failures never permit replay.
+  Exact provider-region availability and SDK-null AKS evidence can relocate
+  eligible cases; deployment operations retain extension metadata, and accepted
+  history deletions wait through `Deleting` without treating it as absence.
+  Exact Search and Container Apps service failures can use the same bounded
+  regional retry path only with complete region, diagnostic and target evidence;
+  permission, mixed, malformed and regionless failures remain ineligible.
+  Structured authorization denials veto retry even alongside eligible child
+  errors. Shared PowerShell imports select the unique exact-name module rather
+  than initializer metadata, preserving version, path and dependency checks.
+- Pester initialization rejects an already-loaded same-version engine from
+  another configured path, with fresh-session guidance. Build checks also fail
+  on setup/teardown errors even when individual tests pass.
+- Bicep is pinned to 0.48.1. Documentation selects the canonical template
+  through native configuration; package defaults use temporary inputs without
+  changing caller files, while explicit template overrides remain validated.
+- Packaged Bicep PSRule options supply `builtInServicePrincipalObjectId` for
+  static analysis only, never for deployment parameters.
 - `avm check convention` for Bicep now runs its rules as a packaged Pester
   suite (`Resources/bicep/conventions`), so it, and therefore Bicep
   `pre-commit` and `pr-check`, requires Pester 5.5.0 or later. Compilation,
@@ -352,6 +387,10 @@ section when cutting a release.
 
 ### Fixed
 
+- `avm pr-check` keeps its nine public steps and exclusions. Terraform
+  source-example initialization is a prerequisite only when validation is
+  enabled; formatting-only and all-excluded runs do not initialize examples.
+  Normal and fork checks retain initialization and provider-cache reuse.
 - Bicep e2e now watches the same deployment after a submission timeout instead
   of failing with an unknown outcome. A recovered failure is retried as a
   confirmed failure; the timed-out deployment is never resubmitted. Confirmed

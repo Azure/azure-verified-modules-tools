@@ -16,6 +16,13 @@ Routes to the engine matching the module's ecosystem:
 The ecosystem is determined by Get-AvmModuleContext, which honours
 the .avm/context.psd1 override file and the -Ecosystem filter.
 
+Bicep uses the packaged canonical README template by default. Bicep
+0.48 selects templates through bicepconfig.json, so default rendering
+uses a temporary source copy without changing caller configuration.
+A configured documentation.template.file must reference a relative
+canonical template copy; valid explicit configurations render directly.
+Temporary sources are removed on success or failure.
+
 Routed by the dispatcher: 'avm docs'.
 
 ## CLI commands
@@ -104,8 +111,8 @@ always targets README.md in each source-bearing module.
 
 ### -Path
 
-Working directory whose enclosing module to document. Defaults to
-the current location.
+Module root to document. Defaults to the current location. An explicit
+path is authoritative; discovery does not search above it.
 
 | Property | Value |
 | --- | --- |
@@ -149,6 +156,13 @@ avm docs --check-drift
 
 ```powershell
 Invoke-AvmDocs -Path C:\repos\my-tf-module -Ecosystem terraform
+```
+
+### EXAMPLE 4
+
+```powershell
+Invoke-AvmDocs -Path C:\repos\my-bicep-module -Ecosystem bicep -CheckDrift
+Compare README content without rewriting module files or configuration.
 ```
 
 ## Outputs

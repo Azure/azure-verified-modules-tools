@@ -1,12 +1,15 @@
 function Get-AvmPropertyValue {
     [CmdletBinding()]
+    [OutputType([object], [object[]])]
     param(
         [AllowNull()]
         [object] $InputObject,
 
         [Parameter(Mandatory)]
         [ValidateNotNullOrEmpty()]
-        [string] $Name
+        [string] $Name,
+
+        [switch] $NoEnumerate
     )
 
     Set-StrictMode -Version 3.0
@@ -18,6 +21,7 @@ function Get-AvmPropertyValue {
 
     if ($InputObject -is [System.Collections.IDictionary]) {
         if ($InputObject.Contains($Name)) {
+            if ($NoEnumerate) { return , $InputObject[$Name] }
             return $InputObject[$Name]
         }
         return $null
@@ -28,5 +32,6 @@ function Get-AvmPropertyValue {
         return $null
     }
 
+    if ($NoEnumerate) { return , $property.Value }
     return $property.Value
 }

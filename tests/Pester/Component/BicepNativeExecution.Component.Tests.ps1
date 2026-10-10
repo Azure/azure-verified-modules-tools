@@ -83,6 +83,29 @@ Describe 'Component: Bicep native regional validation' -Tag Component {
             Mock Invoke-AvmBicepNativeArmOperation {
                 throw 'Unexpected native validation.'
             }
+            $script:preflightFailure = {
+                param([string] $Kind, [string] $Location)
+                $node = if ($Kind -eq 'provider availability') {
+                    $available = (@('eastus', 'centralus', 'northeurope') | Where-Object { $_ -ne $Location }) -join ','
+                    [pscustomobject]@{
+                        Code = 'LocationNotAvailableForResourceType'; Target = $null; Details = $null
+                        Message = "The provided location '$Location' is not available for resource type 'Microsoft.DesktopVirtualization/hostpools'. List of available regions for the resource type is '$available'."
+                    }
+                }
+                else {
+                    [pscustomobject]@{
+                        Code = 'InvalidTemplateDeployment'; Target = $null
+                        Message = "The template deployment 'test-aks' is not valid according to the validation procedure. The following resource provider(s) - 'Microsoft.ContainerService/managedClusters (2025-10-01)' reported preflight validation errors. Tracking id is '22222222-2222-2222-2222-222222222222'. See inner errors for details."
+                        Details = @([pscustomobject]@{
+                                Code = 'AvailabilityZoneNotSupported'; Target = $null; Details = $null
+                                Message = "Preflight validation check for resource(s) for container service private-cluster in resource group retry-fixture failed. Message: The zone(s) '3' for resource 'systempool' is not supported. The supported zones for location '$Location' are ''. Details: "
+                            })
+                    }
+                }
+                [Management.Automation.ErrorRecord]::new(
+                    [InvalidOperationException]::new('Safe validation summary.'),
+                    'AvmBicepTemplateValidationFailed', 'InvalidResult', @($node))
+            }
         }
     }
 
@@ -138,6 +161,82 @@ Describe 'Component: Bicep native regional validation' -Tag Component {
         }
     }
 
+    It 'relocates SDK-shaped <Kind> at <Scope> scope without changing non-location inputs' -ForEach @(
+        @{ Kind = 'provider availability'; Scope = 'sub' }
+        @{ Kind = 'provider availability'; Scope = 'mg' }
+        @{ Kind = 'provider availability'; Scope = 'tenant' }
+        @{ Kind = 'AKS empty zones'; Scope = 'sub' }
+        @{ Kind = 'AKS empty zones'; Scope = 'mg' }
+        @{ Kind = 'AKS empty zones'; Scope = 'tenant' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Kind = $Kind; Scope = $Scope } {
+            param($Kind, $Scope)
+            $script:options.Scope = $Scope
+            Mock Invoke-AvmBicepNativeArmOperation {
+                $Operation | Should -Be 'Validate'
+                $MetadataLocation | Should -Be 'westus'
+                $Parameters['baseTime'] | Should -Be 'fixed'
+                $script:regions.Add($Parameters['resourceLocation'])
+                if ($script:regions.Count -eq 1) { throw (& $script:preflightFailure $Kind $Parameters['resourceLocation']) }
+            }
+            $result = Test-AvmBicepNativeDeployment -DeploymentInput $script:options -TemplateContent $script:templateContent
+            $result.Attempts | Should -Be 2
+            $result.CanRelocate | Should -BeTrue
+            $result.AttemptedRegions | Should -Be @('eastus', 'centralus')
+            $result.DeploymentInput.Parameters['baseTime'] | Should -Be 'fixed'
+            $script:options.Parameters['resourceLocation'] | Should -Be ''
+            [IO.File]::ReadAllText($script:templatePath) | Should -Be '{"location":"centralus"}'
+            Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 2
+        }
+    }
+
+    It 'bounds SDK-shaped <Kind> to three region candidates and restores the pristine template on exhaustion' -ForEach @(
+        @{ Kind = 'provider availability' }, @{ Kind = 'AKS empty zones' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Kind = $Kind } {
+            param($Kind)
+            Mock Get-AvmBicepResourceLocation {
+                [pscustomobject]@{ Location = @('eastus', 'centralus', 'northeurope')[$UnavailableRegions.Count]; IsGlobal = $false }
+            }
+            Mock Invoke-AvmBicepNativeArmOperation {
+                $script:regions.Add($Parameters['resourceLocation'])
+                throw (& $script:preflightFailure $Kind $Parameters['resourceLocation'])
+            }
+            { Test-AvmBicepNativeDeployment -DeploymentInput $script:options -TemplateContent $script:templateContent } |
+                Should -Throw -ExpectedMessage '*Safe validation summary*'
+            @($script:regions) | Should -Be @('eastus', 'centralus', 'northeurope')
+            Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 3
+            [IO.File]::ReadAllText($script:templatePath) | Should -BeExactly $script:templateContent
+            $script:options.Parameters['resourceLocation'] | Should -Be ''
+        }
+    }
+
+    It 'does not let SDK preflight evidence bypass <Restriction>' -ForEach @(
+        @{ Restriction = 'pinned region' }, @{ Restriction = 'global placement' }
+        @{ Restriction = 'resource-group scope' }, @{ Restriction = 'no movable input' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Restriction = $Restriction } {
+            param($Restriction)
+            $extra = @{}
+            switch ($Restriction) {
+                'pinned region' { $extra.ResourceLocation = 'East US' }
+                'global placement' {
+                    Mock Get-AvmBicepResourceLocation { [pscustomobject]@{ Location = 'eastus'; IsGlobal = $true } }
+                }
+                'resource-group scope' { $script:options.Scope = 'group' }
+                'no movable input' {
+                    $script:options.Parameters.Remove('resourceLocation')
+                    $script:templateContent = '{}'
+                }
+            }
+            Mock Invoke-AvmBicepNativeArmOperation { throw (& $script:preflightFailure 'provider availability' 'eastus') }
+            { Test-AvmBicepNativeDeployment -DeploymentInput $script:options -TemplateContent $script:templateContent @extra } |
+                Should -Throw -ExpectedMessage '*Safe validation summary*'
+            Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
+            [IO.File]::ReadAllText($script:templatePath) | Should -BeExactly $script:templateContent
+        }
+    }
+
     It 'rejects conflicting locations before Azure and leaves the pristine temporary template intact' {
         InModuleScope Avm.Authoring {
             { Test-AvmBicepNativeDeployment -DeploymentInput $script:options `
@@ -153,9 +252,9 @@ Describe 'Component: Bicep native regional validation' -Tag Component {
             $node = [InvalidOperationException]::new('Insufficient capacity in the region.')
             $node | Add-Member -MemberType NoteProperty -Name Code -Value 'AllocationFailed'
             ($node -is [pscustomobject]) | Should -BeFalse
-            Test-AvmBicepRegionalErrorNode -Node $node | Should -BeTrue
+            Test-AvmBicepRetryErrorNode -Node $node | Should -BeTrue
             $node.Code = 'AuthorizationFailed'
-            Test-AvmBicepRegionalErrorNode -Node $node | Should -BeFalse
+            Test-AvmBicepRetryErrorNode -Node $node | Should -BeFalse
         }
     }
 }

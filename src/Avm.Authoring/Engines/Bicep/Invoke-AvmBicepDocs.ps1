@@ -4,8 +4,8 @@ function Invoke-AvmBicepDocs {
         Render Bicep module READMEs through the pinned Bicep docs CLI.
 
     .DESCRIPTION
-        Uses the nearest bicepconfig.json and its relative, versioned Scriban
-        template. Renders all source-backed modules before changing any README;
+        Uses the packaged template or a validated nearest-config template.
+        Renders all source-backed modules before changing any README;
         source-less READMEs are preserved and reported as not rendered.
         CheckDrift uses packaged Pester 5.5+ requirements to compare generated
         bytes without writing module files.
@@ -76,211 +76,223 @@ function Invoke-AvmBicepDocs {
     else { [System.StringComparer]::Ordinal }
     $compiledTemplates = [System.Collections.Generic.Dictionary[string, object]]::new(
         $pathComparer)
+    $renderStages = [System.Collections.Generic.Dictionary[string, string]]::new($pathComparer)
 
-    foreach ($scope in $scopes) {
-        $files = @(Get-ChildItem -LiteralPath $scope.Path -Force |
-                Where-Object { $_.Name -ieq 'main.bicep' })
-        if ($files.Count -gt 0 -and
-            ($files.Count -ne 1 -or $files[0].PSIsContainer -or
-            $files[0].Name -cne 'main.bicep' -or
-            ($files[0].Attributes -band [System.IO.FileAttributes]::ReparsePoint))) {
-            throw [AvmConfigurationException]::new(
-                "Bicep documentation needs a regular main.bicep with exact casing in '$($scope.Path)'.")
-        }
-        if ($files.Count -eq 0) {
-            if (Test-Path -LiteralPath (Join-Path $scope.Path 'README.md')) {
-                $relative = [System.IO.Path]::GetRelativePath(
-                    $Context.Root, (Join-Path $scope.Path 'README.md')).Replace('\', '/')
-                $notRendered.Add($relative)
-                $issues.Add([pscustomobject][ordered]@{
-                        File     = $relative
-                        Line     = 0
-                        Column   = 0
-                        Severity = 'warning'
-                        Code     = 'avm.bicep.docs-no-source'
-                        Message  = "'$relative' has no main.bicep; it is preserved but not rendered or compared by Bicep docs."
-                    })
+    try {
+        foreach ($scope in $scopes) {
+            $files = @(Get-ChildItem -LiteralPath $scope.Path -Force |
+                    Where-Object { $_.Name -ieq 'main.bicep' })
+            if ($files.Count -gt 0 -and
+                ($files.Count -ne 1 -or $files[0].PSIsContainer -or
+                $files[0].Name -cne 'main.bicep' -or
+                ($files[0].Attributes -band [System.IO.FileAttributes]::ReparsePoint))) {
+                throw [AvmConfigurationException]::new(
+                    "Bicep documentation needs a regular main.bicep with exact casing in '$($scope.Path)'.")
             }
-            continue
-        }
+            if ($files.Count -eq 0) {
+                if (Test-Path -LiteralPath (Join-Path $scope.Path 'README.md')) {
+                    $relative = [System.IO.Path]::GetRelativePath(
+                        $Context.Root, (Join-Path $scope.Path 'README.md')).Replace('\', '/')
+                    $notRendered.Add($relative)
+                    $issues.Add([pscustomobject][ordered]@{
+                            File     = $relative
+                            Line     = 0
+                            Column   = 0
+                            Severity = 'warning'
+                            Code     = 'avm.bicep.docs-no-source'
+                            Message  = "'$relative' has no main.bicep; it is preserved but not rendered or compared by Bicep docs."
+                        })
+                }
+                continue
+            }
 
-        $docsConfiguration = Get-AvmBicepDocsConfiguration -ModulePath $scope.Path
-        $sourcePath = $files[0].FullName
-        $target = Join-Path -Path $scope.Path -ChildPath 'README.md'
-        $relative = [System.IO.Path]::GetRelativePath($Context.Root, $target).Replace('\', '/')
-        $filesSelected++
-        try {
-            $values = Get-AvmBicepDocsCustomValue -ModulePath $scope.Path `
-                -RepositoryRoot $Context.Root -ToolPath $tool.Path `
-                -CompiledTemplateCache $compiledTemplates
-        }
-        catch [AvmProcessException], [AvmConfigurationException] {
-            if (-not $CheckDrift) {
-                throw
+            $docsConfiguration = Get-AvmBicepDocsConfiguration -ModulePath $scope.Path
+            $sourcePath = $files[0].FullName
+            $target = Join-Path -Path $scope.Path -ChildPath 'README.md'
+            $relative = [System.IO.Path]::GetRelativePath($Context.Root, $target).Replace('\', '/')
+            $filesSelected++
+            try {
+                $values = Get-AvmBicepDocsCustomValue -ModulePath $scope.Path `
+                    -RepositoryRoot $Context.Root -ToolPath $tool.Path `
+                    -CompiledTemplateCache $compiledTemplates
             }
-            $issues.Add([pscustomobject][ordered]@{
-                    File     = $relative
-                    Line     = 0
-                    Column   = 0
-                    Severity = 'error'
-                    Code     = 'avm.bicep.docs-render-failed'
-                    Message  = "Bicep docs could not prepare '$relative': $($_.Exception.Message)"
-                })
-            continue
-        }
-        try {
-            $result = Invoke-AvmBicepDocsRender -Values $values -SourcePath $sourcePath `
-                -TemplatePath $docsConfiguration.TemplatePath -ToolPath $tool.Path -WorkingDirectory $scope.Path
-        }
-        catch [AvmProcessException] {
-            if (-not $CheckDrift) {
-                throw
-            }
-            $issues.Add([pscustomobject][ordered]@{
-                    File     = $relative
-                    Line     = 0
-                    Column   = 0
-                    Severity = 'error'
-                    Code     = 'avm.bicep.docs-render-failed'
-                    Message  = "Bicep docs could not start for '$relative': $($_.Exception.Message)"
-                })
-            continue
-        }
-        $unmappedExample = $null -ne $result.StdOut -and
-        $result.StdOut.Contains('__AVM_DOCS_MISSING_EXAMPLE__:')
-        $ambiguousRoles = $null -ne $result.StdOut -and
-        $result.StdOut.Contains('__AVM_DOCS_AMBIGUOUS_ROLES__:')
-        $missingVariant = $null -ne $result.StdOut -and
-        $result.StdOut.Contains('__AVM_DOCS_MISSING_VARIANT__:')
-        $invalidExample = [regex]::Match(
-            [string]$result.StdOut, '(?m)^__AVM_DOCS_INVALID_EXAMPLE__:(.*)$')
-        if ($result.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($result.StdOut) -or
-            $unmappedExample -or $ambiguousRoles -or $missingVariant -or
-            $invalidExample.Success) {
-            $message = if ($invalidExample.Success) {
-                "Bicep docs could not render '$relative': $($invalidExample.Groups[1].Value.Trim())"
-            }
-            elseif ($unmappedExample) {
-                "Bicep docs included an example without a matching source for '$relative'. Check tests/e2e and bicepconfig.json scope reassignments."
-            }
-            elseif ($ambiguousRoles) {
-                "Bicep docs found conflicting compiled role names for a documented roleAssignments parameter in '$relative'."
-            }
-            elseif ($missingVariant) {
-                "Bicep docs discriminator variants differ from the compiled Bicep mapping in '$relative'."
-            }
-            else {
-                Add-AvmProcessFailureDetail `
-                    -Message "Bicep docs did not render a README for '$sourcePath' (exit $($result.ExitCode))." `
-                    -StdOut $result.StdOut -StdErr $result.StdErr
-            }
-            if ($CheckDrift) {
+            catch [AvmProcessException], [AvmConfigurationException] {
+                if (-not $CheckDrift) {
+                    throw
+                }
                 $issues.Add([pscustomobject][ordered]@{
                         File     = $relative
                         Line     = 0
                         Column   = 0
                         Severity = 'error'
                         Code     = 'avm.bicep.docs-render-failed'
-                        Message  = $message
+                        Message  = "Bicep docs could not prepare '$relative': $($_.Exception.Message)"
                     })
                 continue
             }
-            throw [AvmConfigurationException]::new($message)
-        }
-
-        $filesProcessed++
-        if ($IncludeRenderedContent) {
-            $renderedReadmes.Add([pscustomobject]@{
-                    Path    = $relative
-                    Content = $result.StdOut
-                })
-        }
-        $expected = $utf8.GetBytes($result.StdOut)
-        $current = if ([System.IO.File]::Exists($target)) {
-            , [System.IO.File]::ReadAllBytes($target)
-        }
-        else {
-            $null
-        }
-        $readmeCase = $null
-        if ($CheckDrift) {
-            $readmeCase = @{
-                Current                = $current
-                Expected               = $expected
-                MissingExampleComments = 0
+            try {
+                $renderInput = Get-AvmBicepDocsRenderInput -SourcePath $sourcePath -Root $Context.Root `
+                    -Configuration $docsConfiguration -Stages $renderStages -Confirm:$false -WhatIf:$false
+                $result = Invoke-AvmBicepDocsRender -Values $values -SourcePath $renderInput.SourcePath `
+                    -ToolPath $tool.Path -WorkingDirectory $renderInput.WorkingDirectory
             }
-            $readmeInputs.Add(@{ Case = $readmeCase; IssuePath = $target })
-        }
-        if ($null -ne $current -and
-            [System.Linq.Enumerable]::SequenceEqual([byte[]]$current, [byte[]]$expected)) {
-            continue
-        }
-        $missingExampleComments = 0
-        if ($CheckDrift -and $null -ne $current) {
-            $probe = Get-AvmBicepDocsExampleCommentProbe `
-                -Values $values -GeneratedContent $result.StdOut
-            if ($null -ne $probe) {
-                try {
-                    $probeResult = Invoke-AvmBicepDocsRender -Values $probe.Values `
-                        -SourcePath $sourcePath -ToolPath $tool.Path `
-                        -TemplatePath $docsConfiguration.TemplatePath -WorkingDirectory $scope.Path
+            catch [AvmProcessException], [AvmConfigurationException] {
+                if (-not $CheckDrift) {
+                    throw
                 }
-                catch [AvmProcessException] {
+                $issues.Add([pscustomobject][ordered]@{
+                        File     = $relative
+                        Line     = 0
+                        Column   = 0
+                        Severity = 'error'
+                        Code     = 'avm.bicep.docs-render-failed'
+                        Message  = "Bicep docs could not start for '$relative': $($_.Exception.Message)"
+                    })
+                continue
+            }
+            $unmappedExample = $null -ne $result.StdOut -and
+            $result.StdOut.Contains('__AVM_DOCS_MISSING_EXAMPLE__:')
+            $ambiguousRoles = $null -ne $result.StdOut -and
+            $result.StdOut.Contains('__AVM_DOCS_AMBIGUOUS_ROLES__:')
+            $missingVariant = $null -ne $result.StdOut -and
+            $result.StdOut.Contains('__AVM_DOCS_MISSING_VARIANT__:')
+            $invalidExample = [regex]::Match(
+                [string]$result.StdOut, '(?m)^__AVM_DOCS_INVALID_EXAMPLE__:(.*)$')
+            if ($result.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($result.StdOut) -or
+                $unmappedExample -or $ambiguousRoles -or $missingVariant -or
+                $invalidExample.Success) {
+                $message = if ($invalidExample.Success) {
+                    "Bicep docs could not render '$relative': $($invalidExample.Groups[1].Value.Trim())"
+                }
+                elseif ($unmappedExample) {
+                    "Bicep docs included an example without a matching source for '$relative'. Check tests/e2e and bicepconfig.json scope reassignments."
+                }
+                elseif ($ambiguousRoles) {
+                    "Bicep docs found conflicting compiled role names for a documented roleAssignments parameter in '$relative'."
+                }
+                elseif ($missingVariant) {
+                    "Bicep docs discriminator variants differ from the compiled Bicep mapping in '$relative'."
+                }
+                else {
+                    Add-AvmProcessFailureDetail `
+                        -Message "Bicep docs did not render a README for '$sourcePath' (exit $($result.ExitCode))." `
+                        -StdOut $result.StdOut -StdErr $result.StdErr
+                }
+                if ($CheckDrift) {
                     $issues.Add([pscustomobject][ordered]@{
                             File     = $relative
                             Line     = 0
                             Column   = 0
                             Severity = 'error'
-                            Code     = 'avm.bicep.docs-provenance-failed'
-                            Message  = "Bicep docs could not verify generated comments in '$relative': $($_.Exception.Message)"
-                        })
-                    continue
-                }
-                if ($probeResult.ExitCode -ne 0 -or
-                    [string]::IsNullOrWhiteSpace($probeResult.StdOut)) {
-                    $message = Add-AvmProcessFailureDetail `
-                        -Message "Bicep docs provenance render failed for '$relative' (exit $($probeResult.ExitCode))." `
-                        -StdOut $probeResult.StdOut -StdErr $probeResult.StdErr
-                    $issues.Add([pscustomobject][ordered]@{
-                            File     = $relative
-                            Line     = 0
-                            Column   = 0
-                            Severity = 'error'
-                            Code     = 'avm.bicep.docs-provenance-failed'
+                            Code     = 'avm.bicep.docs-render-failed'
                             Message  = $message
                         })
                     continue
                 }
-                $missingExampleComments = Get-AvmBicepDocsExampleCommentDifferenceCount `
-                    -CurrentBytes $current -GeneratedContent $result.StdOut `
-                    -ProbeContent $probeResult.StdOut -Markers $probe.Markers
+                throw [AvmConfigurationException]::new($message)
             }
-        }
-        if ($missingExampleComments -gt 0) {
-            $readmeCase.MissingExampleComments = $missingExampleComments
-            continue
-        }
 
-        if ($CheckDrift) {
-            continue
-        }
+            $filesProcessed++
+            if ($IncludeRenderedContent) {
+                $renderedReadmes.Add([pscustomobject]@{
+                        Path    = $relative
+                        Content = $result.StdOut
+                    })
+            }
+            $expected = $utf8.GetBytes($result.StdOut)
+            $current = if ([System.IO.File]::Exists($target)) {
+                , [System.IO.File]::ReadAllBytes($target)
+            }
+            else {
+                $null
+            }
+            $readmeCase = $null
+            if ($CheckDrift) {
+                $readmeCase = @{
+                    Current                = $current
+                    Expected               = $expected
+                    MissingExampleComments = 0
+                }
+                $readmeInputs.Add(@{ Case = $readmeCase; IssuePath = $target })
+            }
+            if ($null -ne $current -and
+                [System.Linq.Enumerable]::SequenceEqual([byte[]]$current, [byte[]]$expected)) {
+                continue
+            }
+            $missingExampleComments = 0
+            if ($CheckDrift -and $null -ne $current) {
+                $probe = Get-AvmBicepDocsExampleCommentProbe `
+                    -Values $values -GeneratedContent $result.StdOut
+                if ($null -ne $probe) {
+                    try {
+                        $probeResult = Invoke-AvmBicepDocsRender -Values $probe.Values `
+                            -SourcePath $renderInput.SourcePath -ToolPath $tool.Path `
+                            -WorkingDirectory $renderInput.WorkingDirectory
+                    }
+                    catch [AvmProcessException] {
+                        $issues.Add([pscustomobject][ordered]@{
+                                File     = $relative
+                                Line     = 0
+                                Column   = 0
+                                Severity = 'error'
+                                Code     = 'avm.bicep.docs-provenance-failed'
+                                Message  = "Bicep docs could not verify generated comments in '$relative': $($_.Exception.Message)"
+                            })
+                        continue
+                    }
+                    if ($probeResult.ExitCode -ne 0 -or
+                        [string]::IsNullOrWhiteSpace($probeResult.StdOut)) {
+                        $message = Add-AvmProcessFailureDetail `
+                            -Message "Bicep docs provenance render failed for '$relative' (exit $($probeResult.ExitCode))." `
+                            -StdOut $probeResult.StdOut -StdErr $probeResult.StdErr
+                        $issues.Add([pscustomobject][ordered]@{
+                                File     = $relative
+                                Line     = 0
+                                Column   = 0
+                                Severity = 'error'
+                                Code     = 'avm.bicep.docs-provenance-failed'
+                                Message  = $message
+                            })
+                        continue
+                    }
+                    $missingExampleComments = Get-AvmBicepDocsExampleCommentDifferenceCount `
+                        -CurrentBytes $current -GeneratedContent $result.StdOut `
+                        -ProbeContent $probeResult.StdOut -Markers $probe.Markers
+                }
+            }
+            if ($missingExampleComments -gt 0) {
+                $readmeCase.MissingExampleComments = $missingExampleComments
+                continue
+            }
 
-        $original = $null
-        if ($null -ne $current) {
-            try {
-                $original = $utf8.GetString($current)
+            if ($CheckDrift) {
+                continue
             }
-            catch [System.Text.DecoderFallbackException] {
-                throw [AvmConfigurationException]::new(
-                    "Bicep README must contain valid UTF-8: $target")
+
+            $original = $null
+            if ($null -ne $current) {
+                try {
+                    $original = $utf8.GetString($current)
+                }
+                catch [System.Text.DecoderFallbackException] {
+                    throw [AvmConfigurationException]::new(
+                        "Bicep README must contain valid UTF-8: $target")
+                }
+            }
+            $plan.Add([pscustomobject]@{
+                    Path     = $target
+                    Original = $original
+                    Content  = $result.StdOut
+                })
+            $changed.Add($relative)
+        }
+    }
+    finally {
+        foreach ($stage in $renderStages.Values) {
+            if ([System.IO.Directory]::Exists($stage)) {
+                [System.IO.Directory]::Delete($stage, $true)
             }
         }
-        $plan.Add([pscustomobject]@{
-                Path     = $target
-                Original = $original
-                Content  = $result.StdOut
-            })
-        $changed.Add($relative)
     }
 
     if ($PreparationOnly) {

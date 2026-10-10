@@ -135,6 +135,9 @@ function Invoke-AvmBicepTestE2e {
                 -AzPath $az.Source -KeepResources:$KeepResources -Confirm:$false)
     }
     else {
+        $retryPolicy = Get-AvmBicepRetryPolicy
+        $DeploymentRetryLimit = [Math]::Min($DeploymentRetryLimit, $retryPolicy['limits']['deploymentAttempts'])
+        $ValidationRetryLimit = [Math]::Min($ValidationRetryLimit, $retryPolicy['limits']['regionAttempts'])
         $bicep = Resolve-AvmTool -Name bicep -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
         $result.BicepTool = "bicep/$($bicep.Version)"
         $runDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ('avm-bicep-e2e-{0}' -f [guid]::NewGuid().ToString('N'))
@@ -166,16 +169,32 @@ function Invoke-AvmBicepTestE2e {
                 if ($template.Scope -eq 'mg' -and [string]::IsNullOrWhiteSpace($ManagementGroupId)) {
                     throw [AvmConfigurationException]::new('Management-group Bicep e2e cases require -ManagementGroupId.')
                 }
-                $parameterPath = New-AvmBicepTestParameterFile -Root $Context.Root `
-                    -DestinationPath (Join-Path $runDirectory ("$index-parameters.json")) -Tokens $tokenMap `
-                    -ParameterFile $ParameterFile -DeferResourceLocation -Confirm:$false
-                $nativeParameters = Get-AvmBicepNativeParameter -ParameterPath $parameterPath -Parameters $Parameters
-                $references = @{}
-                foreach ($key in @($nativeParameters.psbase.Keys)) {
-                    if ($nativeParameters[$key] -is [hashtable] -and $nativeParameters[$key].ContainsKey('reference')) {
-                        $references[$key] = $nativeParameters[$key]
-                        $nativeParameters.Remove($key)
+                $attemptInputs = [System.Collections.Generic.List[object]]::new()
+                for ($namingIndex = 0; $namingIndex -lt $DeploymentRetryLimit; $namingIndex++) {
+                    $namingId = if ($namingIndex -eq 0) { $runId } else { [guid]::NewGuid().ToString('N') }
+                    $attemptTokens = if ($namingIndex -eq 0) { $tokenMap } else {
+                        Get-AvmBicepTestTokenMap -Root $Context.Root -SubscriptionId $subscription.SubscriptionId `
+                            -TenantId $TenantId -ManagementGroupId $ManagementGroupId -RunId $namingId `
+                            -TokenFile $TokenFile -Tokens $Tokens -DefaultTokens $ci.Tokens
                     }
+                    $null = $attemptTokens.Remove('resourceLocation')
+                    $content = Resolve-AvmBicepTestToken -Content $template.CompiledContent `
+                        -SourcePath $case.Path -Tokens $attemptTokens -DeferResourceLocation
+                    $parameterPath = New-AvmBicepTestParameterFile -Root $Context.Root `
+                        -DestinationPath (Join-Path $runDirectory ("$index-$namingIndex-parameters.json")) -Tokens $attemptTokens `
+                        -ParameterFile $ParameterFile -DeferResourceLocation -Confirm:$false
+                    $nativeParameters = Get-AvmBicepNativeParameter -ParameterPath $parameterPath -Parameters $Parameters
+                    $references = @{}
+                    foreach ($key in @($nativeParameters.psbase.Keys)) {
+                        if ($nativeParameters[$key] -is [hashtable] -and $nativeParameters[$key].ContainsKey('reference')) {
+                            $references[$key] = $nativeParameters[$key]
+                            $nativeParameters.Remove($key)
+                        }
+                    }
+                    $attemptInputs.Add([pscustomobject]@{
+                            NamingId = $namingId; Tokens = $attemptTokens; TemplateContent = $content
+                            Parameters = $nativeParameters; ReferenceParameters = $references
+                        })
                 }
                 $resourceType = ''
                 $metadataPath = Join-Path $case.ModuleRoot 'metadata.json'
@@ -193,7 +212,8 @@ function Invoke-AvmBicepTestE2e {
                         Case = $case; Scope = $template.Scope; SubscriptionId = $subscription.SubscriptionId
                         RunId = $runId; TemplatePath = $templatePath; Template = $template.Template
                         TemplateContent = [System.IO.File]::ReadAllText($templatePath)
-                        Parameters = $nativeParameters; ReferenceParameters = $references; RequiredFeatures = $requiredFeatures
+                        Parameters = $attemptInputs[0].Parameters; ReferenceParameters = $attemptInputs[0].ReferenceParameters
+                        AttemptInputs = $attemptInputs.ToArray(); RetryPolicy = $retryPolicy; RequiredFeatures = $requiredFeatures
                         Tokens = $tokenMap; TokenResourceLocation = $tokenLocation; ResourceType = $resourceType
                         SourceHash      = Get-AvmBicepTestSourceHash -Case $case
                         AssertionFiles  = [string[]]@(Get-AvmBicepE2eAssertionFile -CasePath $case.Path)

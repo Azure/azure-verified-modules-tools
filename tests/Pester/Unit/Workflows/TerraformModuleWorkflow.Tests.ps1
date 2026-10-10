@@ -362,6 +362,13 @@ Describe 'CI workflow' {
         $script:ci | Should -Not -Match 'coverage-input\.zip'
     }
 
+    It 'keeps both unit entry points behind the generated-documentation drift check' {
+        $buildPath = Join-Path $PSScriptRoot '..' '..' '..' '..' 'build' 'avm.build.ps1'
+        $build = Get-Content -LiteralPath $buildPath -Raw
+        $build | Should -Match "(?m)^task 'ci-unit' 'docs-check', layout, test\r?$"
+        $build | Should -Match "(?m)^task 'ci-coverage' 'docs-check', layout, coverage\r?$"
+    }
+
     It 'uses the prerequisite installer in every CI test job type' {
         ([regex]::Matches(
                 $script:ci,

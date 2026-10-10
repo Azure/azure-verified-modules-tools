@@ -5,7 +5,7 @@
 ## Synopsis
 
 Run the pull-request linting and drift gauntlet against the resolved module:
-metadata -> initialize -> sync -> format -> transform -> lint -> check policy ->
+metadata -> sync -> format -> transform -> lint -> check policy ->
 check convention -> validate -> docs.
 
 ## Description
@@ -30,9 +30,13 @@ ExcludeSteps omits named steps and tools needed only by those steps.
 Excluded steps remain visible as 'skipped' in the result and log.
 Excluding every step returns overall Status='skipped', not 'pass'.
 
-For Terraform, the initialize step prepares each source example once.
-The later validate step reuses that persistent `.terraform` state instead
-of initializing the example again. The 'validate' step is a build-validation
+When Terraform validation is enabled, an initialization prerequisite
+prepares each source example once after metadata and before the remaining
+checks. The validate step reuses that persistent `.terraform` state.
+Excluding validate omits this prerequisite; formatting needs only the
+executable, while transform, lint and policy prepare their own working
+directories. Initialization is not an additional public step.
+The 'validate' step is a build-validation
 pass ('terraform validate' / 'bicep build'), not a test run. Unit tests remain a
 separate CI job so a failure produces one actionable signal and
 fork contributors receive results without environment approval.

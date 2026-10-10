@@ -914,7 +914,7 @@ Describe 'Bicep workflow cleanup deployment discovery' {
                 @{ properties = @{ provisioningOperation = $Kind; targetResource = @{ id = $Id } } }
             }
             $script:pages = @{
-                ($script:root + '/operations?api-version=2021-04-01')          = @{
+                ($script:root + '/operations?api-version=2025-04-01')          = @{
                     value = @(
                         & $operation $script:group
                         & $operation $childGroup
@@ -924,17 +924,17 @@ Describe 'Bicep workflow cleanup deployment discovery' {
                         & $operation "$script:group/providers/Microsoft.Storage/storageAccounts/borrowed" 'Read'
                     )
                 }
-                ($childGroup + '/operations?api-version=2021-04-01')           = @{
+                ($childGroup + '/operations?api-version=2025-04-01')           = @{
                     value = @(
                         & $operation "$script:group/providers/Microsoft.Storage/storageAccounts/created"
                         & $operation $script:root
                     )
                 }
-                ($childSubscription + '/operations?api-version=2021-04-01')    = @{ value = @() }
-                ($childManagementGroup + '/operations?api-version=2021-04-01') = @{
+                ($childSubscription + '/operations?api-version=2025-04-01')    = @{ value = @() }
+                ($childManagementGroup + '/operations?api-version=2025-04-01') = @{
                     value = @(& $operation '/providers/Microsoft.Management/managementGroups/actual-child/providers/Microsoft.Authorization/policyDefinitions/created')
                 }
-                ($childTenant + '/operations?api-version=2021-04-01')          = @{
+                ($childTenant + '/operations?api-version=2025-04-01')          = @{
                     value = @(& $operation '/providers/Microsoft.Management/managementGroups/new-group')
                 }
             }
@@ -1013,6 +1013,7 @@ Describe 'Bicep workflow cleanup deployment discovery' {
     It 'retains known targets after a later page times out and still reads other attempts' {
         InModuleScope Avm.Authoring {
             $other = $script:root + '-other'
+            Mock Wait-AvmRetryDelay {}
             Mock Invoke-AzRestMethod {
                 param($Path)
                 if ($Path -like '*page=2') { throw [System.TimeoutException]::new('Timed out') }
@@ -1034,7 +1035,15 @@ Describe 'Bicep workflow cleanup deployment discovery' {
             $result.Issues.Count | Should -Be 1
             $result.Issues[0].Message | Should -Match 'Timed out'
             @($result.Deployments | Where-Object { $_.Status -eq 'Resolved' }).Count | Should -Be 1
-            Should -Invoke Invoke-AzRestMethod -Exactly 3
+            Should -Invoke Invoke-AzRestMethod -Exactly 5
+            Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter {
+                $Path -ceq "$script:root/operations?api-version=2025-04-01"
+            }
+            Should -Invoke Invoke-AzRestMethod -Exactly 3 -ParameterFilter { $Path -ceq "$script:root/operations?page=2" }
+            Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter {
+                $Path -ceq "$other/operations?api-version=2025-04-01"
+            }
+            Should -Invoke Wait-AvmRetryDelay -Exactly 2
             Should -Invoke Start-Sleep -Exactly 0
         }
     }

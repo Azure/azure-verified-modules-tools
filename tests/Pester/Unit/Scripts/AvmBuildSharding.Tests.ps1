@@ -208,6 +208,21 @@ Describe 'writes state' {
 }
 
 Describe 'Invoke-AvmPesterShard' {
+    It 'fails a shard on block teardown even when all individual tests pass' {
+        $probe = Join-Path $TestDrive 'Teardown.Tests.ps1'
+        [IO.File]::WriteAllText($probe, @'
+Describe 'broken teardown' {
+    AfterAll { throw 'Teardown failed.' }
+    It 'passes' { 1 | Should -Be 1 }
+}
+'@)
+        $shard = Join-Path $script:repoRoot 'build' 'Invoke-AvmPesterShard.ps1'
+        $output = Join-Path $TestDrive 'teardown.xml'
+        $null = & pwsh -NoLogo -NoProfile -NonInteractive -File $shard -Path $probe -OutputPath $output 2>&1
+        $LASTEXITCODE | Should -Be 1
+        ([xml](Get-Content -LiteralPath $output -Raw)).'test-results'.total | Should -Be 1
+    }
+
     It 'fails a shard when a test file cannot be loaded, even if other tests pass' {
         $passing = Join-Path $TestDrive 'Passing.Tests.ps1'
         $broken = Join-Path $TestDrive 'Broken.Tests.ps1'
@@ -246,5 +261,39 @@ Describe 'probe' {
         $seen = [IO.File]::ReadAllLines($record)
         $seen[0].TrimEnd([IO.Path]::DirectorySeparatorChar) | Should -Be $temp
         $seen[1] | Should -Be $avmHome
+    }
+}
+
+Describe 'Invoke-AvmPester block failures' {
+    BeforeAll {
+        $buildPath = Join-Path $script:repoRoot 'build' 'avm.build.ps1'
+        $ast = [Management.Automation.Language.Parser]::ParseFile($buildPath, [ref]$null, [ref]$null)
+        $definition = $ast.Find({
+                param($node)
+                $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq 'script:Invoke-AvmPester'
+            }, $false)
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+
+    BeforeEach {
+        $script:testNameFilter = @()
+        $script:fakeResult = [pscustomobject]@{
+            TotalCount = 1; PassedCount = 1; FailedCount = 0
+            FailedContainersCount = 0; FailedBlocksCount = 0; FailedBlocks = @()
+        }
+        Mock Invoke-Pester { $script:fakeResult }
+    }
+
+    It 'rejects a failed block even when every individual test passed' {
+        $script:fakeResult.FailedBlocksCount = 1
+        $script:fakeResult.FailedBlocks = @([pscustomobject]@{ Name = 'broken teardown' })
+        { Invoke-AvmPester -Configuration (New-PesterConfiguration) } |
+            Should -Throw '*1 Pester setup or teardown block(s) failed: broken teardown*'
+    }
+
+    It 'retains the successful result when no block or container failed' {
+        $result = Invoke-AvmPester -Configuration (New-PesterConfiguration)
+        [object]::ReferenceEquals($result, $script:fakeResult) | Should -BeTrue
     }
 }

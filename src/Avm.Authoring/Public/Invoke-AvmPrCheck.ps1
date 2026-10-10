@@ -2,7 +2,7 @@ function Invoke-AvmPrCheck {
     <#
     .SYNOPSIS
         Run the pull-request linting and drift gauntlet against the resolved module:
-        metadata -> initialize -> sync -> format -> transform -> lint -> check policy ->
+        metadata -> sync -> format -> transform -> lint -> check policy ->
         check convention -> validate -> docs.
 
     .DESCRIPTION
@@ -26,9 +26,13 @@ function Invoke-AvmPrCheck {
         Excluded steps remain visible as 'skipped' in the result and log.
         Excluding every step returns overall Status='skipped', not 'pass'.
 
-        For Terraform, the initialize step prepares each source example once.
-        The later validate step reuses that persistent `.terraform` state instead
-        of initializing the example again. The 'validate' step is a build-validation
+        When Terraform validation is enabled, an initialization prerequisite
+        prepares each source example once after metadata and before the remaining
+        checks. The validate step reuses that persistent `.terraform` state.
+        Excluding validate omits this prerequisite; formatting needs only the
+        executable, while transform, lint and policy prepare their own working
+        directories. Initialization is not an additional public step.
+        The 'validate' step is a build-validation
         pass ('terraform validate' / 'bicep build'), not a test run. Unit tests remain a
         separate CI job so a failure produces one actionable signal and
         fork contributors receive results without environment approval.
@@ -187,18 +191,6 @@ function Invoke-AvmPrCheck {
             ContextOnly = $true
             ExtraArgs   = @{ Context = $context }
         }
-        if ($context.Ecosystem -eq 'terraform') {
-            [pscustomobject]@{
-                Name        = 'initialize'
-                Cmdlet      = 'Initialize-AvmTerraformCommand'
-                ContextOnly = $true
-                ExtraArgs   = @{
-                    Context           = $context
-                    Command           = 'pr-check'
-                    AllowPathFallback = $AllowPathFallback
-                }
-            }
-        }
         [pscustomobject]@{ Name = 'sync'; Cmdlet = 'Invoke-AvmSync'; ExtraArgs = @{ CheckDrift = $true } }
         [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat'; ExtraArgs = @{ CheckDrift = $true } }
         [pscustomobject]@{
@@ -229,11 +221,13 @@ function Invoke-AvmPrCheck {
     $steps = New-Object System.Collections.Generic.List[object]
     $overall = if (@($stepDefs | Where-Object { $_.Name -notin $ExcludeSteps }).Count -eq 0) { 'skipped' } else { 'pass' }
     $stepIndex = 0
+    $initializationPending = $context.Ecosystem -eq 'terraform' -and 'validate' -notin $ExcludeSteps
 
     foreach ($def in $stepDefs) {
         $stepStatus = 'pass'
         $stepError = $null
         $stepResult = $null
+        $initializingTerraform = $false
         $requiredBicepStep = $context.Ecosystem -eq 'bicep' -and
         $def.Name -in @('check policy', 'check convention', 'docs')
         $stepIndex++
@@ -256,6 +250,19 @@ function Invoke-AvmPrCheck {
         Write-AvmLog ('step {0}/{1}: {2} (started {3})' -f $stepIndex, $stepDefs.Count, $def.Name, (Format-AvmTimestamp -Timestamp $stepStart)) -Level Info | Out-Null
 
         try {
+            if ($initializationPending -and $def.Name -ne 'metadata') {
+                $initializingTerraform = $true
+                Write-AvmLog 'pr-check: preparing Terraform initialization for validate' -Level Info | Out-Null
+                $initialization = Invoke-AvmNestedCommand {
+                    Initialize-AvmTerraformCommand -Context $context -Command 'pr-check' -AllowPathFallback:$AllowPathFallback
+                }
+                if ($null -eq $initialization -or -not $initialization.PSObject.Properties['Status'] -or
+                    $initialization.Status -isnot [string] -or $initialization.Status -ne 'pass') {
+                    throw [AvmProcessException]::new('Terraform initialization did not report a successful prerequisite result.')
+                }
+                $initializationPending = $false
+                $initializingTerraform = $false
+            }
             $extraArgs = if ($def.PSObject.Properties.Name -contains 'ExtraArgs' -and $def.ExtraArgs) { $def.ExtraArgs } else { @{} }
             $stepParameters = @{}
             if (-not $def.PSObject.Properties['ContextOnly'] -or -not $def.ContextOnly) {
@@ -349,6 +356,10 @@ function Invoke-AvmPrCheck {
                 $_.Exception.Message
             }
         }
+        if ($initializingTerraform) {
+            if ($stepStatus -ne 'error') { $stepStatus = 'fail' }
+            $stepError = "Terraform initialization prerequisite failed: $stepError"
+        }
         $stepSw.Stop()
         $stepEnd = $stepStart.AddMilliseconds($stepSw.Elapsed.TotalMilliseconds)
 
@@ -372,6 +383,7 @@ function Invoke-AvmPrCheck {
             })
 
         if ($stepStatus -eq 'fail' -or $stepStatus -eq 'error') { $overall = $stepStatus }
+        if ($initializingTerraform) { break }
         if ($stepStatus -eq 'error') { break }
         if ($def.Name -eq 'metadata' -and $stepStatus -ne 'pass') { break }
         if ($StopOnFail -and $stepStatus -eq 'fail') { break }

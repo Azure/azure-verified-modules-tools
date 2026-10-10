@@ -14,7 +14,7 @@ Describe 'Integration: Bicep scaffold telemetry' -Tag Integration {
             [System.Environment]::SetEnvironmentVariable($name, '1', 'Process')
         }
         $script:bicepTool = InModuleScope 'Avm.Authoring' { Resolve-AvmTool -Name bicep }
-        $script:bicepTool.Version | Should -BeExactly '0.47.16'
+        $script:bicepTool.Version | Should -BeExactly '0.48.1'
         $schemaPath = Join-Path -Path (Get-Module -Name Avm.Authoring).ModuleBase -ChildPath 'Resources' `
             -AdditionalChildPath 'Schemas', 'v1', 'avm-module-metadata.schema.json'
         $script:metadataSchemaId = (Get-Content -LiteralPath $schemaPath -Raw | ConvertFrom-Json).'$id'

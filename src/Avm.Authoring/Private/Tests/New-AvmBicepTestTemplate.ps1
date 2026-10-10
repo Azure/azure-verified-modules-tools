@@ -102,6 +102,7 @@ function New-AvmBicepTestTemplate {
         Path               = $DestinationPath
         Scope              = $scope
         Template           = $template
+        CompiledContent    = [string]$build.StdOut
         HasGroupDeployment = $hasGroupDeployment
     }
 }

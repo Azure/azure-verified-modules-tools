@@ -12,11 +12,18 @@ function Invoke-AvmDocs {
         The ecosystem is determined by Get-AvmModuleContext, which honours
         the .avm/context.psd1 override file and the -Ecosystem filter.
 
+        Bicep uses the packaged canonical README template by default. Bicep
+        0.48 selects templates through bicepconfig.json, so default rendering
+        uses a temporary source copy without changing caller configuration.
+        A configured documentation.template.file must reference a relative
+        canonical template copy; valid explicit configurations render directly.
+        Temporary sources are removed on success or failure.
+
         Routed by the dispatcher: 'avm docs'.
 
     .PARAMETER Path
-        Working directory whose enclosing module to document. Defaults to
-        the current location.
+        Module root to document. Defaults to the current location. An explicit
+        path is authoritative; discovery does not search above it.
 
     .PARAMETER Ecosystem
         Force the ecosystem selector. Defaults to 'auto'.
@@ -58,6 +65,10 @@ function Invoke-AvmDocs {
 
     .EXAMPLE
         Invoke-AvmDocs -Path C:\repos\my-tf-module -Ecosystem terraform
+
+    .EXAMPLE
+        Invoke-AvmDocs -Path C:\repos\my-bicep-module -Ecosystem bicep -CheckDrift
+        Compare README content without rewriting module files or configuration.
     #>
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '',

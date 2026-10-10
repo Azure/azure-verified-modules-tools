@@ -381,7 +381,7 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
             foreach ($step in $result.Steps | Where-Object { $_.Step -ne 'check policy' }) {
                 $step.Status | Should -Be 'pass' -Because "pr-check step '$($step.Step)' should pass (error: $($step.Error))"
             }
-            ($result.Steps.Step -join ',') | Should -BeExactly 'metadata,initialize,sync,format,transform,lint,check policy,check convention,validate,docs'
+            ($result.Steps.Step -join ',') | Should -BeExactly 'metadata,sync,format,transform,lint,check policy,check convention,validate,docs'
             $result.Status | Should -Be 'pass'
             $metadataStep = $result.Steps | Where-Object Step -eq 'metadata'
             $metadataStep.Result.ToolSource | Should -Be 'builtin'

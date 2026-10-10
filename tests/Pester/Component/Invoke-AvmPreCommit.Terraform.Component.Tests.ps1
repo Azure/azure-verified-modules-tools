@@ -317,7 +317,43 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         @($result.Steps | Where-Object Step -eq 'check convention')[0].Status | Should -Be 'pass'
     }
 
-    It 'pr-check composes ten steps with one initialization pass before the drift checks' {
+    It 'does not initialize source examples when only <Enabled> remains' -ForEach @(
+        @{ Enabled = 'none' }, @{ Enabled = 'format' }, @{ Enabled = 'transform' }
+        @{ Enabled = 'lint' }, @{ Enabled = 'check policy' }, @{ Enabled = 'docs' }
+    ) {
+        $names = @('metadata', 'sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
+        $excluded = @($names | Where-Object { $_ -ne $Enabled })
+        $sourceExample = Join-Path $script:fixtureRoot 'examples' 'foo'
+        $dataPath = Join-Path $sourceExample '.terraform'
+        $before = if (Test-Path -LiteralPath $dataPath) {
+            @(Get-ChildItem -LiteralPath $dataPath -File -Recurse | Get-FileHash | ForEach-Object { "$($_.Path):$($_.Hash)" })
+        }
+        else { @() }
+        $savedTrace = $env:AVM_STUB_TERRAFORM_TRACE
+        $trace = Join-Path $TestDrive ("partial-{0}.jsonl" -f $Enabled.Replace(' ', '-'))
+        $env:AVM_STUB_TERRAFORM_TRACE = $trace
+        try {
+            $result = Invoke-AvmPrCheck -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback -ExcludeSteps $excluded
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('AVM_STUB_TERRAFORM_TRACE', $(if ($null -eq $savedTrace) { [NullString]::Value } else { $savedTrace }), 'Process')
+        }
+        $result.Status | Should -Be $(if ($Enabled -eq 'none') { 'skipped' } else { 'pass' })
+        $result.Steps.Step | Should -Be $names
+        $calls = if (Test-Path -LiteralPath $trace) { @(Get-Content -LiteralPath $trace | ConvertFrom-Json) } else { @() }
+        @($calls | Where-Object { $_.Command -eq 'init' -and $_.Directory -eq $sourceExample }) |
+            Should -HaveCount 0
+        $after = if (Test-Path -LiteralPath $dataPath) {
+            @(Get-ChildItem -LiteralPath $dataPath -File -Recurse | Get-FileHash | ForEach-Object { "$($_.Path):$($_.Hash)" })
+        }
+        else { @() }
+        @($after) | Should -Be @($before)
+        if ($Enabled -in @('none', 'format', 'docs')) {
+            @($calls | Where-Object Command -eq 'init') | Should -HaveCount 0
+        }
+    }
+
+    It 'pr-check composes nine steps with one initialization prerequisite before the drift checks' {
         $savedTrace = $env:AVM_STUB_TERRAFORM_TRACE
         $trace = Join-Path $TestDrive 'pr-check-initialization-trace.jsonl'
         $env:AVM_STUB_TERRAFORM_TRACE = $trace
@@ -333,8 +369,8 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
 
         $steps = $result.PSObject.Properties['Steps'].Value
-        $steps.Count | Should -Be 10
-        $expected = @('metadata', 'initialize', 'sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
+        $steps.Count | Should -Be 9
+        $expected = @('metadata', 'sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
         ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be $expected
 
         $byName = @{}
@@ -430,12 +466,12 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
             $unit = avm test unit -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback --passthru
 
             $result.Status | Should -Be 'pass'
-            $result.Steps | Should -HaveCount 10
+            $result.Steps | Should -HaveCount 9
             $skipped = @($result.Steps | Where-Object Status -eq 'skipped')
             $skipped | Should -HaveCount 1
             $skipped[0].Step | Should -Be 'check policy'
             $skipped[0].Error | Should -Be 'Excluded by -ExcludeSteps.'
-            @($result.Steps | Where-Object Status -eq 'pass') | Should -HaveCount 9
+            @($result.Steps | Where-Object Status -eq 'pass') | Should -HaveCount 8
             $unit.Status | Should -Be 'pass'
             $calls = @(Get-Content -LiteralPath $trace | ConvertFrom-Json)
             foreach ($command in @('fmt', 'init', 'validate', 'test')) {
