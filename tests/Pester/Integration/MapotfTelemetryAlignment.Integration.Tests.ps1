@@ -1121,6 +1121,159 @@ run "telemetry" {
         $unitResult.StdOut | Should -Match 'Success! 1 passed, 0 failed'
     }
 
+    It 'preserves inherited random mock values in root and selected child runs' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $child = Join-Path $root 'modules' 'child'
+        $dependency = Join-Path $root 'tests' 'random-dependency'
+        $clock = Join-Path $root 'tests' 'clock'
+        $unit = Join-Path $root 'tests' 'unit'
+        New-TelemetryModule -Root $root -WithLegacy -WithLocation
+        New-TelemetryModule -Root $child -WithLegacy -WithLocation -Child
+        $null = New-Item -ItemType Directory -Path $dependency, $clock, $unit -Force
+        Set-Content -LiteralPath (Join-Path $dependency 'main.tf') -Encoding utf8NoBOM -Value @'
+terraform {
+  required_providers {
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
+  }
+}
+
+resource "random_uuid" "generated" {}
+
+output "generated" {
+  value = random_uuid.generated.result
+}
+'@
+        Set-Content -LiteralPath (Join-Path $clock 'main.tf') -Encoding utf8NoBOM -Value @'
+terraform {
+  required_providers {
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.13"
+    }
+  }
+}
+
+resource "time_static" "generated" {}
+
+output "timestamp" {
+  value = time_static.generated.rfc3339
+}
+'@
+        foreach ($target in @($root, $child)) {
+            $source = if ($target -ceq $root) { './tests/random-dependency' } else { '../../tests/random-dependency' }
+            Set-Content -LiteralPath (Join-Path $target 'main.tf') -Encoding utf8NoBOM -Value @"
+module "dependency" {
+  source = "$source"
+}
+
+output "generated" {
+  value = module.dependency.generated
+}
+"@
+        }
+        $testPath = Join-Path $unit 'inherited.tftest.hcl'
+        Set-Content -LiteralPath $testPath -Encoding utf8NoBOM -Value @'
+mock_provider "modtm" {}
+mock_provider "random" {
+  mock_resource "random_uuid" {
+    defaults = {
+      result = "11111111-1111-4111-8111-111111111111"
+    }
+  }
+}
+mock_provider "time" {
+  mock_resource "time_static" {
+    defaults = {
+      rfc3339 = "2026-01-01T00:00:00Z"
+    }
+  }
+}
+mock_provider "azapi" {
+  mock_data "azapi_client_config" {
+    defaults = {
+      subscription_resource_id = "/subscriptions/11111111-1111-1111-1111-111111111111"
+    }
+  }
+}
+
+run "root" {
+  command = apply
+  assert {
+    condition = (
+      output.generated == "11111111-1111-4111-8111-111111111111" &&
+      azapi_resource.telemetry[0].parent_id == "/subscriptions/11111111-1111-1111-1111-111111111111"
+    )
+    error_message = "The root must retain both authored mock values."
+  }
+}
+
+run "child" {
+  command = apply
+  module {
+    source = "./modules/child"
+  }
+  assert {
+    condition = (
+      output.generated == "11111111-1111-4111-8111-111111111111" &&
+      azapi_resource.telemetry[0].parent_id == "/subscriptions/11111111-1111-1111-1111-111111111111"
+    )
+    error_message = "The selected child must retain both authored mock values."
+  }
+}
+
+run "dependency" {
+  command = apply
+  module {
+    source = "./tests/random-dependency"
+  }
+  assert {
+    condition     = output.generated == "11111111-1111-4111-8111-111111111111"
+    error_message = "The dependency's own provider requirement must remain effective."
+  }
+}
+
+run "clock" {
+  command = apply
+  module {
+    source = "./tests/clock"
+  }
+  assert {
+    condition     = output.timestamp == "2026-01-01T00:00:00Z"
+    error_message = "An unrelated selected target must retain its own provider and mock."
+  }
+}
+'@
+        $snapshot = InModuleScope Avm.Authoring -Parameters @{ Root = $root } {
+            param($Root)
+            Get-AvmFileSnapshot -Path @((Get-AvmTerraformFile -Root $Root).FullName)
+        }
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'fail'
+        foreach ($path in $snapshot.Keys) {
+            [System.IO.File]::ReadAllBytes($path) | Should -Be $snapshot[$path]
+        }
+        (Invoke-TelemetryEngine -Root $root).Status | Should -Be 'pass'
+        $content = [System.IO.File]::ReadAllText($testPath)
+        $content | Should -Match '(?m)^\s*azapi\s*=\s*azapi\s*$'
+        $content | Should -Match '(?m)^\s*random\s*=\s*random\s*$'
+        $content | Should -Not -Match '(?m)^\s*time\s*=\s*time\s*$'
+        [regex]::Matches($content, '(?m)^\s*providers\s*=\s*\{').Count | Should -Be 2
+        foreach ($target in @($root, $child)) {
+            Get-Content -LiteralPath (Join-Path $target 'terraform.tf') -Raw |
+                Should -Not -Match '(?m)^\s*random\s*='
+        }
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'pass'
+        [System.IO.File]::ReadAllText($testPath) | Should -BeExactly $content
+        Assert-TelemetryTerraformValid -Root $root -TestDirectory ([System.IO.Path]::Combine('tests', 'unit'))
+        $result = Invoke-TelemetryProcess -FilePath $script:terraformPath `
+            -ArgumentList @('test', '-no-color', ('-test-directory=' + [System.IO.Path]::Combine('tests', 'unit'))) -Root $root
+        $result.StdOut | Should -Match 'Success! 4 passed, 0 failed'
+        $result.StdOut | Should -Not -Match 'Warning:'
+        $result.StdErr | Should -BeNullOrEmpty
+    }
+
     It 'runs root and child telemetry assertions with <Shape> customized client mocks' -TestCases @(
         @{ Shape = 'missing'; SubscriptionId = '00000000-0000-0000-0000-000000000000' }
         @{ Shape = 'partial'; SubscriptionId = '11111111-1111-1111-1111-111111111111' }

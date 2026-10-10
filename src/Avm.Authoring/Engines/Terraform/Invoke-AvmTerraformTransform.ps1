@@ -292,6 +292,32 @@ function Test-AvmTerraformRandomProviderInUse {
     return $false
 }
 
+function Test-AvmTerraformScopedRandomProviderInUse {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)] [object] $Scope,
+        [Parameter(Mandatory)] [object[]] $ModuleTargets,
+        [AllowEmptyCollection()] [string[]] $TargetPaths = @(),
+        [Parameter(Mandatory)] [hashtable] $Cache
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+    $testDirectory = Split-Path -Parent $Scope.File.FullName
+    foreach ($path in @($Scope.Owner.Path) + $TargetPaths) {
+        $key = "$path|$testDirectory"
+        if (-not $Cache.ContainsKey($key)) {
+            $Cache[$key] = Test-AvmTerraformRandomProviderInUse `
+                -ModulePath $path -ModuleTargets $ModuleTargets -TestDirectory $testDirectory
+        }
+        if ($Cache[$key]) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Remove-AvmLegacyTelemetryTestMock {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -368,22 +394,12 @@ mock_provider "azapi" {
         }
         $updated = [regex]::Replace($updated, $legacyReference, 'azapi_resource.telemetry')
         if ($isUnitTest -and [regex]::IsMatch($updated, $randomMock)) {
-            $testDirectory = Split-Path -Parent $file.FullName
-            $key = "$($owner.Path)|$testDirectory"
-            if (-not $randomUse.ContainsKey($key)) {
-                $randomUse[$key] = Test-AvmTerraformRandomProviderInUse `
-                    -ModulePath $owner.Path -ModuleTargets $ModuleTargets -TestDirectory $testDirectory
+            $targetPaths = @()
+            if ($null -ne $unitPlan) {
+                $targetPaths = @($unitPlan.TargetPaths)
             }
-            $randomInUse = $randomUse[$key]
-            if (-not $randomInUse -and $null -ne $unitPlan) {
-                foreach ($targetPath in $unitPlan.TargetPaths) {
-                    if (Test-AvmTerraformRandomProviderInUse `
-                            -ModulePath $targetPath -ModuleTargets $ModuleTargets -TestDirectory $testDirectory) {
-                        $randomInUse = $true
-                        break
-                    }
-                }
-            }
+            $randomInUse = Test-AvmTerraformScopedRandomProviderInUse -Scope $scope `
+                -ModuleTargets $ModuleTargets -TargetPaths $targetPaths -Cache $randomUse
             if (-not $randomInUse) {
                 $withoutEmptyMocks = [regex]::Replace($updated, $emptyRandomMock, '')
                 if ([regex]::IsMatch($withoutEmptyMocks, $randomMock) -or
@@ -725,9 +741,10 @@ function Invoke-AvmTerraformTransform {
             -ErrorAction Stop
 
         $transformOptions = [pscustomobject]@{
-            ToolPath    = $tool.Path
-            ProfileDirs = $profileDirs
-            EnvVars     = $mapotfEnv
+            ToolPath      = $tool.Path
+            TerraformPath = $terraform.Path
+            ProfileDirs   = $profileDirs
+            EnvVars       = $mapotfEnv
         }
         $moduleTargets = @($targets | Where-Object { $_.Scope -in @('root', 'module') })
         $testTargets = @($targets | Where-Object { $_.Scope -eq 'test' })

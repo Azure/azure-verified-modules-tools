@@ -760,9 +760,11 @@ provider-mocked tests. Existing global and per-run values, including nulls
 and expressions, remain authored. This test-only value is not a production
 default and never replaces per-hub regions or repairs unrelated pre-existing
 missing inputs. Assertions, targets and telemetry opt-outs are preserved.
-Real-provider declarations, aliased mocks and provider mappings still require
-review rather than being silently changed; an AzureRM mock alone cannot cover
-new AzAPI telemetry. Integration tests do not receive new mocks or locations.
+Real-provider declarations, aliased mocks and partial or remapped provider
+bindings still require review rather than being silently changed; an AzureRM
+mock alone cannot cover new AzAPI telemetry. A complete same-name mapping of
+the target's retained unaliased mocks is preserved. Integration tests do not receive
+new mocks or locations.
 Non-empty modtm test mocks and remaining
 author-owned `modtm` resources or data sources fail with
 actionable diagnostics instead of being silently rewritten. When random was
@@ -773,6 +775,24 @@ provider. Non-empty mocks or remaining random
 references fail for manual review; mocks for other random use are preserved.
 JSON configurations and module dependencies that cannot be checked locally
 also retain their random mocks rather than assuming the provider is unused.
+When an instrumented unit-test target has no direct random requirement but
+still needs its random mock for dependencies, bind its retained unaliased
+mocks explicitly in that target's runs, including a newly introduced AzAPI
+mock. Inspect each selected target's native provider requirements and its
+configuration dependency tree. Exclude state-only providers and other test
+targets; passing an unrelated mock to a run is invalid in Terraform. Initialize
+missing dependencies with the shared backend-disabled Terraform helper,
+preserving compatible dependency selections. Restore the exact original
+provider-lock bytes, or its absence, even when inspection fails.
+Validate root/default-directory test targets before initialization can fetch
+them. JSON configurations/tests, possible backend/cloud declarations and
+initialized backend metadata require review before dependency inspection;
+do not access remote state to construct mock mappings. The test
+owner's requirement does not cover a separately selected local target.
+Preserve assertions and mock defaults without restoring unused provider
+requirements or exempting them from lint. Verify native profile support for
+the complete mapping before changing any test file, and keep repeated
+transforms and non-writing drift checks stable.
 
 `avm pre-commit` and `avm pr-check` resolve their required tools before the
 first step, which validates metadata for the selected root and its module

@@ -3,6 +3,11 @@ variable "telemetry_subscription_resource_id" {
   default = null
 }
 
+variable "provider_mock_bindings" {
+  type    = map(set(string))
+  default = {}
+}
+
 locals {
   telemetry_mock_updates = {
     for name, mock in local.test_file.mock_providers : name => mock
@@ -18,6 +23,10 @@ locals {
       ]) == 0
     )
   }
+  provider_mock_runs = {
+    for name, providers in var.provider_mock_bindings : name => local.test_file.runs[name]
+    if !contains(keys(local.test_file.runs[name].mptf.attributes), "providers")
+  }
 }
 
 transform "update_in_place" "telemetry_mock" {
@@ -32,4 +41,10 @@ transform "update_in_place" "telemetry_mock" {
       }
     }
   BODY
+}
+
+transform "update_in_place" "provider_mocks" {
+  for_each             = local.provider_mock_runs
+  target_block_address = each.value.mptf.block_address
+  dynamic_block_body   = "providers = {\n${join("\n", [for name in sort(tolist(var.provider_mock_bindings[each.key])) : "  ${name} = ${name}"])}\n}\n"
 }

@@ -211,6 +211,229 @@ function Get-AvmTerraformTelemetryMockResourceId {
     return "/subscriptions/$subscriptionId"
 }
 
+function Get-AvmTerraformUnitTestRequiredProvider {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [object] $Options
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+    $result = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList @(
+        'debug', '--tf-dir', $Path, '--mptf-dir', $Options.ProfileDirs['module'],
+        '--eval', 'data.terraform.this.required_providers'
+    ) -WorkingDirectory $Path -EnvVars $Options.EnvVars
+    try {
+        $providers = ConvertFrom-Json -InputObject $result.StdOut -AsHashtable -ErrorAction Stop
+    }
+    catch {
+        throw [AvmConfigurationException]::new(
+            "Cannot inspect provider requirements for unit-test target '$Path': invalid MaPoTF JSON. $($_.Exception.Message)")
+    }
+    if ($providers -isnot [System.Collections.IDictionary]) {
+        throw [AvmConfigurationException]::new(
+            "Cannot inspect provider requirements for unit-test target '$Path': update MaPoTF and the module profile to expose native required_providers metadata.")
+    }
+    foreach ($provider in $providers.Values) {
+        if ($provider -isnot [System.Collections.IDictionary] -or
+            ($null -ne $provider['source'] -and $provider['source'] -isnot [string])) {
+            throw [AvmConfigurationException]::new(
+                "Cannot inspect provider requirements for unit-test target '$Path': invalid provider source metadata.")
+        }
+    }
+    return $providers
+}
+
+function Test-AvmTerraformUnitTestProviderMapping {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)] [AllowNull()] [object] $Expression,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $ProviderNames
+    )
+
+    Set-StrictMode -Version 3.0
+    if ($Expression -isnot [string]) {
+        return $false
+    }
+    $trivia = '(?>(?:\s|#[^\r\n]*|//[^\r\n]*|/\*[\s\S]*?\*/)*)'
+    $identifier = '[A-Za-z_][A-Za-z0-9_-]*'
+    $entry = '(?:"(?<name>' + $identifier + ')"|(?<name>' + $identifier + '))' +
+    $trivia + '=' + $trivia + '\k<name>'
+    $pattern = '\A' + $trivia + '\{' + $trivia + '(?:' + $entry + $trivia +
+    '(?:,' + $trivia + ')?)*\}' + $trivia + '\z'
+    $match = [regex]::Match($Expression, $pattern,
+        [System.Text.RegularExpressions.RegexOptions]::CultureInvariant, [TimeSpan]::FromSeconds(1))
+    if (-not $match.Success) {
+        return $false
+    }
+    $names = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($capture in $match.Groups['name'].Captures) {
+        if (-not $names.Add($capture.Value)) {
+            return $false
+        }
+    }
+    return $names.SetEquals($ProviderNames)
+}
+
+function ConvertFrom-AvmTerraformProviderTree {
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Text,
+        [Parameter(Mandatory)] [string] $Path
+    )
+
+    Set-StrictMode -Version 3.0
+    $sources = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $inConfiguration = $false
+    $rootSeen = $false
+    $testDepth = -1
+    foreach ($line in $Text -split '\r?\n') {
+        if (-not $inConfiguration) {
+            if ($line -ceq 'Providers required by configuration:') {
+                $inConfiguration = $true
+            }
+            continue
+        }
+        if ($line -ceq 'Providers required by state:') { break }
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        if ($line -ceq '.' -and -not $rootSeen) {
+            $rootSeen = $true
+            continue
+        }
+        $node = [regex]::Match($line,
+            '\A(?<prefix>[\u2502\u251c\u2514\u2500 \u00a0]+)(?<kind>provider|module|test|run)(?<value>.*)\z')
+        if (-not $rootSeen -or -not $node.Success -or $node.Groups['prefix'].Length % 4 -ne 0) {
+            throw [AvmConfigurationException]::new(
+                "Cannot inspect provider dependencies for '$Path': unexpected Terraform provider tree.")
+        }
+        $depth = $node.Groups['prefix'].Length / 4
+        if ($testDepth -ge 0 -and $depth -gt $testDepth) { continue }
+        $testDepth = -1
+        $kind = $node.Groups['kind'].Value
+        $value = $node.Groups['value'].Value
+        if ($kind -ceq 'test' -and $value.StartsWith('.')) {
+            $testDepth = $depth
+            continue
+        }
+        if ($kind -ceq 'module' -and $value.StartsWith('.')) { continue }
+        $provider = [regex]::Match($value,
+            '\A\[(?<source>[A-Za-z0-9._:-]+/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+)\](?:\s+.*)?\z')
+        if ($kind -cne 'provider' -or -not $provider.Success) {
+            throw [AvmConfigurationException]::new(
+                "Cannot inspect provider dependencies for '$Path': unexpected Terraform provider node.")
+        }
+        $null = $sources.Add($provider.Groups['source'].Value)
+    }
+    if (-not $inConfiguration -or -not $rootSeen) {
+        throw [AvmConfigurationException]::new(
+            "Cannot inspect provider dependencies for '$Path': missing Terraform configuration tree.")
+    }
+    return [string[]]@($sources)
+}
+
+function Get-AvmTerraformUnitTestProviderSource {
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [object[]] $ModuleTargets,
+        [Parameter(Mandatory)] [object] $Options
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+    $files = @(Get-ChildItem -LiteralPath $Path -File)
+    $trivia = '(?:\s|#[^\r\n]*|//[^\r\n]*|/\*[\s\S]*?\*/)'
+    $stateDeclaration = '\b(?:backend|state_store|state_store_provider)' + $trivia + '+"' +
+    '|\bcloud' + $trivia + '*\{'
+    foreach ($file in $files) {
+        if ($file.Name.EndsWith('.tf.json', [System.StringComparison]::OrdinalIgnoreCase) -or
+            ($file.Name.EndsWith('.tf', [System.StringComparison]::OrdinalIgnoreCase) -and
+            [regex]::IsMatch([System.IO.File]::ReadAllText($file.FullName), $stateDeclaration,
+                [System.Text.RegularExpressions.RegexOptions]::CultureInvariant, [TimeSpan]::FromSeconds(1)))) {
+            throw [AvmConfigurationException]::new(
+                "Cannot inspect provider dependencies for '$Path': review JSON configuration or possible backend/cloud declarations before running dependency inspection.")
+        }
+    }
+    if (Test-Path -LiteralPath (Join-Path -Path $Path -ChildPath '.terraform' -AdditionalChildPath 'terraform.tfstate')) {
+        throw [AvmConfigurationException]::new(
+            "Cannot inspect provider dependencies for '$Path': an initialized backend requires review; dependency inspection must not access remote state.")
+    }
+    $testFiles = @($files | Where-Object { $_.Name -like '*.tftest.hcl' -or $_.Name -like '*.tftest.json' })
+    $testDirectory = Join-Path $Path 'tests'
+    if (Test-Path -LiteralPath $testDirectory -PathType Container) {
+        $testFiles += @(Get-ChildItem -LiteralPath $testDirectory -File |
+                Where-Object { $_.Name -like '*.tftest.hcl' -or $_.Name -like '*.tftest.json' })
+    }
+    foreach ($file in $testFiles) {
+        if ($file.Name.EndsWith('.json', [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw [AvmConfigurationException]::new(
+                "Cannot inspect provider dependencies for '$Path': review JSON test '$($file.FullName)' before installing module dependencies.")
+        }
+        $scope = [pscustomobject]@{
+            File         = $file
+            Owner        = [pscustomobject]@{ Path = $Path }
+            RelativePath = [System.IO.Path]::GetRelativePath($Path, $file.FullName).Replace('\', '/')
+        }
+        $null = Get-AvmTerraformUnitTestInspection -Scope $scope -ModuleTargets $ModuleTargets -Options $Options
+    }
+    $environment = $Options.EnvVars.Clone()
+    foreach ($name in @('TF_DATA_DIR', 'TF_CLI_ARGS', 'TF_CLI_ARGS_init', 'TF_CLI_ARGS_providers')) {
+        $environment[$name] = $null
+    }
+    $lockPath = Join-Path $Path '.terraform.lock.hcl'
+    $lockExists = Test-Path -LiteralPath $lockPath -PathType Leaf
+    [byte[]]$lockContent = @()
+    if ($lockExists) {
+        $lockContent = [System.IO.File]::ReadAllBytes($lockPath)
+    }
+    try {
+        $null = Invoke-AvmTerraformInit -TerraformPath $Options.TerraformPath -WorkingDirectory $Path `
+            -EnvVars $environment -BackendFalse -NoColor -PreserveDependencySelections `
+            -Label 'terraform init (unit-test provider dependencies)'
+        $result = Invoke-AvmProcess -FilePath $Options.TerraformPath `
+            -ArgumentList @('providers', '-no-color', '-test-directory=tests') `
+            -WorkingDirectory $Path -EnvVars $environment
+        ConvertFrom-AvmTerraformProviderTree -Text $result.StdOut -Path $Path
+    }
+    finally {
+        if ($lockExists) {
+            [System.IO.File]::WriteAllBytes($lockPath, $lockContent)
+        }
+        elseif (Test-Path -LiteralPath $lockPath -PathType Leaf) {
+            Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop
+        }
+    }
+}
+
+function Get-AvmTerraformUnitTestMockProviderName {
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $ProviderNames,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $RequiredProviders,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $ProviderSources
+    )
+
+    Set-StrictMode -Version 3.0
+    foreach ($name in $ProviderNames) {
+        $source = if ($RequiredProviders.Contains($name)) { $RequiredProviders[$name]['source'] } else { $null }
+        if ([string]::IsNullOrWhiteSpace($source)) {
+            $source = "hashicorp/$name"
+        }
+        if (@($source -split '/').Count -eq 2) {
+            $source = "registry.terraform.io/$source"
+        }
+        if ($source -in $ProviderSources) {
+            $name
+        }
+    }
+}
+
 function Invoke-AvmTerraformUnitTestMigration {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -222,7 +445,13 @@ function Invoke-AvmTerraformUnitTestMigration {
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
+    if (-not $PSCmdlet.ShouldProcess($Root, 'migrate scoped Terraform unit tests')) {
+        return
+    }
     $plans = [System.Collections.Generic.List[object]]::new()
+    $randomUse = @{}
+    $requiredProviders = @{}
+    $providerSources = @{}
     foreach ($snapshot in $Snapshots) {
         $scope = $snapshot.Scope
         if ((Get-FileHash -LiteralPath $scope.File.FullName -Algorithm SHA256).Hash -cne $snapshot.Hash) {
@@ -268,20 +497,90 @@ function Invoke-AvmTerraformUnitTestMigration {
         $after.test.mock_providers.modtm.mptf.is_empty
         $hasEmptyAzapi = $after.test.mock_providers.Contains('azapi') -and
         $after.test.mock_providers.azapi.mptf.is_empty
+        $hasRandomMock = @($after.test.mock_providers.Keys | Where-Object { $_ -cmatch '^random(\.|$)' }).Count -gt 0
+        $randomMockRetained = $hasRandomMock -and (-not $migratesTelemetry -or
+            (Test-AvmTerraformScopedRandomProviderInUse -Scope $scope -ModuleTargets $ModuleTargets `
+                -TargetPaths @($targetPaths) -Cache $randomUse))
+        $missingRandomRequirements = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        if ($migratesTelemetry -and $randomMockRetained) {
+            foreach ($target in $instrumentedTargets) {
+                if (-not $requiredProviders.ContainsKey($target.Path)) {
+                    $requiredProviders[$target.Path] = Get-AvmTerraformUnitTestRequiredProvider `
+                        -Path $target.Path -Options $Options
+                }
+                if (-not $requiredProviders[$target.Path].Contains('random')) {
+                    if (-not $providerSources.ContainsKey($target.Path)) {
+                        $providerSources[$target.Path] = @(Get-AvmTerraformUnitTestProviderSource `
+                                -Path $target.Path -ModuleTargets $ModuleTargets -Options $Options)
+                    }
+                    if ($providerSources[$target.Path] -contains 'registry.terraform.io/hashicorp/random') {
+                        $null = $missingRandomRequirements.Add($target.Path)
+                    }
+                }
+            }
+        }
+        $providerNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        foreach ($name in $after.test.mock_providers.Keys) {
+            if (($migratesTelemetry -and $name -ceq 'modtm') -or
+                ($name -ceq 'random' -and -not $randomMockRetained)) {
+                continue
+            }
+            $null = $providerNames.Add($name)
+        }
+        if ($migratesTelemetry -and $hasEmptyModtm) {
+            $null = $providerNames.Add('azapi')
+        }
+        [string[]]$mockProviderNames = @($providerNames)
+        [Array]::Sort($mockProviderNames, [System.StringComparer]::Ordinal)
+        $providerMockBindings = @{}
+        foreach ($name in $after.test.run_modules.Keys) {
+            $targetPath = $after.test.run_modules[$name].dir
+            if ($missingRandomRequirements.Contains($targetPath) -and
+                -not $after.test.runs[$name].mptf.attributes.Contains('providers')) {
+                $providerMockBindings[$name] = @(Get-AvmTerraformUnitTestMockProviderName `
+                        -ProviderNames $mockProviderNames -RequiredProviders $requiredProviders[$targetPath] `
+                        -ProviderSources $providerSources[$targetPath])
+            }
+        }
         if ($newLocations.Count -gt 0 -or
+            $missingRandomRequirements.Count -gt 0 -or
             ($migratesTelemetry -and ($hasEmptyModtm -or $hasEmptyAzapi -or $null -ne $telemetryResourceId))) {
-            $requiresAzapiMock = @($instrumentedTargets | Where-Object { $newLocations.Contains($_.Path) }).Count -gt 0
+            $requiresAzapiMock = $missingRandomRequirements.Count -gt 0 -or
+            @($instrumentedTargets | Where-Object { $newLocations.Contains($_.Path) }).Count -gt 0
             $hasAzureMock = $after.test.mock_providers.Contains('azapi') -or
             (-not $requiresAzapiMock -and $after.test.mock_providers.Contains('azurerm')) -or
             ($migratesTelemetry -and $hasEmptyModtm)
-            $realProviders = @($after.test.providers.Keys | Where-Object { $_ -cmatch '^(azapi|azurerm)(\.|$)' })
-            $aliasedMocks = @($after.test.mock_providers.Keys | Where-Object { $_ -cmatch '^(azapi|azurerm|modtm)\.' })
-            $mappedRuns = @($after.test.runs.Values |
-                    Where-Object { $_.mptf.attributes.Contains('providers') })
+            $realProviders = @($after.test.providers.Keys | Where-Object {
+                    $missingRandomRequirements.Count -gt 0 -or $_ -cmatch '^(azapi|azurerm)(\.|$)'
+                })
+            $aliasedMocks = @($after.test.mock_providers.Keys | Where-Object {
+                    $_ -cmatch '^(azapi|azurerm|modtm)\.' -or
+                    ($missingRandomRequirements.Count -gt 0 -and $_ -cnotmatch '\A[A-Za-z_][A-Za-z0-9_-]*\z')
+                })
+            $unsafeMappings = @(
+                foreach ($name in $after.test.runs.Keys) {
+                    $run = $after.test.runs[$name]
+                    if (-not $run.mptf.attributes.Contains('providers')) { continue }
+                    $targetPath = $after.test.run_modules[$name].dir
+                    if (-not $requiredProviders.ContainsKey($targetPath)) {
+                        $requiredProviders[$targetPath] = Get-AvmTerraformUnitTestRequiredProvider `
+                            -Path $targetPath -Options $Options
+                    }
+                    if (-not $providerSources.ContainsKey($targetPath)) {
+                        $providerSources[$targetPath] = @(Get-AvmTerraformUnitTestProviderSource `
+                                -Path $targetPath -ModuleTargets $ModuleTargets -Options $Options)
+                    }
+                    $names = @(Get-AvmTerraformUnitTestMockProviderName -ProviderNames $mockProviderNames `
+                            -RequiredProviders $requiredProviders[$targetPath] -ProviderSources $providerSources[$targetPath])
+                    if (-not (Test-AvmTerraformUnitTestProviderMapping -Expression $run.mptf.attributes.providers -ProviderNames $names)) {
+                        $name
+                    }
+                }
+            )
             if (-not $hasAzureMock -or $realProviders.Count -gt 0 -or
-                $aliasedMocks.Count -gt 0 -or $mappedRuns.Count -gt 0) {
+                $aliasedMocks.Count -gt 0 -or $unsafeMappings.Count -gt 0) {
                 throw [AvmConfigurationException]::new(
-                    "Cannot automatically migrate unit test '$($scope.File.FullName)': use an unaliased mock for each introduced Azure provider, without real-provider declarations or run provider mappings.")
+                    "Cannot automatically migrate unit test '$($scope.File.FullName)': use unaliased mocks for introduced providers, without real-provider declarations or partial/remapped run provider mappings.")
             }
         }
         $encoded = (ConvertTo-Json -InputObject @($newLocations) -Compress).Replace('${', '$${').Replace('%{', '%%{')
@@ -294,23 +593,43 @@ function Invoke-AvmTerraformUnitTestMigration {
             $resourceIdJson = ConvertTo-Json -InputObject $telemetryResourceId -Compress
             $arguments += @('--mptf-var', "telemetry_subscription_resource_id=$resourceIdJson")
         }
+        if ($providerMockBindings.Count -gt 0) {
+            $bindingsJson = (ConvertTo-Json -InputObject $providerMockBindings -Depth 5 -Compress).Replace('${', '$${').Replace('%{', '%%{')
+            $arguments += @('--mptf-var', "provider_mock_bindings=$bindingsJson")
+        }
         $plans.Add([pscustomobject]@{
                 Path                            = $scope.File.FullName
                 Scope                           = $scope
                 TargetPaths                     = @($targetPaths)
                 NewLocationPaths                = @($newLocations)
                 TelemetrySubscriptionResourceId = $telemetryResourceId
+                ProviderMockBindings            = $providerMockBindings
                 Arguments                       = $arguments
             })
     }
 
-    if (-not $PSCmdlet.ShouldProcess($Root, 'migrate scoped Terraform unit tests')) {
-        return
-    }
-    foreach ($plan in $plans | Where-Object { $null -ne $_.TelemetrySubscriptionResourceId }) {
+    foreach ($plan in $plans | Where-Object {
+            $null -ne $_.TelemetrySubscriptionResourceId -or $_.ProviderMockBindings.Count -gt 0
+        }) {
+        $capabilities = [System.Collections.Generic.List[string]]::new()
+        $capabilityName = 'label-safe object merging'
+        if ($null -ne $plan.TelemetrySubscriptionResourceId) {
+            $capabilities.Add(
+                'try(transform.update_in_place.telemetry_mock.azapi.match_nested_block_labels, false) && try(transform.update_in_place.telemetry_mock.azapi.merge_object_attributes, false)')
+        }
+        if ($plan.ProviderMockBindings.Count -gt 0) {
+            $capabilityName = 'label-safe object merging and explicit mock provider bindings'
+            foreach ($name in $plan.ProviderMockBindings.Keys) {
+                $body = "providers = {`n" +
+                (($plan.ProviderMockBindings[$name] | ForEach-Object { "  $_ = $_" }) -join "`n") + "`n}`n"
+                $bodyJson = ConvertTo-Json -InputObject $body -Compress
+                $nameJson = (ConvertTo-Json -InputObject $name -Compress).Replace('${', '$${').Replace('%{', '%%{')
+                $capabilities.Add("try(transform.update_in_place.provider_mocks[$nameJson].dynamic_block_body == $bodyJson, false)")
+            }
+        }
         $arguments = @('debug') + $plan.Arguments[1..($plan.Arguments.Count - 1)] + @(
             '--eval',
-            'try(transform.update_in_place.telemetry_mock.azapi.match_nested_block_labels, false) && try(transform.update_in_place.telemetry_mock.azapi.merge_object_attributes, false)'
+            ('alltrue([' + ($capabilities -join ', ') + '])')
         )
         $result = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList $arguments `
             -WorkingDirectory $plan.Scope.Owner.Path -EnvVars $Options.EnvVars
@@ -319,16 +638,19 @@ function Invoke-AvmTerraformUnitTestMigration {
         }
         catch {
             throw [AvmConfigurationException]::new(
-                "Cannot verify label-safe MaPoTF support for '$($plan.Path)': invalid native capability response. $($_.Exception.Message)")
+                "Cannot verify $capabilityName MaPoTF support for '$($plan.Path)': invalid native capability response. $($_.Exception.Message)")
         }
         if ($supported -isnot [bool] -or -not $supported) {
             throw [AvmConfigurationException]::new(
-                "Cannot migrate customized telemetry mocks in '$($plan.Path)': update MaPoTF and the unit-test profile to support label-safe object merging; remove outdated tool or profile overrides.")
+                "Cannot migrate customized telemetry mocks in '$($plan.Path)': update MaPoTF and the unit-test profile to support $capabilityName; remove outdated tool or profile overrides.")
         }
     }
     Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets $ModuleTargets -UnitTestPlans $plans.ToArray()
     foreach ($plan in $plans |
-            Where-Object { $_.NewLocationPaths.Count -gt 0 -or $null -ne $_.TelemetrySubscriptionResourceId }) {
+            Where-Object {
+                $_.NewLocationPaths.Count -gt 0 -or $null -ne $_.TelemetrySubscriptionResourceId -or
+                $_.ProviderMockBindings.Count -gt 0
+            }) {
         try {
             $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList $plan.Arguments `
                 -WorkingDirectory $plan.Scope.Owner.Path -EnvVars $Options.EnvVars
