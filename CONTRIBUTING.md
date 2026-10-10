@@ -157,7 +157,7 @@ The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it thr
 ./build.ps1 component         # Pester Component tier (real FS + real subprocess, stub binaries, no network)
 ./build.ps1 test,component -TestGroup Authoring
 ./build.ps1 test,component -TestGroup RepositoryManagement
-./build.ps1 test-workflows    # workflow definitions, installation behavior and CI routing
+./build.ps1 test-workflows    # workflow definitions, installation behavior and CI contracts
 ./build.ps1 integration       # Pester Integration tier (real network + real binaries; not part of ci/pre-commit)
 ./build.ps1 integration -IntegrationGroup Bicep # Compiler, docs and native policy; no deployment
 ./build.ps1 build             # stage a publishable tree under ./out/Avm.Authoring + verify exports
@@ -173,13 +173,15 @@ Notes:
 - `build` stages the module as-committed. Version stamping is a release-time concern and lives in the ADO pipeline, so the in-repo `src/Avm.Authoring/Avm.Authoring.psd1` is never rewritten by the build.
 - A first run installs nothing for you — make sure the prerequisites in [§1](#1-prerequisites) (InvokeBuild, Pester, PSScriptAnalyzer) are present.
 
-`Tools: CI` selects authoring, workflow and repository-management suites from
-the changed paths on pull requests and main pushes. Tests and shared
-dependencies participate in routing; unrelated documentation-only changes
-skip the suites but still finish `CI result`. Manual dispatch selects any
-one scope or `all` without a diff. Run the full local `pre-commit` gate before
-pushing, not a scoped substitute. See [scoped CI](docs/quality-spec.md#scoped-ci)
-for the exact responsibilities, matrices and required-check guidance.
+`Authoring: CI`, `Workflows: CI` and `Repos: CI` run independently using native
+GitHub path filters on pull requests and main pushes. Each includes its tests
+and relevant shared dependencies and can be dispatched manually on its own.
+Only authoring retains the cross-platform matrix; workflow and
+repository-management tests run on Ubuntu. Unrelated documentation-only changes
+intentionally skip CI. Each workflow reports its own results.
+Run the full local `pre-commit` gate before pushing, not a scoped substitute.
+See [scoped CI](docs/quality-spec.md#scoped-ci) for the path-filter and test-group
+contract.
 
 ---
 

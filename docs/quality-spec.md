@@ -140,7 +140,9 @@ azure-verified-modules-tools/
     reference/                    # generated public cmdlet reference
   .github/
     workflows/
-      ci.yml
+      ci-authoring.yml
+      ci-workflows.yml
+      repository-management-config-test.yml
   .gitattributes
   .gitignore
   LICENSE                         # MIT, referenced by manifest LicenseUri
@@ -1340,58 +1342,45 @@ This section is the implementation-level expression of the **Security stance** p
 
 ### Scoped CI
 
-`Tools: CI` (`ci.yml`) runs for pull requests targeting `main` and pushes to
-`main`, without top-level path filters. Its selector compares pull-request
-heads to their merge base and pushes to their previous tip, including both
-sides of renames and all commits in the diff. An initial push without a previous
-tip selects every scope; an unavailable diff fails rather than skipping tests.
-Manual dispatch bypasses the diff and selects `all` (the default), `authoring`,
-`workflows`, or `repository-management`.
+Three independent workflows use GitHub's native `on.push.paths` and
+`on.pull_request.paths` filters for pushes to `main` and pull requests targeting
+`main`. Each also has `workflow_dispatch` to run its own suite without a file
+change. There is no dispatcher, custom changed-file detection or cross-workflow
+status aggregation.
 
-The dispatcher conditionally calls three same-commit reusable workflows:
+| Workflow | File | Coverage |
+| --- | --- | --- |
+| `Authoring: CI` | `ci-authoring.yml` | Lint once on Ubuntu; authoring unit and component tests on Ubuntu, Windows and macOS; the Ubuntu unit leg enforces the 70% coverage floor. |
+| `Workflows: CI` | `ci-workflows.yml` | Workflow definitions, embedded installation behavior and CI contract tests on Ubuntu only. |
+| `Repos: CI` | `repository-management-config-test.yml` | Repository-management unit/component tests, configuration checks and mocked Terraform validation on Ubuntu only. |
 
-| Workflow | Coverage |
-| --- | --- |
-| `Authoring: CI` | Lint once on Ubuntu; authoring unit and component tests on `ubuntu-latest`, `windows-latest`, and `macos-latest`; the Ubuntu unit leg enforces the 70% coverage floor. |
-| `Workflows: CI` | `tests/Pester/Unit/Workflows/` once on Ubuntu: workflow definitions, embedded installation behavior and CI routing. |
-| `Repos: CI` | Repository-management unit and component tests on the same three OSes, plus the existing Ubuntu configuration checks and mocked Terraform infrastructure validation. |
+Authoring pull-request/manual runs retain both Terraform fixtures per OS and
+one Bicep integration leg per OS. Main pushes skip both integration matrices.
+Existing integration environment approval and job-specific permissions remain
+in place. Workflow and repository-management CI need no Azure credentials.
 
-Selected authoring pull-request/manual runs retain both Terraform fixtures per
-OS and one Bicep integration leg per OS. Main pushes skip both integration
-matrices. Existing environment approval and job-specific permissions remain
-in place; scope selection and repository-management tests require no Azure
-credentials.
+The static YAML filters include each area's source, tests, fixtures and
+relevant workflow files. Authoring excludes repository-management and workflow
+test directories, plus the dedicated repository component/fixture files.
+Repository-management tests include the `BicepModuleIdentities`,
+`BicepTestTenantSync`, `ModuleCatalog`, `Repository` and `TerraformCodeowners`
+component filename families and the shared `TerraformInitUpgrade.Tests.ps1`
+guard. Changes to shared build scripts, dependency installers, module bootstrap,
+pinned dependencies or runtime helpers can trigger multiple workflows.
+Keep these filters aligned when adding shared dependencies or test families.
 
-`build/AvmCi.ps1` owns routing and test inventories. Repository-management
-source, infrastructure, configuration, tests and dedicated fixtures select
-repository tests without selecting authoring or workflow tests. Authoring
-tests and fixtures select authoring. Workflow definitions and their tests
-select workflow tests; repository workflows also select repository tests, and
-the shared Terraform module workflow selects all three scopes.
+Each workflow uploads and reports its own test artifacts. Unrelated
+documentation-only changes intentionally skip the workflows; generated
+`docs/reference/` changes still trigger authoring for drift validation.
+Native path-filter limits and skip behavior apply. Do not require a
+path-filtered workflow for every change; branch-protection configuration is
+not modified by these workflows.
 
-Source-module changes select authoring and repository tests because both use
-that module. Changes to shared build scripts, routing, dependency installers,
-module bootstrap, pinned dependencies and shared runtime helpers also select
-workflow tests. Mixed changes select the union of affected scopes. Test-file
-changes follow the same inventory rules as execution, including the shared
-`TerraformInitUpgrade.Tests.ps1` guard. Repository component files use the
-`BicepModuleIdentities`, `BicepTestTenantSync`, `ModuleCatalog`, `Repository`
-and `TerraformCodeowners` filename families; other component files belong to
-authoring. New shared test helpers conservatively select all scopes.
-
-Unrelated documentation-only changes skip all three suites; generated
-`docs/reference/` changes still select authoring for drift validation. The
-always-scheduled `CI result` job verifies selected suites succeeded and
-unselected suites were skipped, and aggregates available test artifacts.
-It does not download artifacts when no scope is selected. If branch protection
-requires a status context, use `CI result`, not optional matrix jobs or the
-artifact-dependent `Test results` report. Workflow changes do not modify
-repository protection settings.
-
-`-TestGroup Authoring` and `-TestGroup RepositoryManagement` select the same
-unit/component inventories for serial, sharded and coverage runs. The default
-`All` and the full local `pre-commit` gate remain unchanged, including workflow
-unit tests and all repository-management tests.
+The build entry point's `-TestGroup Authoring` and
+`-TestGroup RepositoryManagement` select test files only, not changed paths.
+Serial, sharded and coverage runs use the same inventories. The default `All`
+and full local `pre-commit` gate still run every unit/component group,
+including workflow and repository-management tests.
 
 ---
 

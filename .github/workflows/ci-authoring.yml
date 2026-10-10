@@ -1,7 +1,61 @@
 name: 'Authoring: CI'
 
 on:
-  workflow_call:
+  push:
+    branches: [main]
+    paths:
+      - 'src/Avm.Authoring/**'
+      - 'build/**'
+      - 'build.ps1'
+      - 'scripts/**'
+      - 'tests/**'
+      - '!tests/Pester/Unit/RepositoryManagement/**'
+      - '!tests/Pester/Unit/Workflows/**'
+      - '!tests/Pester/Component/BicepModuleIdentities*.Tests.ps1'
+      - '!tests/Pester/Component/BicepTestTenantSync*.Tests.ps1'
+      - '!tests/Pester/Component/ModuleCatalog*.Tests.ps1'
+      - '!tests/Pester/Component/Repository*.Tests.ps1'
+      - '!tests/Pester/Component/TerraformCodeowners*.Tests.ps1'
+      - '!tests/Pester/Helpers/ModuleCatalogFixture.ps1'
+      - '!tests/fixtures/TestTenant.ps1'
+      - '!tests/fixtures/BicepIdentities.ps1'
+      - 'docs/reference/**'
+      - '.github/workflows/ci-authoring.yml'
+      - '.github/workflows/terraform-module.yml'
+      - '.github/workflows/release.yml'
+      - '.github/actions/**'
+      - '.gitattributes'
+      - '.gitignore'
+      - 'CHANGELOG.md'
+      - 'LICENSE'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/Avm.Authoring/**'
+      - 'build/**'
+      - 'build.ps1'
+      - 'scripts/**'
+      - 'tests/**'
+      - '!tests/Pester/Unit/RepositoryManagement/**'
+      - '!tests/Pester/Unit/Workflows/**'
+      - '!tests/Pester/Component/BicepModuleIdentities*.Tests.ps1'
+      - '!tests/Pester/Component/BicepTestTenantSync*.Tests.ps1'
+      - '!tests/Pester/Component/ModuleCatalog*.Tests.ps1'
+      - '!tests/Pester/Component/Repository*.Tests.ps1'
+      - '!tests/Pester/Component/TerraformCodeowners*.Tests.ps1'
+      - '!tests/Pester/Helpers/ModuleCatalogFixture.ps1'
+      - '!tests/fixtures/TestTenant.ps1'
+      - '!tests/fixtures/BicepIdentities.ps1'
+      - 'docs/reference/**'
+      - '.github/workflows/ci-authoring.yml'
+      - '.github/workflows/terraform-module.yml'
+      - '.github/workflows/release.yml'
+      - '.github/actions/**'
+      - '.gitattributes'
+      - '.gitignore'
+      - 'CHANGELOG.md'
+      - 'LICENSE'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -9,6 +63,10 @@ permissions:
 env:
   # Avoid shared PowerShell startup-profile corruption: https://github.com/dotnet/runtime/issues/121977
   DOTNET_MultiCoreJitMinNumCpus: '7fffffff'
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
@@ -254,3 +312,28 @@ jobs:
           path: out/test-results/*.xml
           if-no-files-found: warn
           retention-days: 7
+
+  report:
+    name: Report authoring tests
+    needs: [unit, component, integration, bicep-integration]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      checks: write         # publish this workflow's test report
+      pull-requests: write  # publish this workflow's results comment
+      contents: read
+    steps:
+      - name: Download test results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: test-results-*
+          path: artifacts
+
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@d0a4676d0e0b938bc201470d88276b7c74c712b3 # v2.24.0
+        with:
+          check_name: Authoring test results
+          comment_title: Authoring test results
+          files: artifacts/**/*.xml
+          report_individual_runs: "true"

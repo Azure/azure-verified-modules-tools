@@ -294,7 +294,6 @@ Describe 'CI workflow' {
         $script:ciPath = Join-Path $workflowRoot 'ci-authoring.yml'
         $script:ci = Get-Content -LiteralPath $script:ciPath -Raw
         $script:workflowCi = Get-Content -LiteralPath (Join-Path $workflowRoot 'ci-workflows.yml') -Raw
-        $script:dispatcher = Get-Content -LiteralPath (Join-Path $workflowRoot 'ci.yml') -Raw
     }
 
     It 'disables shared startup JIT profiles before CI PowerShell processes start' {
@@ -319,7 +318,7 @@ Describe 'CI workflow' {
         $jobBlock | Should -Match 'run: \./build\.ps1 test-workflows'
         $jobBlock | Should -Match 'name: test-results-workflows-ubuntu-latest'
 
-        $script:dispatcher | Should -Match 'needs: \[changes, authoring, workflows, repository-management\]'
+        $script:workflowCi | Should -Match '(?m)^    needs: workflows\r?$'
         $script:ci | Should -Not -Match 'test-workflows'
     }
 
@@ -393,7 +392,7 @@ Describe 'CI workflow' {
         $bicep | Should -Not -Match 'environment:|id-token:|azure/login|Add-MpPreference|fixture:'
         $bicep | Should -Match 'if: always\(\)'
         $bicep | Should -Match 'test-results-bicep-integration-'
-        $script:dispatcher | Should -Match 'needs: \[changes, authoring, workflows, repository-management\]'
+        $script:ci | Should -Match 'needs: \[unit, component, integration, bicep-integration\]'
     }
 }
 

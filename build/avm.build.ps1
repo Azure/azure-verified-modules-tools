@@ -35,8 +35,7 @@
 
     The test, coverage, component, and integration tasks write an NUnit result
     file per tier under out/test-results/. The split CI workflows upload it as
-    an artifact, and the calling CI workflow aggregates the selected suites
-    into one pull-request report and run summary.
+    an artifact and publish their own test reports.
     Locally this is just a file write under the gitignored out/ tree.
 
     TestGroup selects All (the local default), Authoring, or RepositoryManagement
@@ -278,8 +277,34 @@ function script:Get-AvmTestResultPath {
     Join-Path $dir ("{0}.xml" -f $Tier)
 }
 
+function script:Get-AvmScopedTestFile {
+    [CmdletBinding()]
+    [OutputType([System.IO.FileInfo])]
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [ValidateSet('Unit', 'Component')] [string] $Tier,
+        [ValidateSet('All', 'Authoring', 'RepositoryManagement')] [string] $Group = 'All'
+    )
+
+    $files = @(Get-ChildItem -LiteralPath $Path -Filter '*.Tests.ps1' -File -Recurse |
+        Where-Object {
+            $relative = [System.IO.Path]::GetRelativePath($Path, $_.FullName).Replace('\', '/')
+            $repositoryTest = $Tier -eq 'Unit' ?
+                $relative -clike 'RepositoryManagement/*' :
+                $relative -cmatch '^(BicepModuleIdentities|BicepTestTenantSync|ModuleCatalog|Repository|TerraformCodeowners)[^/]*\.Tests\.ps1$'
+            $sharedTest = $Tier -eq 'Unit' -and $relative -ceq 'Module/TerraformInitUpgrade.Tests.ps1'
+            $workflowTest = $Tier -eq 'Unit' -and $relative -clike 'Workflows/*'
+            $Group -eq 'All' -or $sharedTest -or
+                ($Group -eq 'RepositoryManagement' -and $repositoryTest) -or
+                ($Group -eq 'Authoring' -and -not $repositoryTest -and -not $workflowTest)
+        } | Sort-Object -Property FullName)
+    if ($files.Count -eq 0) {
+        throw [System.IO.InvalidDataException]::new("No $Tier test files found for group '$Group' in '$Path'.")
+    }
+    $files
+}
+
 . (Join-Path $PSScriptRoot 'AvmPesterSharding.ps1')
-. (Join-Path $PSScriptRoot 'AvmCi.ps1')
 
 # --- tasks ------------------------------------------------------------------
 

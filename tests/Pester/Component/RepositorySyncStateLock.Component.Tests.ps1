@@ -1,8 +1,8 @@
 BeforeAll {
     $root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
     $lib = Join-Path $root 'repository-management' 'repository-sync' 'scripts' 'lib'
-    foreach ($name in @('Logging', 'RetryHelpers', 'TerraformOperations')) {
-        . (Join-Path $lib "$name.ps1")
+    foreach ($libraryName in @('Logging', 'RetryHelpers', 'TerraformOperations')) {
+        . (Join-Path $lib "$libraryName.ps1")
     }
 
     function Set-TestBackendMetadata {
@@ -19,7 +19,7 @@ BeforeAll {
 Describe 'Repository state-lock recovery' -Tag Component {
     BeforeEach {
         $script:previousEnvironment = @{}
-        $values = @{
+        $values = [ordered]@{
             GITHUB_ACTIONS = 'true'
             GITHUB_REPOSITORY = 'Azure/azure-verified-modules-tools'
             GITHUB_REF = 'refs/heads/main'
@@ -29,9 +29,9 @@ Describe 'Repository state-lock recovery' -Tag Component {
             RUNNER_NAME = 'current-worker'
             ACTIONS_STATE_LOCK_TOKEN = 'synthetic-actions-read-token'
         }
-        foreach ($name in $values.Keys) {
-            $script:previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
-            [Environment]::SetEnvironmentVariable($name, $values[$name])
+        foreach ($environmentName in $values.Keys) {
+            $script:previousEnvironment[$environmentName] = [Environment]::GetEnvironmentVariable($environmentName)
+            [Environment]::SetEnvironmentVariable($environmentName, $values[$environmentName])
         }
         $script:parameters = @{
             workingDirectory = $TestDrive
@@ -154,9 +154,9 @@ Describe 'Repository state-lock recovery' -Tag Component {
     }
 
     AfterEach {
-        foreach ($name in $script:previousEnvironment.Keys) {
-            $value = $script:previousEnvironment[$name]
-            [Environment]::SetEnvironmentVariable($name, ($null -eq $value ? [NullString]::Value : $value))
+        foreach ($environmentName in $script:previousEnvironment.Keys) {
+            $previousValue = $script:previousEnvironment[$environmentName]
+            [Environment]::SetEnvironmentVariable($environmentName, ($null -eq $previousValue ? [NullString]::Value : $previousValue))
         }
         Should -Invoke Start-Process -Exactly 0
     }
@@ -246,7 +246,20 @@ Describe 'Repository state-lock recovery' -Tag Component {
         @{ Name = 'ACTIONS_STATE_LOCK_TOKEN'; Value = '' }
     ) {
         [Environment]::SetEnvironmentVariable($Name, $Value)
-        { Clear-TerraformStateLock @script:parameters } | Should -Throw '*Automatic lock recovery requires*'
+        $expectedMessage = $Name -ceq 'ACTIONS_STATE_LOCK_TOKEN' ?
+            '*Automatic lock recovery requires the repository-scoped Actions read token*' :
+            '*Automatic lock recovery requires the trusted Terraform Sync workflow on Tools main*'
+        { Clear-TerraformStateLock @script:parameters } | Should -Throw $expectedMessage
+        Should -Invoke Invoke-RepositorySyncProcess -Exactly 0
+    }
+
+    It 'rejects a <TokenState> Actions read token before any external operation' -ForEach @(
+        @{ TokenState = 'missing'; TokenValue = $null }
+        @{ TokenState = 'whitespace-only'; TokenValue = " `t " }
+    ) {
+        [Environment]::SetEnvironmentVariable('ACTIONS_STATE_LOCK_TOKEN', ($null -eq $TokenValue ? [NullString]::Value : $TokenValue))
+        { Clear-TerraformStateLock @script:parameters } |
+            Should -Throw '*Automatic lock recovery requires the repository-scoped Actions read token*'
         Should -Invoke Invoke-RepositorySyncProcess -Exactly 0
     }
 
