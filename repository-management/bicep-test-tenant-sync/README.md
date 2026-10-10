@@ -82,8 +82,14 @@ The plan guard rejects foreign state, unrelated identity deletion or replacement
 role assignments, moved/imported identities, widened federation and incomplete
 group/provider evidence. Removing a configured membership is allowed only for
 that module's verified principal. Missing modules stop the run rather than
-destroying their identities. Raw plans and output documents are not streamed
-to workflow logs. No state repair, force-unlock or automatic apply retry is used.
+destroying their identities. After verification, `terraform show -no-color`
+displays the saved plan's resource actions and attribute differences in the
+job log, including plan-only runs. Apply streams resource progress as it
+happens. Both streams use the shared credential redactor; ordinary identity
+names and client IDs stay visible and Terraform's sensitive-value markers
+remain intact. Saved plan files, machine-readable plan/output JSON and raw
+state remain private. No state repair, force-unlock or automatic apply retry
+is used.
 
 ### Existing identity naming transition
 

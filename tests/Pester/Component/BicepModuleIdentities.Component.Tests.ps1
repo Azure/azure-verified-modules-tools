@@ -113,7 +113,7 @@ Describe 'Bicep module identity entry points with real files and mocked services
             New-Item -ItemType File -Path $path
         }.GetNewClosure())
         Mock Invoke-AvmProcess -ModuleName Avm.Authoring -MockWith ({
-            param($FilePath, $ArgumentList, $EnvVars, $WorkingDirectory, $StreamOutput)
+            param($FilePath, $ArgumentList, $EnvVars, $WorkingDirectory, $StreamOutput, $OnStdOutLine, $OnStdErrLine)
             $command = [IO.Path]::GetFileNameWithoutExtension($FilePath)
             $state.Calls.Add(@{ Command = $command; Arguments = $ArgumentList; Environment = $EnvVars; Directory = $WorkingDirectory })
             if ($command -ceq 'gh') {
@@ -148,8 +148,13 @@ Describe 'Bicep module identity entry points with real files and mocked services
             $EnvVars.ARM_CLIENT_ID | Should -BeExactly '10000000-0000-4000-8000-000000000002'
             $EnvVars.ARM_CLIENT_SECRET | Should -BeNullOrEmpty
             $EnvVars.TF_CLI_ARGS | Should -BeNullOrEmpty
-            ([bool]$StreamOutput) | Should -BeFalse
-            if ($ArgumentList[0] -ceq $state.FailOperation) {
+            $displayingPlan = $ArgumentList[0] -ceq 'show' -and $ArgumentList -contains '-no-color'
+            ([bool]$StreamOutput) | Should -Be ($displayingPlan -or $ArgumentList[0] -ceq 'apply')
+            if ($StreamOutput) {
+                $OnStdOutLine | Should -Not -BeNullOrEmpty
+                $OnStdErrLine | Should -Not -BeNullOrEmpty
+            }
+            if ($ArgumentList[0] -ceq $state.FailOperation -or ($displayingPlan -and $state.FailOperation -ceq 'display')) {
                 return [pscustomobject]@{ ExitCode = 1; StdOut = 'raw-plan-sentinel'; StdErr = 'private-diagnostic-sentinel' }
             }
             switch ($ArgumentList[0]) {
@@ -168,19 +173,37 @@ Describe 'Bicep module identity entry points with real files and mocked services
                     $body = 'raw-plan-sentinel'
                 }
                 'show' {
-                    $ArgumentList | Should -Be @('show', '-json', $state.PlanPath)
-                    $body = ConvertTo-Json -InputObject $state.Plan -Depth 100 -Compress
+                    if ($displayingPlan) {
+                        $ArgumentList | Should -Be @('show', '-no-color', $state.PlanPath)
+                        $body = @(
+                            '# azapi_resource.identity["avm/res/storage/storage-account"] will be created'
+                            '  + name = "id-test-bicep-avm-res-storage-storage-account"'
+                            '  ~ display_name = "old-name" -> "new-name"'
+                            '    sensitive_attribute = (sensitive value)'
+                        ) -join "`n"
+                    }
+                    else {
+                        $ArgumentList | Should -Be @('show', '-json', $state.PlanPath)
+                        $body = ConvertTo-Json -InputObject $state.Plan -Depth 100 -Compress
+                    }
                 }
                 'apply' {
                     $ArgumentList[-1] | Should -BeExactly $state.PlanPath
                     [IO.File]::ReadAllText($ArgumentList[-1]) | Should -BeExactly 'opaque-saved-plan'
-                    $body = 'raw-output-sentinel'
+                    $body = @(
+                        'azapi_resource.identity["avm/res/storage/storage-account"]: Creating...'
+                        'azapi_resource.identity["avm/res/storage/storage-account"]: Creation complete after 1s'
+                    ) -join "`n"
                 }
                 'output' {
                     $ArgumentList | Should -Be @('output', '-json', 'test_identities')
                     $body = ConvertTo-Json -InputObject $state.Outputs -Depth 10 -Compress
                 }
                 default { throw 'Unexpected Terraform operation; state repair and retries are forbidden.' }
+            }
+            if ($StreamOutput) {
+                foreach ($line in ($body -split "`n")) { & $OnStdOutLine $line }
+                & $OnStdErrLine "provider warning $env:GH_TOKEN $env:ARM_CLIENT_SECRET"
             }
             [pscustomobject]@{ ExitCode = 0; StdOut = $body; StdErr = '' }
         }.GetNewClosure())
@@ -213,23 +236,40 @@ Describe 'Bicep module identity entry points with real files and mocked services
 
     It 'plans from the real entry point without applying or producing a consumable mapping' {
         $script:state.Plan = New-AvmTestBicepIdentityPlan -NamingMigration
-        $result = & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath -IdentityMigrationPath $script:migrationPath |
+        $information = [System.Collections.Generic.List[string]]::new()
+        $result = & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath `
+            -IdentityMigrationPath $script:migrationPath 6>&1 |
+            ForEach-Object {
+                if ($_ -is [System.Management.Automation.InformationRecord]) { $information.Add([string]$_.MessageData) }
+                else { $_ }
+            } |
             ConvertFrom-Json -AsHashtable
         $result.Status | Should -BeExactly 'Planned'
         $result.ModuleCount | Should -Be 2
         $result.PlanOnly | Should -BeTrue
         Test-Path -LiteralPath $script:mappingPath | Should -BeFalse
         Test-Path -LiteralPath $script:migrationPath | Should -BeFalse
+        ($information | Out-String) | Should -Match 'will be created'
+        ($information | Out-String) | Should -Match 'id-test-bicep-avm-res-storage-storage-account'
+        ($information | Out-String) | Should -Match '"old-name" -> "new-name"'
+        ($information | Out-String) | Should -Match '\(sensitive value\)'
+        ($information | Out-String) | Should -Not -Match 'raw-plan-sentinel|fixture-token|unused-secret-sentinel'
         @($script:state.Calls | Where-Object Command -CEQ 'terraform' | ForEach-Object { $_.Arguments[0] }) |
-            Should -Be @('init', 'plan', 'show')
+            Should -Be @('init', 'plan', 'show', 'show')
     }
 
     It 'applies one verified saved plan and publishes only its mapping while retaining the shared identity' {
-        $information = @()
+        $information = [System.Collections.Generic.List[string]]::new()
         $result = & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath -Apply `
-            -InformationVariable information | ConvertFrom-Json -AsHashtable
+            6>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.InformationRecord]) { $information.Add([string]$_.MessageData) }
+                else { $_ }
+            } | ConvertFrom-Json -AsHashtable
         $result.Status | Should -BeExactly 'Applied'
         ($information | Out-String) | Should -Not -Match 'raw-plan-sentinel|raw-output-sentinel'
+        ($information | Out-String) | Should -Match 'Creating\.\.\.'
+        ($information | Out-String) | Should -Match 'Creation complete after 1s'
+        ($information | Out-String) | Should -Not -Match 'fixture-token|unused-secret-sentinel'
         $script:state.Parameters.modules['avm/res/storage/storage-account'] |
             Should -Contain 'avm-test-management-group-iam-admins'
         $script:state.Parameters.modules['avm/res/fabric/capacity'] | Should -HaveCount 2
@@ -245,7 +285,7 @@ Describe 'Bicep module identity entry points with real files and mocked services
         }
         ConvertTo-Json -InputObject $remaining -Depth 5 -Compress | Should -BeExactly $script:beforeVariables
         @($script:state.Calls | Where-Object Command -CEQ 'terraform' | ForEach-Object { $_.Arguments[0] }) |
-            Should -Be @('init', 'plan', 'show', 'apply', 'output')
+            Should -Be @('init', 'plan', 'show', 'show', 'apply', 'output')
     }
 
     It 'replaces legacy module identities and updates only exactly matching old client bindings from the same run' {
@@ -341,6 +381,17 @@ Describe 'Bicep module identity entry points with real files and mocked services
     It 'rejects an unsafe plan before apply' {
         $script:state.Plan.resource_changes[0].change.actions = @('delete', 'create')
         { & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath -Apply } | Should -Throw
+        @($script:state.Calls | Where-Object { $_.Command -ceq 'terraform' -and $_.Arguments[0] -ceq 'apply' }) |
+            Should -HaveCount 0
+        @($script:state.Calls | Where-Object { $_.Command -ceq 'terraform' -and $_.Arguments -contains '-no-color' -and $_.Arguments[0] -ceq 'show' }) |
+            Should -HaveCount 0
+        Test-Path -LiteralPath $script:mappingPath | Should -BeFalse
+    }
+
+    It 'does not apply when the verified human-readable plan cannot be displayed' {
+        $script:state.FailOperation = 'display'
+        { & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath -Apply } |
+            Should -Throw '*Terraform show failed*'
         @($script:state.Calls | Where-Object { $_.Command -ceq 'terraform' -and $_.Arguments[0] -ceq 'apply' }) |
             Should -HaveCount 0
         Test-Path -LiteralPath $script:mappingPath | Should -BeFalse

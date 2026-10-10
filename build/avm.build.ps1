@@ -34,10 +34,14 @@
                     in a separate Ubuntu job and runs workflow tests separately.
 
     The test, coverage, component, and integration tasks write an NUnit result
-    file per tier under out/test-results/. The CI workflows upload it as an
-    artifact, and a companion workflow_run workflow renders the pass/fail report
-    on the pull request and run summary via the publish-test-results action.
+    file per tier under out/test-results/. The split CI workflows upload it as
+    an artifact, and the calling CI workflow aggregates the selected suites
+    into one pull-request report and run summary.
     Locally this is just a file write under the gitignored out/ tree.
+
+    TestGroup selects All (the local default), Authoring, or RepositoryManagement
+    for unit and component tasks, including the unit coverage task. Workflow
+    tests run separately in CI. The local pre-commit task still runs every group.
 
     The default task (`.`) is `layout`.
 #>
@@ -49,6 +53,9 @@ param(
     [string] $Configuration = 'Debug',
 
     [string[]] $TestName = @(),
+
+    [ValidateSet('All', 'Authoring', 'RepositoryManagement')]
+    [string] $TestGroup = 'All',
 
     [ValidateSet('All', 'Bicep', 'Terraform')]
     [string] $IntegrationGroup = 'All'
@@ -272,6 +279,7 @@ function script:Get-AvmTestResultPath {
 }
 
 . (Join-Path $PSScriptRoot 'AvmPesterSharding.ps1')
+. (Join-Path $PSScriptRoot 'AvmCi.ps1')
 
 # --- tasks ------------------------------------------------------------------
 
@@ -643,8 +651,9 @@ task test {
         return
     }
 
+    $unitFiles = @(Get-AvmScopedTestFile -Path $unitPath -Tier Unit -Group $TestGroup)
     $config = New-PesterConfiguration
-    $config.Run.Path                = $unitPath
+    $config.Run.Path                = @($unitFiles.FullName)
     $config.Run.PassThru            = $true
     $config.Run.Exit                = $false
     $config.Output.Verbosity        = 'Detailed'
@@ -659,7 +668,6 @@ task test {
         $result = script:Invoke-AvmPester -Configuration $config
     }
     else {
-        $unitFiles = @(Get-ChildItem -LiteralPath $unitPath -Filter '*.Tests.ps1' -File -Recurse | Sort-Object -Property FullName)
         $result = @(
             script:Invoke-AvmPesterShardedTier -Tier 'unit' -File $unitFiles -ShardCount $shardCount
         )[-1]
@@ -686,11 +694,12 @@ task coverage {
         $null = New-Item -ItemType Directory -Path $coverageOut -Force
     }
 
+    $unitFiles = @(Get-AvmScopedTestFile -Path $unitPath -Tier Unit -Group $TestGroup | Where-Object {
+            $relative = [System.IO.Path]::GetRelativePath($unitPath, $_.FullName).Replace('\', '/')
+            $relative -cnotlike 'Workflows/*'
+        })
     $config = New-PesterConfiguration
-    $config.Run.Path                           = $unitPath
-    if (Test-Path -LiteralPath $script:workflowUnitTestsRoot) {
-        $config.Run.ExcludePath                = @($script:workflowUnitTestsRoot)
-    }
+    $config.Run.Path                           = @($unitFiles.FullName)
     $config.Run.PassThru                       = $true
     $config.Run.Exit                           = $false
     $config.Output.Verbosity                   = if ($env:AVM_COVERAGE_VERBOSE -eq '1') { 'Detailed' } else { 'Minimal' }
@@ -830,14 +839,10 @@ task component {
         return
     }
 
-    $componentFiles = @(Get-ChildItem -LiteralPath $componentPath -Filter '*.Tests.ps1' -File -Recurse | Sort-Object -Property FullName)
-    if ($componentFiles.Count -eq 0) {
-        Write-Build Yellow "  no component test files found at $componentPath"
-        return
-    }
+    $componentFiles = @(Get-AvmScopedTestFile -Path $componentPath -Tier Component -Group $TestGroup)
 
     $config = New-PesterConfiguration
-    $config.Run.Path                = $componentPath
+    $config.Run.Path                = @($componentFiles.FullName)
     $config.Run.PassThru            = $true
     $config.Run.Exit                = $false
     $config.Output.Verbosity        = 'Detailed'

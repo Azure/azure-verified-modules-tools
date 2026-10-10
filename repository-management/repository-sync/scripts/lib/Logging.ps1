@@ -21,15 +21,21 @@ function Invoke-RepositorySyncLogGroup {
 function Protect-RepositorySyncLogText {
     [CmdletBinding()]
     [OutputType([string])]
-    param([AllowEmptyString()] [string] $Text)
+    param(
+        [AllowEmptyString()] [string] $Text,
+        [hashtable] $Environment = @{}
+    )
 
-    $credentials = [Environment]::GetEnvironmentVariables().GetEnumerator() |
+    $credentials = @([Environment]::GetEnvironmentVariables().GetEnumerator()) + @($Environment.GetEnumerator()) |
         Where-Object { $_.Key -match '^(GH_TOKEN|GITHUB_TOKEN|ACTIONS_.*TOKEN|ARM_.*(SECRET|PASSWORD|TOKEN|KEY)|TF_TOKEN_.*)$' } |
         Sort-Object { ([string]$_.Value).Length } -Descending
     foreach ($credential in $credentials) {
         $value = [string]$credential.Value
         if (-not [string]::IsNullOrEmpty($value)) {
             $Text = $Text.Replace($value, '***', [StringComparison]::Ordinal)
+            foreach ($line in ($value -split '\r?\n' | Where-Object { $_.Length -gt 0 })) {
+                $Text = $Text.Replace($line, '***', [StringComparison]::Ordinal)
+            }
         }
     }
     return $Text

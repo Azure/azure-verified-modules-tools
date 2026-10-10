@@ -1,45 +1,48 @@
 ---
-name: 'Repos: Config Tests'
+name: 'Repos: CI'
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/repository-management-config-test.yml
-      - .github/workflows/repository-management-label-sync.yml
-      - .github/workflows/repository-management-sync.yml
-      - .github/workflows/repository-management-bicep-sync.yml
-      - repository-management/repository-config/config.json
-      - repository-management/bicep-config/**
-      - repository-management/labels/**
-      - repository-management/shared/**
-      - repository-management/bicep-test-tenant-sync/**
-      - repository-management/repository-sync/terraform/**
-      - repository-management/repository-sync/scripts/lib/TestTenant.ps1
-      - tests/Pester/Unit/RepositoryManagement/**
-      - tests/fixtures/TestTenant.ps1
-      - tests/fixtures/BicepIdentities.ps1
-      - repository-management/repository-sync/scripts/Invoke-RepositorySync.ps1
-      - repository-management/repository-sync/scripts/lib/AvmPreCommit.ps1
-      - repository-management/repository-sync/scripts/lib/RepositoryFileSync.ps1
-      - repository-management/repository-sync/scripts/lib/RepoTree.ps1
-      - repository-management/repository-sync/scripts/lib/ManagedFilesUpgrade.ps1
-      - repository-management/repository-sync/scripts/lib/RepositoryConfig.ps1
-      - repository-management/repository-sync/scripts/lib/TeamsAndUsers.ps1
-      - repository-management/repository-sync/scripts/lib/TerraformOperations.ps1
-      - repository-management/repository-sync/scripts/lib/RetryHelpers.ps1
-      - infra/**
-      - build/avm.build.ps1
-      - repository-management/repository-sync/scripts/Test-AvmPreCommit.ps1
-      - repository-management/repository-sync/scripts/Test-ManagedFilesUpgrade.ps1
-      - repository-management/repository-sync/scripts/Test-RepositoryConfig.ps1
-      - repository-management/repository-sync/scripts/Test-RepositorySyncInputs.ps1
-      - repository-management/repository-sync/scripts/Test-TeamsAndUsers.ps1
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
+env:
+  DOTNET_MultiCoreJitMinNumCpus: '7fffffff'
+
 jobs:
+  pester:
+    name: Repository tests (${{ matrix.task }} on ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        task: [test, component]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build prerequisites
+        shell: pwsh
+        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -Confirm:$false
+
+      - name: Run repository management tests
+        shell: pwsh
+        run: ./build.ps1 ${{ matrix.task }} -TestGroup RepositoryManagement
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-repository-management-${{ matrix.task }}-${{ matrix.os }}
+          path: out/test-results/*.xml
+          if-no-files-found: warn
+          retention-days: 7
+
   infra:
     name: Validate state infrastructure
     runs-on: ubuntu-latest
@@ -66,6 +69,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Test repository configuration
         shell: pwsh

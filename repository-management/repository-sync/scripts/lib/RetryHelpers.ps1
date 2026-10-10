@@ -268,7 +268,8 @@ function Invoke-RepositorySyncProcess {
         [Parameter(Mandatory)] [string[]] $Arguments,
         [string] $WorkingDirectory,
         [hashtable] $EnvVars = @{},
-        [ValidateRange(1, 3600)] [int] $TimeoutSec = 300
+        [ValidateRange(1, 3600)] [int] $TimeoutSec = 300,
+        [scriptblock] $OnOutputLine
     )
 
     $module = Get-Module Avm.Authoring | Select-Object -First 1
@@ -282,10 +283,16 @@ function Invoke-RepositorySyncProcess {
     $environment.GH_DEBUG = $null
     $environment.GH_PROMPT_DISABLED = '1'
     return & $module {
-        param($Executable, $Arguments, $Directory, $Environment, $Timeout)
+        param($Executable, $Arguments, $Directory, $Environment, $Timeout, $OutputHandler)
+        $options = @{}
+        if ($null -ne $OutputHandler) {
+            $options.StreamOutput = $true
+            $options.OnStdOutLine = $OutputHandler
+            $options.OnStdErrLine = $OutputHandler
+        }
         Invoke-AvmProcess -FilePath $Executable -ArgumentList $Arguments -WorkingDirectory $Directory `
-            -TimeoutSec $Timeout -IgnoreExitCode -EnvVars $Environment
-    } $executable $Arguments $WorkingDirectory $environment $TimeoutSec
+            -TimeoutSec $Timeout -IgnoreExitCode -EnvVars $Environment @options
+    } $executable $Arguments $WorkingDirectory $environment $TimeoutSec $OnOutputLine
 }
 
 function Invoke-RepositoryGitHub {

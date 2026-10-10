@@ -133,29 +133,41 @@ function Invoke-RepositorySyncTerraform {
         [Parameter(Mandatory)] [string] $Root,
         [hashtable] $Environment = @{},
         [switch] $Json,
-        [switch] $Quiet
+        [switch] $Quiet,
+        [switch] $StreamOutput
     )
 
+    if ($StreamOutput -and ($Json -or $Quiet -or ($Arguments -cmatch '^-{1,2}json(?:=|$)'))) {
+        throw [System.ArgumentException]::new('Streaming requires visible human-readable Terraform output, not Quiet or JSON output.')
+    }
+    $options = @{}
+    if ($StreamOutput) {
+        $protectLog = ${function:Protect-RepositorySyncLogText}
+        $options.OnOutputLine = {
+            param([string] $Line)
+            Write-Information (& $protectLog -Text $Line -Environment $Environment) -InformationAction Continue
+        }.GetNewClosure()
+    }
     if (-not $Json -and -not $Quiet) {
         Write-Information "Running Terraform $($Arguments[0])..." -InformationAction Continue
     }
     try {
         $result = Invoke-RepositorySyncProcess -Command terraform -Arguments $Arguments `
-            -WorkingDirectory $Root -EnvVars $Environment -TimeoutSec 1800
+            -WorkingDirectory $Root -EnvVars $Environment -TimeoutSec 1800 @options
     }
     catch [System.TimeoutException] {
         $message = "Terraform $($Arguments[0]) timed out; the child process was stopped. Inspect state ownership before retrying an interrupted apply."
         if (-not $Json -and -not $Quiet) {
             $message += "`n" + (Protect-RepositorySyncLogText -Text (@(
                 $_.Exception.Data['StdOut'], $_.Exception.Data['StdErr']
-            ) -join "`n"))
+            ) -join "`n") -Environment $Environment)
         }
         throw [System.TimeoutException]::new($message)
     }
     if ($result.ExitCode -ne 0) {
         $message = "Terraform $($Arguments[0]) failed (exit code $($result.ExitCode)); no automatic apply retry or state repair was attempted."
         if (-not $Json) {
-            $message += "`n" + (Protect-RepositorySyncLogText -Text (@($result.StdOut, $result.StdErr) -join "`n"))
+            $message += "`n" + (Protect-RepositorySyncLogText -Text (@($result.StdOut, $result.StdErr) -join "`n") -Environment $Environment)
         }
         $exception = [System.InvalidOperationException]::new($message)
         $exception.Data['ExitCode'] = $result.ExitCode
@@ -173,10 +185,10 @@ function Invoke-RepositorySyncTerraform {
         }
         return $document
     }
-    if ($Quiet) { return }
+    if ($Quiet -or $StreamOutput) { return }
     foreach ($text in @($result.StdOut, $result.StdErr)) {
         if (-not [string]::IsNullOrWhiteSpace($text)) {
-            Write-Information (Protect-RepositorySyncLogText -Text $text) -InformationAction Continue
+            Write-Information (Protect-RepositorySyncLogText -Text $text -Environment $Environment) -InformationAction Continue
         }
     }
 }

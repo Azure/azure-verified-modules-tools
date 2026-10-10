@@ -1,30 +1,4 @@
-name: 'Authoring: CI'
-
-# Avm.Authoring CI runs on changes to main, pull requests, and manual dispatch.
-# Lint runs once; the three test tiers retain their platform coverage:
-#
-#   * lint        -- PSScriptAnalyzer once on Ubuntu.
-#   * unit        -- layout, generated-doc, and unit-test validation across
-#                    three OSes; the Ubuntu leg also collects coverage.
-#   * component   -- filesystem and subprocess component tests across three
-#                    OSes, in parallel with the unit matrix.
-#   * workflows   -- workflow-definition unit tests (`./build.ps1
-#                    test-workflows`) on Ubuntu, matching the workflow runner
-#                    OS they validate.
-#   * integration -- real-binary Terraform integration tests (`./build.ps1
-#                    integration`) that run the wired `avm pre-commit` and
-#                    `avm pr-check` chains end to end against the on-disk fixture
-#                    modules using the actual pinned tools (terraform,
-#                    terraform-docs, tflint, conftest, mapotf) downloaded into an
-#                    isolated AVM_HOME -- not the stub launchers the Component
-#                    tier uses. It needs real network (tool + provider downloads)
-#                    and Azure OIDC, so it is slower than the build gate and runs
-#                    as its own 3 OS x 2 fixture job matrix here.
-#   * bicep-integration -- compiler/native-policy cases once per OS, independent
-#                    of Terraform fixtures and without Azure authentication.
-#
-# A single `report` job aggregates every test tier into one test-results
-# report. Lint is a separate check and has no test artifact.
+name: 'Tools: CI'
 
 on:
   push:
@@ -32,12 +6,22 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      scope:
+        description: Test scope to run without change filtering
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - authoring
+          - workflows
+          - repository-management
 
 permissions:
   contents: read
 
 env:
-  # Avoid shared PowerShell startup-profile corruption: https://github.com/dotnet/runtime/issues/121977
   DOTNET_MultiCoreJitMinNumCpus: '7fffffff'
 
 concurrency:
@@ -45,316 +29,101 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  lint:
-    name: Lint
+  changes:
+    name: Select test scopes
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
+    outputs:
+      authoring: ${{ steps.scope.outputs.authoring }}
+      workflows: ${{ steps.scope.outputs.workflows }}
+      repository-management: ${{ steps.scope.outputs.repository-management }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Install build prerequisites
-        shell: pwsh
-        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -IncludePSScriptAnalyzer -Confirm:$false
-
-      - name: Run lint
-        shell: pwsh
-        run: ./build.ps1 lint
-
-  unit:
-    name: Unit tests (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            task: ci-coverage
-          - os: windows-latest
-            task: ci-unit
-          - os: macos-latest
-            task: ci-unit
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
-    permissions:
-      contents: read
-      code-quality: write
-      pull-requests: read
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install build prerequisites
-        shell: pwsh
-        # The matrix still tests our custom analyzer rule on every OS.
-        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -IncludePSScriptAnalyzer -Confirm:$false
-
-      - name: PowerShell environment
+      - name: Select affected suites
+        id: scope
         shell: pwsh
         run: |
-          $PSVersionTable | Format-List
-          Get-Module -ListAvailable -Name InvokeBuild, Pester, PSScriptAnalyzer |
-              Select-Object Name, Version | Format-Table
+          $scope = ./scripts/Get-AvmCiScope.ps1
+          foreach ($entry in $scope.GetEnumerator()) {
+              $value = $entry.Value.ToString().ToLowerInvariant()
+              "$($entry.Key)=$value" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+              Write-Host "$($entry.Key): $value"
+          }
 
-      - name: Run unit tests
-        shell: pwsh
-        run: ./build.ps1 ${{ matrix.task }}
-
-      - name: Upload test results
-        # Upload the NUnit result XML even when the test task fails, so the results
-        # are downloadable per leg and consumed by the `report` job below, which
-        # aggregates every leg of both tiers into a single pull-request report.
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-results-unit-${{ matrix.os }}
-          path: out/test-results/*.xml
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Upload coverage to GitHub
-        if: ${{ matrix.os == 'ubuntu-latest' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-        uses: actions/upload-code-coverage@1c15be36fc3733ba839b1dd643bd9556e4426dc1 # v1.4.1
-        with:
-          file: out/coverage/coverage.cobertura.xml
-          language: PowerShell
-          label: code-coverage-agent
-
-  component:
-    name: Component tests (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install build prerequisites
-        shell: pwsh
-        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -IncludePSScriptAnalyzer -Confirm:$false
-
-      - name: Run component tests
-        shell: pwsh
-        run: ./build.ps1 ci-component
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-results-component-${{ matrix.os }}
-          path: out/test-results/*.xml
-          if-no-files-found: warn
-          retention-days: 7
+  authoring:
+    name: Authoring
+    needs: changes
+    if: needs.changes.outputs.authoring == 'true'
+    uses: ./.github/workflows/ci-authoring.yml
+    permissions:
+      contents: read
+      code-quality: write    # the Ubuntu unit job uploads coverage
+      pull-requests: read
+      id-token: write        # the existing environment-gated integration jobs
 
   workflows:
-    name: Workflow tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    name: Workflows
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
+    uses: ./.github/workflows/ci-workflows.yml
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install build prerequisites
-        shell: pwsh
-        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -Confirm:$false
-
-      - name: Run workflow tests
-        shell: pwsh
-        run: ./build.ps1 test-workflows
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-results-workflows-ubuntu-latest
-          path: out/test-results/*.xml
-          if-no-files-found: warn
-          retention-days: 7
-
-  integration:
-    name: Integration (${{ matrix.fixture }} on ${{ matrix.os }})
-    if: github.event_name != 'push'
-    strategy:
-      # Cover every test module on every OS independently; one red leg must not
-      # cancel the others (we want the full drift picture in one run).
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        fixture:
-          - terraform-azure-avm-res-mock
-          - terraform-azurerm-avm-res-mock
-    runs-on: ${{ matrix.os }}
-    # Run in the `avm` GitHub Environment so the job resolves its environment-scoped
-    # OIDC federated credential and ARM_* variables. The Entra federated credential
-    # is configured against this environment's subject (see the Azure login step).
-    environment: avm
-    timeout-minutes: 30
-    permissions:
-      id-token: write   # Azure OIDC login
-      contents: read
-
-    env:
-      # The integration suite reads AVM_INTEGRATION_FIXTURE at discovery time and generates a
-      # Context for only the named module, so each matrix leg exercises exactly
-      # one test module.
-      AVM_INTEGRATION_FIXTURE: ${{ matrix.fixture }}
-      # `tflint --init` downloads its ruleset plugins from the GitHub releases
-      # API. Unauthenticated it gets 60 requests/hour per source IP, and the
-      # hosted macOS runners share an egress IP, so the integration legs
-      # intermittently failed with `403 API rate limit exceeded`. tflint reads
-      # GITHUB_TOKEN for authenticated downloads (5000/hour).
-      GITHUB_TOKEN: ${{ github.token }}
-      # OIDC plumbing for `azure/login`. The `test` step today is validate-only
-      # (`terraform init -backend=false` + `terraform validate -json`) so it does
-      # not actually need Azure auth, but we wire login per the same pattern as
-      # the legacy Terraform governance workflow so the chain is ready when test grows to plan.
-      ARM_USE_OIDC: 'true'
-      ARM_CLIENT_ID: ${{ vars.ARM_CLIENT_ID }}
-      ARM_TENANT_ID: ${{ vars.ARM_TENANT_ID }}
-      ARM_SUBSCRIPTION_ID: ${{ vars.ARM_SUBSCRIPTION_ID }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Configure AVM tool + provider cache
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          # runner.temp is not available in job-level env, so resolve the cache
-          # dirs here and export them to GITHUB_ENV for later steps.
-          $avmHome = Join-Path $env:RUNNER_TEMP 'avm-home'
-          $tfCache = Join-Path $env:RUNNER_TEMP 'tf-plugin-cache'
-          New-Item -ItemType Directory -Force -Path $avmHome, $tfCache | Out-Null
-          "AVM_HOME=$avmHome"            | Out-File -FilePath $env:GITHUB_ENV -Append
-          "TF_PLUGIN_CACHE_DIR=$tfCache" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-      - name: Exclude AVM tools from Windows Defender
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          # mapotf's Go binary is a known Defender false positive ("virus or
-          # potentially unwanted software") and is quarantined at exec time on
-          # Windows. GitHub-hosted Windows runners let us add an exclusion (an
-          # un-elevated dev box cannot), so CI gets a real pass instead of a skip.
-          Add-MpPreference -ExclusionPath $env:AVM_HOME -ErrorAction SilentlyContinue
-          Add-MpPreference -ExclusionProcess 'mapotf.exe' -ErrorAction SilentlyContinue
-
-      - name: Azure login (OIDC)
-        # Only when the federated-identity vars are provisioned (skips cleanly on
-        # forks). Because this job runs in the `avm` GitHub Environment, the OIDC
-        # token subject is `repo:Azure/azure-verified-modules-tools:environment:avm`
-        # -- the Entra federated credential must be configured against that
-        # environment subject (not a branch ref), so it covers the pull_request
-        # and workflow_dispatch runs regardless of the selected ref.
-        if: ${{ vars.ARM_CLIENT_ID != '' }}
-        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
-        with:
-          client-id: ${{ vars.ARM_CLIENT_ID }}
-          tenant-id: ${{ vars.ARM_TENANT_ID }}
-          subscription-id: ${{ vars.ARM_SUBSCRIPTION_ID }}
-
-      - name: Install build prerequisites
-        shell: pwsh
-        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -Confirm:$false
-
-      - name: Run integration task
-        shell: pwsh
-        run: ./build.ps1 integration -IntegrationGroup Terraform
-
-      - name: Upload test results
-        # Upload the NUnit result XML even when the integration task fails, so
-        # the results are downloadable per matrix leg and consumed by the
-        # `report` job below, which aggregates every leg into one report.
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-results-integration-${{ matrix.fixture }}-${{ matrix.os }}
-          path: out/test-results/*.xml
-          if-no-files-found: warn
-          retention-days: 7
-
-  bicep-integration:
-    name: Bicep integration (${{ matrix.os }})
-    if: github.event_name != 'push'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install build prerequisites
-        shell: pwsh
-        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -IncludeBicepPolicy -Confirm:$false
-
-      - name: Run Bicep integration tests
-        shell: pwsh
-        run: |
-          $env:AVM_HOME = Join-Path $env:RUNNER_TEMP 'avm-bicep-home'
-          ./build.ps1 integration -IntegrationGroup Bicep
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-results-bicep-integration-${{ matrix.os }}
-          path: out/test-results/*.xml
-          if-no-files-found: warn
-          retention-days: 7
+  repository-management:
+    name: Repository management
+    needs: changes
+    if: needs.changes.outputs.repository-management == 'true'
+    uses: ./.github/workflows/repository-management-config-test.yml
 
   report:
-    name: Publish test results
-    needs: [unit, component, workflows, integration, bicep-integration]
-    # Run even when a build, workflow, or integration leg fails (so red tests
-    # still get reported), but not when the run was cancelled. Aggregates every
-    # leg into one report. Runs outside the `avm` environment with no id-token --
-    # it only reads the result artifacts, never Azure.
+    name: CI result
+    needs: [changes, authoring, workflows, repository-management]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       checks: write          # create the Checks-tab test report
-      pull-requests: write   # post / update the results comment
+      pull-requests: write   # post or update the results comment
       contents: read
     steps:
       - name: Download test results
+        if: ${{ !cancelled() && (needs.changes.outputs.authoring == 'true' || needs.changes.outputs.workflows == 'true' || needs.changes.outputs.repository-management == 'true') }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: test-results-*
           path: artifacts
 
       - name: Publish test results
-        # Renders a job summary on this run, plus a Checks-tab entry and a
-        # pull-request comment when the token has write access (same-repo PRs).
-        # On fork PRs the token is read-only, so it degrades to the job summary
-        # only; action_fail defaults to false, so reporting never reds the build.
-        # report_individual_runs keeps each matrix leg distinct, so a test that
-        # fails on one OS / fixture is reported as a real failure on that leg
-        # instead of being de-duplicated and mislabelled flaky.
+        if: ${{ !cancelled() && (needs.changes.outputs.authoring == 'true' || needs.changes.outputs.workflows == 'true' || needs.changes.outputs.repository-management == 'true') }}
         uses: EnricoMi/publish-unit-test-result-action@d0a4676d0e0b938bc201470d88276b7c74c712b3 # v2.24.0
-        if: ${{ !cancelled() }}
         with:
           check_name: Test results
           files: artifacts/**/*.xml
           report_individual_runs: "true"
+
+      - name: Verify selected suites
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        env:
+          CI_NEEDS: ${{ toJson(needs) }}
+        run: |
+          $needs = $env:CI_NEEDS | ConvertFrom-Json -AsHashtable
+          if ($needs.changes.result -ne 'success') {
+              throw [System.InvalidOperationException]::new('CI could not determine the affected test scopes.')
+          }
+          $failed = @()
+          foreach ($name in @('authoring', 'workflows', 'repository-management')) {
+              $selected = $needs.changes.outputs[$name]
+              $result = $needs[$name].result
+              "$name`: selected=$selected, result=$result" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+              $expected = if ($selected -ceq 'true') { 'success' } else { 'skipped' }
+              if ($selected -cnotin @('true', 'false') -or $result -cne $expected) {
+                  $failed += "$name ($result)"
+              }
+          }
+          if ($failed.Count -gt 0) {
+              throw [System.InvalidOperationException]::new("CI suites did not complete as selected: $($failed -join ', ').")
+          }

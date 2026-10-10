@@ -7,6 +7,10 @@
     command surface (`./build.ps1 <task>`) without remembering the path to the
     task graph at build/avm.build.ps1.
 
+.PARAMETER TestGroup
+    Select All, Authoring, or RepositoryManagement unit and component tests.
+    All is the default, preserving the complete local pre-commit gate.
+
 .EXAMPLE
     ./build.ps1 pre-commit
 .EXAMPLE
@@ -21,6 +25,8 @@
     ./build.ps1 ?      # list tasks
 .EXAMPLE
     ./build.ps1 integration -TestName 'Integration: module metadata*'
+.EXAMPLE
+    ./build.ps1 test,component -TestGroup RepositoryManagement
 #>
 
 #Requires -Version 7.4
@@ -31,6 +37,9 @@ param(
     [string[]] $Tasks = @('.'),
 
     [string[]] $TestName = @(),
+
+    [ValidateSet('All', 'Authoring', 'RepositoryManagement')]
+    [string] $TestGroup = 'All',
 
     [ValidateSet('All', 'Bicep', 'Terraform')]
     [string] $IntegrationGroup = 'All'
@@ -56,6 +65,6 @@ if (-not (Test-Path -LiteralPath $buildScript)) {
     throw "Build script not found: $buildScript"
 }
 
-$buildArgs = @{ Task = $Tasks; File = $buildScript; TestName = $TestName; IntegrationGroup = $IntegrationGroup }
+$buildArgs = @{ Task = $Tasks; File = $buildScript; TestName = $TestName; TestGroup = $TestGroup; IntegrationGroup = $IntegrationGroup }
 
 Invoke-Build @buildArgs
