@@ -313,44 +313,34 @@ Describe 'Existing retry transport literal-argv mode' {
     }
 }
 
-Describe "State lock recovery identity" {
-    BeforeEach {
-        Mock Start-Process { [pscustomobject]@{ ExitCode = 0 } }
+Describe 'State lock acquisition classification' {
+    It 'recognizes the complete native acquisition diagnostic with ANSI gutters' {
+        $text = @(
+            "$($script:esc)[31m$([char]0x2502)$($script:esc)[0m Error: Error acquiring the state lock"
+            "$([char]0x2502) Error message: state blob is already locked"
+        )
+        Test-RepositorySyncLockAcquisitionFailure -Text $text | Should -BeTrue
+        Test-RepositorySyncLockAcquisitionFailure -Text @('Error acquiring the state lock') | Should -BeTrue
     }
 
-    It "uses the state subscription and logged-in identity for the blob fallback" {
-        Clear-TerraformStateLock -errorOutput @('Error acquiring the state lock') `
-            -workingDirectory $TestDrive -storageAccountName 'stateaccount' `
-            -containerName 'tfstate' -blobName 'repo.tfstate' `
-            -subscriptionId '55555555-5555-4555-8555-555555555555' | Should -BeTrue
-
-        Should -Invoke Start-Process -Exactly 1 -ParameterFilter {
-            $FilePath -eq 'az' -and
-            ($ArgumentList -join ' ') -eq (
-                'storage blob lease break --account-name stateaccount --container-name tfstate ' +
-                '--blob-name repo.tfstate --lease-break-period 0 --auth-mode login ' +
-                '--subscription 55555555-5555-4555-8555-555555555555'
-            )
-        }
+    It 'refuses unrelated or ambiguous diagnostics: <Case>' -ForEach @(
+        @{ Case = 'release'; Text = @('Error: Error releasing the state lock') }
+        @{ Case = 'provider'; Text = @('Error: Provider failed: Error acquiring the state lock') }
+        @{ Case = 'quotation'; Text = @('A previous run reported Error acquiring the state lock') }
+        @{ Case = 'partial'; Text = @('Error: Error acquiring the state lock and then something else') }
+        @{ Case = 'multiple failures'; Text = @('Error: Error acquiring the state lock', 'Error: Apply interrupted') }
+        @{ Case = 'empty'; Text = @() }
+    ) {
+        Test-RepositorySyncLockAcquisitionFailure -Text $Text | Should -BeFalse
     }
 
-    It "uses the initialized Terraform backend for a known lock ID" {
-        Clear-TerraformStateLock -errorOutput @('ID: 11111111-1111-4111-8111-111111111111') `
-            -workingDirectory $TestDrive -storageAccountName 'stateaccount' `
-            -containerName 'tfstate' -blobName 'repo.tfstate' `
-            -subscriptionId '55555555-5555-4555-8555-555555555555' | Should -BeTrue
-
-        Should -Invoke Start-Process -Exactly 1 -ParameterFilter {
-            $FilePath -eq 'terraform' -and
-            $ArgumentList -contains 'force-unlock'
-        }
-    }
-
-    It "keeps legacy CLI subscription discovery when no override is supplied" {
-        Clear-TerraformStateBlobLease -storageAccountName 'stateaccount' `
-            -containerName 'tfstate' -blobName 'repo.tfstate' | Should -BeTrue
-        Should -Invoke Start-Process -Exactly 1 -ParameterFilter {
-            $FilePath -eq 'az' -and $ArgumentList -notcontains '--subscription'
-        }
+    It 'does not reconnect unverified legacy retries to lock release' {
+        Mock Clear-TerraformStateLock { throw 'Legacy recovery must not run.' }
+        $result = Invoke-TerraformUnderTest -Responses @(
+            @{ ExitCode = 1; Output = ''; Error = @('Error: Error acquiring the state lock') }
+        )
+        $result.success | Should -BeFalse
+        $global:retryHelpersAttempts | Should -Be 1
+        Should -Invoke Clear-TerraformStateLock -Exactly 0
     }
 }

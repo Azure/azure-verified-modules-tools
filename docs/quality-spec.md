@@ -1273,6 +1273,34 @@ This section is the implementation-level expression of the **Security stance** p
   backend/controller/shared identities, or cut over Bicep validation consumers
   or their OIDC subject template.
 
+### Repository-sync state-lock recovery
+
+- Ordinary remote Terraform sync may attempt recovery once per native command
+  only after a complete, unambiguous state-lock acquisition failure. Retry the
+  identical plan or verified saved-plan apply at most once. Never recover
+  release failures, other errors, timeouts or interrupted applies; never disable
+  locking or rewrite/import state. Local bootstrap and Bicep sync do not opt in.
+- Require trusted Tools `main` workflow/current-attempt evidence, complete
+  current-job discovery and no observed active competing run or same-state
+  worker. Use the repository-scoped Actions read token, not broader App
+  permissions. Check the initialized default-workspace backend against the
+  exact selected key and all configured tenant/subscription/client/account/
+  container values. CLI recovery authenticates only as the state identity;
+  native Terraform and BAMI providers retain explicit OIDC and disabled CLI
+  fallback.
+- Inspect blob properties/lock metadata, never resource state contents.
+  Validate error-reported and stored ID/path, then recheck active writers and
+  unchanged ETag/lease/metadata immediately before release. Known IDs use the
+  initialized backend's force-unlock. Missing metadata permits only a scoped
+  ETag-conditional lease break without a fabricated ID. Failed or uncertain
+  release stops without fallback or retry; verify release before retrying
+  acquisition. Preserve original native errors/exit codes and redact credentials.
+- Unknown-owner recovery is an explicit risk-accepted exception, not verified
+  abandonment. Timestamps and empty metadata are not ownership proof; the
+  ETag check cannot eliminate external-writer or lease-generation races.
+  The changed automatic-recovery policy requires recorded SFI sign-off before
+  merge, separately from user risk acceptance and any live-operation approval.
+
 ### Module manifest and release pipeline
 
 - `LICENSE` at the repo root is referenced from the manifest's `LicenseUri`. The manifest fails its own self-check if the file isn't reachable.
