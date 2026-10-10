@@ -573,7 +573,7 @@ task 'test-tenant-terraform' {
                         }
                         else {
                             $previous = Assert-AvmBamiIdentityPlan -Plan $candidatePlan -Settings $settings `
-                                -Repository 'Azure/terraform-azurerm-avm-ptn-example-repo' -RepositoryId '1234' `
+                                -Repository 'Azure/terraform-azurerm-avm-ptn-azuremonitorwindowsagent' -RepositoryId '1234' `
                                 -RepositoryOwnerId '6844498' -RepositorySyncRepositoryId '1239632211' `
                                 -EntraGroupNames @('repository-readers', 'repository-owners') -PassThru
                         }
@@ -582,6 +582,24 @@ task 'test-tenant-terraform' {
                         }
                         Write-Build Green "  $ecosystem naming replacement passes its production ownership guard"
                     }
+                    $recoveryPlans = @($events | Where-Object {
+                        $_['type'] -ceq 'test_plan' -and $_['@testrun'] -ceq 'recreate_windows_identity_after_its_legacy_resources_were_deleted'
+                    })
+                    if ($recoveryPlans.Count -ne 1) {
+                        throw [System.IO.InvalidDataException]::new('Expected one actual mocked windows identity recreation plan.')
+                    }
+                    $plan = $recoveryPlans[0]['test_plan']
+                    $candidatePlan = ConvertFrom-AvmTestTerraformPlan -Plan $plan -AddressPrefix 'module.azure.' `
+                        -GroupContracts @{ 'module.azure' = $plan['output_changes']['test_group_contract']['after'] }
+                    $managed = @($candidatePlan.resource_changes | Where-Object { $_['mode'] -ceq 'managed' })
+                    if ($managed.Count -ne 7 -or @($managed | Where-Object { (@($_['change']['actions']) -join ',') -cne 'create' }).Count -gt 0) {
+                        throw [System.IO.InvalidDataException]::new('Recovery after legacy deletion must only create the seven missing identity resources.')
+                    }
+                    Assert-AvmBamiIdentityPlan -Plan $candidatePlan -Settings $settings `
+                        -Repository 'Azure/terraform-azurerm-avm-ptn-azuremonitorwindowsagent' -RepositoryId '1234' `
+                        -RepositoryOwnerId '6844498' -RepositorySyncRepositoryId '1239632211' `
+                        -EntraGroupNames @('repository-readers', 'repository-owners')
+                    Write-Build Green '  windows identity recreation passes its production ownership guard'
                 }
                 if ($directoryName -ceq 'bicep-identities') {
                     . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'TestTenant.ps1')

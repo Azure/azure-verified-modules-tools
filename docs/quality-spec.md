@@ -1239,10 +1239,15 @@ This section is the implementation-level expression of the **Security stance** p
 ### Test identity naming and replacement
 
 - Terraform test identities use `id-test-terraform-` plus the lowercase repository
-  name without its leading `terraform-`; the owner is excluded. Bicep test
+  name without its leading `terraform-`, replacing the known Azure-reserved
+  `windows` substring with `w5s`; the owner is excluded. Reject normalized
+  Terraform-name collisions across the complete installed repository inventory
+  before filtering, and recheck it in workers with `windows` or `w5s` names.
+  An incomplete or unavailable inventory must not bypass this check. Bicep test
   identities use `id-test-bicep-` plus the complete canonical root path with
-  slashes replaced by hyphens. Neither convention hashes, truncates or
-  abbreviates names. Preserve the 90-character repository identity bound and
+  slashes replaced by hyphens, without the Terraform reserved-word substitution.
+  Neither convention hashes or truncates names; no other words are abbreviated.
+  Preserve the 90-character repository identity bound and
   68-character canonical Bicep path bound; reject Bicep flattening collisions
   before provisioning and validate complete federated credential names against
   Azure's 120-character maximum.

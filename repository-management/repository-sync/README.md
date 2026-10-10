@@ -99,15 +99,21 @@ Terraform uses `id-test-terraform-` followed by the complete lowercase repositor
 name with exactly its leading `terraform-` removed. The GitHub owner is omitted;
 the provider (`azure`, `azurerm` or `azapi`) and module components remain. For
 example, `Azure/terraform-azurerm-avm-res-storage-storageaccount` becomes
-`id-test-terraform-azurerm-avm-res-storage-storageaccount`. New names have no
-hash, truncation or `windows` to `w5s` abbreviation.
+`id-test-terraform-azurerm-avm-res-storage-storageaccount`. Replace `windows`
+with `w5s` in the lowercase Terraform stem because Azure reserves that word:
+`terraform-azurerm-avm-ptn-azuremonitorwindowsagent` therefore uses
+`id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent`. No other words are
+abbreviated, and names have no hash or truncation.
 
 The full identity name must fit the repository's existing 90-character bound.
 This is stricter than [Azure's 3-128-character identity limit](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-name-rules#microsoftmanagedidentity);
 the full federation names must also fit their
 [3-120-character limit](https://learn.microsoft.com/en-us/azure/templates/microsoft.managedidentity/userassignedidentities/federatedidentitycredentials).
-Lowercase GitHub repository names are unique within the managed Azure
-organization; stripping only a fixed leading prefix preserves that uniqueness.
+Discovery rejects normalized-name collisions across the complete installed
+repository inventory before selection, exclusions or archive filtering.
+Workers whose names contain `windows` or `w5s` recheck that inventory before
+Terraform, including directly invoked workers. Inventory failures stop the
+run; selecting only one colliding repository does not bypass the check.
 The distinct `id-test-bicep-` prefix separates [Bicep module identities](../bicep-test-tenant-sync/README.md#identity-names).
 
 An operator-approved saved plan may replace only the exact former
@@ -121,11 +127,16 @@ assignment can be removed only for the verified old principal. The ordinary
 root's existing references publish the new client ID to the repository's
 consumer settings; their shape and precedence do not change.
 
-The backend/controller and shared `id-avm-bicep` identities are unchanged.
+The backend/controller, shared `id-avm-bicep`, dedicated Bicep identities and
+Terraform names without `windows` are unchanged.
 Identity replacement changes client IDs and invalidates old federation, so
 coordinate the first approved reconciliation with active tests and inspect
 explicit consumer overrides. Failed or partially completed operations stop
 for review; there is no automatic identity rollback, state repair or blind retry.
+If a failed rename already deleted the old identity, a separately approved
+fresh plan may create the missing identity and credentials at the corrected
+name. Surviving foreign or unverifiable membership/federation ownership still
+fails the guard; never manufacture old identity evidence to bypass it.
 The narrow replacement exception requires recorded SFI sign-off before merge,
 separately from operator approval for any live run.
 

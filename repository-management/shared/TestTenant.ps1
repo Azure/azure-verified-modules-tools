@@ -38,7 +38,7 @@ function Get-AvmTestIdentityName {
         }
         if ($Legacy) { return $Repository.Replace('/', '-').Replace('windows', 'w5s') }
         $source = $parts[1].ToLowerInvariant()
-        $stem = $source.Substring('terraform-'.Length)
+        $stem = $source.Substring('terraform-'.Length).Replace('windows', 'w5s')
         $prefix = 'id-test-terraform-'
     }
     $name = $prefix + $stem
