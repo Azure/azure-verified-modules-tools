@@ -1,0 +1,119 @@
+name: 'Workflows: CI'
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - '.github/actions/**'
+      - '.github/dependabot.yml'
+      - 'tests/Pester/Unit/Workflows/**'
+      - 'tests/Pester/Import-AvmTestModule.ps1'
+      - 'build/**'
+      - 'build.ps1'
+      - 'scripts/Install-AvmBuildPrerequisites.ps1'
+      - 'scripts/Import-AvmNetworkRetry.ps1'
+      - 'src/Avm.Authoring/Avm.Authoring.psd1'
+      - 'src/Avm.Authoring/Avm.Authoring.psm1'
+      - 'src/Avm.Authoring/Resources/**'
+      - 'src/Avm.Authoring/Private/Tools/**'
+      - 'src/Avm.Authoring/Private/Network/**'
+      - 'src/Avm.Authoring/Private/Exceptions/**'
+      - 'src/Avm.Authoring/Private/Folders/**'
+      - 'src/Avm.Authoring/Private/Host/**'
+      - 'src/Avm.Authoring/Private/Output/**'
+      - 'src/Avm.Authoring/Private/Process/**'
+      - 'src/Avm.Authoring/Private/Config/**'
+      - 'src/Avm.Authoring/en-US/**'
+      - '.gitattributes'
+      - '.gitignore'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - '.github/actions/**'
+      - '.github/dependabot.yml'
+      - 'tests/Pester/Unit/Workflows/**'
+      - 'tests/Pester/Import-AvmTestModule.ps1'
+      - 'build/**'
+      - 'build.ps1'
+      - 'scripts/Install-AvmBuildPrerequisites.ps1'
+      - 'scripts/Import-AvmNetworkRetry.ps1'
+      - 'src/Avm.Authoring/Avm.Authoring.psd1'
+      - 'src/Avm.Authoring/Avm.Authoring.psm1'
+      - 'src/Avm.Authoring/Resources/**'
+      - 'src/Avm.Authoring/Private/Tools/**'
+      - 'src/Avm.Authoring/Private/Network/**'
+      - 'src/Avm.Authoring/Private/Exceptions/**'
+      - 'src/Avm.Authoring/Private/Folders/**'
+      - 'src/Avm.Authoring/Private/Host/**'
+      - 'src/Avm.Authoring/Private/Output/**'
+      - 'src/Avm.Authoring/Private/Process/**'
+      - 'src/Avm.Authoring/Private/Config/**'
+      - 'src/Avm.Authoring/en-US/**'
+      - '.gitattributes'
+      - '.gitignore'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_MultiCoreJitMinNumCpus: '7fffffff'
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  workflows:
+    name: Workflow tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build prerequisites
+        shell: pwsh
+        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -Confirm:$false
+
+      - name: Run workflow tests
+        shell: pwsh
+        run: ./build.ps1 test-workflows
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-workflows-ubuntu-latest
+          path: out/test-results/*.xml
+          if-no-files-found: warn
+          retention-days: 7
+
+  report:
+    name: Report workflow tests
+    needs: workflows
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      checks: write         # publish this workflow's test report
+      pull-requests: write  # publish this workflow's results comment
+      contents: read
+    steps:
+      - name: Download test results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: test-results-workflows-ubuntu-latest
+          path: artifacts
+
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@d0a4676d0e0b938bc201470d88276b7c74c712b3 # v2.24.0
+        with:
+          check_name: Workflow test results
+          comment_title: Workflow test results
+          files: artifacts/**/*.xml
+          report_individual_runs: "true"

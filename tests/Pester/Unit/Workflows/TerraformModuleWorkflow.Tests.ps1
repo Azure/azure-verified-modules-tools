@@ -290,8 +290,10 @@ Describe 'terraform-module required Azure feature registration' {
 
 Describe 'CI workflow' {
     BeforeAll {
-        $script:ciPath = Join-Path $PSScriptRoot '..' '..' '..' '..' '.github' 'workflows' 'ci.yml'
+        $workflowRoot = Join-Path $PSScriptRoot '..' '..' '..' '..' '.github' 'workflows'
+        $script:ciPath = Join-Path $workflowRoot 'ci-authoring.yml'
         $script:ci = Get-Content -LiteralPath $script:ciPath -Raw
+        $script:workflowCi = Get-Content -LiteralPath (Join-Path $workflowRoot 'ci-workflows.yml') -Raw
     }
 
     It 'disables shared startup JIT profiles before CI PowerShell processes start' {
@@ -302,12 +304,12 @@ Describe 'CI workflow' {
         ([regex]::Matches($script:ci, '(?m)^\s*DOTNET_MultiCoreJitMinNumCpus:')).Count | Should -Be 1
         $script:ci | Should -Match 'run: \./build\.ps1 \$\{\{ matrix\.task \}\}'
         $script:ci | Should -Match 'run: \./build\.ps1 ci-component'
-        $script:ci | Should -Match 'run: \./build\.ps1 test-workflows'
+        $script:workflowCi | Should -Match 'run: \./build\.ps1 test-workflows'
         $script:ci | Should -Match 'run: \./build\.ps1 integration'
     }
 
     It 'keeps workflow-definition tests in a dedicated Ubuntu-only job' {
-        $jobMatch = [regex]::Match($script:ci, '(?ms)^  workflows:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        $jobMatch = [regex]::Match($script:workflowCi, '(?ms)^  workflows:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
         $jobMatch.Success | Should -BeTrue
         $jobBlock = $jobMatch.Value
 
@@ -316,7 +318,8 @@ Describe 'CI workflow' {
         $jobBlock | Should -Match 'run: \./build\.ps1 test-workflows'
         $jobBlock | Should -Match 'name: test-results-workflows-ubuntu-latest'
 
-        $script:ci | Should -Match 'needs: \[unit, component, workflows, integration, bicep-integration\]'
+        $script:workflowCi | Should -Match '(?m)^    needs: workflows\r?$'
+        $script:ci | Should -Not -Match 'test-workflows'
     }
 
     It 'authenticates tflint plugin downloads so the shared macOS runner egress does not hit the GitHub API rate limit' {
@@ -340,7 +343,7 @@ Describe 'CI workflow' {
         $unit.Value | Should -Match 'os: macos-latest'
         $unit.Value | Should -Match 'task: ci-coverage'
         $unit.Value | Should -Match 'task: ci-unit'
-        $unit.Value | Should -Match 'run: \./build\.ps1 \$\{\{ matrix\.task \}\}'
+        $unit.Value | Should -Match 'run: \./build\.ps1 \$\{\{ matrix\.task \}\} -TestGroup Authoring'
         $unit.Value | Should -Match 'Upload coverage to GitHub'
         $unit.Value | Should -Match "matrix\.os == 'ubuntu-latest'"
         $unit.Value | Should -Match 'out/coverage/coverage\.cobertura\.xml'
@@ -349,7 +352,7 @@ Describe 'CI workflow' {
             $job.Value | Should -Match '(?m)^    timeout-minutes: 25\r?$'
             $job.Value | Should -Match 'Install-AvmBuildPrerequisites\.ps1 -IncludePSScriptAnalyzer'
         }
-        $component.Value | Should -Match 'run: \./build\.ps1 ci-component'
+        $component.Value | Should -Match 'run: \./build\.ps1 ci-component -TestGroup Authoring'
     }
 
     It 'collects coverage in the Ubuntu unit leg without a duplicate test job' {
@@ -365,7 +368,10 @@ Describe 'CI workflow' {
     It 'uses the prerequisite installer in every CI test job type' {
         ([regex]::Matches(
                 $script:ci,
-                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 6
+                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 5
+        ([regex]::Matches(
+                $script:workflowCi,
+                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 1
     }
 
     It 'installs pinned Bicep policy dependencies before integration acceptance only' {
@@ -386,7 +392,7 @@ Describe 'CI workflow' {
         $bicep | Should -Not -Match 'environment:|id-token:|azure/login|Add-MpPreference|fixture:'
         $bicep | Should -Match 'if: always\(\)'
         $bicep | Should -Match 'test-results-bicep-integration-'
-        $script:ci | Should -Match 'needs: \[unit, component, workflows, integration, bicep-integration\]'
+        $script:ci | Should -Match 'needs: \[unit, component, integration, bicep-integration\]'
     }
 }
 

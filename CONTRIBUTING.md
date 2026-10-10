@@ -145,9 +145,9 @@ If either throws a casing error, the on-disk folder, file, or manifest casing ha
 The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it through the `./build.ps1 <task>` forwarder from the repo root. `pre-commit` is the gate to run before every PR.
 
 ```pwsh
-./build.ps1 pre-commit        # layout + lint + unit + component tests — the local gate
-./build.ps1 ci                # full local CI gate: layout + lint + coverage + component
-./build.ps1 ci-tests          # CI matrix: layout + coverage + component (lint runs once on Ubuntu)
+./build.ps1 pre-commit        # docs-check + layout + lint + all unit/component tests
+./build.ps1 ci                # full local CI gate: docs-check + layout + lint + coverage + component
+./build.ps1 ci-tests          # docs-check + layout + all unit/component tests
 
 # Individual tasks
 ./build.ps1 layout            # casing + manifest-shape guard (Test-AvmModuleLayout)
@@ -155,6 +155,9 @@ The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it thr
 ./build.ps1 test              # Pester unit tests (excludes Component + Integration)
 ./build.ps1 coverage          # unit tests + coverage gate (fails below the 70% line floor)
 ./build.ps1 component         # Pester Component tier (real FS + real subprocess, stub binaries, no network)
+./build.ps1 test,component -TestGroup Authoring
+./build.ps1 test,component -TestGroup RepositoryManagement
+./build.ps1 test-workflows    # workflow definitions, installation behavior and CI contracts
 ./build.ps1 integration       # Pester Integration tier (real network + real binaries; not part of ci/pre-commit)
 ./build.ps1 integration -IntegrationGroup Bicep # Compiler, docs and native policy; no deployment
 ./build.ps1 build             # stage a publishable tree under ./out/Avm.Authoring + verify exports
@@ -169,6 +172,16 @@ Notes:
 - Integration defaults to all files. `-IntegrationGroup Bicep` selects `Bicep*.Tests.ps1`; `Terraform` selects the remaining shared/Terraform files. CI runs Bicep once per OS and retains both Terraform fixture legs per OS.
 - `build` stages the module as-committed. Version stamping is a release-time concern and lives in the ADO pipeline, so the in-repo `src/Avm.Authoring/Avm.Authoring.psd1` is never rewritten by the build.
 - A first run installs nothing for you — make sure the prerequisites in [§1](#1-prerequisites) (InvokeBuild, Pester, PSScriptAnalyzer) are present.
+
+`Authoring: CI`, `Workflows: CI` and `Repos: CI` run independently using native
+GitHub path filters on pull requests and main pushes. Each includes its tests
+and relevant shared dependencies and can be dispatched manually on its own.
+Only authoring retains the cross-platform matrix; workflow and
+repository-management tests run on Ubuntu. Unrelated documentation-only changes
+intentionally skip CI. Each workflow reports its own results.
+Run the full local `pre-commit` gate before pushing, not a scoped substitute.
+See [scoped CI](docs/quality-spec.md#scoped-ci) for the path-filter and test-group
+contract.
 
 ---
 

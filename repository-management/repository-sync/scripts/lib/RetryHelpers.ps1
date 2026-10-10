@@ -70,37 +70,6 @@ function Invoke-TerraformWithRetry {
         $command.Arguments = @("-chdir=$workingDirectory") + $command.Arguments
     }
 
-    # The repository sync is the only writer of each repo's state and runs on a
-    # 4 hourly schedule, so any lock we hit is left over from a cancelled or
-    # crashed run rather than a concurrent one. Break it and retry.
-    # State is passed through Context rather than a closure: GetNewClosure()
-    # rebinds the script block to a dynamic module, which cannot resolve the
-    # helper functions this file dot-sources into the caller's script scope.
-    $recoveryActions = @(
-        @{
-            Name        = "terraform state lock"
-            Pattern     = @("Error acquiring the state lock", "Error releasing the state lock")
-            MaxAttempts = 3
-            Context     = @{
-                workingDirectory   = $workingDirectory
-                storageAccountName = $stateStorageAccountName
-                containerName      = $stateContainerName
-                blobName           = $stateBlobName
-                subscriptionId     = $stateSubscriptionId
-            }
-            Action      = {
-                param([string[]]$errorOutput, [hashtable]$context)
-                Clear-TerraformStateLock `
-                    -errorOutput $errorOutput `
-                    -workingDirectory $context.workingDirectory `
-                    -storageAccountName $context.storageAccountName `
-                    -containerName $context.containerName `
-                    -blobName $context.blobName `
-                    -subscriptionId $context.subscriptionId
-            }
-        }
-    )
-
     return Invoke-CommandWithRetry `
         -parentCommand "terraform" `
         -commands $commands `
@@ -109,21 +78,179 @@ function Invoke-TerraformWithRetry {
         -maxRetries $maxRetries `
         -retryDelayIncremental $retryDelayIncremental `
         -retryOn $retryOn `
-        -recoveryActions $recoveryActions `
         -printOutput:$printOutput.IsPresent `
         -printOutputOnError:$printOutputOnError.IsPresent `
         -returnOutputParsedFromJson:$returnOutputParsedFromJson.IsPresent
 }
 
-# Clears the state lock left behind by a cancelled or crashed run. Prefers
-# `terraform force-unlock`, which clears the lock metadata as well as the blob
-# lease, and falls back to breaking the lease directly. The fallback matters
-# because a killed run often leaves the lease held with an empty
-# "terraformlockid" metadata value: there is then no ID for force-unlock to
-# match, and breaking the lease is the only way to release the blob. Returns
-# $true only when the lock was actually released, so the caller can fall
-# through to the normal failure path when it cannot be broken.
+function Test-RepositorySyncLockAcquisitionFailure {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([string[]] $Text)
+
+    $lines = @(Remove-AnsiEscapeCode -text (($Text -join "`n") -split '\r?\n') |
+        ForEach-Object { ($_ -replace '^[\s\u2502]+', '').TrimEnd() })
+    $headings = @($lines | Where-Object { $_ -cmatch '^(Error:|Error (acquiring|releasing) the state lock)' })
+    return $headings.Count -eq 1 -and $headings[0] -cmatch '^(Error:\s*)?Error acquiring the state lock$'
+}
+
+function Invoke-RepositorySyncLockRead {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [ValidateSet('az', 'gh')] [string] $Command,
+        [Parameter(Mandatory)] [string[]] $Arguments,
+        [hashtable] $Environment = @{}
+    )
+
+    try {
+        $result = Invoke-RepositorySyncProcess -Command $Command -Arguments $Arguments -EnvVars $Environment -TimeoutSec 60
+    }
+    catch [System.TimeoutException] {
+        throw [System.TimeoutException]::new('State-lock inspection timed out; no release or Terraform retry is permitted.')
+    }
+    if ($result.ExitCode -ne 0) {
+        $detail = Protect-RepositorySyncLogText -Text $result.StdErr -Environment $Environment
+        throw [System.InvalidOperationException]::new("State-lock inspection failed using $Command (exit $($result.ExitCode)). $detail")
+    }
+    try {
+        $value = ConvertFrom-Json -InputObject $result.StdOut -AsHashtable -Depth 30 -ErrorAction Stop
+    }
+    catch {
+        throw [System.IO.InvalidDataException]::new('State-lock inspection returned invalid JSON; raw output is private.')
+    }
+    if ($value -isnot [System.Collections.IDictionary]) {
+        throw [System.IO.InvalidDataException]::new('State-lock inspection must return one metadata object.')
+    }
+    return $value
+}
+
+function Assert-RepositorySyncNoCompetingWriter {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $RepoId,
+        [Parameter(Mandatory)] [string] $Repository,
+        [string] $LockOwner,
+        [hashtable] $Environment = @{}
+    )
+
+    $tools = 'Azure/azure-verified-modules-tools'
+    $workflow = '.github/workflows/repository-management-sync.yml'
+    if ($env:GITHUB_ACTIONS -cne 'true' -or $env:GITHUB_REPOSITORY -cne $tools -or
+        $env:GITHUB_REF -cne 'refs/heads/main' -or $env:GITHUB_WORKFLOW_REF -cne "$tools/$workflow@refs/heads/main" -or
+        $env:GITHUB_RUN_ID -cnotmatch '^[1-9][0-9]*$' -or $env:GITHUB_RUN_ATTEMPT -cnotmatch '^[1-9][0-9]*$' -or
+        [string]::IsNullOrWhiteSpace($env:RUNNER_NAME)) {
+        throw [System.InvalidOperationException]::new('Automatic lock recovery requires the trusted Terraform Sync workflow on Tools main.')
+    }
+    if ([string]::IsNullOrWhiteSpace($env:ACTIONS_STATE_LOCK_TOKEN)) {
+        throw [System.InvalidOperationException]::new('Automatic lock recovery requires the repository-scoped Actions read token.')
+    }
+    $readEnvironment = $Environment.Clone()
+    $readEnvironment.GH_TOKEN = $env:ACTIONS_STATE_LOCK_TOKEN
+    $readEnvironment.ACTIONS_STATE_LOCK_TOKEN = $null
+    $api = @('api', '--hostname', 'github.com', '--method', 'GET')
+    $run = Invoke-RepositorySyncLockRead -Command gh -Environment $readEnvironment `
+        -Arguments ($api + "repos/$tools/actions/runs/$env:GITHUB_RUN_ID")
+    if ([string]$run['id'] -cne $env:GITHUB_RUN_ID -or [string]$run['run_attempt'] -cne $env:GITHUB_RUN_ATTEMPT -or
+        $run['status'] -cne 'in_progress' -or $run['path'] -cne $workflow -or $run['head_branch'] -cne 'main' -or
+        $run['head_repository'] -isnot [System.Collections.IDictionary] -or $run['head_repository']['full_name'] -cne $tools -or
+        [string]$run['workflow_id'] -cnotmatch '^[1-9][0-9]*$') {
+        throw [System.InvalidOperationException]::new('GitHub did not verify the current trusted sync run and attempt.')
+    }
+    $active = Invoke-RepositorySyncLockRead -Command gh -Environment $readEnvironment `
+        -Arguments ($api + "repos/$tools/actions/workflows/$($run['workflow_id'])/runs?status=in_progress&per_page=100")
+    if ($active['total_count'] -ne 1 -or $active['workflow_runs'] -isnot [System.Collections.IList] -or
+        $active['workflow_runs'].Count -ne 1 -or [string]$active['workflow_runs'][0]['id'] -cne $env:GITHUB_RUN_ID -or
+        $active['workflow_runs'][0]['status'] -cne 'in_progress') {
+        throw [System.InvalidOperationException]::new('Another active sync run or incomplete run evidence prevents automatic lock recovery.')
+    }
+    $jobs = [System.Collections.Generic.List[object]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $expected = $null
+    $page = 1
+    do {
+        $response = Invoke-RepositorySyncLockRead -Command gh -Environment $readEnvironment `
+            -Arguments ($api + "repos/$tools/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs?per_page=100&page=$page")
+        if ([string]$response['total_count'] -cnotmatch '^[1-9][0-9]*$' -or
+            $response['jobs'] -isnot [System.Collections.IList] -or $response['jobs'].Count -eq 0 -or $response['jobs'].Count -gt 100 -or
+            ($null -ne $expected -and $expected -ne $response['total_count'])) {
+            throw [System.IO.InvalidDataException]::new('The current sync job inventory is incomplete or changed during inspection.')
+        }
+        $expected = $response['total_count']
+        foreach ($job in $response['jobs']) {
+            if ($job -isnot [System.Collections.IDictionary] -or [string]$job['id'] -cnotmatch '^[1-9][0-9]*$' -or
+                -not $seen.Add([string]$job['id'])) {
+                throw [System.IO.InvalidDataException]::new('The current sync job inventory is ambiguous.')
+            }
+            $jobs.Add($job)
+        }
+        $page++
+    } while ($jobs.Count -lt $expected)
+    $matching = @($jobs | Where-Object {
+        $_['status'] -ceq 'in_progress' -and $_['name'] -cmatch ('^Sync terraform-(azure|azurerm|azapi)-' + [regex]::Escape($RepoId) + '$')
+    })
+    if ($jobs.Count -ne $expected -or $matching.Count -ne 1 -or
+        $matching[0]['name'] -cne "Sync $($Repository.Split('/')[1])" -or $matching[0]['runner_name'] -cne $env:RUNNER_NAME) {
+        throw [System.InvalidOperationException]::new('An active competing state writer or unverified current worker prevents automatic lock recovery.')
+    }
+    if (-not [string]::IsNullOrWhiteSpace($LockOwner)) {
+        $ownerHost = ($LockOwner -split '@')[-1]
+        if (@($jobs | Where-Object { $_['status'] -ceq 'in_progress' -and $_['runner_name'] -ceq $ownerHost }).Count -gt 0) {
+            throw [System.InvalidOperationException]::new('The observed lock owner matches an active Actions worker; automatic release is refused.')
+        }
+    }
+}
+
+function Get-RepositorySyncStateBlobLock {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [object] $Backend,
+        [Parameter(Mandatory)] [string] $BlobName,
+        [hashtable] $Environment = @{}
+    )
+
+    $snapshot = Invoke-RepositorySyncLockRead -Command az -Environment $Environment -Arguments @(
+        'storage', 'blob', 'show', '--account-name', $Backend.StorageAccountName,
+        '--container-name', $Backend.ContainerName, '--name', $BlobName,
+        '--auth-mode', 'login', '--subscription', $Backend.SubscriptionId, '--only-show-errors', '--output', 'json',
+        '--query', '{etag:properties.etag,leaseState:properties.lease.state,leaseStatus:properties.lease.status,lockInfo:metadata.terraformlockid}'
+    )
+    if ($snapshot['etag'] -isnot [string] -or $snapshot['etag'] -cnotmatch '^(?:"0x[0-9a-fA-F]+"|0x[0-9a-fA-F]+)$' -or
+        $snapshot['leaseState'] -cnotin @('available', 'leased', 'expired', 'breaking', 'broken') -or
+        $snapshot['leaseStatus'] -cnotin @('locked', 'unlocked') -or
+        ($null -ne $snapshot['lockInfo'] -and $snapshot['lockInfo'] -isnot [string])) {
+        throw [System.IO.InvalidDataException]::new('The selected state blob has incomplete lease metadata.')
+    }
+    $lockId = $null
+    $lockOwner = ''
+    if (-not [string]::IsNullOrEmpty($snapshot['lockInfo'])) {
+        try {
+            $json = [Text.UTF8Encoding]::new($false, $true).GetString([Convert]::FromBase64String($snapshot['lockInfo']))
+            $info = ConvertFrom-Json -InputObject $json -AsHashtable -ErrorAction Stop
+        }
+        catch {
+            throw [System.IO.InvalidDataException]::new('The selected state lock metadata is malformed; it cannot be released automatically.')
+        }
+        $parsedId = [guid]::Empty
+        if ($info -isnot [System.Collections.IDictionary] -or $info['ID'] -isnot [string] -or
+            -not [guid]::TryParseExact($info['ID'], 'D', [ref]$parsedId) -or $parsedId -eq [guid]::Empty -or
+            $info['Path'] -cne "$($Backend.ContainerName)/$BlobName") {
+            throw [System.InvalidOperationException]::new('The observed Terraform lock does not identify the exact selected state blob.')
+        }
+        $lockId = $parsedId.ToString()
+        if ($info['Who'] -is [string]) { $lockOwner = $info['Who'] }
+    }
+    return @{
+        ETag = $snapshot['etag']
+        State = $snapshot['leaseState']
+        Status = $snapshot['leaseStatus']
+        Metadata = $snapshot['lockInfo']
+        LockId = $lockId
+        Owner = $lockOwner
+    }
+}
+
 function Clear-TerraformStateLock {
+    [CmdletBinding(SupportsShouldProcess)]
     param(
         [string[]]$errorOutput,
         [string]$workingDirectory,
@@ -131,101 +258,136 @@ function Clear-TerraformStateLock {
         [string]$containerName,
         [string]$blobName,
         [string]$subscriptionId,
-        [string]$outputLog = "force-unlock.log",
-        [string]$errorLog = "force-unlock.error.log"
+        [string]$tenantId,
+        [string]$clientId,
+        [string]$repository,
+        [hashtable]$environment = @{}
     )
 
-    # Terraform colourises and box-draws this output, so match the GUID rather
-    # than anchoring on the surrounding characters.
-    $lockIdPattern = 'ID:\s*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
-
-    $lockId = $null
-    foreach ($line in $errorOutput) {
-        $lockIdMatch = [regex]::Match($line, $lockIdPattern)
-        if ($lockIdMatch.Success) {
-            $lockId = $lockIdMatch.Groups[1].Value
-            break
+    if (-not (Test-RepositorySyncLockAcquisitionFailure -Text $errorOutput)) {
+        throw [System.ArgumentException]::new('Lock recovery is permitted only for a native state-lock acquisition failure.')
+    }
+    $backend = Resolve-RepositorySyncStateConfiguration -Backend @{
+        TenantId = $tenantId; SubscriptionId = $subscriptionId; ClientId = $clientId
+        StorageAccountName = $storageAccountName; ContainerName = $containerName
+    }
+    if ($blobName -cnotmatch '^(avm-(res|ptn|utl)-[a-z0-9]+(?:-[a-z0-9]+)*)\.tfstate$') {
+        throw [System.ArgumentException]::new('Lock recovery requires the exact canonical repository state blob.')
+    }
+    $repoId = $blobName.Substring(0, $blobName.Length - '.tfstate'.Length)
+    if ($repository -cnotmatch ('^Azure/terraform-(azure|azurerm|azapi)-' + [regex]::Escape($repoId) + '$')) {
+        throw [System.ArgumentException]::new('Lock recovery repository and state blob must identify the same module.')
+    }
+    if (-not $PSCmdlet.ShouldProcess("$storageAccountName/$containerName/$blobName", 'Attempt one automatic state-lock recovery')) {
+        return $false
+    }
+    $environment = $environment.Clone()
+    foreach ($name in (@([Environment]::GetEnvironmentVariables().Keys) + @($environment.Keys) |
+        Where-Object { $_ -like 'AZURE_STORAGE_*' })) {
+        $environment[$name] = $null
+    }
+    $dataRoot = Join-Path $workingDirectory '.terraform'
+    if ($environment['TF_WORKSPACE'] -cne 'default' -or $environment['TF_DATA_DIR'] -cne $dataRoot) {
+        throw [System.InvalidOperationException]::new('Lock recovery requires the initialized default workspace and its explicit data directory.')
+    }
+    try {
+        $metadata = Get-Content -LiteralPath (Join-Path $dataRoot 'terraform.tfstate') -Raw -ErrorAction Stop |
+            ConvertFrom-Json -AsHashtable -ErrorAction Stop
+    }
+    catch {
+        throw [System.IO.InvalidDataException]::new('Cannot verify initialized backend metadata for lock recovery; raw metadata is private.')
+    }
+    if ($metadata -isnot [System.Collections.IDictionary] -or
+        $metadata['backend'] -isnot [System.Collections.IDictionary] -or $metadata['backend']['type'] -cne 'azurerm' -or
+        $metadata['backend']['config'] -isnot [System.Collections.IDictionary]) {
+        throw [System.InvalidOperationException]::new('Lock recovery requires the explicitly initialized Azure backend.')
+    }
+    $expected = @{
+        tenant_id = $backend.TenantId; subscription_id = $backend.SubscriptionId; client_id = $backend.ClientId
+        storage_account_name = $backend.StorageAccountName; container_name = $backend.ContainerName; key = $blobName
+        use_azuread_auth = $true; use_oidc = $true; use_cli = $false; use_msi = $false; lookup_blob_endpoint = $false
+    }
+    foreach ($key in $expected.Keys) {
+        if ([string]$metadata['backend']['config'][$key] -cne [string]$expected[$key]) {
+            throw [System.InvalidOperationException]::new("Initialized backend '$key' does not match the selected recovery target.")
         }
     }
-
-    if ($lockId) {
-        Write-Host "Found stale Terraform state lock '$lockId'. Forcing unlock."
-
-        $process = Start-Process `
-            -FilePath "terraform" `
-            -ArgumentList @("-chdir=$workingDirectory", "force-unlock", "-force", $lockId) `
-            -RedirectStandardOutput $outputLog `
-            -RedirectStandardError $errorLog `
-            -PassThru `
-            -NoNewWindow `
-            -Wait
-
-        if ($process.ExitCode -eq 0) {
-            Write-Host "Released Terraform state lock '$lockId'."
-            return $true
+    Assert-RepositorySyncNoCompetingWriter -RepoId $repoId -Repository $repository -Environment $environment
+    $account = Invoke-RepositorySyncLockRead -Command az -Environment $environment -Arguments @(
+        'account', 'show', '--subscription', $backend.SubscriptionId, '--output', 'json', '--only-show-errors',
+        '--query', '{id:id,tenantId:tenantId,user:user}'
+    )
+    if ($account['id'] -ine $backend.SubscriptionId -or $account['tenantId'] -ine $backend.TenantId -or
+        $account['user'] -isnot [System.Collections.IDictionary] -or $account['user']['type'] -cne 'servicePrincipal' -or
+        $account['user']['name'] -ine $backend.ClientId) {
+        throw [System.InvalidOperationException]::new('Azure CLI must be authenticated as the selected state backend identity, not the provider or a user.')
+    }
+    $observed = Get-RepositorySyncStateBlobLock -Backend $backend -BlobName $blobName -Environment $environment
+    if ($observed.Status -ceq 'unlocked' -and $observed.State -cin @('available', 'expired', 'broken')) {
+        Write-Information 'The selected state lock is no longer held; retrying acquisition once.' -InformationAction Continue
+        return $true
+    }
+    if ($observed.State -cne 'leased' -or $observed.Status -cne 'locked') {
+        throw [System.InvalidOperationException]::new('The selected state lease is transitioning; it will not be changed automatically.')
+    }
+    $diagnostic = ConvertTo-FlatErrorText -text (Remove-AnsiEscapeCode -text $errorOutput)
+    $reported = [regex]::Matches($diagnostic, '(?:^|\s)ID:\s*([0-9a-fA-F-]{36})(?=\s|$)')
+    if ($reported.Count -gt 1 -or ($reported.Count -eq 1 -and $reported[0].Groups[1].Value -ine $observed.LockId)) {
+        throw [System.InvalidOperationException]::new('The reported lock ID no longer matches the selected state lock.')
+    }
+    $reportedPaths = [regex]::Matches($diagnostic, '(?:^|\s)Path:\s*(\S+)')
+    if ($reportedPaths.Count -gt 1 -or ($reportedPaths.Count -eq 1 -and $reportedPaths[0].Groups[1].Value -cne "$containerName/$blobName")) {
+        throw [System.InvalidOperationException]::new('The reported lock path does not match the selected state blob.')
+    }
+    Assert-RepositorySyncNoCompetingWriter -RepoId $repoId -Repository $repository -LockOwner $observed.Owner -Environment $environment
+    $current = Get-RepositorySyncStateBlobLock -Backend $backend -BlobName $blobName -Environment $environment
+    foreach ($key in @('ETag', 'State', 'Status', 'Metadata')) {
+        if ($observed[$key] -cne $current[$key]) {
+            throw [System.InvalidOperationException]::new('The observed state lock or lease changed before release; recovery is refused.')
         }
-
-        Write-Warning "terraform force-unlock failed with exit code $($process.ExitCode). Falling back to breaking the state blob lease."
-        Get-Content -Path $errorLog | Write-Host
+    }
+    Write-Warning "Attempting automatic recovery of the unverified lock on '$storageAccountName/$containerName/$blobName'; no active competing sync writer was observed."
+    if ($observed.LockId) {
+        $result = Invoke-RepositorySyncProcess -Command terraform -WorkingDirectory $workingDirectory -EnvVars $environment `
+            -Arguments @('force-unlock', '-force', $observed.LockId) -TimeoutSec 60
+        if ($result.ExitCode -ne 0) {
+            $detail = Protect-RepositorySyncLogText -Text $result.StdErr -Environment $environment
+            throw [System.InvalidOperationException]::new("Terraform force-unlock failed (exit $($result.ExitCode)); no lease-break fallback or command retry is permitted. $detail")
+        }
     }
     else {
-        Write-Host "No Terraform state lock ID in the error output. Falling back to breaking the state blob lease."
+        $null = Clear-TerraformStateBlobLease -Backend $backend -BlobName $blobName -ETag $observed.ETag `
+            -Environment $environment -Confirm:$false
     }
-
-    return Clear-TerraformStateBlobLease `
-        -storageAccountName $storageAccountName `
-        -containerName $containerName `
-        -blobName $blobName `
-        -subscriptionId $subscriptionId
+    $released = Get-RepositorySyncStateBlobLock -Backend $backend -BlobName $blobName -Environment $environment
+    if ($released.Status -cne 'unlocked' -or $released.State -cnotin @('available', 'expired', 'broken')) {
+        throw [System.InvalidOperationException]::new('The selected state lease is still held after recovery; Terraform will not be retried.')
+    }
+    Write-Information "Released the selected state lock on '$blobName'." -InformationAction Continue
+    return $true
 }
 
-# Breaks the Azure Storage blob lease that backs a Terraform state lock. Used
-# when `terraform force-unlock` cannot help, either because the lock metadata
-# is empty or because the lease no longer matches the one Terraform holds.
 function Clear-TerraformStateBlobLease {
+    [CmdletBinding(SupportsShouldProcess)]
     param(
-        [string]$storageAccountName,
-        [string]$containerName,
-        [string]$blobName,
-        [string]$subscriptionId,
-        [string]$outputLog = "lease-break.log",
-        [string]$errorLog = "lease-break.error.log"
+        [Parameter(Mandatory)] [object] $Backend,
+        [Parameter(Mandatory)] [string] $BlobName,
+        [Parameter(Mandatory)] [ValidatePattern('^(?:"0x[0-9a-fA-F]+"|0x[0-9a-fA-F]+)$')] [string] $ETag,
+        [hashtable] $Environment = @{}
     )
 
-    if (!$storageAccountName -or !$containerName -or !$blobName) {
-        Write-Warning "No state blob details were supplied, so the state lock cannot be broken. Leaving the lock in place."
+    if (-not $PSCmdlet.ShouldProcess("$($Backend.StorageAccountName)/$($Backend.ContainerName)/$BlobName", 'Break the unchanged state lease with missing lock metadata')) {
         return $false
     }
-
-    Write-Host "Breaking the lease on state blob '$blobName' in '$storageAccountName/$containerName'."
-
-    $arguments = @(
-            "storage", "blob", "lease", "break",
-            "--account-name", $storageAccountName,
-            "--container-name", $containerName,
-            "--blob-name", $blobName,
-            "--lease-break-period", "0",
-            "--auth-mode", "login"
+    $result = Invoke-RepositorySyncProcess -Command az -EnvVars $Environment -TimeoutSec 60 -Arguments @(
+        'storage', 'blob', 'lease', 'break', '--account-name', $Backend.StorageAccountName,
+        '--container-name', $Backend.ContainerName, '--blob-name', $BlobName, '--lease-break-period', '0',
+        '--if-match', $ETag, '--auth-mode', 'login', '--subscription', $Backend.SubscriptionId, '--only-show-errors', '--output', 'none'
     )
-    if ($subscriptionId) {
-        $arguments += @("--subscription", $subscriptionId)
+    if ($result.ExitCode -ne 0) {
+        $detail = Protect-RepositorySyncLogText -Text $result.StdErr -Environment $Environment
+        throw [System.InvalidOperationException]::new("The conditional state lease break failed (exit $($result.ExitCode)); Terraform will not be retried. $detail")
     }
-    $process = Start-Process `
-        -FilePath "az" `
-        -ArgumentList $arguments `
-        -RedirectStandardOutput $outputLog `
-        -RedirectStandardError $errorLog `
-        -PassThru `
-        -NoNewWindow `
-        -Wait
-
-    if ($process.ExitCode -ne 0) {
-        Write-Warning "Breaking the lease on state blob '$blobName' failed with exit code $($process.ExitCode)."
-        Get-Content -Path $errorLog | Write-Host
-        return $false
-    }
-
-    Write-Host "Broke the lease on state blob '$blobName'."
     return $true
 }
 
@@ -268,7 +430,8 @@ function Invoke-RepositorySyncProcess {
         [Parameter(Mandatory)] [string[]] $Arguments,
         [string] $WorkingDirectory,
         [hashtable] $EnvVars = @{},
-        [ValidateRange(1, 3600)] [int] $TimeoutSec = 300
+        [ValidateRange(1, 3600)] [int] $TimeoutSec = 300,
+        [scriptblock] $OnOutputLine
     )
 
     $module = Get-Module Avm.Authoring | Select-Object -First 1
@@ -282,10 +445,16 @@ function Invoke-RepositorySyncProcess {
     $environment.GH_DEBUG = $null
     $environment.GH_PROMPT_DISABLED = '1'
     return & $module {
-        param($Executable, $Arguments, $Directory, $Environment, $Timeout)
+        param($Executable, $Arguments, $Directory, $Environment, $Timeout, $OutputHandler)
+        $options = @{}
+        if ($null -ne $OutputHandler) {
+            $options.StreamOutput = $true
+            $options.OnStdOutLine = $OutputHandler
+            $options.OnStdErrLine = $OutputHandler
+        }
         Invoke-AvmProcess -FilePath $Executable -ArgumentList $Arguments -WorkingDirectory $Directory `
-            -TimeoutSec $Timeout -IgnoreExitCode -EnvVars $Environment
-    } $executable $Arguments $WorkingDirectory $environment $TimeoutSec
+            -TimeoutSec $Timeout -IgnoreExitCode -EnvVars $Environment @options
+    } $executable $Arguments $WorkingDirectory $environment $TimeoutSec $OnOutputLine
 }
 
 function Invoke-RepositoryGitHub {

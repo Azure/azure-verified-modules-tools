@@ -97,6 +97,7 @@ function Get-RepositorySyncTerraformEnvironment {
         TF_IN_AUTOMATION = 'true'
         TF_INPUT = 'false'
         TF_WORKSPACE = 'default'
+        ACTIONS_STATE_LOCK_TOKEN = $null
         TF_LOG = $null
         TF_LOG_CORE = $null
         TF_LOG_PROVIDER = $null
@@ -133,29 +134,66 @@ function Invoke-RepositorySyncTerraform {
         [Parameter(Mandatory)] [string] $Root,
         [hashtable] $Environment = @{},
         [switch] $Json,
-        [switch] $Quiet
+        [switch] $Quiet,
+        [switch] $StreamOutput,
+        [hashtable] $LockRecovery = @{}
     )
 
+    if ($StreamOutput -and ($Json -or $Quiet -or ($Arguments -cmatch '^-{1,2}json(?:=|$)'))) {
+        throw [System.ArgumentException]::new('Streaming requires visible human-readable Terraform output, not Quiet or JSON output.')
+    }
+    $options = @{}
+    if ($StreamOutput) {
+        $protectLog = ${function:Protect-RepositorySyncLogText}
+        $options.OnOutputLine = {
+            param([string] $Line)
+            Write-Information (& $protectLog -Text $Line -Environment $Environment) -InformationAction Continue
+        }.GetNewClosure()
+    }
     if (-not $Json -and -not $Quiet) {
         Write-Information "Running Terraform $($Arguments[0])..." -InformationAction Continue
     }
-    try {
-        $result = Invoke-RepositorySyncProcess -Command terraform -Arguments $Arguments `
-            -WorkingDirectory $Root -EnvVars $Environment -TimeoutSec 1800
-    }
-    catch [System.TimeoutException] {
-        $message = "Terraform $($Arguments[0]) timed out; the child process was stopped. Inspect state ownership before retrying an interrupted apply."
-        if (-not $Json -and -not $Quiet) {
-            $message += "`n" + (Protect-RepositorySyncLogText -Text (@(
-                $_.Exception.Data['StdOut'], $_.Exception.Data['StdErr']
-            ) -join "`n"))
+    $recoveryAttempted = $false
+    $recoveryFailure = ''
+    for ($attempt = 0; $attempt -lt 2; $attempt++) {
+        try {
+            $result = Invoke-RepositorySyncProcess -Command terraform -Arguments $Arguments `
+                -WorkingDirectory $Root -EnvVars $Environment -TimeoutSec 1800 @options
         }
-        throw [System.TimeoutException]::new($message)
+        catch [System.TimeoutException] {
+            $message = "Terraform $($Arguments[0]) timed out; the child process was stopped. Inspect state ownership before retrying an interrupted apply."
+            if (-not $Json -and -not $Quiet) {
+                $message += "`n" + (Protect-RepositorySyncLogText -Text (@(
+                    $_.Exception.Data['StdOut'], $_.Exception.Data['StdErr']
+                ) -join "`n") -Environment $Environment)
+            }
+            throw [System.TimeoutException]::new($message)
+        }
+        if ($result.ExitCode -eq 0 -or $attempt -ne 0 -or $LockRecovery.Count -eq 0 -or
+            $Json -or ($Arguments -cmatch '^-{1,2}json(?:=|$)') -or $Arguments[0] -cnotin @('plan', 'apply') -or
+            -not (Test-RepositorySyncLockAcquisitionFailure -Text @($result.StdOut, $result.StdErr))) {
+            break
+        }
+        $recoveryAttempted = $true
+        try {
+            if (-not (Clear-TerraformStateLock @LockRecovery -errorOutput @($result.StdOut, $result.StdErr) `
+                -workingDirectory $Root -environment $Environment -Confirm:$false)) {
+                $recoveryFailure = 'State-lock recovery was declined; Terraform was not retried.'
+                break
+            }
+        }
+        catch {
+            $recoveryFailure = Protect-RepositorySyncLogText -Text $_.Exception.Message -Environment $Environment
+            break
+        }
     }
     if ($result.ExitCode -ne 0) {
-        $message = "Terraform $($Arguments[0]) failed (exit code $($result.ExitCode)); no automatic apply retry or state repair was attempted."
+        $outcome = $recoveryAttempted ?
+            "bounded lock recovery did not resolve the failure; no further automatic retry is permitted. $recoveryFailure" :
+            'no automatic apply retry or state repair was attempted.'
+        $message = "Terraform $($Arguments[0]) failed (exit code $($result.ExitCode)); $outcome"
         if (-not $Json) {
-            $message += "`n" + (Protect-RepositorySyncLogText -Text (@($result.StdOut, $result.StdErr) -join "`n"))
+            $message += "`n" + (Protect-RepositorySyncLogText -Text (@($result.StdOut, $result.StdErr) -join "`n") -Environment $Environment)
         }
         $exception = [System.InvalidOperationException]::new($message)
         $exception.Data['ExitCode'] = $result.ExitCode
@@ -173,10 +211,10 @@ function Invoke-RepositorySyncTerraform {
         }
         return $document
     }
-    if ($Quiet) { return }
+    if ($Quiet -or $StreamOutput) { return }
     foreach ($text in @($result.StdOut, $result.StdErr)) {
         if (-not [string]::IsNullOrWhiteSpace($text)) {
-            Write-Information (Protect-RepositorySyncLogText -Text $text) -InformationAction Continue
+            Write-Information (Protect-RepositorySyncLogText -Text $text -Environment $Environment) -InformationAction Continue
         }
     }
 }
@@ -247,6 +285,8 @@ function Invoke-TerraformPlanAndApply {
         [string]$stateStorageAccountName,
         [string]$stateContainerName,
         [string]$stateSubscriptionId,
+        [string]$stateTenantId,
+        [string]$stateClientId,
         [array]$issueLog,
         [hashtable]$environment = @{},
         [AllowNull()] [System.Collections.IDictionary] $bamiSettings,
@@ -259,8 +299,21 @@ function Invoke-TerraformPlanAndApply {
     if (-not $PSCmdlet.ShouldProcess($orgAndRepoName, 'Plan repository configuration and test identity')) {
         return $issueLog
     }
+    $lockRecovery = @{}
+    if (@($stateStorageAccountName, $stateContainerName, $stateSubscriptionId, $stateTenantId, $stateClientId) |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) {
+        $lockRecovery = @{
+            storageAccountName = $stateStorageAccountName
+            containerName = $stateContainerName
+            subscriptionId = $stateSubscriptionId
+            tenantId = $stateTenantId
+            clientId = $stateClientId
+            blobName = "$repoId.tfstate"
+            repository = $orgAndRepoName
+        }
+    }
     $planPath = Join-Path $terraformModulePath "$repoId.tfplan"
-    Invoke-RepositorySyncTerraform -Root $terraformModulePath -Environment $environment -Arguments @(
+    Invoke-RepositorySyncTerraform -Root $terraformModulePath -Environment $environment -LockRecovery $lockRecovery -Arguments @(
         'plan', '-input=false', '-no-color', '-lock-timeout=5m', "-out=$planPath"
     )
     $plan = Invoke-RepositorySyncTerraform -Root $terraformModulePath -Environment $environment `
@@ -269,7 +322,7 @@ function Invoke-TerraformPlanAndApply {
         -RepositorySyncRepositoryId $repositorySyncRepositoryId -EntraGroupNames $entraGroupNames `
         -JobWorkflowRef $jobWorkflowRef -ResourceTypesThatCannotBeDestroyed $resourceTypesThatCannotBeDestroyed
     if (-not $planOnly -and $PSCmdlet.ShouldProcess($orgAndRepoName, 'Apply the verified saved repository plan')) {
-        Invoke-RepositorySyncTerraform -Root $terraformModulePath -Environment $environment -Arguments @(
+        Invoke-RepositorySyncTerraform -Root $terraformModulePath -Environment $environment -LockRecovery $lockRecovery -Arguments @(
             'apply', '-input=false', '-no-color', '-lock-timeout=5m', $planPath
         )
     }

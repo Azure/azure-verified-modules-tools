@@ -3,6 +3,7 @@
 . (Join-Path $PSScriptRoot '..' '..' '..' 'shared' 'TestTenant.ps1')
 . (Join-Path $PSScriptRoot 'RetryHelpers.ps1')
 . (Join-Path $PSScriptRoot 'TerraformOperations.ps1')
+. (Join-Path $PSScriptRoot 'RepositoryDiscovery.ps1')
 
 function Resolve-AvmRepositorySyncFederationContext {
     [CmdletBinding()]
@@ -531,6 +532,12 @@ function Resolve-AvmRepositorySyncContext {
     if ($repo.full_name -cne $Repository -or $repo.fork -or $repo.id -le 0 -or
         [string]$repo.owner.id -cne $toolsContext.OrganizationId -or $repo.owner.login -cne 'Azure') {
         throw [System.InvalidOperationException]::new('GitHub returned an unexpected repository identity.')
+    }
+    if ($Repository -imatch 'windows|w5s') {
+        $installed = @(Get-RepositoryInstalledRepositories)
+        if (@($installed | Where-Object { $_.full_name -ceq $Repository }).Count -ne 1) {
+            throw [System.InvalidOperationException]::new('Reserved-name identity validation requires the selected repository in the complete App installation inventory.')
+        }
     }
     return [pscustomobject]@{
         Repository = $repo
