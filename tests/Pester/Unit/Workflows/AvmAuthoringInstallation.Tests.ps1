@@ -7,7 +7,7 @@ BeforeDiscovery {
         $workflow = Get-Content -LiteralPath (Join-Path $workflowRoot $workflowName) -Raw
         $step = [regex]::Match(
             $workflow,
-            '(?ms)^      - name: [^\r\n]*Install Avm\.Authoring[^\r\n]*\r?\n(?<body>.*?)(?=^      - |\z)'
+            '(?ms)^      - name: [^\r\n]*(?:Install|Load) Avm\.Authoring[^\r\n]*\r?\n(?<body>.*?)(?=^      - |\z)'
         )
         $run = [regex]::Match(
             $step.Groups['body'].Value,
@@ -57,8 +57,13 @@ Describe 'Avm.Authoring installation in <WorkflowName>' -ForEach $installCases {
     }
 
     BeforeEach {
-        $previousVersion = $env:AVM_AUTHORING_VERSION
+        $previousEnvironment = @{}
+        foreach ($name in @('AVM_AUTHORING_VERSION', 'USE_WORKFLOW_AUTHORING_SOURCE', 'GITHUB_WORKSPACE')) {
+            $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+        }
         $env:AVM_AUTHORING_VERSION = $null
+        $env:USE_WORKFLOW_AUTHORING_SOURCE = 'false'
+        $env:GITHUB_WORKSPACE = Join-Path $TestDrive 'repository'
         $global:AvmWorkflowInstallAttempts = 0
         $global:AvmWorkflowBootstrapAttempts = 0
 
@@ -74,7 +79,11 @@ Describe 'Avm.Authoring installation in <WorkflowName>' -ForEach $installCases {
     }
 
     AfterEach {
-        $env:AVM_AUTHORING_VERSION = $previousVersion
+        foreach ($name in $previousEnvironment.Keys) {
+            $value = $previousEnvironment[$name]
+            if ($null -eq $value) { $value = [NullString]::Value }
+            [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+        }
         Remove-Variable -Name AvmWorkflowInstallAttempts, AvmWorkflowBootstrapAttempts -Scope Global
     }
 
@@ -230,6 +239,50 @@ Describe 'Avm.Authoring installation in <WorkflowName>' -ForEach $installCases {
         }
     }
     else {
+        It 'loads the workflow checkout without contacting the Gallery' {
+            $env:USE_WORKFLOW_AUTHORING_SOURCE = 'true'
+            $sourceManifest = Join-Path $env:GITHUB_WORKSPACE 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
+            Mock Install-PSResource {
+                throw [System.Net.Http.HttpRequestException]::new('Gallery HTTP 403 (Forbidden).')
+            }
+
+            & $installer
+
+            Should -Invoke Install-PSResource -Times 0 -Exactly
+            Should -Invoke Install-Module -Times 0 -Exactly
+            Should -Invoke Start-Sleep -Times 0 -Exactly
+            Should -Invoke Write-Warning -Times 0 -Exactly
+            Should -Invoke Import-Module -Times 1 -Exactly -ParameterFilter {
+                $Name -eq $sourceManifest -and $Force -and $ErrorAction -eq 'Stop'
+            }
+        }
+
+        It 'reports a missing checkout module without falling back to the Gallery' {
+            $env:USE_WORKFLOW_AUTHORING_SOURCE = 'true'
+            $sourceManifest = Join-Path $env:GITHUB_WORKSPACE 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
+            Mock Import-Module {
+                throw [System.IO.FileNotFoundException]::new('Checkout module is missing.')
+            } -ParameterFilter { $Name -eq $sourceManifest }
+
+            { & $installer } | Should -Throw '*Checkout module is missing*'
+
+            Should -Invoke Install-PSResource -Times 0 -Exactly
+            Should -Invoke Start-Sleep -Times 0 -Exactly
+            Should -Invoke Import-Module -Times 1 -Exactly -ParameterFilter { $Name -eq $sourceManifest }
+        }
+
+        It 'rejects an incompatible checkout without falling back to a release' {
+            $env:USE_WORKFLOW_AUTHORING_SOURCE = 'true'
+            Mock Get-Command {
+                [pscustomobject]@{ Parameters = @{} }
+            } -ParameterFilter { $Name -eq 'Invoke-AvmPreCommit' }
+
+            { & $installer } | Should -Throw '*does not support repository sync options*'
+
+            Should -Invoke Install-PSResource -Times 0 -Exactly
+            Should -Invoke Start-Sleep -Times 0 -Exactly
+        }
+
         It 'still rejects an incompatible release without retrying the successful installation' {
             Mock Get-Command {
                 [pscustomobject]@{ Parameters = @{} }

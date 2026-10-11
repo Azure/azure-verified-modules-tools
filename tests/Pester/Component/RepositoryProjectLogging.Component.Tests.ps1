@@ -10,17 +10,27 @@ Describe 'Repository sync project prerequisites' -Tag Component {
     BeforeAll {
         $workflow = Get-Content -LiteralPath (Join-Path $script:root '.github' 'workflows' 'repository-management-sync-repository.yml') -Raw
         $script:steps = @{}
-        foreach ($name in @('Install Avm.Authoring', 'Create GitHub App token', 'Add repository items to the AVM All Up project', 'Report skipped project synchronization', 'Report project sync issues')) {
+        foreach ($name in @('Load Avm.Authoring', 'Create GitHub App token', 'Add repository items to the AVM All Up project', 'Report skipped project synchronization', 'Report project sync issues')) {
             $match = [regex]::Match($workflow, '(?ms)^      - name: ' + [regex]::Escape($name) + '\r?\n.*?(?=^      - name:|\z)')
             $match.Success | Should -BeTrue
             $script:steps[$name] = $match.Value
         }
         $script:stepCode = @{}
-        foreach ($name in @('Install Avm.Authoring', 'Report skipped project synchronization')) {
+        foreach ($name in @('Load Avm.Authoring', 'Report skipped project synchronization')) {
             $match = [regex]::Match($script:steps[$name], '(?ms)^        run: \|\r?\n(?<code>.*?)(?=^        [a-z]|\z)')
             $match.Success | Should -BeTrue
             $script:stepCode[$name] = [scriptblock]::Create(($match.Groups['code'].Value -replace '(?m)^          ', ''))
         }
+    }
+
+    BeforeEach {
+        $previousSourceSelection = [Environment]::GetEnvironmentVariable('USE_WORKFLOW_AUTHORING_SOURCE', 'Process')
+        $env:USE_WORKFLOW_AUTHORING_SOURCE = 'false'
+    }
+
+    AfterEach {
+        $value = if ($null -eq $previousSourceSelection) { [NullString]::Value } else { $previousSourceSelection }
+        [Environment]::SetEnvironmentVariable('USE_WORKFLOW_AUTHORING_SOURCE', $value, 'Process')
     }
 
     It 'preserves the original installer failure after its existing three attempts' {
@@ -28,7 +38,7 @@ Describe 'Repository sync project prerequisites' -Tag Component {
         Mock Start-Sleep {}
         Mock Import-Module {} -ParameterFilter { $Name -eq 'Avm.Authoring' }
         $records = [System.Collections.Generic.List[object]]::new()
-        { & $script:stepCode['Install Avm.Authoring'] 3>&1 | ForEach-Object { $records.Add($_) } } |
+        { & $script:stepCode['Load Avm.Authoring'] 3>&1 | ForEach-Object { $records.Add($_) } } |
             Should -Throw '*PowerShell Gallery HTTP 403 (Forbidden)*'
         Should -Invoke Install-PSResource -Exactly 3
         Should -Invoke Start-Sleep -Exactly 2
@@ -38,7 +48,7 @@ Describe 'Repository sync project prerequisites' -Tag Component {
             $record | Should -BeOfType ([System.Management.Automation.WarningRecord])
             $record.Message | Should -Match 'HTTP 403'
         }
-        $script:steps['Install Avm.Authoring'] | Should -Not -Match 'continue-on-error'
+        $script:steps['Load Avm.Authoring'] | Should -Not -Match 'continue-on-error'
         $script:steps['Create GitHub App token'] | Should -Not -Match 'continue-on-error|(?m)^        if:'
     }
 

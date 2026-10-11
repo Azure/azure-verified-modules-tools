@@ -1572,6 +1572,14 @@ Git origin so module classification does not depend on temporary directory
 names or legacy telemetry prefixes. Setting that local identity must not
 fetch from or write to the remote repository.
 
+Manual plan-only repository-sync runs selecting workflow authoring source
+must load the checked-out module during preparation bootstrap and optional
+project synchronization, without first installing an unused Gallery release.
+Only the combination of manual dispatch, plan-only mode and the source option
+may select that checkout. Released-source, scheduled and apply runs retain
+bounded Gallery installation retries. Missing or incompatible checkout
+modules fail explicitly; they must not fall back to a release.
+
 ### Coverage
 
 - 70% line coverage on `src/Avm.Authoring/` minimum, enforced via Pester `CodeCoverage`. CI build fails below the floor.

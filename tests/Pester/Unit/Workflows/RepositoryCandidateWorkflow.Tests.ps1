@@ -61,6 +61,21 @@ Describe 'Repository sync candidate workflow' {
                 'sync_project_items: ${{ github.event_name != ''workflow_dispatch'' || inputs.sync_project_items }}'))
     }
 
+    It 'shares the guarded source selection with bootstrap and optional project synchronization' {
+        $script:prepare | Should -Match ([regex]::Escape(
+                'USE_WORKFLOW_AUTHORING_SOURCE: ${{ github.event_name == ''workflow_dispatch'' && inputs.plan_only && inputs.use_workflow_authoring_source }}'))
+        foreach ($name in @('Load Avm.Authoring', 'Add repository items to the AVM All Up project')) {
+            $step = [regex]::Match($script:prepare,
+                '(?ms)^      - name: ' + [regex]::Escape($name) + '\r?\n(?<body>.*?)(?=^      - name:|\z)')
+            $step.Success | Should -BeTrue
+            $step.Groups['body'].Value | Should -Match '\$env:USE_WORKFLOW_AUTHORING_SOURCE -eq ''true'''
+            $step.Groups['body'].Value | Should -Match ([regex]::Escape(
+                    "Join-Path `$env:GITHUB_WORKSPACE 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'"))
+            $step.Groups['body'].Value | Should -Match 'Import-Module -Name \$moduleToLoad -Force -ErrorAction Stop'
+        }
+        $script:prepare | Should -Match '\$planOnly -and \$triggerType -eq ''workflow_dispatch'' -and\s+\$env:USE_WORKFLOW_AUTHORING_SOURCE -eq ''true'''
+    }
+
     It 'skips only this repository when its preparation fails and isolates its validation identity' {
         $script:validate | Should -Match 'environment:\s*avm-validation'
         $script:validate | Should -Match 'needs:\s*run-sync'
