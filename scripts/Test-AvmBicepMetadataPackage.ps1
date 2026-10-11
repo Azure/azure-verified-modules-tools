@@ -66,6 +66,8 @@ function Join-AvmPackageSmokePath {
 
 $registryRoot = (Resolve-Path -LiteralPath $RegistryPath).ProviderPath
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$yamlPin = [version]((Get-Content -LiteralPath (Join-Path $repoRoot 'src' 'Avm.Authoring' 'Resources' 'avm.pins.jsonc') -Raw |
+        ConvertFrom-Json -AsHashtable)['powerShellModules']['powershell-yaml']['version'])
 $sourceCommit = (& git -C $repoRoot rev-parse HEAD).Trim()
 Assert-AvmPackageSmoke -Condition ($LASTEXITCODE -eq 0) -Message 'Unable to read the tools source commit.'
 $sourceStatus = @(& git -C $repoRoot status --porcelain --untracked-files=all -- src/Avm.Authoring)
@@ -101,7 +103,7 @@ if ($Probe) {
     $privateNames = @(
         'Get-AvmBicepMetadataLiteral', 'Get-AvmMetadataSourcePlan', 'Test-AvmBicepTelemetrySourceWiring',
         'Test-AvmMetadataModules', 'Invoke-AvmBicepDocs', 'Invoke-AvmBicepCheckPolicy',
-        'Invoke-AvmBicepCheckConvention', 'Invoke-AvmBicepTestUnit', 'Invoke-AvmBicepPesterSuite',
+        'Invoke-AvmBicepCheckConvention', 'Invoke-AvmBicepConventionSuite', 'Invoke-AvmBicepTestUnit', 'Invoke-AvmBicepPesterSuite',
         'Get-AvmBicepE2ePostHook', 'Invoke-AvmBicepE2ePostHook',
         'Get-AvmBicepApiSpecList', 'Get-AvmBicepMcrTagList'
     )
@@ -129,6 +131,16 @@ if ($Probe) {
         -Segments @('Resources', 'bicep', 'Invoke-AvmPesterSuite.ps1')
     Assert-AvmPackageSmoke -Condition (Test-Path -LiteralPath $runner -PathType Leaf) `
         -Message 'The package omitted the child Pester runner.'
+    $conventions = Join-AvmPackageSmokePath -Root $expectedModule -Segments @('Resources', 'bicep', 'conventions')
+    $conventionRules = @(Get-ChildItem -LiteralPath (Join-Path $conventions 'rules') -Filter 'Test-AvmBicepConvention*.ps1' -File -ErrorAction SilentlyContinue)
+    Assert-AvmPackageSmoke -Condition ((Test-Path -LiteralPath (Join-Path $conventions 'Conventions.Tests.ps1') -PathType Leaf) -and
+        $conventionRules.Count -eq 12) `
+        -Message "The package omitted the convention Pester suite or its rules ($($conventionRules.Count) of 12 rules)."
+    $settings = Join-AvmPackageSmokePath -Root $expectedModule -Segments @('Resources', 'bicep', 'settings.json')
+    Assert-AvmPackageSmoke -Condition ((Test-Path -LiteralPath $settings -PathType Leaf) -and
+        (& $module { (Get-AvmBicepConfiguration)['e2e']['ownershipTag'] }) -ceq 'avm-e2e-run-id' -and
+        (& $module { Get-AvmPowerShellModulePin -Name 'powershell-yaml' }) -eq $yamlPin) `
+        -Message 'The package omitted or could not resolve its Bicep settings and PowerShell module pins.'
     $negativeCases = [System.Collections.Generic.List[object]]::new()
 
     $scopes = @(
@@ -391,7 +403,7 @@ try {
                 $available = @(Get-Module -ListAvailable -Name $name | Sort-Object Version -Descending)
                 $dependency = $available | Where-Object {
                     ($name -ne 'Pester' -or $_.Version -ge [version]'5.5.0') -and
-                    ($name -ne 'powershell-yaml' -or $_.Version -eq [version]'0.4.12')
+                    ($name -ne 'powershell-yaml' -or $_.Version -eq $yamlPin)
                 } | Select-Object -First 1
                 Assert-AvmPackageSmoke -Condition ($null -ne $dependency) `
                     -Message "Required local test dependency '$name' is missing; run the standard focused selectors first."

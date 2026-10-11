@@ -87,7 +87,7 @@ function Assert-AvmCleanFailure {
     $isModuleVersionFailure = $Exception -is [AvmModuleVersionException]
     $detail = $Exception.Message.Replace("`r", ' ').Replace("`n", ' ')
     $summary = if ($isModuleVersionFailure) {
-        "AVM upgrade required.`n$($Exception.Message)"
+        "Avm.Authoring $($Exception.CurrentVersion) is outdated. Version $($Exception.LatestVersion) is required to run 'avm $Verb'.`n`n$($Exception.Message)"
     }
     else {
         'avm {0} failed: {1}' -f $Verb, $detail
@@ -106,7 +106,7 @@ function Assert-AvmCleanFailure {
         $Exception,
         $errorId,
         $(if ($isModuleVersionFailure) {
-                [System.Management.Automation.ErrorCategory]::NotInstalled
+                [System.Management.Automation.ErrorCategory]::NotSpecified
             }
             else {
                 [System.Management.Automation.ErrorCategory]::InvalidOperation

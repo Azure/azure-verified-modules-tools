@@ -49,10 +49,10 @@ override_data {
 }
 
 override_data {
-  target = module.bami[0].data.azuread_group.test_permissions["avm-test-identity-owners"]
+  target = module.bami[0].data.azuread_group.test_permissions["avm-test-management-group-owners"]
   values = {
     object_id        = "10000000-0000-4000-8000-000000000009"
-    display_name     = "avm-test-identity-owners"
+    display_name     = "avm-test-management-group-owners"
     security_enabled = true
     types            = []
   }
@@ -62,7 +62,7 @@ override_resource {
   target          = module.bami[0].azapi_resource.identity
   override_during = plan
   values = {
-    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-example-repo"
+    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-terraform-azurerm-avm-ptn-example-repo"
     output = {
       properties = {
         principalId = "10000000-0000-4000-8000-000000000007"
@@ -74,7 +74,7 @@ override_resource {
 }
 
 variables {
-  entra_group_names             = ["avm-test-entra-readers", "avm-test-identity-owners"]
+  entra_group_names             = ["avm-test-entra-readers", "avm-test-management-group-owners"]
   github_repository_name        = "terraform-azurerm-avm-ptn-example-repo"
   github_teams                  = {}
   module_id                     = "avm-ptn-example-repo"

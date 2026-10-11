@@ -43,6 +43,7 @@ runs:
         $parameters = @{
           Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH; TestFiles = $tests
           PoolJson = $env:TEST_SUBSCRIPTION_IDS; FallbackSubscriptionId = $env:VALIDATE_SUBSCRIPTION_ID
+          ModuleClientIds = $env:VALIDATE_MODULE_CLIENT_IDS; TenantId = $env:VALIDATE_TENANT_ID
           RandomSeed = [int](([long]$env:GITHUB_RUN_ID + [long]$env:GITHUB_RUN_ATTEMPT) % [int]::MaxValue)
           DisplaySubscriptionNames = ConvertTo-AvmWorkflowBoolean $env:DISPLAY_SUBSCRIPTION_NAMES
         }

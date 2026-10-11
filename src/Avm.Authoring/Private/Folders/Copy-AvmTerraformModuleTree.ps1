@@ -5,7 +5,9 @@ function Copy-AvmTerraformModuleTree {
         [string] $SourceRoot,
 
         [Parameter(Mandatory)]
-        [string] $DestinationRoot
+        [string] $DestinationRoot,
+
+        [switch] $IncludeDependencyLocks
     )
 
     Set-StrictMode -Version 3.0
@@ -19,7 +21,7 @@ function Copy-AvmTerraformModuleTree {
         $relative = [System.IO.Path]::GetRelativePath($SourceRoot, $file.FullName)
         $segments = $relative -split '[\\/]'
         if ($segments -contains '.git' -or $segments -contains '.terraform') { continue }
-        if ($file.Name -eq '.terraform.lock.hcl' -or $file.Name -like '*.tfstate*') { continue }
+        if (($file.Name -eq '.terraform.lock.hcl' -and -not $IncludeDependencyLocks) -or $file.Name -like '*.tfstate*') { continue }
         if ($file.Name -in @('tfplan', 'tfplan.json')) { continue }
 
         $destination = Join-Path $DestinationRoot $relative

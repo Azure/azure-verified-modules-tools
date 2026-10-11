@@ -39,8 +39,8 @@ function Get-AvmBicepMcrTagList {
         }
 
         try {
-            $response = Invoke-WebRequest -Uri $uri -Method Get -Headers @{ Accept = 'application/json' } `
-                -MaximumRedirection 0 -SkipHttpErrorCheck -TimeoutSec 20 -ErrorAction Stop
+            $response = Invoke-AvmWebRequest -Uri $uri -Headers @{ Accept = 'application/json' } `
+                -MaximumRedirection 0 -SkipHttpErrorCheck -TimeoutSec 20 -Label "MCR tag-list request for '$ModulePath'"
         }
         catch [System.Net.Http.HttpRequestException], [System.Net.WebException],
         [System.TimeoutException], [System.Management.Automation.RuntimeException] {

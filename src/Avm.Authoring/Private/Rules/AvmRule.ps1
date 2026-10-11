@@ -10,8 +10,7 @@ function New-AvmRule {
         AppliesTo='root') and the result is validated by Test-AvmRule before
         return.
 
-        Authored shape (see docs/quality-standards.md Appendix A for the
-        canonical rule list):
+        Authored shape:
 
             @{
                 Id          = 'avm.tf.outputs-tf-not-output-tf'

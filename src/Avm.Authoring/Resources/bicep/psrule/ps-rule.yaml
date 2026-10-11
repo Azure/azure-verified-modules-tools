@@ -1,0 +1,56 @@
+binding:
+  preferTargetInfo: true
+  targetType:
+    - type
+    - resourceType
+requires:
+  PSRule: "@pre >=2.9.0"
+  PSRule.Rules.Azure: "@pre >=1.38.0"
+include:
+  module:
+    - PSRule.Rules.Azure
+execution:
+  ruleSuppressed: Debug
+  unprocessedObject: Debug
+output:
+  culture:
+    - "en-US"
+input:
+  pathIgnore:
+    - "*"
+    - "!avm/**/defaults/*.test.bicep"
+    - "!avm/**/waf-aligned/*.test.bicep"
+configuration:
+  AZURE_PARAMETER_FILE_EXPANSION: false
+  AZURE_BICEP_FILE_EXPANSION: true
+  AZURE_BICEP_FILE_EXPANSION_TIMEOUT: 60
+  AZURE_DEPLOYMENT_NONSENSITIVE_PARAMETER_NAMES:
+    [
+      "sasTokenValidityLength",
+      "passwordlength",
+      "secretname",
+      "secreturl",
+      "secreturi",
+      "secretrotation",
+      "secretinterval",
+      "secretprovider",
+      "secretsprovider",
+      "secretref",
+      "secretid",
+      "disablepassword",
+      "sync*passwords",
+      "sqlAdministratorLogin",
+      "tokenname",
+      "ssoClientSecretKeyVaultPath",
+      "ssoSecretType",
+      "tokenValidityLength",
+      "uniqueKeyPolicyKeys",
+    ]
+rule:
+  includeLocal: false
+  exclude:
+    - Azure.KeyVault.PurgeProtect
+    - Azure.VM.UseHybridUseBenefit
+    - Azure.AppConfig.PurgeProtect
+    - Azure.MySQL.MaintenanceWindow
+    - Azure.AppService.AvailabilityZone

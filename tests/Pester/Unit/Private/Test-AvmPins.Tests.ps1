@@ -178,6 +178,24 @@ Describe 'Test-AvmPins' {
                     Should -Throw -ExceptionType ([System.Data.DataException])
             }
         }
+
+        It 'rejects checksum-bypass metadata in serialized pins' {
+            foreach ($pinKind in @('binary', 'PowerShell module')) {
+                $pins = script:NewValidLock
+                if ($pinKind -eq 'binary') {
+                    $pins.tools[0].versionOverride = @{ Path = 'untrusted.json'; PackagedVersion = '1.9.5' }
+                }
+                else {
+                    $pins.powerShellModules = @{
+                        Pester = @{ version = '5.7.1'; sha256 = 'a' * 64; versionOverride = @{} }
+                    }
+                }
+                InModuleScope Avm.Authoring -Parameters @{ L = $pins } {
+                    param($L)
+                    { Test-AvmPins -Pins $L } | Should -Throw '*cannot declare runtime versionOverride metadata*'
+                }
+            }
+        }
     }
 
     Context 'platformAliases' {
@@ -330,6 +348,49 @@ Describe 'Test-AvmPins' {
         }
     }
 
+    Context 'powerShellModules' {
+        It 'accepts exact module versions' {
+            $pins = script:NewValidLock
+            $pins.powerShellModules = @{
+                'PSRule.Rules.Azure' = @{ version = '1.47.0'; sha256 = 'a' * 64; dependencies = @('PSRule') }
+                PSRule = @{ version = '2.9.0'; sha256 = 'b' * 64 }
+                'powershell-yaml' = @{ version = '0.4.12'; sha256 = 'c' * 64 }
+            }
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins } {
+                param($L)
+                Test-AvmPins -Pins $L | Should -BeTrue
+            }
+        }
+
+        It 'rejects <Label>' -ForEach @(
+            @{ Label = 'an empty section'; Modules = @{}; Message = '*non-empty object*' }
+            @{ Label = 'a version range'; Modules = @{ PSRule = @{ version = '[2.9.0,)'; sha256 = 'a' * 64 } }; Message = '*stable version*' }
+            @{ Label = 'a nonstring version'; Modules = @{ PSRule = @{ version = 2; sha256 = 'a' * 64 } }; Message = '*stable version*' }
+            @{ Label = 'a missing checksum'; Modules = @{ PSRule = @{ version = '2.9.0' } }; Message = '*version and sha256*' }
+            @{ Label = 'an invalid checksum'; Modules = @{ PSRule = @{ version = '2.9.0'; sha256 = 'not-a-hash' } }; Message = '*lowercase sha256*' }
+            @{ Label = 'an unsupported Pester version'; Modules = @{ Pester = @{ version = '4.10.1'; sha256 = 'a' * 64 } }; Message = '*5.5.0 or later*' }
+            @{ Label = 'an unknown dependency'; Modules = @{ PSRule = @{ version = '2.9.0'; sha256 = 'a' * 64; dependencies = @('Missing') } }; Message = '*unknown or self dependency*' }
+            @{ Label = 'an invalid module name'; Modules = @{ '../PSRule' = '2.9.0' }; Message = '*not a valid module name*' }
+        ) {
+            $pins = script:NewValidLock
+            $pins.powerShellModules = $Modules
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins; M = $Message } {
+                param($L, $M)
+                { Test-AvmPins -Pins $L } | Should -Throw -ExceptionType ([System.Data.DataException]) -ExpectedMessage $M
+            }
+        }
+
+        It 'returns bundled pins and rejects an unpinned module' {
+            InModuleScope 'Avm.Authoring' {
+                Get-AvmPowerShellModulePin -Name 'PSRule' | Should -Be ([version]'2.9.0')
+                Get-AvmPowerShellModulePin -Name 'PSRule.Rules.Azure' | Should -Be ([version]'1.47.0')
+                Get-AvmPowerShellModulePin -Name 'powershell-yaml' | Should -Be ([version]'0.4.12')
+                Get-AvmPowerShellModulePin -Name 'Pester' | Should -Be ([version]'5.7.1')
+                { Get-AvmPowerShellModulePin -Name 'Az.Accounts' } |
+                    Should -Throw -ExceptionType ([System.Data.DataException]) -ExpectedMessage "*no powerShellModules pin for 'Az.Accounts'*"
+            }
+        }
+    }
     Context 'bundled production pin manifest' {
         It 'is valid under the strict (https-only) schema' {
             InModuleScope 'Avm.Authoring' {

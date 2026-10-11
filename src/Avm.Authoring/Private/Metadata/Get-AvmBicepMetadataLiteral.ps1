@@ -4,7 +4,10 @@ function Get-AvmBicepMetadataLiteral {
     param(
         [Parameter(Mandatory)]
         [AllowEmptyString()]
-        [string] $Source
+        [string] $Source,
+
+        [ValidateSet('name', 'description')]
+        [string[]] $Name = @('name', 'description')
     )
 
     Set-StrictMode -Version 3.0
@@ -17,9 +20,10 @@ function Get-AvmBicepMetadataLiteral {
         if (-not $token.Groups['declaration'].Success) {
             continue
         }
-        $name = $token.Groups['name'].Value
-        if ($values.ContainsKey($name)) {
-            throw [System.ArgumentException]::new("main.bicep declares metadata $name more than once.")
+        $literalName = $token.Groups['name'].Value
+        if ($literalName -notin $Name) { continue }
+        if ($values.ContainsKey($literalName)) {
+            throw [System.ArgumentException]::new("main.bicep declares metadata $literalName more than once.")
         }
         $raw = $token.Groups['value'].Value
         if ($raw.StartsWith("'''", [System.StringComparison]::Ordinal)) {
@@ -27,7 +31,7 @@ function Get-AvmBicepMetadataLiteral {
             if ($value.StartsWith("`n", [System.StringComparison]::Ordinal)) {
                 $value = $value.Substring(1)
             }
-            $values[$name] = $value
+            $values[$literalName] = $value
             continue
         }
 
@@ -36,7 +40,7 @@ function Get-AvmBicepMetadataLiteral {
         for ($index = 0; $index -lt $body.Length; $index++) {
             $character = $body[$index]
             if ($character -eq '$' -and $index + 1 -lt $body.Length -and $body[$index + 1] -eq '{') {
-                throw [System.ArgumentException]::new("metadata $name must be a literal, not an interpolated string.")
+                throw [System.ArgumentException]::new("metadata $literalName must be a literal, not an interpolated string.")
             }
             if ($character -ne '\') {
                 $null = $decoded.Append($character)
@@ -54,21 +58,21 @@ function Get-AvmBicepMetadataLiteral {
                 'u' {
                     $unicode = [regex]::Match($body.Substring($index), '^u\{([0-9a-fA-F]{1,6})\}')
                     if (-not $unicode.Success) {
-                        throw [System.ArgumentException]::new("Invalid Unicode escape in metadata $name.")
+                        throw [System.ArgumentException]::new("Invalid Unicode escape in metadata $literalName.")
                     }
                     $codePoint = [Convert]::ToInt32($unicode.Groups[1].Value, 16)
                     $null = $decoded.Append([char]::ConvertFromUtf32($codePoint))
                     $index += $unicode.Length - 1
                 }
                 default {
-                    throw [System.ArgumentException]::new("Unsupported escape '\$escaped' in metadata $name.")
+                    throw [System.ArgumentException]::new("Unsupported escape '\$escaped' in metadata $literalName.")
                 }
             }
         }
-        $values[$name] = $decoded.ToString()
+        $values[$literalName] = $decoded.ToString()
     }
 
-    foreach ($required in @('name', 'description')) {
+    foreach ($required in $Name) {
         if (-not $values.ContainsKey($required)) {
             throw [System.ArgumentException]::new("main.bicep must declare metadata $required as a string literal.")
         }

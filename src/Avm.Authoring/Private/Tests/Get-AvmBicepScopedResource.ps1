@@ -23,7 +23,7 @@ function Get-AvmBicepScopedResource {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    if ($RunId -cnotmatch '^[0-9a-f]{32}$') {
+    if (-not (Test-AvmBicepRunId -RunId $RunId)) {
         throw [AvmConfigurationException]::new('Bicep e2e run ID must be 32 lowercase hexadecimal characters.')
     }
     if ($Scope -eq 'group' -and [string]::IsNullOrWhiteSpace($OwnedGroupName)) {

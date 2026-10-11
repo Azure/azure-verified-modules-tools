@@ -1,25 +1,24 @@
 function Get-AvmBicepPolicyConfiguration {
     [CmdletBinding()]
     [OutputType([pscustomobject])]
-    param(
-        [Parameter(Mandatory)]
-        [string] $RepositoryRoot
-    )
+    param()
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
-    $directory = Join-Path -Path $RepositoryRoot -ChildPath 'utilities' `
-        -AdditionalChildPath 'pipelines', 'staticValidation', 'psrule'
+    $directory = [System.IO.Path]::GetFullPath(
+        (Join-Path -Path $PSScriptRoot -ChildPath '..' `
+            -AdditionalChildPath '..', 'Resources', 'bicep', 'psrule'))
     $optionPath = Join-Path $directory 'ps-rule.yaml'
     $rulePath = Join-Path $directory '.ps-rule'
     if (-not [System.IO.File]::Exists($optionPath) -or
         -not [System.IO.Directory]::Exists($rulePath)) {
         throw [AvmConfigurationException]::new(
-            'Bicep PSRule requires utilities/pipelines/staticValidation/psrule/ps-rule.yaml and its .ps-rule/ rules directory in the repository. No baseline ran.')
+            'The installed Avm.Authoring package is missing its Bicep PSRule options or rules. No baseline ran.')
     }
     $comparison = if ($IsWindows) { [System.StringComparison]::OrdinalIgnoreCase }
     else { [System.StringComparison]::Ordinal }
-    $root = [System.IO.Path]::GetFullPath($RepositoryRoot)
+    $root = [System.IO.Path]::GetFullPath(
+        (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '..'))
     $ancestor = [System.IO.DirectoryInfo]::new($directory)
     while ($null -ne $ancestor) {
         if ($ancestor.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
@@ -33,13 +32,13 @@ function Get-AvmBicepPolicyConfiguration {
     }
     if ($null -eq $ancestor) {
         throw [AvmConfigurationException]::new(
-            'Bicep PSRule configuration is outside the repository.')
+            'Bicep PSRule configuration is outside the installed package.')
     }
     foreach ($itemPath in @($directory, $optionPath, $rulePath)) {
         if ((Get-Item -LiteralPath $itemPath -Force).Attributes -band
             [System.IO.FileAttributes]::ReparsePoint) {
             throw [AvmConfigurationException]::new(
-                'Bicep PSRule configuration and rules cannot be linked outside the repository.')
+                'Bicep PSRule configuration and rules cannot be linked outside the installed package.')
         }
     }
     foreach ($entry in @(Get-ChildItem -LiteralPath $rulePath -Recurse -Force)) {
@@ -62,7 +61,7 @@ function Get-AvmBicepPolicyConfiguration {
         [string]$option.Configuration['AZURE_BICEP_FILE_EXPANSION'] -ne 'true' -or
         [string]$option.Configuration['AZURE_PARAMETER_FILE_EXPANSION'] -ne 'false') {
         throw [AvmConfigurationException]::new(
-            'Bicep PSRule configuration must select defaults and waf-aligned tests, use only PSRule.Rules.Azure and repository YAML rules, enable Bicep expansion, and disable parameter-file expansion.')
+            'Bicep PSRule configuration must select defaults and waf-aligned tests, use only PSRule.Rules.Azure and packaged YAML rules, enable Bicep expansion, and disable parameter-file expansion.')
     }
     return [pscustomobject]@{
         OptionPath = $optionPath

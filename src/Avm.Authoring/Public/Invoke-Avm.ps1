@@ -13,6 +13,10 @@ function Invoke-Avm {
         so that unbound arguments such as '-Json' or '--json' flow through
         unchanged into $args rather than failing parameter binding at this layer.
 
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check for a newer Avm.Authoring version and
+        apply the same setting to the dispatched command. Writes a warning once.
+
     .EXAMPLE
         PS> avm
 
@@ -62,7 +66,7 @@ function Invoke-Avm {
             $PSDefaultParameterValues['*:Verbose'] = $true
         }
 
-        $isUpdateCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -ceq 'update'
+        $isUpdateCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -cin @('update', 'upgrade')
         $isVersionCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -ceq 'version'
         $isE2eListCommand = $false
         if ($rawArguments.Count -ge 3) {
@@ -87,8 +91,7 @@ function Invoke-Avm {
             $PSDefaultParameterValues['Test-AvmModuleVersion:SuppressSkipWarning'] = $true
         }
 
-        # Honour .avm/.disable sentinel anywhere up the path: spec section 8.
-        # The opt-out lets a repo turn the dispatcher off without uninstalling
+        # Honour a .avm/.disable sentinel anywhere up the path. The opt-out lets a repo turn the dispatcher off without uninstalling
         # the module. We honour it even for read-only verbs like 'avm version'
         # so the user can't accidentally rely on output that the maintainer
         # explicitly disabled.
@@ -102,11 +105,12 @@ function Invoke-Avm {
         $arguments = @(
             foreach ($arg in $rawArguments) {
                 $token = [string]$arg
-                if ($token -in @('--passthru', '--pass-thru', '-PassThru', '-passthru')) {
+                if ($arg -is [string] -and $token -in @('--passthru', '--pass-thru', '-PassThru', '-passthru')) {
                     $passThru = $true
                     continue
                 }
-                $arg
+                # Preserve array-valued parameters as a single argument.
+                , $arg
             }
         )
         $registry = @(Get-AvmVerbRegistry)

@@ -44,6 +44,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
                 $checkout[0].with.path | Should -BeExactly '.avm-tools'
                 $checkout[0].with.'persist-credentials' | Should -BeFalse
                 $checkout[0].with.'sparse-checkout' | Should -Match 'scripts/bicep-workflows'
+                $checkout[0].with.'sparse-checkout' | Should -Match 'repository-management/shared'
                 $checkout[0].with.'sparse-checkout' | Should -Not -Match '(?m)^src$|^tests$'
                 foreach ($step in $usesSupport) {
                     $actionName = $step.uses.Split('/')[-1]
@@ -209,12 +210,16 @@ Describe 'Bicep required checks and deployment guards' {
         $text | Should -Not -Match 'secrets|id-token|azure/login|environment:|bicep-release-tags'
     }
 
-    It 'preserves identifier precedence and confines secret credentials to exception authentication' {
+    It 'selects only the published module client mapping while preserving tenant and subscription precedence' {
         $pool = '${{ vars.VALIDATE_SUBSCRIPTION_IDS || vars.TEST_SUBSCRIPTION_IDS || secrets.VALIDATE_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS }}'
         $managementGroup = '${{ vars.VALIDATE_MANAGEMENT_GROUP_ID || vars.ARM_MGMTGROUP_ID || secrets.VALIDATE_MANAGEMENT_GROUP_ID || secrets.ARM_MGMTGROUP_ID }}'
         foreach ($name in @('bicep-module', 'bicep-module-preview', 'bicep-module-publish')) {
             $jobs = $script:workflows[$name].jobs
             $jobs.job_initialize_subscription_selection.steps[-1].env.TEST_SUBSCRIPTION_IDS | Should -BeExactly $pool
+            $jobs.job_initialize_subscription_selection.steps[-1].env.VALIDATE_MODULE_CLIENT_IDS |
+                Should -BeExactly '${{ vars.VALIDATE_MODULE_CLIENT_IDS }}'
+            $jobs.job_initialize_subscription_selection.steps[-1].env.VALIDATE_TENANT_ID |
+                Should -BeExactly '${{ vars.VALIDATE_TENANT_ID || secrets.VALIDATE_TENANT_ID }}'
             foreach ($jobName in @('job_psrule_must', 'job_psrule_opt')) {
                 $jobs[$jobName].steps[-1].env.TEST_SUBSCRIPTION_IDS | Should -BeExactly $pool
                 $jobs[$jobName].steps[-1].env.ARM_MGMTGROUP_ID | Should -BeExactly $managementGroup
@@ -225,9 +230,13 @@ Describe 'Bicep required checks and deployment guards' {
         $deployment.subscriptionPool | Should -BeExactly $pool
         $deployment.managementGroupId | Should -BeExactly $managementGroup
         $deployment.fallbackSubscriptionId | Should -BeExactly '${{ vars.VALIDATE_SUBSCRIPTION_ID || secrets.VALIDATE_SUBSCRIPTION_ID }}'
-        $deployment.clientId | Should -BeExactly '${{ vars.VALIDATE_CLIENT_ID || secrets.VALIDATE_CLIENT_ID }}'
+        $deployment.moduleClientIds | Should -BeExactly '${{ vars.VALIDATE_MODULE_CLIENT_IDS }}'
         $deployment.tenantId | Should -BeExactly '${{ vars.VALIDATE_TENANT_ID || secrets.VALIDATE_TENANT_ID }}'
-        $deployment.azureCredentials | Should -BeExactly '${{ secrets.AZURE_CREDENTIALS }}'
+        $deployment.Contains('clientId') | Should -BeFalse
+        $deployment.Contains('azureCredentials') | Should -BeFalse
+        $selection = $script:actions['bicep-subscription-selection'].runs.steps[-1].run
+        $selection | Should -Match 'ModuleClientIds = \$env:VALIDATE_MODULE_CLIENT_IDS'
+        $selection | Should -Match 'PoolJson = \$env:TEST_SUBSCRIPTION_IDS'
         foreach ($name in @('bicep-module-preview', 'bicep-module-publish')) {
             $jobs = $script:workflows[$name].jobs
             $jobs.job_module_deploy_validation.with.tokenNamePrefix | Should -BeExactly 'gci'
@@ -239,10 +248,10 @@ Describe 'Bicep required checks and deployment guards' {
     It 'confines CI contexts to native deployment and preserves renewal, failure and cancellation order' {
         $steps = $script:actions['bicep-deployment'].runs.steps
         $ids = @($steps | Where-Object { $_['id'] } | ForEach-Object id)
-        $ids | Should -Be @('auth', 'setup', 'login_oidc', 'login_secret', 'context', 'deploy', 'renew_oidc', 'renew_secret', 'complete')
+        $ids | Should -Be @('auth', 'setup', 'login_oidc', 'context', 'deploy', 'renew_oidc', 'complete')
         foreach ($step in $steps) {
             if ($step.Contains('env') -and ($step.env['AVM_CI_SECRETS'] -or $step.env['AVM_CI_VARIABLES'])) { $step.id | Should -Be 'deploy' }
-            if ($step['id'] -in @('renew_oidc', 'renew_secret', 'complete') -or $step.name -eq 'Recover unfinished native cleanup') {
+            if ($step['id'] -in @('renew_oidc', 'complete') -or $step.name -eq 'Recover unfinished native cleanup') {
                 $step.if | Should -Match '!cancelled\(\)'
             }
         }
@@ -251,6 +260,63 @@ Describe 'Bicep required checks and deployment guards' {
         ($steps | Where-Object { $_['id'] -eq 'login_oidc' }).with.'subscription-id' |
             Should -BeExactly ($steps | Where-Object { $_['id'] -eq 'renew_oidc' }).with.'subscription-id'
         ($steps | Where-Object name -EQ 'Recover unfinished native cleanup').if | Should -Match "removeDeployment == 'true'"
+    }
+
+    It 'pins both login clients and every native phase to the same checked module identity' {
+        $action = $script:actions['bicep-deployment']
+        $action.inputs.moduleClientIds.required | Should -BeTrue
+        $action.inputs.Contains('clientId') | Should -BeFalse
+        $action.inputs.Contains('azureCredentials') | Should -BeFalse
+        $auth = $action.runs.steps | Where-Object { $_['id'] -eq 'auth' }
+        $auth.env.VALIDATE_MODULE_CLIENT_IDS | Should -BeExactly '${{ inputs.moduleClientIds }}'
+        $auth.run | Should -Match 'ModuleClientIds = \$env:VALIDATE_MODULE_CLIENT_IDS'
+        $logins = @($action.runs.steps | Where-Object { $_['uses'] -like 'azure/login@*' })
+        $logins.Count | Should -Be 2
+        foreach ($login in $logins) {
+            $login.with.'client-id' | Should -BeExactly '${{ steps.auth.outputs.clientId }}'
+            $login.with.'tenant-id' | Should -BeExactly '${{ steps.auth.outputs.tenantId }}'
+            $login.with.'subscription-id' | Should -BeExactly '${{ steps.auth.outputs.subscriptionId }}'
+            $login.with.'enable-AzPSSession' | Should -BeTrue
+            $login.with.Contains('creds') | Should -BeFalse
+        }
+        foreach ($step in $action.runs.steps | Where-Object {
+                $_['id'] -in @('deploy', 'complete') -or $_.name -eq 'Recover unfinished native cleanup'
+            }) {
+            $step.env.ARM_CLIENT_ID | Should -BeExactly '${{ steps.auth.outputs.clientId }}'
+            $step.env.ARM_TENANT_ID | Should -BeExactly '${{ steps.context.outputs.tenantId }}'
+            $step.env.ARM_SUBSCRIPTION_ID | Should -BeExactly '${{ steps.auth.outputs.subscriptionId }}'
+            $step.run | Should -Match 'ClientId[ =]+\$env:ARM_CLIENT_ID'
+        }
+        foreach ($path in @(
+                '.github/actions/bicep-deployment/action.yml',
+                '.github/workflows/bicep-module-deployment.yml',
+                'scripts/bicep-workflows/Deployment.ps1'
+            )) {
+            (Get-Content -LiteralPath (Join-Path $script:root $path) -Raw) |
+                Should -Not -Match 'VALIDATE_CLIENT_ID|AZURE_CREDENTIALS|oidc-exceptions|useSecret'
+        }
+    }
+
+    It 'requires mapping selection only for requested Azure tests, never static, preview or tag-only work' {
+        foreach ($name in @('bicep-module', 'bicep-module-preview', 'bicep-module-publish')) {
+            $jobs = $script:workflows[$name].jobs
+            $jobs.job_initialize_subscription_selection.if |
+                Should -BeExactly "fromJSON(inputs.workflowInput).deploymentValidation == 'true'"
+            $jobs.job_module_deploy_validation.if |
+                Should -Match "deploymentValidation == 'true'"
+            $jobs.job_module_deploy_validation.if |
+                Should -Match "inputs.moduleTestFilePaths != '\[\]'"
+            foreach ($jobName in @('job_module_static_validation', 'job_psrule_must', 'job_psrule_opt', 'job_preview_module', 'job_publish_module')) {
+                if (-not $jobs.Contains($jobName)) { continue }
+                $job = $jobs[$jobName] | ConvertTo-Json -Depth 30
+                $job | Should -Not -Match 'VALIDATE_MODULE_CLIENT_IDS|moduleClientIds|azure/login@|id-token'
+            }
+        }
+        foreach ($name in @('bicep-module-static', 'bicep-module-publish-only')) {
+            $script:workflows.ContainsKey($name) | Should -BeTrue
+            ($script:workflows[$name] | ConvertTo-Json -Depth 30) |
+                Should -Not -Match 'VALIDATE_MODULE_CLIENT_IDS|moduleClientIds|azure/login@|id-token'
+        }
     }
 
     It 'preserves deployment defaults when a custom location is supplied: <Provided>' -ForEach @(

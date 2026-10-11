@@ -10,9 +10,11 @@ BeforeAll {
     $script:subscription = '11111111-2222-4333-8444-555555555555'
     $script:secondSubscription = '99999999-2222-4333-8444-555555555555'
     $script:tenant = '11111111-2222-4333-8444-666666666666'
+    $script:client = '10000000-0000-4000-8000-000000000006'
+    $script:secondClient = '10000000-0000-4000-8000-000000000016'
     $script:modulePath = 'avm/res/mock/widget'
     $script:savedEnvironment = @{}
-    foreach ($name in @('GITHUB_STEP_SUMMARY', 'TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_ID')) {
+    foreach ($name in @('GITHUB_STEP_SUMMARY', 'TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_ID', 'VALIDATE_CLIENT_ID', 'AZURE_CREDENTIALS')) {
         $script:savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
         [Environment]::SetEnvironmentVariable($name, [NullString]::Value)
     }
@@ -220,6 +222,13 @@ Describe 'Component: Bicep shared workflow target and authentication boundaries'
         )
         $entry = @(Get-AvmWorkflowSubscriptions -PoolJson $script:pool)[0]
         $script:case = @{ path = 'tests/e2e/defaults/main.test.bicep'; name = 'defaults'; e2eIgnore = $false; subscriptionIndex = 0; subscriptionKey = $entry.key }
+        $script:mapping = [ordered]@{
+            $script:modulePath = $script:client
+            'avm/ptn/lz/sub-vending' = $script:secondClient
+        }
+        $script:mappingJson = ConvertTo-AvmBicepModuleClientIdJson -ClientIds $script:mapping
+        $script:case.identityKey = (Get-AvmWorkflowModuleIdentity -Root $script:root -ModulePath $script:modulePath `
+                -ModuleClientIds $script:mappingJson -TenantId $script:tenant).identityKey
         Mock Get-AvmTool { [pscustomobject]@{ Status = 'installed'; Path = 'fixture-bicep' } }
         Mock Invoke-AvmWorkflowProcess {
             [pscustomobject]@{ ExitCode = 0; StdOut = '{"$schema":"https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#","resources":[]}'; StdErr = '' }
@@ -228,7 +237,10 @@ Describe 'Component: Bicep shared workflow target and authentication boundaries'
 
     It 'keeps ignored entries in round robin without sharing their locks or exposing subscription IDs' {
         $ignored = @{ path = 'tests/e2e/ignored/main.test.bicep'; name = 'ignored'; e2eIgnore = $true }
-        $args = @{ Root = $script:root; ModulePath = $script:modulePath; TestFiles = @($ignored, $script:case, $script:case); PoolJson = $script:pool; RandomSeed = 9 }
+        $args = @{
+            Root = $script:root; ModulePath = $script:modulePath; TestFiles = @($ignored, $script:case, $script:case)
+            PoolJson = $script:pool; RandomSeed = 9; ModuleClientIds = $script:mappingJson; TenantId = $script:tenant
+        }
         $first = Get-AvmWorkflowDeploymentMatrix @args
         $second = Get-AvmWorkflowDeploymentMatrix @args
         $matrix = ConvertFrom-Json -InputObject $first.deploymentMatrix
@@ -239,6 +251,9 @@ Describe 'Component: Bicep shared workflow target and authentication boundaries'
         $first.deploymentMatrix | Should -Not -Match $script:subscription
         $first.deploymentMatrix | Should -Not -Match $script:secondSubscription
         $matrix[1].concurrencyGroup | Should -Be (ConvertFrom-Json $second.deploymentMatrix)[1].concurrencyGroup
+        $matrix[0].identityKey | Should -BeNullOrEmpty
+        $matrix[1].identityKey | Should -BeExactly $script:case.identityKey
+        $matrix[2].identityKey | Should -BeExactly $matrix[1].identityKey
     }
 
     It 'needs no pool, compiler or setup when every case is ignored' {
@@ -272,36 +287,47 @@ Describe 'Component: Bicep shared workflow target and authentication boundaries'
         { Get-AvmWorkflowSubscriptions -PoolJson $Value -FallbackSubscriptionId $script:subscription } | Should -Throw
     }
 
+    It 'needs no mapping, tenant, subscription pool or compiler for an empty selection' {
+        $matrix = Get-AvmWorkflowDeploymentMatrix -Root $script:root -ModulePath $script:modulePath -TestFiles @()
+        $matrix.deploymentMatrix | Should -BeExactly '[]'
+        $matrix.sharedScope | Should -BeExactly 'false'
+        Should -Invoke Get-AvmTool -Exactly 0
+        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0
+    }
+
     It 'revalidates the original pool index and digest before authentication' {
         $auth = Get-AvmWorkflowAuthentication -Root $script:root -ModulePath $script:modulePath -TestCase $script:case `
-            -PoolJson $script:pool -ClientId fixture-client -TenantId $script:tenant
-        $auth.useSecret | Should -BeExactly 'false'
+            -PoolJson $script:pool -ModuleClientIds $script:mappingJson -TenantId $script:tenant
+        $auth.clientId | Should -BeExactly $script:client
+        $auth.tenantId | Should -BeExactly $script:tenant
         $auth.subscriptionId | Should -BeExactly $script:subscription
         $script:case.subscriptionIndex = 1
         { Get-AvmWorkflowAuthentication -Root $script:root -ModulePath $script:modulePath -TestCase $script:case `
-                -PoolJson $script:pool -ClientId fixture-client -TenantId $script:tenant } | Should -Throw '*digest*'
+                -PoolJson $script:pool -ModuleClientIds $script:mappingJson -TenantId $script:tenant } | Should -Throw '*digest*'
     }
 
-    It 'scopes secret authentication to the declared exception and replaces only the selected subscription' {
-        [IO.File]::WriteAllText((Join-Path $script:root '.oidc-exceptions.json'), '["avm/res/mock/widget"]')
-        $credentials = ConvertTo-Json -Compress -InputObject @{ clientId = 'fixture'; clientSecret = 'not-a-real-secret'; tenantId = $script:tenant; subscriptionId = $script:secondSubscription }
+    It 'ignores legacy exception and shared-client settings rather than overriding the mapped identity' {
+        [IO.File]::WriteAllText((Join-Path $script:root '.oidc-exceptions.json'), 'not consumed by the new workflow')
+        $env:VALIDATE_CLIENT_ID = $script:secondClient
+        $env:AZURE_CREDENTIALS = '{"clientId":"legacy-client","clientSecret":"fixture-only","tenantId":"legacy-tenant"}'
         $auth = Get-AvmWorkflowAuthentication -Root $script:root -ModulePath $script:modulePath -TestCase $script:case `
-            -PoolJson $script:pool -TenantId $script:tenant -Credentials $credentials
-        $auth.useSecret | Should -BeExactly 'true'
-        ($auth.credentials | ConvertFrom-Json).subscriptionId | Should -BeExactly $script:subscription
-        ($credentials | ConvertFrom-Json).subscriptionId | Should -BeExactly $script:secondSubscription
-        { Get-AvmWorkflowAuthentication -Root $script:root -ModulePath $script:modulePath -TestCase $script:case `
-                -PoolJson $script:pool -TenantId $script:secondSubscription -Credentials $credentials } | Should -Throw '*tenantId does not match*'
+            -PoolJson $script:pool -TenantId $script:tenant -ModuleClientIds $script:mappingJson
+        $auth.clientId | Should -BeExactly $script:client
+        @($auth.Keys | Sort-Object) | Should -Be @('clientId', 'subscriptionId', 'tenantId')
     }
 
-    It 'never falls back to secret authentication for an ordinary module' {
+    It 'fails missing mapping even when legacy identity settings exist' {
+        $env:VALIDATE_CLIENT_ID = $script:secondClient
+        $env:AZURE_CREDENTIALS = '{"clientId":"legacy-client","clientSecret":"fixture-only","tenantId":"legacy-tenant"}'
         { Get-AvmWorkflowAuthentication -Root $script:root -ModulePath $script:modulePath -TestCase $script:case `
-                -PoolJson $script:pool -Credentials '{"clientId":"fixture","clientSecret":"not-real","tenantId":"fixture"}' } |
-            Should -Throw '*do not fall back*'
+                -PoolJson $script:pool -TenantId $script:tenant } | Should -Throw '*VALIDATE_MODULE_CLIENT_IDS*'
     }
 
     It 'rejects partial selection and a reordered pool before authentication' {
-        $parameters = @{ Root = $script:root; ModulePath = $script:modulePath; TestCase = $script:case; PoolJson = $script:pool; ClientId = 'fixture'; TenantId = $script:tenant }
+        $parameters = @{
+            Root = $script:root; ModulePath = $script:modulePath; TestCase = $script:case
+            PoolJson = $script:pool; ModuleClientIds = $script:mappingJson; TenantId = $script:tenant
+        }
         $script:case.Remove('subscriptionIndex')
         { Get-AvmWorkflowAuthentication @parameters } | Should -Throw '*index and digest*'
         $script:case.subscriptionIndex = 0
@@ -312,30 +338,122 @@ Describe 'Component: Bicep shared workflow target and authentication boundaries'
         { Get-AvmWorkflowAuthentication @parameters } | Should -Throw '*index and digest*'
     }
 
-    It 'rejects malformed exception configuration (<Value>)' -ForEach @(
+    It 'rejects missing, malformed and ambiguous mappings (<Value>)' -ForEach @(
+        @{ Value = '' }
+        @{ Value = ' ' }
+        @{ Value = 'null' }
         @{ Value = '{}' }
-        @{ Value = '[1]' }
-        @{ Value = '["avm/res/mock/widget","avm/res/mock/widget"]' }
-        @{ Value = '["avm/res/mock/widget/*"]' }
+        @{ Value = '[]' }
+        @{ Value = '{"avm/res/mock/widget":null}' }
+        @{ Value = '{"avm/res/mock/widget":{"clientId":"10000000-0000-4000-8000-000000000006"}}' }
+        @{ Value = '{"avm/res/mock/widget":"not-a-guid"}' }
+        @{ Value = '{"avm/res/mock/widget":"00000000-0000-0000-0000-000000000000"}' }
+        @{ Value = '{"avm/res/mock/widget":"10000000-0000-4000-8000-000000000006","avm/res/mock/widget":"10000000-0000-4000-8000-000000000016"}' }
+        @{ Value = '{"avm/res/mock/widget":"10000000-0000-4000-8000-000000000006","avm/res/mock/Widget":"10000000-0000-4000-8000-000000000016"}' }
+        @{ Value = '{"avm/res/mock/widget":"10000000-0000-4000-8000-000000000006","avm/ptn/lz/sub-vending":"10000000-0000-4000-8000-000000000006"}' }
+        @{ Value = '{"avm/res/mock/widget/child":"10000000-0000-4000-8000-000000000006"}' }
+        @{ Value = '{"avm/invalid/mock/widget":"10000000-0000-4000-8000-000000000006"}' }
+        @{ Value = '{"avm/res/mock/*":"10000000-0000-4000-8000-000000000006"}' }
+        @{ Value = '{"avm\\res\\mock\\widget":"10000000-0000-4000-8000-000000000006"}' }
     ) {
-        [IO.File]::WriteAllText((Join-Path $script:root '.oidc-exceptions.json'), $Value)
         { Get-AvmWorkflowAuthentication -Root $script:root -ModulePath $script:modulePath -TestCase $script:case `
-                -PoolJson $script:pool -ClientId fixture -TenantId $script:tenant } | Should -Throw '*oidc-exceptions.json*'
+                -PoolJson $script:pool -ModuleClientIds $Value -TenantId $script:tenant } | Should -Throw '*VALIDATE_MODULE_CLIENT_IDS*'
+    }
+
+    It 'uses the published root entry for <ModulePath>' -ForEach @(
+        @{ ModulePath = 'avm/res/storage/storage-account'; ModuleRoot = 'avm/res/storage/storage-account' }
+        @{ ModulePath = 'avm/res/storage/storage-account/blob-service'; ModuleRoot = 'avm/res/storage/storage-account' }
+        @{ ModulePath = 'avm/res/storage/storage-account/blob-service/container'; ModuleRoot = 'avm/res/storage/storage-account' }
+        @{ ModulePath = 'avm\res\storage\storage-account\blob-service'; ModuleRoot = 'avm/res/storage/storage-account' }
+        @{ ModulePath = 'avm/ptn/lz/sub-vending/sub-scope'; ModuleRoot = 'avm/ptn/lz/sub-vending' }
+        @{ ModulePath = 'avm/utl/types/avm-common-types'; ModuleRoot = 'avm/utl/types/avm-common-types' }
+    ) {
+        $null = New-Item -ItemType Directory -Path (Join-Path $script:root ($ModulePath.Replace('\', '/'))) -Force
+        $mapping = [ordered]@{ $ModuleRoot = $script:client; 'avm/res/fabric/capacity' = $script:secondClient }
+        $json = ConvertTo-AvmBicepModuleClientIdJson -ClientIds $mapping
+        $identity = Get-AvmWorkflowModuleIdentity -Root $script:root -ModulePath $ModulePath -ModuleClientIds $json -TenantId $script:tenant
+        $identity.moduleRoot | Should -BeExactly $ModuleRoot
+        $identity.clientId | Should -BeExactly $script:client
+        $identity.tenantId | Should -BeExactly $script:tenant
+        $identity.identityKey | Should -Match '^[0-9a-f]{64}$'
+    }
+
+    It 'rejects invalid paths without prefix matching or normalizing away a boundary (<ModulePath>)' -ForEach @(
+        @{ ModulePath = 'avm/res/mock/widget-extra' }
+        @{ ModulePath = 'avm/res/mock/Widget' }
+        @{ ModulePath = 'avm/res/mock/widget/../widget' }
+        @{ ModulePath = 'avm/res/mock/widget/./child' }
+        @{ ModulePath = 'avm/res/mock/widget//child' }
+        @{ ModulePath = '../escape' }
+        @{ ModulePath = 'avm/res/mock/*' }
+    ) {
+        $null = New-Item -ItemType Directory -Path (Join-Path $script:root 'avm/res/mock/widget-extra') -Force
+        $null = New-Item -ItemType Directory -Path (Join-Path $script:root $script:modulePath 'child') -Force
+        { Get-AvmWorkflowModuleIdentity -Root $script:root -ModulePath $ModulePath `
+                -ModuleClientIds $script:mappingJson -TenantId $script:tenant } | Should -Throw
+    }
+
+    It 'rejects a missing or invalid published tenant (<Tenant>)' -ForEach @(
+        @{ Tenant = '' }
+        @{ Tenant = 'fixture.onmicrosoft.com' }
+        @{ Tenant = '00000000-0000-0000-0000-000000000000' }
+        @{ Tenant = 'not-a-guid' }
+    ) {
+        { Get-AvmWorkflowModuleIdentity -Root $script:root -ModulePath $script:modulePath `
+                -ModuleClientIds $script:mappingJson -TenantId $Tenant } | Should -Throw '*VALIDATE_TENANT_ID*'
+    }
+
+    It 'fails selection drift instead of switching identity (<Change>)' -ForEach @(
+        @{ Change = 'client' }
+        @{ Change = 'tenant' }
+        @{ Change = 'module' }
+        @{ Change = 'missing binding' }
+    ) {
+        $parameters = @{
+            Root = $script:root; ModulePath = $script:modulePath; TestCase = $script:case
+            PoolJson = $script:pool; ModuleClientIds = $script:mappingJson; TenantId = $script:tenant
+        }
+        switch ($Change) {
+            'client' {
+                $script:mapping[$script:modulePath] = '10000000-0000-4000-8000-000000000026'
+                $parameters.ModuleClientIds = ConvertTo-AvmBicepModuleClientIdJson -ClientIds $script:mapping
+            }
+            'tenant' { $parameters.TenantId = $script:secondSubscription }
+            'module' {
+                $parameters.ModulePath = 'avm/ptn/lz/sub-vending'
+                $null = New-Item -ItemType Directory -Path (Join-Path $script:root $parameters.ModulePath) -Force
+            }
+            'missing binding' { $script:case.Remove('identityKey') }
+        }
+        { Get-AvmWorkflowAuthentication @parameters } | Should -Throw '*selected module identity*'
     }
 
     It 'fails scope selection rather than inferring a safe scope after compiler failure' {
         Mock Invoke-AvmWorkflowProcess { throw 'fixture compiler failure' }
-        { Get-AvmWorkflowDeploymentMatrix -Root $script:root -ModulePath $script:modulePath -TestFiles @($script:case) -PoolJson $script:pool } |
+        { Get-AvmWorkflowDeploymentMatrix -Root $script:root -ModulePath $script:modulePath -TestFiles @($script:case) `
+                -PoolJson $script:pool -ModuleClientIds $script:mappingJson -TenantId $script:tenant } |
             Should -Throw '*compiler failure*'
     }
 
-    It 'verifies the actual selected subscription and resolves tenant domains without accepting a mismatched GUID' {
+    It 'verifies the actual selected module client, tenant, subscription and cloud' {
         Mock Get-AzContext {
-            [pscustomobject]@{ Subscription = @{ Id = $script:subscription }; Tenant = @{ Id = $script:tenant } }
+            [pscustomobject]@{
+                Subscription = @{ Id = $script:subscription }; Tenant = @{ Id = $script:tenant }
+                Account = @{ Id = $script:client; Type = 'ServicePrincipal' }; Environment = @{ Name = 'AzureCloud' }
+            }
         }
-        Confirm-AvmWorkflowAzureContext -SubscriptionId $script:subscription -TenantId 'fixture.onmicrosoft.com' | Should -BeExactly $script:tenant
-        { Confirm-AvmWorkflowAzureContext -SubscriptionId $script:secondSubscription -TenantId $script:tenant } | Should -Throw '*does not match*'
-        { Confirm-AvmWorkflowAzureContext -SubscriptionId $script:subscription -TenantId $script:secondSubscription } | Should -Throw '*does not match*'
+        Confirm-AvmWorkflowAzureContext -SubscriptionId $script:subscription -TenantId $script:tenant -ClientId $script:client |
+            Should -BeExactly $script:tenant
+        { Confirm-AvmWorkflowAzureContext -SubscriptionId $script:secondSubscription -TenantId $script:tenant -ClientId $script:client } | Should -Throw '*does not match*'
+        { Confirm-AvmWorkflowAzureContext -SubscriptionId $script:subscription -TenantId $script:secondSubscription -ClientId $script:client } | Should -Throw '*does not match*'
+        { Confirm-AvmWorkflowAzureContext -SubscriptionId $script:subscription -TenantId $script:tenant -ClientId $script:secondClient } | Should -Throw '*does not match*'
+        Mock Get-AzContext {
+            [pscustomobject]@{
+                Subscription = @{ Id = $script:subscription }; Tenant = @{ Id = $script:tenant }
+                Account = @{ Id = $script:client; Type = 'ServicePrincipal' }; Environment = @{ Name = 'AzureUSGovernment' }
+            }
+        }
+        { Confirm-AvmWorkflowAzureContext -SubscriptionId $script:subscription -TenantId $script:tenant -ClientId $script:client } | Should -Throw '*does not match*'
     }
 }
 
@@ -351,6 +469,12 @@ Describe 'Component: Bicep shared workflow native phase forwarding' -Tag Compone
         Mock Invoke-AvmTestUnit { [pscustomobject]@{ Status = 'pass'; RunsTotal = 1; RunsSkipped = 0; RunsFiltered = 0; Issues = @() } }
         Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Status = 'pass'; TestsSelected = 1; BaselinesExecuted = 1; Issues = @() } }
         Mock Invoke-AvmTestCleanup { [pscustomobject]@{ Status = 'pass' } }
+        Mock Get-AzContext {
+            [pscustomobject]@{
+                Subscription = @{ Id = $script:subscription }; Tenant = @{ Id = $script:tenant }
+                Account = @{ Id = $script:client; Type = 'ServicePrincipal' }; Environment = @{ Name = 'AzureCloud' }
+            }
+        }
     }
 
     It 'uses one packaged compliance and authored-unit route without custom compliance paths' {
@@ -374,7 +498,10 @@ Describe 'Component: Bicep shared workflow native phase forwarding' -Tag Compone
     }
 
     It 'separates deployment inputs from state-selected completion and keeps metadata location fixed' {
-        $parameters = @{ Root = $script:root; ModulePath = $script:modulePath; SubscriptionId = $script:subscription; TenantId = $script:tenant; StatePath = $script:state; ResultDirectory = $script:output }
+        $parameters = @{
+            Root = $script:root; ModulePath = $script:modulePath; SubscriptionId = $script:subscription
+            TenantId = $script:tenant; ClientId = $script:client; StatePath = $script:state; ResultDirectory = $script:output
+        }
         Invoke-AvmWorkflowE2e @parameters -Phase Deploy -Example 'tests/e2e/defaults/main.test.bicep' -CustomLocation northeurope -RemoveDeployment $false -Confirm:$false
         Invoke-AvmWorkflowE2e @parameters -Phase Complete -RemoveDeployment $false -Confirm:$false
         Should -Invoke Invoke-AvmTestE2e -Exactly 1 -ParameterFilter {
@@ -387,18 +514,83 @@ Describe 'Component: Bicep shared workflow native phase forwarding' -Tag Compone
 
     It 'does not run native mutations under WhatIf or on absent recovery state' {
         Invoke-AvmWorkflowE2e -Root $script:root -ModulePath $script:modulePath -Phase Deploy `
-            -SubscriptionId $script:subscription -TenantId $script:tenant -Example 'tests/e2e/defaults/main.test.bicep' `
+            -SubscriptionId $script:subscription -TenantId $script:tenant -ClientId $script:client -Example 'tests/e2e/defaults/main.test.bicep' `
             -StatePath $script:state -ResultDirectory $script:output -WhatIf
-        Invoke-AvmWorkflowRecovery -StatePath $script:state -SubscriptionId $script:subscription -TenantId $script:tenant -Confirm:$false
+        Invoke-AvmWorkflowRecovery -StatePath $script:state -SubscriptionId $script:subscription -TenantId $script:tenant -ClientId $script:client -Confirm:$false
         Should -Invoke Invoke-AvmTestE2e -Exactly 0
         Should -Invoke Invoke-AvmTestCleanup -Exactly 0
     }
 
     It 'uses state-only recovery without rerunning deployment or authored hooks' {
         [IO.File]::WriteAllText($script:state, '{}')
-        Invoke-AvmWorkflowRecovery -StatePath $script:state -SubscriptionId $script:subscription -TenantId $script:tenant -Confirm:$false
+        Invoke-AvmWorkflowRecovery -StatePath $script:state -SubscriptionId $script:subscription -TenantId $script:tenant -ClientId $script:client -Confirm:$false
         Should -Invoke Invoke-AvmTestCleanup -Exactly 1 -ParameterFilter { $SubscriptionId -eq $script:subscription -and $TenantId -eq $script:tenant }
         Should -Invoke Invoke-AvmTestE2e -Exactly 0
+    }
+
+    It 'keeps two module identities separate through deployment, completion and recovery' {
+        $mapping = [ordered]@{
+            $script:modulePath = $script:client
+            'avm/ptn/lz/sub-vending' = $script:secondClient
+        }
+        $json = ConvertTo-AvmBicepModuleClientIdJson -ClientIds $mapping
+        $pool = ConvertTo-Json -Compress -InputObject @(@{ id = $script:subscription; name = 'Test subscription' })
+        $target = @(Get-AvmWorkflowSubscriptions -PoolJson $pool)[0]
+        $selectedClients = [Collections.Generic.List[string]]::new()
+        Mock Get-AzContext {
+            $selectedClients.Add($script:activeClient)
+            [pscustomobject]@{
+                Subscription = @{ Id = $script:subscription }; Tenant = @{ Id = $script:tenant }
+                Account = @{ Id = $script:activeClient; Type = 'ServicePrincipal' }; Environment = @{ Name = 'AzureCloud' }
+            }
+        }
+        foreach ($modulePath in $mapping.Keys) {
+            $example = 'tests/e2e/defaults/main.test.bicep'
+            $folder = Join-Path $script:root $modulePath 'tests/e2e/defaults'
+            $null = New-Item -ItemType Directory -Path $folder -Force
+            [IO.File]::WriteAllText((Join-Path $folder 'main.test.bicep'), '')
+            $identity = Get-AvmWorkflowModuleIdentity -Root $script:root -ModulePath $modulePath -ModuleClientIds $json -TenantId $script:tenant
+            $case = @{ path = $example; identityKey = $identity.identityKey; subscriptionIndex = 0; subscriptionKey = $target.key }
+            $auth = Get-AvmWorkflowAuthentication -Root $script:root -ModulePath $modulePath -TestCase $case `
+                -ModuleClientIds $json -PoolJson $pool -TenantId $script:tenant
+            $auth.clientId | Should -BeExactly $mapping[$modulePath]
+            $script:activeClient = $auth.clientId
+            $state = Join-Path $script:root "$($auth.clientId).json"
+            $parameters = @{
+                Root = $script:root; ModulePath = $modulePath; SubscriptionId = $auth.subscriptionId
+                TenantId = $auth.tenantId; ClientId = $auth.clientId; StatePath = $state; ResultDirectory = $script:output
+            }
+            Invoke-AvmWorkflowE2e @parameters -Phase Deploy -Example $example -Confirm:$false
+            Invoke-AvmWorkflowE2e @parameters -Phase Complete -Confirm:$false
+            [IO.File]::WriteAllText($state, '{}')
+            Invoke-AvmWorkflowRecovery -StatePath $state -SubscriptionId $auth.subscriptionId -TenantId $auth.tenantId `
+                -ClientId $auth.clientId -Confirm:$false
+        }
+        @($selectedClients) | Should -Be @(
+            $script:client, $script:client, $script:client, $script:secondClient, $script:secondClient, $script:secondClient
+        )
+        Should -Invoke Invoke-AvmTestE2e -Exactly 4 -ParameterFilter {
+            $SubscriptionId -eq $script:subscription -and $TenantId -eq $script:tenant
+        }
+        Should -Invoke Invoke-AvmTestCleanup -Exactly 2 -ParameterFilter {
+            $SubscriptionId -eq $script:subscription -and $TenantId -eq $script:tenant
+        }
+    }
+
+    It 'refuses an account switch before deployment, completion or recovery' {
+        $parameters = @{
+            Root = $script:root; ModulePath = $script:modulePath; SubscriptionId = $script:subscription
+            TenantId = $script:tenant; ClientId = $script:secondClient; StatePath = $script:state; ResultDirectory = $script:output
+        }
+        foreach ($phase in @('Deploy', 'Complete')) {
+            { Invoke-AvmWorkflowE2e @parameters -Phase $phase -Example 'tests/e2e/defaults/main.test.bicep' -Confirm:$false } |
+                Should -Throw '*selected module client*'
+        }
+        [IO.File]::WriteAllText($script:state, '{}')
+        { Invoke-AvmWorkflowRecovery -StatePath $script:state -SubscriptionId $script:subscription -TenantId $script:tenant `
+                -ClientId $script:secondClient -Confirm:$false } | Should -Throw '*selected module client*'
+        Should -Invoke Invoke-AvmTestE2e -Exactly 0
+        Should -Invoke Invoke-AvmTestCleanup -Exactly 0
     }
 
     It 'retains required failures and advisory warning severity without raw package output' {

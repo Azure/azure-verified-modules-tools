@@ -41,6 +41,46 @@ variable "identity_resource_group_name" {
   description = "Name of the resource group to create the identities in."
 }
 
+variable "identity_name" {
+  type        = string
+  description = "Optional dedicated Bicep module identity name; Terraform names use id-test-terraform- and the repository stem with reserved windows replaced by w5s."
+  default     = null
+
+  validation {
+    condition     = var.identity_name == null ? true : can(regex("^[A-Za-z0-9][A-Za-z0-9_-]{2,89}$", var.identity_name))
+    error_message = "An explicit identity name must contain 3-90 letters, digits, underscores or hyphens."
+  }
+}
+
+variable "github_workflow_ref" {
+  type        = string
+  description = "Optional top-level caller workflow binding in addition to the reusable job workflow."
+  default     = null
+
+  validation {
+    condition     = var.github_workflow_ref == null ? true : can(regex("^[^/\\s@]+/[^/\\s@]+/\\.github/workflows/[^/\\s@]+\\.ya?ml@refs/heads/main$", var.github_workflow_ref))
+    error_message = "The caller workflow must be a fully qualified workflow ref on trusted main."
+  }
+}
+
+variable "bicep_registry_federation_enabled" {
+  type        = bool
+  description = "Add the registry's owner/repository/environment subject while retaining staged workflow-bound credentials."
+  default     = false
+  nullable    = false
+
+  validation {
+    condition = !var.bicep_registry_federation_enabled || (
+      var.identity_name != null &&
+      var.github_repository_owner == "Azure" &&
+      var.github_repository_name == "bicep-registry-modules" &&
+      var.github_repository_environment_names == toset(["avm-validation"]) &&
+      can(regex("^[A-Za-z0-9][A-Za-z0-9_-]{2,119}$", "${local.owner_repo_name}-registry-avm-validation"))
+    )
+    error_message = "Registry federation requires a named Azure/bicep-registry-modules identity, only avm-validation, and a credential name within 120 characters."
+  }
+}
+
 variable "github_repository_owner" {
   type        = string
   description = "Owner of the GitHub repositories."
@@ -49,11 +89,29 @@ variable "github_repository_owner" {
 variable "github_repository_name" {
   type        = string
   description = "Name of the GitHub repository."
+
+  validation {
+    condition = var.identity_name != null ? true : (
+      length("id-test-terraform-${replace(trimprefix(lower(var.github_repository_name), "terraform-"), "windows", "w5s")}") <= 90 &&
+      can(regex("^terraform-(azure|azurerm|azapi)-avm-(res|ptn|utl)-[a-z0-9]+(-[a-z0-9]+)*$", lower(var.github_repository_name)))
+    )
+    error_message = "Default test identity naming requires an AVM Terraform repository whose complete identity name fits the repository's 90-character limit."
+  }
 }
 
 variable "github_repository_environment_names" {
   type        = set(string)
   description = "Names of the GitHub environments to create federated identity credentials for. The OIDC subject claim uses the `context` claim, which expands to `environment:<name>` for env-gated jobs, so one credential is created per environment."
+
+  validation {
+    condition = alltrue([
+      for name in var.github_repository_environment_names :
+      can(regex("^[A-Za-z0-9][A-Za-z0-9_-]{2,119}$",
+        var.github_workflow_ref == null ? "${local.owner_repo_name}-${name}" : "${local.owner_repo_name}-module-${name}"
+      ))
+    ])
+    error_message = "Environment suffixes must keep federated credential names within 120 characters, including the optional module- prefix."
+  }
 }
 
 variable "location" {

@@ -44,6 +44,10 @@ function Get-AvmModuleContext {
     .PARAMETER Json
         Emit the result as a JSON document instead of a pscustomobject.
 
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
+
     .OUTPUTS
         pscustomobject with Kind, Root, Ecosystem, Scope, Owner.
 

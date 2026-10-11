@@ -67,7 +67,7 @@ function Publish-AvmTerraformRepositoryContent {
     $null = New-Item -ItemType Directory -Path $staging
     try {
         $null = Invoke-AvmGit -ArgumentList @('clone', '--quiet', "https://github.com/$Repository.git", $checkout) `
-            -WorkingDirectory $staging -UseGitHubCredential
+            -WorkingDirectory $staging -UseGitHubCredential -RetryNetworkFailure
         $git = @{ WorkingDirectory = $checkout }
         if ((Invoke-AvmGit @git -ArgumentList @('rev-parse', '--verify', '--quiet', 'refs/remotes/origin/main') -IgnoreExitCode).ExitCode -eq 0) {
             $null = Invoke-AvmGit @git -ArgumentList @('checkout', '--quiet', '-B', 'main', 'origin/main')

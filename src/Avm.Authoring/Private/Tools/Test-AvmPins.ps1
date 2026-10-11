@@ -10,8 +10,8 @@ function Test-AvmPins {
 
         Schema rules are documented at the head of Resources/avm.pins.jsonc.
 
-        The 'tools' array is required. The 'policyLibrary' and 'tflintPlugins'
-        sections are optional so fixture manifests can pin tools alone, but are
+        The 'tools' array is required. The 'policyLibrary', 'tflintPlugins' and
+        'powerShellModules' sections are optional so fixture manifests can pin tools alone, but are
         fully validated whenever present.
     #>
     [CmdletBinding()]
@@ -58,6 +58,9 @@ function Test-AvmPins {
             if ($t -isnot [hashtable]) {
                 throw [System.Data.DataException]::new(
                     "avm.pins: tool[$i] is not an object.")
+            }
+            if ($t.ContainsKey('versionOverride')) {
+                throw [System.Data.DataException]::new("avm.pins: tool[$i] cannot declare runtime versionOverride metadata.")
             }
 
             foreach ($k in 'name', 'version', 'urlTemplate', 'archive', 'entrypoint', 'sha256') {
@@ -279,6 +282,51 @@ function Test-AvmPins {
                 if ([string]$plugins[$name] -notmatch $semverRegex) {
                     throw [System.Data.DataException]::new(
                         "avm.pins: tflintPlugins['$name'] '$($plugins[$name])' is not semver.")
+                }
+            }
+        }
+
+        if ($Pins.ContainsKey('powerShellModules')) {
+            $modules = $Pins['powerShellModules']
+            if ($modules -isnot [hashtable] -or $modules.Count -eq 0) {
+                throw [System.Data.DataException]::new(
+                    "avm.pins: 'powerShellModules' must be a non-empty object.")
+            }
+            foreach ($name in $modules.Keys) {
+                if ($name -cnotmatch '^[A-Za-z][A-Za-z0-9.-]*$') {
+                    throw [System.Data.DataException]::new(
+                        "avm.pins: powerShellModules key '$name' is not a valid module name.")
+                }
+                if ($seenNames.Contains($name)) {
+                    throw [System.Data.DataException]::new("avm.pins: duplicate binary/PowerShell tool name '$name'.")
+                }
+                $module = $modules[$name]
+                if ($module -isnot [hashtable] -or
+                    -not $module.ContainsKey('version') -or -not $module.ContainsKey('sha256')) {
+                    throw [System.Data.DataException]::new(
+                        "avm.pins: powerShellModules['$name'] must contain version and sha256.")
+                }
+                if ($module.version -isnot [string] -or $module.version -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+$' -or
+                    $module.sha256 -isnot [string] -or $module.sha256 -cnotmatch $sha256Regex) {
+                    throw [System.Data.DataException]::new(
+                        "avm.pins: powerShellModules['$name'] requires a stable version and 64-char lowercase sha256.")
+                }
+                if ($module.ContainsKey('versionOverride')) {
+                    throw [System.Data.DataException]::new("avm.pins: powerShellModules['$name'] cannot declare runtime versionOverride metadata.")
+                }
+                if ($name -ceq 'Pester' -and [version]$module.version -lt [version]'5.5.0') {
+                    throw [System.Data.DataException]::new('avm.pins: Pester must be version 5.5.0 or later.')
+                }
+                if ($module.ContainsKey('dependencies')) {
+                    if ($module.dependencies -isnot [array]) {
+                        throw [System.Data.DataException]::new("avm.pins: dependencies for '$name' must be an array.")
+                    }
+                    foreach ($dependency in $module.dependencies) {
+                        if ($dependency -isnot [string] -or $dependency -ceq $name -or
+                            @($modules.Keys) -cnotcontains $dependency) {
+                            throw [System.Data.DataException]::new("avm.pins: '$name' has an unknown or self dependency '$dependency'.")
+                        }
+                    }
                 }
             }
         }

@@ -24,13 +24,17 @@ function Invoke-AvmHttp {
 
     .PARAMETER TimeoutSec
         Network read timeout (default 300s). Ignored for file:// URLs.
+
+    .PARAMETER UnverifiedToolVersionOverride
+        Explicit exception used only for a named tool-version-overrides.json entry.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(DefaultParameterSetName = 'Pinned')]
     [OutputType([string])]
     param(
         [Parameter(Mandatory)] [string] $Url,
         [Parameter(Mandatory)] [string] $Destination,
-        [Parameter(Mandatory)] [string] $ExpectedSha256,
+        [Parameter(Mandatory, ParameterSetName = 'Pinned')] [string] $ExpectedSha256,
+        [Parameter(Mandatory, ParameterSetName = 'Override')] [switch] $UnverifiedToolVersionOverride,
         [int] $TimeoutSec = 300
     )
 
@@ -41,7 +45,10 @@ function Invoke-AvmHttp {
         throw [System.ArgumentException]::new(
             "Invoke-AvmHttp only accepts https:// (or file:// for tests). Got: $Url")
     }
-    if ($ExpectedSha256 -notmatch '^[0-9a-f]{64}$') {
+    if ($PSCmdlet.ParameterSetName -eq 'Override' -and -not $UnverifiedToolVersionOverride) {
+        throw [System.ArgumentException]::new('An unverified download requires an explicit tool version override.')
+    }
+    if ($PSCmdlet.ParameterSetName -eq 'Pinned' -and $ExpectedSha256 -cnotmatch '^[0-9a-f]{64}$') {
         throw [System.ArgumentException]::new(
             "ExpectedSha256 must be 64-char lowercase hex. Got: $ExpectedSha256")
     }
@@ -75,33 +82,26 @@ function Invoke-AvmHttp {
         Copy-Item -LiteralPath $localSource -Destination $partial -Force
     }
     else {
-        # TLS 1.2+ pin. Tls13 may not be defined on older .NET targets, so
-        # combine defensively.
-        $tls12 = [System.Net.SecurityProtocolType]::Tls12
-        $protocols = $tls12
-        $tls13Member = [System.Net.SecurityProtocolType].GetField('Tls13')
-        if ($null -ne $tls13Member) {
-            $protocols = $tls12 -bor [System.Net.SecurityProtocolType]::Tls13
-        }
-        [System.Net.ServicePointManager]::SecurityProtocol = $protocols
-
         Write-AvmLog ("http: downloading {0} to {1}; timeout={2}s" -f $effectiveUrl, $partial, $TimeoutSec) -Level Verbose | Out-Null
-        Invoke-WebRequest -Uri $effectiveUrl -OutFile $partial -TimeoutSec $TimeoutSec -UseBasicParsing | Out-Null
+        Invoke-AvmWebRequest -Uri $effectiveUrl -OutFile $partial -TimeoutSec $TimeoutSec -Label "Download of $effectiveUrl" | Out-Null
     }
 
-    $actual = (Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash.ToLowerInvariant()
-    $expected = $ExpectedSha256.ToLowerInvariant()
-    if ($actual -ne $expected) {
-        Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
-        throw [AvmToolException]::new(
-            "SHA256 mismatch downloading $effectiveUrl. Expected: $expected. Actual: $actual.",
-            'AVM1011')
+    if (-not $UnverifiedToolVersionOverride) {
+        $actual = (Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash.ToLowerInvariant()
+        $expected = $ExpectedSha256.ToLowerInvariant()
+        if ($actual -ne $expected) {
+            Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+            throw [AvmToolException]::new(
+                "SHA256 mismatch downloading $effectiveUrl. Expected: $expected. Actual: $actual.",
+                'AVM1011')
+        }
     }
 
     if (Test-Path -LiteralPath $Destination) {
         Remove-Item -LiteralPath $Destination -Force
     }
     Move-Item -LiteralPath $partial -Destination $Destination -Force
-    Write-AvmLog ("http: sha256 verified; promoted download to {0}" -f $Destination) -Level Verbose | Out-Null
+    $verification = if ($UnverifiedToolVersionOverride) { 'tool version override; pinned sha256 verification disabled' } else { 'sha256 verified' }
+    Write-AvmLog ("http: {0}; promoted download to {1}" -f $verification, $Destination) -Level Verbose | Out-Null
     return $Destination
 }

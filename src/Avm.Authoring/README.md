@@ -2,7 +2,7 @@
 
 Source for the **`Avm.Authoring`** PowerShell module on the [PowerShell Gallery](https://www.powershellgallery.com/packages/Avm.Authoring).
 
-An earlier name-reservation placeholder release exported a single function, `Get-AvmAuthoringPlaceholder`, which is retained here as a back-compat shim. This module adds the **`avm` CLI dispatcher** with verbs for runtime info (`avm version`), module updates (`avm update`), environment diagnosis (`avm doctor`), repo classification (`avm context`), **content-addressed tool management** (`avm tool list|which|install`), the source-formatting / linting / build-validation trio (`avm format`, `avm lint`, `avm test`), README generation (`avm docs`), and a composition verb (`avm pre-commit`) that runs the trio back-to-back. Each verb is backed by the per-ecosystem Bicep and Terraform engine facades. The full roadmap is in [`docs/avm-consolidation-plan.md`](../../docs/avm-consolidation-plan.md); the engineering rules are in [`docs/avm-implementation-spec.md`](../../docs/avm-implementation-spec.md).
+An earlier name-reservation placeholder release exported a single function, `Get-AvmAuthoringPlaceholder`, which is retained here as a back-compat shim. This module adds the **`avm` CLI dispatcher** with verbs for runtime info (`avm version`), module updates (`avm upgrade`, with `avm update` retained as an alias), environment diagnosis (`avm doctor`), repo classification (`avm context`), **content-addressed tool management** (`avm tool list|which|install`), the source-formatting / linting / build-validation trio (`avm format`, `avm lint`, `avm test`), README generation (`avm docs`), and a composition verb (`avm pre-commit`) that runs the trio back-to-back. Each verb is backed by the per-ecosystem Bicep and Terraform engine facades. The purpose, architecture, and engineering rules are in [`docs/quality-spec.md`](../../docs/quality-spec.md).
 
 ## Layout
 
@@ -13,7 +13,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Public/`                                         | One file per exported function. File basename equals function name.                |
 | `Public/Invoke-Avm.ps1`                           | The `avm` dispatcher. Routes verb paths to cmdlets. Accepts kebab-case flags.      |
 | `Public/Get-AvmVersion.ps1`                       | `avm version` -> runtime + module info.                                            |
-| `Public/Update-AvmAuthoring.ps1`                  | `avm update` -> update the CurrentUser installation from PowerShell Gallery.       |
+| `Public/Update-AvmAuthoring.ps1`                  | `avm upgrade` / `avm update` -> update the CurrentUser installation from PowerShell Gallery. |
 | `Public/Invoke-AvmDoctor.ps1`                     | `avm doctor` -> local environment diagnosis.                                       |
 | `Public/Get-AvmModuleContext.ps1`                 | `avm context` -> classify the current directory as a Bicep or Terraform module.    |
 | `Public/Initialize-AvmModule.ps1`                 | `avm init` -> local Bicep scaffolding, or resumable Terraform repository creation and setup; Bicep `-Proposed` creates only metadata.json. |
@@ -37,7 +37,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Engines/Bicep/Format-AvmBicepModule.ps1`         | Runs `bicep format` over every `.bicep` / `.bicepparam` source in the module.      |
 | `Engines/Bicep/Invoke-AvmBicepLint.ps1`           | Runs `bicep lint` per `.bicep` file and surfaces structured diagnostics.           |
 | `Engines/Bicep/Invoke-AvmBicepTest.ps1`           | Runs `bicep build --stdout` per `.bicep` file as a no-network compile check.       |
-| `Engines/Bicep/Invoke-AvmBicepTestUnit.ps1`       | Runs module Pester unit tests in isolation; registry compliance is an explicit opt-in. |
+| `Engines/Bicep/Invoke-AvmBicepTestUnit.ps1`       | Runs module Pester unit tests in isolation; `-IncludeCompliance` adds packaged native conventions, metadata and README checks. |
 | `Engines/Bicep/Invoke-AvmBicepTestIntegration.ps1` | Validates and previews Bicep `tests/e2e` with Azure CLI using temporary, token-substituted ARM templates. |
 | `Engines/Bicep/Invoke-AvmBicepTestE2e.ps1`        | Native deployment, assertions, post hooks and operation-based cleanup at all four ARM scopes. |
 | `Engines/Bicep/Invoke-AvmBicepDocs.ps1`           | Renders Bicep READMEs through the pinned CLI and a repository-selected Scriban template. |
@@ -51,7 +51,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Private/Context/`                                | Repo/module classification walker.                                                 |
 | `Private/Docs/`                                   | Bicep template, Notes, source-example, and compiled-resource documentation helpers. |
 | `Private/Dispatch/`                               | Verb registry + `.avm/.disable` sentinel.                                          |
-| `Private/Exceptions/AvmExceptions.ps1`            | Typed exception classes (`AvmException` base + specialisations, spec section 14).  |
+| `Private/Exceptions/AvmExceptions.ps1`            | Typed exception classes (`AvmException` base + specialisations).                  |
 | `Private/Folders/Get-AvmFolder.ps1`               | Cross-OS resolver for Config/Cache/Data/State/Tools/Logs/Temp folders.             |
 | `Private/Layout/Test-AvmModuleLayout.ps1`         | Module-shape validator used by `./build.ps1 layout` and the publish gate.          |
 | `Private/Process/Invoke-AvmProcess.ps1`           | Subprocess primitive: argv-verbatim, stdout/stderr capture, exit/timeout policy.   |
@@ -308,7 +308,10 @@ stops the run:
    access is kept.
 1. Publish the first commit to `main` from a temporary clone: the portal's
    seed files, `metadata.json`, the minimal scaffold from
-   `Resources/Scaffolds/Terraform`, and the current managed files, telemetry,
+   `Resources/Scaffolds/Terraform` (an AzAPI virtual network that takes
+   `parent_id`, with the AzAPI `resource_types`, `retry`, `timeouts` and
+   `ignore_body_changes` inputs, and a default example that uses the regions
+   and naming utility modules), and the current managed files, telemetry,
    and README added by `avm pre-commit`. Nothing else from your folder is
    published, and a `main` that already holds module files is never
    overwritten. When `main` already has `metadata.json`, the run checks that
@@ -377,7 +380,7 @@ so it matches the released `avm init`. `gh skill update` updates it later.
 ## Local smoke test
 
 The source manifest has version `0.0.0`. For local source commands other than
-`avm version` and `avm update`, pass `-SkipModuleVersionCheck` immediately after
+`avm version` and `avm upgrade`, pass `-SkipModuleVersionCheck` immediately after
 `avm`; installed releases enforce the latest Gallery version by default.
 `avm version` still returns the running version and warns when an update is
 available.
@@ -389,7 +392,7 @@ Import-Module ./src/Avm.Authoring/Avm.Authoring.psd1 -Force
 
 avm -SkipModuleVersionCheck  # dispatcher help (writes via Information stream)
 avm version         # Get-AvmVersion
-avm update          # Update-AvmAuthoring
+avm upgrade         # Update-AvmAuthoring
 avm -SkipModuleVersionCheck doctor          # Invoke-AvmDoctor
 avm -SkipModuleVersionCheck doctor --json   # GNU-style flag translates to -Json
 avm -SkipModuleVersionCheck context         # Get-AvmModuleContext (current working directory)
@@ -399,8 +402,8 @@ avm -SkipModuleVersionCheck format          # Invoke-AvmFormat (engine resolved 
 avm -SkipModuleVersionCheck lint            # Invoke-AvmLint (bicep lint; scoped AVM TFLint rulesets for terraform)
 avm -SkipModuleVersionCheck test            # Invoke-AvmTest (bicep build --stdout; terraform validate -json per example)
 avm -SkipModuleVersionCheck test --no-init  # Use initialized examples; module coverage is not assessed
-avm -SkipModuleVersionCheck docs            # Invoke-AvmDocs (terraform-docs inject; bicep walker pending)
-avm -SkipModuleVersionCheck pre-commit      # Terraform: metadata -> sync -> check convention -> transform -> format -> docs
+avm -SkipModuleVersionCheck docs            # Invoke-AvmDocs (terraform-docs inject; Bicep Scriban template)
+avm -SkipModuleVersionCheck pre-commit      # Terraform: metadata -> initialize -> sync -> check convention -> transform -> format -> docs
 avm -SkipModuleVersionCheck pre-commit -Ecosystem terraform -ManagedFilesLocalPath D:\managed-files\terraform\files -ConfigLocalPath D:\tools\repository-management\repository-config -RepoId avm-res-foo
 
 Remove-Module Avm.Authoring
@@ -485,7 +488,7 @@ The lock schema accepts an optional `platformAliases` map for tools whose releas
 
 ## Tool cache layout
 
-Installed tools live under `<Data>/tools/` (resolved by `Get-AvmFolder -Kind Tools` per `docs/avm-implementation-spec.md` §10):
+Installed tools live under `<Data>/tools/` (resolved by `Get-AvmFolder -Kind Tools` per `docs/quality-spec.md` §10):
 
 ```
 <Data>/tools/<name>/

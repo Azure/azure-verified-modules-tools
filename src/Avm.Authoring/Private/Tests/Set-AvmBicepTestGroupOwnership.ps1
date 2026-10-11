@@ -13,9 +13,10 @@ function Set-AvmBicepTestGroupOwnership {
     )
 
     Set-StrictMode -Version 3.0
+    $ownerTag = (Get-AvmBicepConfiguration)['e2e']['ownershipTag']
     $ErrorActionPreference = 'Stop'
 
-    if ($RunId -cnotmatch '^[0-9a-f]{32}$') {
+    if (-not (Test-AvmBicepRunId -RunId $RunId)) {
         throw [AvmConfigurationException]::new('Bicep e2e run ID must be 32 lowercase hexadecimal characters.')
     }
     $resources = $Template['resources']
@@ -86,13 +87,13 @@ function Set-AvmBicepTestGroupOwnership {
     foreach ($key in $tags.Keys) {
         if ($key -isnot [string] -or -not $keys.Add($key) -or
             $tags[$key] -isnot [string] -or
-            ($key -ieq 'avm-e2e-run-id' -and $key -cne 'avm-e2e-run-id')) {
+            ($key -ieq $ownerTag -and $key -cne $ownerTag)) {
             throw [AvmConfigurationException]::new(
                 "Bicep e2e test '$SourcePath' has ambiguous or nonliteral group tags.")
         }
     }
-    if ($tags.Contains('avm-e2e-run-id')) {
-        if ($tags['avm-e2e-run-id'] -cne $RunId) {
+    if ($tags.Contains($ownerTag)) {
+        if ($tags[$ownerTag] -cne $RunId) {
             throw [AvmConfigurationException]::new(
                 "Bicep e2e test '$SourcePath' already declares a different group ownership tag.")
         }
@@ -104,8 +105,8 @@ function Set-AvmBicepTestGroupOwnership {
     if (-not $group.Contains('tags')) {
         $group['tags'] = $tags
     }
-    if (-not $tags.Contains('avm-e2e-run-id')) {
-        $tags['avm-e2e-run-id'] = $RunId
+    if (-not $tags.Contains($ownerTag)) {
+        $tags[$ownerTag] = $RunId
     }
     return [pscustomobject]@{
         Tagged             = $true

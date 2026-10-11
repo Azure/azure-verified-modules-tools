@@ -200,7 +200,8 @@ function Initialize-AvmTerraformRepository {
         & $addStep 'open source portal setup' 'pass' 'complete'
 
         $state.Stage = 'team access'
-        $published = $null -ne (Invoke-AvmGitHubApi -Endpoint $metadataEndpoint -AllowNotFound)
+        $metadataFile = Invoke-AvmGitHubApi -Endpoint $metadataEndpoint -AllowNotFound
+        $published = $null -ne $metadataFile
         $recordExists = Test-Path -LiteralPath (Get-AvmRulesetOptOutRecordPath -Repository $repository) -PathType Leaf
         $teamPlan = @(Sync-AvmRepositoryTeamAccess -Organization $organization -Repository $target.Name -Team $teams -PlanOnly)
         $teamsNeeded = @($teamPlan | Where-Object { $_.Status -eq 'planned' }).Count -gt 0
@@ -275,8 +276,7 @@ function Initialize-AvmTerraformRepository {
         $state.Stage = 'initial content'
         $contentReady = $published
         if ($published) {
-            $file = Invoke-AvmGitHubApi -Endpoint $metadataEndpoint
-            $json = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String(([string]$file['content'] -replace '\s', '')))
+            $json = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String(([string]$metadataFile['content'] -replace '\s', '')))
             $validation = Test-AvmMetadataContent -Json $json -Ecosystem terraform -ModuleType $ModuleType
             if ($validation.Issues.Count -gt 0) {
                 $invalid = [pscustomobject]@{ Issues = $validation.Issues }

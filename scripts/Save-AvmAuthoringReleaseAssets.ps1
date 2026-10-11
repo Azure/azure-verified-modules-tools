@@ -28,9 +28,16 @@ if ($ReleaseId -le 0) {
     throw "Release ID '$ReleaseId' must be positive."
 }
 
-$assetsJson = gh api --paginate --slurp "repos/$Repository/releases/$ReleaseId/assets?per_page=100"
-if ($LASTEXITCODE -ne 0) {
-    throw "Unable to list release assets for '$ReleaseTag' (release ID $ReleaseId)."
+. (Join-Path -Path $PSScriptRoot -ChildPath 'Import-AvmNetworkRetry.ps1')
+
+$assetsJson = Invoke-AvmRetry -RetryActivity "Listing release assets for '$ReleaseTag'" -RetryAction {
+    $ghOutput = @(gh api --paginate --slurp "repos/$Repository/releases/$ReleaseId/assets?per_page=100" 2>&1)
+    $ghError = ($ghOutput | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] }) -join "`n"
+    if ($LASTEXITCODE -ne 0) {
+        throw [System.InvalidOperationException]::new(
+            "Unable to list release assets for '$ReleaseTag' (release ID $ReleaseId). $ghError".TrimEnd())
+    }
+    ($ghOutput | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }) -join "`n"
 }
 
 $assetPages = ConvertFrom-Json -InputObject $assetsJson -NoEnumerate
@@ -69,10 +76,12 @@ $headers = @{
 }
 foreach ($asset in $selectedAssets) {
     $targetPath = Join-Path $OutputPath $asset.name
-    Invoke-WebRequest `
-        -Uri "https://api.github.com/repos/$Repository/releases/assets/$($asset.id)" `
-        -Headers $headers `
-        -OutFile $targetPath
+    Invoke-AvmRetry -RetryActivity "Downloading release asset '$($asset.name)'" -RetryAction {
+        Invoke-WebRequest `
+            -Uri "https://api.github.com/repos/$Repository/releases/assets/$($asset.id)" `
+            -Headers $headers `
+            -OutFile $targetPath
+    }
 
     $actualSize = (Get-Item -LiteralPath $targetPath).Length
     if ($actualSize -ne [long] $asset.size) {

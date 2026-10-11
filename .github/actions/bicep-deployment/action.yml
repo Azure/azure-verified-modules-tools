@@ -19,14 +19,11 @@ inputs:
   fallbackSubscriptionId:
     description: Effective singleton subscription.
     required: false
-  clientId:
-    description: Effective validation client.
-    required: false
+  moduleClientIds:
+    description: Published VALIDATE_MODULE_CLIENT_IDS JSON, keyed by canonical root module path.
+    required: true
   tenantId:
     description: Effective validation tenant.
-    required: false
-  azureCredentials:
-    description: Secret credentials used only for configured OIDC exceptions.
     required: false
   managementGroupId:
     description: Effective management group.
@@ -55,9 +52,8 @@ runs:
         TEST_CASE: ${{ inputs.testCase }}
         POOL_JSON: ${{ inputs.subscriptionPool }}
         FALLBACK_SUBSCRIPTION_ID: ${{ inputs.fallbackSubscriptionId }}
-        VALIDATE_CLIENT_ID: ${{ inputs.clientId }}
+        VALIDATE_MODULE_CLIENT_IDS: ${{ inputs.moduleClientIds }}
         VALIDATE_TENANT_ID: ${{ inputs.tenantId }}
-        AZURE_CREDENTIALS: ${{ inputs.azureCredentials }}
       run: |
         $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Deployment.ps1')
@@ -66,12 +62,10 @@ runs:
         $parameters = @{
           Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH; TestCase = $case
           PoolJson = $env:POOL_JSON; FallbackSubscriptionId = $env:FALLBACK_SUBSCRIPTION_ID
-          ClientId = $env:VALIDATE_CLIENT_ID; TenantId = $env:VALIDATE_TENANT_ID; Credentials = $env:AZURE_CREDENTIALS
+          ModuleClientIds = $env:VALIDATE_MODULE_CLIENT_IDS; TenantId = $env:VALIDATE_TENANT_ID
         }
         $auth = Get-AvmWorkflowAuthentication @parameters
-        foreach ($value in @($auth.subscriptionId, $auth.credentials)) {
-          if (-not [string]::IsNullOrEmpty($value)) { Write-Output "::add-mask::$($value.Replace('%', '%25'))" }
-        }
+        Write-Output "::add-mask::$($auth.subscriptionId)"
         foreach ($entry in $auth.GetEnumerator()) { Write-AvmWorkflowOutput -Name $entry.Key -Value $entry.Value }
         $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes("$env:MODULE_PATH|$($case.path)"))).ToLowerInvariant()
         Write-AvmWorkflowOutput -Name artifactKey -Value $key
@@ -88,19 +82,11 @@ runs:
         $null = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'avm-bicep-state') -Force
     - name: Sign in with OIDC
       id: login_oidc
-      if: steps.auth.outputs.useSecret == 'false'
       uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
       with:
         client-id: ${{ steps.auth.outputs.clientId }}
         tenant-id: ${{ steps.auth.outputs.tenantId }}
         subscription-id: ${{ steps.auth.outputs.subscriptionId }}
-        enable-AzPSSession: true
-    - name: Sign in for configured exception
-      id: login_secret
-      if: steps.auth.outputs.useSecret == 'true'
-      uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
-      with:
-        creds: ${{ steps.auth.outputs.credentials }}
         enable-AzPSSession: true
     - name: Confirm selected Azure context
       id: context
@@ -109,10 +95,11 @@ runs:
         AVM_ACTION_PATH: ${{ github.action_path }}
         SELECTED_SUBSCRIPTION: ${{ steps.auth.outputs.subscriptionId }}
         SELECTED_TENANT: ${{ steps.auth.outputs.tenantId }}
+        SELECTED_CLIENT: ${{ steps.auth.outputs.clientId }}
       run: |
         $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Deployment.ps1')
-        $tenant = Confirm-AvmWorkflowAzureContext -SubscriptionId $env:SELECTED_SUBSCRIPTION -TenantId $env:SELECTED_TENANT
+        $tenant = Confirm-AvmWorkflowAzureContext -SubscriptionId $env:SELECTED_SUBSCRIPTION -TenantId $env:SELECTED_TENANT -ClientId $env:SELECTED_CLIENT
         Write-AvmWorkflowOutput -Name tenantId -Value $tenant
     - name: Deploy native test case
       id: deploy
@@ -124,6 +111,7 @@ runs:
         TEST_CASE: ${{ inputs.testCase }}
         ARM_SUBSCRIPTION_ID: ${{ steps.auth.outputs.subscriptionId }}
         ARM_TENANT_ID: ${{ steps.context.outputs.tenantId }}
+        ARM_CLIENT_ID: ${{ steps.auth.outputs.clientId }}
         ARM_MGMTGROUP_ID: ${{ inputs.managementGroupId }}
         TOKEN_NAMEPREFIX: ${{ inputs.tokenNamePrefix }}
         CI_KEY_VAULT_NAME: ${{ inputs.ciKeyVaultName }}
@@ -137,7 +125,7 @@ runs:
         $case = ConvertFrom-Json -InputObject $env:TEST_CASE -AsHashtable
         $parameters = @{
           Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH; Phase = 'Deploy'; Example = $case.path
-          SubscriptionId = $env:ARM_SUBSCRIPTION_ID; TenantId = $env:ARM_TENANT_ID
+          SubscriptionId = $env:ARM_SUBSCRIPTION_ID; TenantId = $env:ARM_TENANT_ID; ClientId = $env:ARM_CLIENT_ID
           ManagementGroupId = $env:ARM_MGMTGROUP_ID; CustomLocation = $workflowInput['customLocation']
           RemoveDeployment = ConvertTo-AvmWorkflowBoolean $workflowInput.removeDeployment
           StatePath = Join-Path $env:RUNNER_TEMP 'avm-bicep-state' 'state.json'
@@ -146,23 +134,16 @@ runs:
         Invoke-AvmWorkflowE2e @parameters -Confirm:$false
     - name: Renew OIDC sign-in for completion
       id: renew_oidc
-      if: ${{ !cancelled() && (success() || failure()) && steps.deploy.outcome != 'skipped' && steps.auth.outputs.useSecret == 'false' }}
+      if: ${{ !cancelled() && (success() || failure()) && steps.deploy.outcome != 'skipped' }}
       uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
       with:
         client-id: ${{ steps.auth.outputs.clientId }}
         tenant-id: ${{ steps.auth.outputs.tenantId }}
         subscription-id: ${{ steps.auth.outputs.subscriptionId }}
         enable-AzPSSession: true
-    - name: Renew exception sign-in for completion
-      id: renew_secret
-      if: ${{ !cancelled() && (success() || failure()) && steps.deploy.outcome != 'skipped' && steps.auth.outputs.useSecret == 'true' }}
-      uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
-      with:
-        creds: ${{ steps.auth.outputs.credentials }}
-        enable-AzPSSession: true
     - name: Assert and complete native test case
       id: complete
-      if: ${{ !cancelled() && (success() || failure()) && steps.deploy.outcome == 'success' && (steps.renew_oidc.outcome == 'success' || steps.renew_secret.outcome == 'success') }}
+      if: ${{ !cancelled() && (success() || failure()) && steps.deploy.outcome == 'success' && steps.renew_oidc.outcome == 'success' }}
       shell: pwsh
       env:
         AVM_ACTION_PATH: ${{ github.action_path }}
@@ -170,6 +151,7 @@ runs:
         WORKFLOW_INPUT: ${{ inputs.workflowInput }}
         ARM_SUBSCRIPTION_ID: ${{ steps.auth.outputs.subscriptionId }}
         ARM_TENANT_ID: ${{ steps.context.outputs.tenantId }}
+        ARM_CLIENT_ID: ${{ steps.auth.outputs.clientId }}
       run: |
         $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Validation.ps1')
@@ -177,24 +159,25 @@ runs:
         $workflowInput = ConvertFrom-Json -InputObject $env:WORKFLOW_INPUT -AsHashtable
         $parameters = @{
           Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH; Phase = 'Complete'
-          SubscriptionId = $env:ARM_SUBSCRIPTION_ID; TenantId = $env:ARM_TENANT_ID
+          SubscriptionId = $env:ARM_SUBSCRIPTION_ID; TenantId = $env:ARM_TENANT_ID; ClientId = $env:ARM_CLIENT_ID
           RemoveDeployment = ConvertTo-AvmWorkflowBoolean $workflowInput.removeDeployment
           StatePath = Join-Path $env:RUNNER_TEMP 'avm-bicep-state' 'state.json'
           ResultDirectory = Join-Path $env:RUNNER_TEMP 'avm-bicep-results'
         }
         Invoke-AvmWorkflowE2e @parameters -Confirm:$false
     - name: Recover unfinished native cleanup
-      if: ${{ !cancelled() && failure() && steps.deploy.outcome != 'skipped' && fromJSON(inputs.workflowInput).removeDeployment == 'true' && (steps.renew_oidc.outcome == 'success' || steps.renew_secret.outcome == 'success') }}
+      if: ${{ !cancelled() && failure() && steps.deploy.outcome != 'skipped' && fromJSON(inputs.workflowInput).removeDeployment == 'true' && steps.renew_oidc.outcome == 'success' }}
       shell: pwsh
       env:
         AVM_ACTION_PATH: ${{ github.action_path }}
         ARM_SUBSCRIPTION_ID: ${{ steps.auth.outputs.subscriptionId }}
         ARM_TENANT_ID: ${{ steps.context.outputs.tenantId }}
+        ARM_CLIENT_ID: ${{ steps.auth.outputs.clientId }}
       run: |
         $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Validation.ps1')
         Import-AvmWorkflowPackage
-        Invoke-AvmWorkflowRecovery -StatePath (Join-Path $env:RUNNER_TEMP 'avm-bicep-state' 'state.json') -SubscriptionId $env:ARM_SUBSCRIPTION_ID -TenantId $env:ARM_TENANT_ID -Confirm:$false
+        Invoke-AvmWorkflowRecovery -StatePath (Join-Path $env:RUNNER_TEMP 'avm-bicep-state' 'state.json') -SubscriptionId $env:ARM_SUBSCRIPTION_ID -TenantId $env:ARM_TENANT_ID -ClientId $env:ARM_CLIENT_ID -Confirm:$false
     - name: Retain results and recovery state
       if: always() && steps.auth.outcome == 'success'
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

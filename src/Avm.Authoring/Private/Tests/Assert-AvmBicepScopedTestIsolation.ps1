@@ -17,6 +17,7 @@ function Assert-AvmBicepScopedTestIsolation {
     )
 
     Set-StrictMode -Version 3.0
+    $ownerTag = (Get-AvmBicepConfiguration)['e2e']['ownershipTag']
     $ErrorActionPreference = 'Stop'
 
     $resources = $Template['resources']
@@ -70,7 +71,7 @@ function Assert-AvmBicepScopedTestIsolation {
     $ownedGroup = $null
     $crossGroupCount = 0
     if ($Scope -eq 'sub' -and -not [string]::IsNullOrWhiteSpace($OwnedGroupRunId)) {
-        if ($OwnedGroupRunId -cnotmatch '^[0-9a-f]{32}$') {
+        if (-not (Test-AvmBicepRunId -RunId $OwnedGroupRunId)) {
             throw [AvmConfigurationException]::new('Bicep e2e run ID must be 32 lowercase hexadecimal characters.')
         }
         $groups = @($resourceList | Where-Object {
@@ -92,8 +93,8 @@ function Assert-AvmBicepScopedTestIsolation {
                 $ownedGroup['name'] -cnotmatch '^\[parameters\(''[A-Za-z][A-Za-z0-9_]*''\)\]$' -or
                 $ownedGroup.Contains('condition') -or $ownedGroup.Contains('copy') -or
                 $tags -isnot [System.Collections.IDictionary] -or
-                $tags['avm-e2e-run-id'] -isnot [string] -or
-                $tags['avm-e2e-run-id'] -cne $OwnedGroupRunId) {
+                $tags[$ownerTag] -isnot [string] -or
+                $tags[$ownerTag] -cne $OwnedGroupRunId) {
                 throw [AvmConfigurationException]::new(
                     "Bicep e2e test '$SourcePath' requires an unconditional run-owned group with a parameterized name.")
             }

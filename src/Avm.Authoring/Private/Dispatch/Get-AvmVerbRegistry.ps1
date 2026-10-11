@@ -30,6 +30,11 @@ function Get-AvmVerbRegistry {
             Summary = 'Update Avm.Authoring to the latest PowerShell Gallery version.'
         }
         [pscustomobject]@{
+            Path    = [string[]]@('upgrade')
+            Cmdlet  = 'Update-AvmAuthoring'
+            Summary = 'Upgrade Avm.Authoring to the latest PowerShell Gallery version.'
+        }
+        [pscustomobject]@{
             Path    = [string[]]@('doctor')
             Cmdlet  = 'Invoke-AvmDoctor'
             Summary = 'Diagnose the local environment.'

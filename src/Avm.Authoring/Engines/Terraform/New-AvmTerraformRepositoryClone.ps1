@@ -65,7 +65,7 @@ function New-AvmTerraformRepositoryClone {
     $staging = Join-Path -Path $parent -ChildPath ".$name.avm-clone-$suffix"
     $backup = Join-Path -Path $parent -ChildPath ".$name.avm-metadata-$suffix.json"
     try {
-        $null = Invoke-AvmGit -ArgumentList @('clone', '--quiet', "$url.git", $staging) -WorkingDirectory $parent -UseGitHubCredential
+        $null = Invoke-AvmGit -ArgumentList @('clone', '--quiet', "$url.git", $staging) -WorkingDirectory $parent -UseGitHubCredential -RetryNetworkFailure
         $entries = @(if (Test-Path -LiteralPath $Path) { Get-ChildItem -LiteralPath $Path -Force })
         if ($entries.Count -gt 0 -and -not (& $isMetadataOnly $entries)) {
             return (& $result 'skipped' $otherFiles)

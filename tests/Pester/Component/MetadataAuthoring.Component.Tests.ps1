@@ -66,13 +66,13 @@ BeforeAll {
             param($ModuleContext, $CommandName, $Actions, $LogVerbose)
             $script:metadataLaterCalls = 0
             $script:metadataToolResolutions = 0
-            Mock Get-AvmModuleContext { $ModuleContext }
+            Mock Get-AvmModuleContextInternal { $ModuleContext }
             Mock Test-AvmModuleVersion {}
             Mock Resolve-AvmCommandTool { $script:metadataToolResolutions++; @() }
             Mock Assert-AvmGitWorkingTreeClean {}
             Mock Invoke-AvmHttp { throw 'Metadata validation must not fetch external data.' }
             Mock Invoke-AvmProcess { throw 'These metadata fixtures must not run a subprocess.' }
-            foreach ($name in @('Invoke-AvmSync', 'Invoke-AvmFormat', 'Invoke-AvmTransform', 'Invoke-AvmLint', 'Invoke-AvmCheckPolicy', 'Invoke-AvmCheckConvention', 'Invoke-AvmTest')) {
+            foreach ($name in @('Initialize-AvmTerraformCommand', 'Invoke-AvmSync', 'Invoke-AvmFormat', 'Invoke-AvmTransform', 'Invoke-AvmLint', 'Invoke-AvmCheckPolicy', 'Invoke-AvmCheckConvention', 'Invoke-AvmTest')) {
                 Mock -CommandName $name -MockWith {
                     $script:metadataLaterCalls++
                     [pscustomobject]@{ Status = 'pass'; Issues = @() }

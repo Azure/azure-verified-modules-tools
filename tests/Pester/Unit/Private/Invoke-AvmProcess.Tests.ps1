@@ -251,6 +251,85 @@ Describe 'Invoke-AvmProcess' {
         ($messages -join "`n") | Should -Match 'failing-detail'
     }
 
+    It 'keeps caller-rendered streams private with Actions <Actions> and exit <ExitCode>' -ForEach @(
+        @{ Actions = ''; ExitCode = 0 }
+        @{ Actions = ''; ExitCode = 7 }
+        @{ Actions = 'true'; ExitCode = 0 }
+        @{ Actions = 'true'; ExitCode = 7 }
+    ) {
+        $observed = InModuleScope 'Avm.Authoring' -Parameters @{
+            E = $script:pwsh; Actions = $Actions; ExitCode = $ExitCode
+        } {
+            param($E, $Actions, $ExitCode)
+            $saved = @{ GITHUB_ACTIONS = $env:GITHUB_ACTIONS; AVM_VERBOSE = $env:AVM_VERBOSE; RUNNER_DEBUG = $env:RUNNER_DEBUG }
+            $env:GITHUB_ACTIONS = $Actions
+            $env:AVM_VERBOSE = ''
+            $env:RUNNER_DEBUG = ''
+            try {
+                $messages = @()
+                $result = Invoke-AvmProcess -FilePath $E -ArgumentList @(
+                    '-NoProfile', '-NonInteractive', '-Command',
+                    "[Console]::Out.WriteLine('private-out'); [Console]::Error.WriteLine('private-error'); exit $ExitCode"
+                ) -Label 'rendered fixture' -StreamOutput -IgnoreExitCode `
+                    -OnStdOutLine { param($line) Write-AvmLog ($line.Replace('private-out', 'safe-out')) -Level Info } `
+                    -OnStdErrLine { param($line) Write-AvmLog ($line.Replace('private-error', 'safe-error')) -Level Info } `
+                    -InformationVariable messages
+                @{ Result = $result; Messages = @($messages | ForEach-Object { [string]$_.MessageData }) }
+            }
+            finally {
+                foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+            }
+        }
+        $observed.Result.ExitCode | Should -Be $ExitCode
+        $observed.Result.StdOut.TrimEnd() | Should -Be 'private-out'
+        $observed.Result.StdErr.TrimEnd() | Should -Be 'private-error'
+        $observed.Messages | Should -Contain 'safe-out'
+        $observed.Messages | Should -Contain 'safe-error'
+        ($observed.Messages -join "`n") | Should -Not -Match 'private-out|private-error|::group::|::endgroup::'
+    }
+
+    It 'replays only stdout when a stderr-rendered quiet run fails' {
+        $observed = InModuleScope 'Avm.Authoring' -Parameters @{ E = $script:pwsh } {
+            param($E)
+            Mock Test-AvmGitHubActionsContext { $false }
+            Mock Test-AvmVerboseEnabled { $false }
+            $messages = @()
+            $null = Invoke-AvmProcess -FilePath $E -ArgumentList @(
+                '-NoProfile', '-NonInteractive', '-Command',
+                "[Console]::Out.WriteLine('stdout-detail'); [Console]::Error.WriteLine('private-error'); exit 7"
+            ) -Label 'stderr fixture' -StreamOutput -IgnoreExitCode `
+                -OnStdErrLine { param($line) Write-AvmLog ($line.Replace('private-error', 'safe-error')) -Level Info } `
+                -InformationVariable messages
+            @($messages | ForEach-Object { [string]$_.MessageData })
+        }
+        ($observed -join "`n") | Should -Match 'stdout-detail'
+        $observed | Should -Contain 'safe-error'
+        ($observed -join "`n") | Should -Not -Match 'private-error'
+    }
+
+    It 'stops its child and preserves the error when a streaming callback fails' {
+        $observed = InModuleScope 'Avm.Authoring' -Parameters @{ E = $script:pwsh } {
+            param($E)
+            $child = @{ Id = 0 }
+            try {
+                $null = Invoke-AvmProcess -FilePath $E -ArgumentList @(
+                    '-NoProfile', '-NonInteractive', '-Command',
+                    '[Console]::Error.WriteLine($PID); Start-Sleep -Seconds 30'
+                ) -StreamOutput -TimeoutSec 5 -Label 'failing renderer' -OnStdErrLine {
+                    param($line)
+                    $child.Id = [int]$line
+                    throw [System.IO.InvalidDataException]::new('Synthetic rendering failure.')
+                }
+                @{ Id = $child.Id; Error = $null }
+            }
+            catch { @{ Id = $child.Id; Error = $_.Exception } }
+        }
+        $observed.Error | Should -BeOfType ([System.IO.InvalidDataException])
+        $observed.Error.Message | Should -Be 'Synthetic rendering failure.'
+        $observed.Id | Should -BeGreaterThan 0
+        Get-Process -Id $observed.Id -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+    }
+
     It 'reports StartTime, EndTime and DurationMs on the result' {
         $exe = $script:pwsh
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ E = $exe } {

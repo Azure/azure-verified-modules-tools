@@ -1,0 +1,27 @@
+{
+  "retry": {
+    "maxAttempts": 4,
+    "initialDelaySeconds": 2,
+    "maxDelaySeconds": 30,
+    "maxRetryAfterSeconds": 120,
+    "advisoryMaxAttempts": 2
+  },
+  "transientHttpStatusCodes": [408, 429, 500, 502, 503, 504],
+  "transientMessagePatterns": [
+    "\\b(?:timed out|timeout expired|operation has timed out)\\b",
+    "\\bconnection (?:was )?(?:reset|refused|closed|aborted)\\b",
+    "\\b(?:could not resolve host|no such host(?: is known)?|name or service not known|temporary failure in name resolution|name resolution failed)\\b",
+    "\\b(?:no route to host|network is unreachable|tls handshake timeout)\\b",
+    "\\b(?:unexpected eof|early eof|rpc failed)\\b",
+    "an error occurred while sending the request",
+    "\\b(?:too many requests|service unavailable|bad gateway|gateway time-?out|temporarily unavailable)\\b",
+    "\\bsecondary rate limit\\b",
+    "\\bcontext deadline exceeded\\b",
+    "client\\.timeout exceeded while awaiting headers",
+    "failed to retrieve cryptographic signature for provider",
+    "\\b(?:provider|registry)\\b.*\\b(?:500 internal server error|502 bad gateway|503 service unavailable|504 gateway time-?out)\\b",
+    "\\(http (?:408|429|5\\d\\d)\\)",
+    "\\breturned error: (?:408|429|5\\d\\d)\\b",
+    "\\bstatus code does not indicate success: (?:408|429|5\\d\\d)\\b"
+  ]
+}

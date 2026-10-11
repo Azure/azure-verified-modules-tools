@@ -144,7 +144,7 @@ function Invoke-AvmTerraformTestE2e {
 
     $selected = @(Select-AvmTerraformE2eExample -Example $allExamples -Selector $Example)
 
-    $tool = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
+    $tool = Resolve-AvmTool -Name 'terraform' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
 
     $exampleDirs = @($selected)
 
@@ -217,7 +217,8 @@ function Invoke-AvmTerraformTestE2e {
                 -WorkingDirectory $exampleDir `
                 -EnvVars $envVars `
                 -StreamOutput `
-                -IgnoreExitCode
+                -IgnoreExitCode `
+                -RetryNetworkFailure
 
             if ($init.ExitCode -ne 0) {
                 $detail = if ($init.StdErr) { $init.StdErr.Trim() } elseif ($init.StdOut) { $init.StdOut.Trim() } else { '' }

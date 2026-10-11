@@ -1,0 +1,36 @@
+name: Storage fixture
+
+on:
+  workflow_dispatch:
+    inputs:
+      staticValidation:
+        type: boolean
+        default: true
+      deploymentValidation:
+        type: boolean
+        default: true
+      removeDeployment:
+        type: boolean
+        default: true
+      customLocation:
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/avm.res.storage.storage-account.yml
+      - avm/res/storage/storage-account/**
+      - '!*/**/README.md'
+      - '!avm/**/metadata.json'
+
+env:
+  workflowPath: .github/workflows/avm.res.storage.storage-account.yml
+  modulePath: avm/res/storage/storage-account
+
+jobs:
+  job_initialize_pipeline:
+    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && !(github.repository != 'Azure/bicep-registry-modules' && github.event_name != 'workflow_dispatch') }}
+    steps:
+      - shell: pwsh
+        run: Write-Output 'Compiler-only fixture'

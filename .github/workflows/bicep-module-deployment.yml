@@ -74,6 +74,7 @@ jobs:
           sparse-checkout: |
             .github/actions
             scripts/bicep-workflows
+            repository-management/shared
       - name: Run native deployment lifecycle
         if: ${{ !fromJSON(inputs.testCase).e2eIgnore }}
         uses: ./.avm-tools/.github/actions/bicep-deployment
@@ -84,9 +85,8 @@ jobs:
           testCase: ${{ inputs.testCase }}
           subscriptionPool: ${{ vars.VALIDATE_SUBSCRIPTION_IDS || vars.TEST_SUBSCRIPTION_IDS || secrets.VALIDATE_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS }}
           fallbackSubscriptionId: ${{ vars.VALIDATE_SUBSCRIPTION_ID || secrets.VALIDATE_SUBSCRIPTION_ID }}
-          clientId: ${{ vars.VALIDATE_CLIENT_ID || secrets.VALIDATE_CLIENT_ID }}
+          moduleClientIds: ${{ vars.VALIDATE_MODULE_CLIENT_IDS }}
           tenantId: ${{ vars.VALIDATE_TENANT_ID || secrets.VALIDATE_TENANT_ID }}
-          azureCredentials: ${{ secrets.AZURE_CREDENTIALS }}
           managementGroupId: ${{ vars.VALIDATE_MANAGEMENT_GROUP_ID || vars.ARM_MGMTGROUP_ID || secrets.VALIDATE_MANAGEMENT_GROUP_ID || secrets.ARM_MGMTGROUP_ID }}
           tokenNamePrefix: ${{ inputs.tokenNamePrefix || secrets.TOKEN_NAMEPREFIX }}
           ciKeyVaultName: ${{ vars.CI_KEY_VAULT_NAME }}

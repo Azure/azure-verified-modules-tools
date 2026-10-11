@@ -8,14 +8,43 @@ function Get-AvmCommandTool {
 
         [Parameter(Mandatory)]
         [ValidateSet('bicep', 'terraform')]
-        [string] $Ecosystem
+        [string] $Ecosystem,
+
+        [string[]] $ExcludeSteps = @()
     )
 
     $tools = switch ("$Command/$Ecosystem") {
-        'pre-commit/bicep' { @('bicep') }
-        'pre-commit/terraform' { @('mapotf', 'terraform', 'terraform-docs') }
-        'pr-check/bicep' { @('bicep') }
-        'pr-check/terraform' { @('conftest', 'mapotf', 'terraform', 'terraform-docs', 'tflint') }
+        'pre-commit/bicep' { @('bicep', 'Pester') }
+        'pre-commit/terraform' { @('mapotf', 'terraform', 'terraform-docs', 'Pester') }
+        'pr-check/bicep' { @('bicep', 'Pester', 'powershell-yaml', 'PSRule', 'PSRule.Rules.Azure') }
+        'pr-check/terraform' { @('conftest', 'mapotf', 'terraform', 'terraform-docs', 'tflint', 'Pester') }
+    }
+
+    if ($Command -eq 'pr-check' -and $ExcludeSteps.Count -gt 0) {
+        $requiredBy = switch ($Ecosystem) {
+            'bicep' {
+                @{
+                    'bicep'              = @('format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
+                    'Pester'             = @('metadata', 'check convention', 'docs')
+                    'powershell-yaml'    = @('check convention')
+                    'PSRule'             = @('check policy')
+                    'PSRule.Rules.Azure' = @('check policy')
+                }
+            }
+            'terraform' {
+                @{
+                    'conftest'       = @('check policy')
+                    'mapotf'         = @('transform')
+                    'terraform'      = @('format', 'transform', 'lint', 'check policy', 'validate')
+                    'terraform-docs' = @('docs')
+                    'tflint'         = @('lint')
+                    'Pester'         = @('metadata')
+                }
+            }
+        }
+        $tools = @($tools | Where-Object {
+                @($requiredBy[$_] | Where-Object { $_ -notin $ExcludeSteps }).Count -gt 0
+            })
     }
 
     return @($tools)
@@ -33,15 +62,22 @@ function Resolve-AvmCommandTool {
         [ValidateSet('bicep', 'terraform')]
         [string] $Ecosystem,
 
-        [switch] $AllowPathFallback
+        [string] $ModuleRoot,
+
+        [switch] $AllowPathFallback,
+
+        [string[]] $ExcludeSteps = @()
     )
 
-    $names = @(Get-AvmCommandTool -Command $Command -Ecosystem $Ecosystem)
+    $names = @(Get-AvmCommandTool -Command $Command -Ecosystem $Ecosystem -ExcludeSteps $ExcludeSteps)
     Write-AvmLog ('tools: resolving {0} requirement(s): {1}' -f $names.Count, ($names -join ', ')) -Level Install | Out-Null
 
     $resolved = [System.Collections.Generic.List[object]]::new()
     foreach ($name in $names) {
-        $tool = Resolve-AvmTool -Name $name -AllowPathFallback:$AllowPathFallback
+        $tool = Resolve-AvmTool -Name $name -ModuleRoot $ModuleRoot -AllowPathFallback:$AllowPathFallback
+        if ($tool.PSObject.Properties['Kind'] -and $tool.Kind -ceq 'powershell-module') {
+            $null = Import-AvmPowerShellModule -Name $name -ModuleRoot $ModuleRoot
+        }
         $resolved.Add($tool)
         Write-AvmLog ('tools: ready {0}/{1} from {2}' -f $tool.Name, $tool.Version, $tool.Source) -Level Install | Out-Null
         Write-AvmLog ('tools: {0} path = {1}' -f $tool.Name, $tool.Path) -Level Verbose | Out-Null

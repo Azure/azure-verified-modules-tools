@@ -142,7 +142,7 @@ Describe "Repository management migration layout" {
         }
 
         ([regex]::Matches($workflow, '(?m)^\s*environment:\s*avm\s*$')).Count |
-            Should -Be 3
+            Should -Be 2
         $secretReferences = @(
             [regex]::Matches($workflow, 'secrets\.([A-Z0-9_]+)') |
                 ForEach-Object { $_.Groups[1].Value } |
@@ -209,15 +209,11 @@ Describe "Repository management migration layout" {
             '^tests/Pester/Unit/RepositoryManagement/' +
             'RepositoryDiscovery\.Tests\.ps1:\d+:'
         )
-        # Completed progress slices are an append-only audit trail, so they may
-        # name the archived repository when recording where work originated.
-        $allowedProgressNoteLine = '^docs/progress/[^:]+\.md:\d+:'
         $unexpectedReferences = @(
             $grepOutput |
                 Where-Object {
                     $_ -notmatch $allowedProductionLine -and
-                    $_ -notmatch $allowedTestLine -and
-                    $_ -notmatch $allowedProgressNoteLine
+                    $_ -notmatch $allowedTestLine
                 }
         )
 

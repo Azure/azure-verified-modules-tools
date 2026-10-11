@@ -164,42 +164,6 @@ function Get-AvmTerraformTransformTarget {
     return $targets.ToArray()
 }
 
-function Test-AvmMapotfTransientProviderError {
-    [CmdletBinding()]
-    [OutputType([bool])]
-    param(
-        [AllowEmptyString()]
-        [string] $Output
-    )
-
-    Set-StrictMode -Version 3.0
-    $ErrorActionPreference = 'Stop'
-
-    if ([string]::IsNullOrWhiteSpace($Output)) {
-        return $false
-    }
-
-    $normalized = $Output `
-        -replace '\x1B\[[0-?]*[ -/]*[@-~]', '' `
-        -replace '[\r\n\u2502]+', ' ' `
-        -replace '\s+', ' '
-
-    $patterns = @(
-        'context deadline exceeded'
-        'Client\.Timeout exceeded while awaiting headers'
-        'failed to retrieve cryptographic signature for provider'
-        '(?:provider|registry).*(?:500 Internal Server Error|502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout)'
-    )
-
-    foreach ($pattern in $patterns) {
-        if ($normalized -match $pattern) {
-            return $true
-        }
-    }
-
-    return $false
-}
-
 function Invoke-AvmMapotfTransformTarget {
     [CmdletBinding()]
     param(
@@ -227,40 +191,21 @@ function Invoke-AvmMapotfTransformTarget {
     $transformArguments.Add($Target.Path)
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    $maxRetries = 2
-    $attempt = 0
-    do {
-        $transform = Invoke-AvmProcess `
-            -FilePath $Options.ToolPath `
-            -ArgumentList $transformArguments.ToArray() `
-            -WorkingDirectory $Target.Path `
-            -EnvVars $Options.EnvVars `
-            -IgnoreExitCode
-        if ($transform.ExitCode -eq 0) {
-            break
-        }
-
-        $combinedOutput = @($transform.StdOut, $transform.StdErr) -join [System.Environment]::NewLine
-        if (
-            $attempt -ge $maxRetries -or
-            -not (Test-AvmMapotfTransientProviderError -Output $combinedOutput)
-        ) {
-            $message = Add-AvmProcessFailureDetail `
-                -Message ('mapotf transform exited with code {0} for {1} target {2}.' -f $transform.ExitCode, $Target.Scope, $Target.Path) `
-                -StdOut $transform.StdOut `
-                -StdErr $transform.StdErr
-            throw [AvmProcessException]::new($message)
-        }
-
-        $attempt++
-        $delaySeconds = $attempt * 5
-        Write-AvmLog (
-            'transform: transient provider download failure; retrying {0} target in {1}s ({2} of {3})' -f
-            $Target.Scope, $delaySeconds, $attempt, $maxRetries
-        ) -Level Warning | Out-Null
-        Start-Sleep -Seconds $delaySeconds
-    } while ($attempt -le $maxRetries)
-    $stopwatch.Stop()
+    $transform = Invoke-AvmProcess `
+        -FilePath $Options.ToolPath `
+        -ArgumentList $transformArguments.ToArray() `
+        -WorkingDirectory $Target.Path `
+        -EnvVars $Options.EnvVars `
+        -IgnoreExitCode `
+        -RetryNetworkFailure `
+        -Label ('mapotf transform {0} target' -f $Target.Scope)
+    if ($transform.ExitCode -ne 0) {
+        $message = Add-AvmProcessFailureDetail `
+            -Message ('mapotf transform exited with code {0} for {1} target {2}.' -f $transform.ExitCode, $Target.Scope, $Target.Path) `
+            -StdOut $transform.StdOut `
+            -StdErr $transform.StdErr
+        throw [AvmProcessException]::new($message)
+    }    $stopwatch.Stop()
 
     Write-AvmLog (
         'transform: {0} target completed in {1}: {2}' -f
@@ -322,13 +267,13 @@ function Invoke-AvmTerraformTransform {
 
         Root and local-module targets finish before examples inspect their
         inputs. Each group runs through the bounded Invoke-AvmParallel
-        scheduler. A configured TF_PLUGIN_CACHE_DIR forces serial target
-        execution because Terraform's shared provider plugin cache is not
-        concurrency-safe.
+        scheduler. Mapotf uses each target's working-directory providers rather
+        than TF_PLUGIN_CACHE_DIR, allowing independent targets and separate AVM
+        processes to run without racing Terraform's shared provider cache.
 
         mapotf exit codes: 0 = success. A transform failure caused by a
-        recognized transient Terraform provider network error is retried twice
-        with incremental delay; other failures and retry exhaustion surface as
+        transient network error, such as a provider download timeout, is retried
+        with the shared network retry policy; other failures and retry exhaustion surface as
         AvmProcessException. A missing mapotf binary (AvmToolException) or a
         missing config bundle (AvmConfigurationException) propagates so the
         composition chain reports the step as 'skipped' on an unconfigured
@@ -376,7 +321,7 @@ function Invoke-AvmTerraformTransform {
             "Invoke-AvmTerraformTransform requires a terraform context (got Ecosystem='$($Context.Ecosystem)').")
     }
 
-    $tool = Resolve-AvmTool -Name 'mapotf' -AllowPathFallback:$AllowPathFallback
+    $tool = Resolve-AvmTool -Name 'mapotf' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
     $profileDirs = @{
         common  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'common'
         module  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'module'
@@ -426,20 +371,18 @@ function Invoke-AvmTerraformTransform {
         # to mapotf's terraform grandchild. A missing terraform throws
         # AvmToolException, which the chain surfaces as 'skipped' just like a
         # missing mapotf binary.
-        $terraform = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
+        $terraform = Resolve-AvmTool -Name 'terraform' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
         Write-AvmLog ("transform: resolved terraform dependency at {0}" -f $terraform.Path) -Level Verbose | Out-Null
         $mapotfEnv = New-AvmToolPathEnvironment `
             -ToolPath $terraform.Path `
             -ToolName 'terraform'
-
-        $effectiveThrottle = $ThrottleLimit
-        $pluginCache = [string]$env:TF_PLUGIN_CACHE_DIR
-        if ($effectiveThrottle -gt 1 -and -not [string]::IsNullOrWhiteSpace($pluginCache)) {
-            $effectiveThrottle = 1
-            Write-AvmLog (
-                'transform: TF_PLUGIN_CACHE_DIR is configured; running Mapotf targets serially because the shared Terraform provider cache is not concurrency-safe'
-            ) -Level Verbose | Out-Null
-        }
+        $mapotfEnv.TF_PLUGIN_CACHE_DIR = $null
+        $mapotfEnv.MAPOTF_PROVIDER_SCHEMA_CACHE_DIR = Join-Path (Get-AvmFolder -Kind Cache) 'mapotf-provider-schema'
+        $null = New-Item `
+            -ItemType Directory `
+            -Path $mapotfEnv.MAPOTF_PROVIDER_SCHEMA_CACHE_DIR `
+            -Force `
+            -ErrorAction Stop
 
         $transformOptions = [pscustomobject]@{
             ToolPath    = $tool.Path
@@ -452,13 +395,13 @@ function Invoke-AvmTerraformTransform {
             -InputObject $moduleTargets `
             -FunctionName 'Invoke-AvmMapotfTransformTarget' `
             -Argument $transformOptions `
-            -ThrottleLimit $effectiveThrottle
+            -ThrottleLimit $ThrottleLimit
         if ($exampleTargets.Count -gt 0) {
             Invoke-AvmParallel `
                 -InputObject $exampleTargets `
                 -FunctionName 'Invoke-AvmMapotfTransformTarget' `
                 -Argument $transformOptions `
-                -ThrottleLimit $effectiveThrottle
+                -ThrottleLimit $ThrottleLimit
         }
         Write-AvmLog 'transform: mapotf scoped transforms completed' -Level Verbose | Out-Null
 

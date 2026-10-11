@@ -54,6 +54,7 @@ function Invoke-AvmGitHubApi {
             $arguments += @('--input', $bodyPath)
         }
         $result = Invoke-AvmProcess -FilePath $gh -ArgumentList $arguments -IgnoreExitCode `
+            -RetryNetworkFailure:($Method -eq 'GET') `
             -Label "gh api $Method $Endpoint" `
             -EnvVars @{ GH_HOST = 'github.com'; GH_PROMPT_DISABLED = '1'; GH_DEBUG = $null; NO_COLOR = '1' }
     }

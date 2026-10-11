@@ -58,6 +58,7 @@ jobs:
           sparse-checkout: |
             .github/actions
             scripts/bicep-workflows
+            repository-management/shared
       - name: Run native static validation
         uses: ./.avm-tools/.github/actions/bicep-validation
         with:
@@ -153,6 +154,8 @@ jobs:
         env:
           TEST_SUBSCRIPTION_IDS: ${{ vars.VALIDATE_SUBSCRIPTION_IDS || vars.TEST_SUBSCRIPTION_IDS || secrets.VALIDATE_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS }}
           VALIDATE_SUBSCRIPTION_ID: ${{ vars.VALIDATE_SUBSCRIPTION_ID || secrets.VALIDATE_SUBSCRIPTION_ID }}
+          VALIDATE_MODULE_CLIENT_IDS: ${{ vars.VALIDATE_MODULE_CLIENT_IDS }}
+          VALIDATE_TENANT_ID: ${{ vars.VALIDATE_TENANT_ID || secrets.VALIDATE_TENANT_ID }}
 
   job_module_deploy_validation:
     name: Deployment validation

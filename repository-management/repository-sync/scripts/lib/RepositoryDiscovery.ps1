@@ -1,5 +1,7 @@
 #Requires -Version 7.4
 
+. (Join-Path $PSScriptRoot '..' '..' '..' 'shared' 'TestTenant.ps1')
+
 function Get-RepositoryInstalledRepositories {
     [CmdletBinding()]
     [OutputType([object[]])]
@@ -43,6 +45,20 @@ function Get-RepositoryInstalledRepositories {
     } while (($page - 1) * 100 -lt $expectedCount)
     if ($repositories.Count -ne $expectedCount) {
         throw [System.IO.InvalidDataException]::new('GitHub app repository count does not match its total.')
+    }
+
+    $identityOwners = [System.Collections.Generic.Dictionary[string, string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($repository in $repositories) {
+        if ($repository.full_name -inotmatch '^[A-Za-z0-9-]+/terraform-(azure|azurerm|azapi)-avm-(res|ptn|utl)-[a-z0-9]+(-[a-z0-9]+)*$') {
+            continue
+        }
+        $identityName = Get-AvmTestIdentityName -Repository $repository.full_name
+        if ($identityOwners.ContainsKey($identityName)) {
+            throw [System.InvalidOperationException]::new(
+                "Repositories '$($identityOwners[$identityName])' and '$($repository.full_name)' normalize to the same test identity '$identityName'; repository sync is blocked."
+            )
+        }
+        $identityOwners.Add($identityName, $repository.full_name)
     }
 
     return $repositories.ToArray()

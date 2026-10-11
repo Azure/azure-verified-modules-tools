@@ -160,7 +160,7 @@ function Invoke-AvmTerraformDocs {
             "Invoke-AvmTerraformDocs requires a terraform context (got Ecosystem='$($Context.Ecosystem)').")
     }
 
-    $tool = Resolve-AvmTool -Name 'terraform-docs' -AllowPathFallback:$AllowPathFallback
+    $tool = Resolve-AvmTool -Name 'terraform-docs' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
     $root = $Context.Root
 
     # Build the ordered list of documentation targets: the module root first,

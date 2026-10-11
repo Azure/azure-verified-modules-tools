@@ -13,6 +13,10 @@ function Export-AvmReadmeNote {
         Directory containing the existing README.md. Defaults to the current
         directory. Run once per module with authored Notes.
 
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
+
     .EXAMPLE
         avm docs export-notes -Path ./avm/res/storage/storage-account
     #>

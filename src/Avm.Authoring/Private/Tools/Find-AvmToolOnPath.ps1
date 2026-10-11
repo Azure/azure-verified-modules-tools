@@ -5,16 +5,14 @@ function Find-AvmToolOnPath {
         report the version it self-identifies as.
 
     .DESCRIPTION
-        Implements step 2 of the spec section 10 lookup order. Looks for the
-        tool's entrypoint via Get-Command. If found, runs '<exe> --version',
+        The PATH fallback step of tool resolution. Looks for the tool's
+        entrypoint via Get-Command. If found, runs '<exe> --version',
         scrapes a semver-shaped substring from stdout+stderr, and compares it
         to the lock-pinned version.
 
-        The matcher is intentionally permissive: most managed tools (terraform,
+        The matcher is intentionally permissive: the managed tools (terraform,
         tflint, conftest, terraform-docs, bicep) print a 'X.Y.Z' or 'vX.Y.Z'
-        substring somewhere in their --version output. Tools that don't can
-        opt into a custom matcher via the lock schema in a later phase; for
-        Phase 0 the default suffices.
+        substring somewhere in their --version output.
 
     .PARAMETER Entrypoint
         Bare entrypoint name from the lock (no extension, no path). On Windows

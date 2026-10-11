@@ -411,6 +411,26 @@ Describe 'Format-AvmDuration' {
             Format-AvmDuration -Duration ([timespan]::FromSeconds(185))
         } | Should -Be '3m 05s'
     }
+
+    It 'formats <Seconds> seconds as <Expected> without rounding whole minutes or hours' -ForEach @(
+        @{ Seconds = 0; Expected = '0 ms' }
+        @{ Seconds = 0.999; Expected = '999 ms' }
+        @{ Seconds = 1; Expected = '1.0s' }
+        @{ Seconds = 59; Expected = '59.0s' }
+        @{ Seconds = 60; Expected = '1m 00s' }
+        @{ Seconds = 116.283; Expected = '1m 56s' }
+        @{ Seconds = 3599.999; Expected = '59m 59s' }
+        @{ Seconds = 3600; Expected = '1h 00m 00s' }
+        @{ Seconds = 7199.999; Expected = '1h 59m 59s' }
+        @{ Seconds = 86399.999; Expected = '23h 59m 59s' }
+        @{ Seconds = 86400; Expected = '24h 00m 00s' }
+        @{ Seconds = 90000; Expected = '25h 00m 00s' }
+    ) {
+        InModuleScope 'Avm.Authoring' -Parameters @{ Seconds = $Seconds; Expected = $Expected } {
+            param($Seconds, $Expected)
+            Format-AvmDuration -Duration ([timespan]::FromSeconds($Seconds)) | Should -Be $Expected
+        }
+    }
 }
 
 Describe 'Format-AvmTimestamp' {

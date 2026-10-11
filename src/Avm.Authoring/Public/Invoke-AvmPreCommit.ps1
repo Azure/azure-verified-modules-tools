@@ -3,7 +3,7 @@ function Invoke-AvmPreCommit {
     .SYNOPSIS
         Run the standard pre-commit gauntlet against the resolved module:
         bicep:     metadata -> format -> lint -> validate -> transform -> docs.
-        terraform: metadata -> sync -> check convention -> transform -> format -> docs.
+        terraform: metadata -> initialize -> sync -> check convention -> transform -> format -> docs.
 
     .DESCRIPTION
         Composition cmdlet. Resolves the module context once with
@@ -14,10 +14,10 @@ function Invoke-AvmPreCommit {
         pass when no errors are thrown).
 
         The Terraform chain follows the legacy Terraform governance
-        pre-commit.porch.yaml philosophy: after an initial managed-files
-        sync it stays fast and fully offline
-        (check convention -> transform -> format -> docs), so it
-        never needs `terraform init`. The `sync` step runs after metadata so the
+        pre-commit.porch.yaml philosophy: its initialize step prepares the shared
+        Terraform provider and Mapotf schema caches without running `terraform
+        init`, then the managed-files sync and remaining checks stay offline
+        (check convention -> transform -> format -> docs). The `sync` step runs after metadata so the
         rest of the chain sees the freshest governed files; it fetches the
         managed-file source (the Azure/azure-verified-modules-tools repo by
         default, overridable or pinned to a local path - see Invoke-AvmSync)
@@ -116,6 +116,10 @@ function Invoke-AvmPreCommit {
         Skip the managed-files release lookup and sync against whatever ref the
         normal precedence resolves. Forwarded only to the Terraform sync step.
 
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
+
     .OUTPUTS
         pscustomobject with:
           - Path        : the resolved module root
@@ -178,12 +182,22 @@ function Invoke-AvmPreCommit {
     $startTime = [datetime]::UtcNow
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
-    $context = Get-AvmModuleContext -Path $Path -Ecosystem $Ecosystem
+    $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
     Write-AvmLog ("pre-commit: module root = {0}; ecosystem = {1}" -f $context.Root, $context.Ecosystem) -Level Verbose | Out-Null
-    $null = Resolve-AvmCommandTool -Command 'pre-commit' -Ecosystem $context.Ecosystem -AllowPathFallback:$AllowPathFallback
+    $null = Resolve-AvmCommandTool -Command 'pre-commit' -Ecosystem $context.Ecosystem -ModuleRoot $context.Root -AllowPathFallback:$AllowPathFallback
 
     $stepDefs = if ($context.Ecosystem -eq 'terraform') {
         @(
+            [pscustomobject]@{
+                Name        = 'initialize'
+                Cmdlet      = 'Initialize-AvmTerraformCommand'
+                ContextOnly = $true
+                ExtraArgs   = @{
+                    Context           = $context
+                    Command           = 'pre-commit'
+                    AllowPathFallback = $AllowPathFallback
+                }
+            }
             [pscustomobject]@{ Name = 'sync'; Cmdlet = 'Invoke-AvmSync' }
             [pscustomobject]@{
                 Name      = 'check convention'
@@ -296,7 +310,12 @@ function Invoke-AvmPreCommit {
         }
         catch {
             $stepStatus = 'error'
-            $stepError = $_.Exception.Message
+            $stepError = if ($null -ne $_.ErrorDetails -and -not [string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) {
+                $_.ErrorDetails.Message
+            }
+            else {
+                $_.Exception.Message
+            }
         }
         $stepSw.Stop()
         $stepEnd = $stepStart.AddMilliseconds($stepSw.Elapsed.TotalMilliseconds)

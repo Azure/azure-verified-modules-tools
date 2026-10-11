@@ -11,11 +11,6 @@ AfterAll {
 }
 
 Describe 'Invoke-AvmCheckPolicy' {
-    It 'is exported by the manifest' {
-        (Get-Command Invoke-AvmCheckPolicy -Module Avm.Authoring -ErrorAction Stop) |
-            Should -Not -BeNullOrEmpty
-    }
-
     It 'is wired into the verb registry as "avm check policy"' {
         $reg = InModuleScope 'Avm.Authoring' { Get-AvmVerbRegistry }
         $entry = $reg | Where-Object {
@@ -31,7 +26,7 @@ Describe 'Invoke-AvmCheckPolicy' {
 
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
@@ -53,7 +48,7 @@ Describe 'Invoke-AvmCheckPolicy' {
 
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{
                     Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
                 }
@@ -86,7 +81,7 @@ Describe 'Invoke-AvmCheckPolicy' {
 
     It 'forwards Bicep selectors through both the public command and CLI' {
         InModuleScope Avm.Authoring {
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{ Root = $TestDrive; Ecosystem = 'bicep' }
             }
             Mock Invoke-AvmBicepCheckPolicy {
@@ -99,13 +94,13 @@ Describe 'Invoke-AvmCheckPolicy' {
                 $Example.Count -eq 1 -and $Example[0] -ceq 'tests/e2e/defaults/main.test.bicep' -and
                 $Baseline.Count -eq 1 -and $Baseline[0] -ceq 'Azure.Default'
             }
-            Should -Invoke Get-AvmModuleContext -Exactly 2 -ParameterFilter { $SkipModuleVersionCheck }
+            Should -Invoke Get-AvmModuleContextInternal -Exactly 2
         }
     }
 
     It 'rejects Bicep selectors for Terraform instead of ignoring them' {
         InModuleScope Avm.Authoring {
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 [pscustomobject]@{ Root = $TestDrive; Ecosystem = 'terraform' }
             }
             Mock Invoke-AvmTerraformCheckPolicy { throw 'Must not evaluate.' }

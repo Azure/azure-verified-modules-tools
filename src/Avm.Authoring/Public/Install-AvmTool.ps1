@@ -25,8 +25,16 @@ function Install-AvmTool {
 
     .PARAMETER PinsPath
         Override the bundled Resources/avm.pins.jsonc. Intended for tests.
+
+    .PARAMETER Path
+        Module root whose tool-version-overrides.json applies. Bicep monorepos
+        use their recognized repository root. Defaults to the current directory.
+
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     [OutputType([pscustomobject])]
     param(
         [Parameter(Position = 0)]
@@ -35,6 +43,8 @@ function Install-AvmTool {
         [switch] $Force,
 
         [string] $PinsPath,
+
+        [string] $Path = $PWD.Path,
 
         # Test-only escape hatch (see Test-AvmPins). Hidden from help
         # and tab-completion so it does not appear in the production surface.
@@ -50,12 +60,12 @@ function Install-AvmTool {
     Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
     $lock = if ($PinsPath) {
-        Read-AvmPins -Path $PinsPath -AllowFileUrls:$AllowFileUrls
+        Read-AvmPins -Path $PinsPath -ModuleRoot $Path -AllowFileUrls:$AllowFileUrls
     }
     else {
-        Read-AvmPins
+        Read-AvmPins -ModuleRoot $Path
     }
-    $tools = @($lock.tools)
+    $tools = @(Get-AvmToolDefinition -Pins $lock)
 
     if ($Name) {
         $requested = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -76,9 +86,12 @@ function Install-AvmTool {
         Write-AvmLog 'No tools to install.' -Level Info
         return
     }
+    $tools = @(Get-AvmToolDefinition -Pins $lock -Name $tools.name -IncludeDependencies)
 
     $platform = Get-AvmToolPlatform
     foreach ($t in $tools) {
+        Write-AvmToolVersionOverride -Tool $t
+        if (-not $PSCmdlet.ShouldProcess("$($t.name) $($t.version)", 'Install managed tool')) { continue }
         Write-AvmLog ("Installing {0} {1} ({2})..." -f $t.name, $t.version, $platform) -Level Info
         Install-AvmToolFromPins -Tool $t -Platform $platform -Force:$Force
     }

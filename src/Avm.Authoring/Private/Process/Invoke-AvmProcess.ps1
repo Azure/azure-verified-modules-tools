@@ -11,7 +11,7 @@ function Invoke-AvmProcess {
         AvmProcessException on non-zero exit unless -IgnoreExitCode is supplied.
         On timeout the process tree is killed and a TimeoutException is thrown.
 
-        Per spec section 9 the CLI never invokes a shell and never quotes
+        It never invokes a shell and never quotes
         arguments; every argument is passed verbatim through
         ProcessStartInfo.ArgumentList.
 
@@ -57,10 +57,22 @@ function Invoke-AvmProcess {
         collapsed GitHub Actions group: the caller's lines are already the
         curated progress view and must stay visible. Requires -StreamOutput.
 
+    .PARAMETER OnStdErrLine
+        Scriptblock invoked with each stderr line as it arrives. The caller
+        owns stderr rendering, so raw stderr is not echoed or replayed to the
+        log. Captured data and exception details are unchanged. Requires
+        -StreamOutput.
+
     .PARAMETER SuccessExitCode
         Exit codes treated as success for narration and failure replay. Does
         not affect the AvmProcessException throw, which is governed by
         -IgnoreExitCode.
+
+    .PARAMETER RetryNetworkFailure
+        Retry the whole invocation when it fails with a transient network
+        error (see Invoke-AvmRetry). Use only for commands that are safe to
+        repeat, such as clones, fetches, reads and tool initialisation. With
+        -IgnoreExitCode, the last result is returned once retries run out.
 
     .OUTPUTS
         pscustomobject with FileName, ArgumentList, ExitCode, StdOut, StdErr,
@@ -81,7 +93,9 @@ function Invoke-AvmProcess {
         [switch] $StreamOutput,
         [string] $Label,
         [scriptblock] $OnStdOutLine,
-        [int[]] $SuccessExitCode = @(0)
+        [scriptblock] $OnStdErrLine,
+        [int[]] $SuccessExitCode = @(0),
+        [switch] $RetryNetworkFailure
     )
 
     Set-StrictMode -Version 3.0
@@ -99,6 +113,24 @@ function Invoke-AvmProcess {
         $joined = if ($ArgumentList.Count -gt 0) { '{0} {1}' -f $leaf, ($ArgumentList -join ' ') } else { $leaf }
         if ($joined.Length -gt 140) { $joined.Substring(0, 137) + '...' } else { $joined }
     }
+    if ($RetryNetworkFailure) {
+        $processAttemptArguments = @{} + $PSBoundParameters
+        $processAttemptArguments.Remove('RetryNetworkFailure')
+        return Invoke-AvmRetry -RetryActivity $displayLabel -RetryAction {
+            $attemptResult = Invoke-AvmProcess @processAttemptArguments
+            if ($IgnoreExitCode -and $SuccessExitCode -notcontains $attemptResult.ExitCode) {
+                $attemptMessage = '{0} exited with code {1}.{2}{3}{2}{4}' -f $displayLabel, $attemptResult.ExitCode, [Environment]::NewLine, $attemptResult.StdErr, $attemptResult.StdOut
+                $attemptFailure = [System.Exception]::new($attemptMessage)
+                if ((Get-AvmNetworkFailureKind -ErrorRecord $attemptFailure) -eq 'Transient') {
+                    $attemptFailure.Data['AvmTransient'] = $true
+                    $attemptFailure.Data['AvmResult'] = $attemptResult
+                    throw $attemptFailure
+                }
+            }
+            $attemptResult
+        }
+    }
+
     Write-AvmLog ('process: executable = {0}' -f $FilePath) -Level Verbose | Out-Null
     Write-AvmLog ('process: working directory = {0}' -f $WorkingDirectory) -Level Verbose | Out-Null
     Write-AvmLog ('process: arguments = {0}' -f ($ArgumentList -join ' | ')) -Level Verbose | Out-Null
@@ -107,8 +139,9 @@ function Invoke-AvmProcess {
     $detailedOutput = -not (Test-AvmNestedCommandContext) -or (Test-AvmVerboseEnabled)
     $narrate = [bool]$StreamOutput -and $detailedOutput
     $hasLineHook = $null -ne $OnStdOutLine
+    $hasErrorLineHook = $null -ne $OnStdErrLine
     $live = $narrate -and ($inActions -or (Test-AvmVerboseEnabled))
-    $grouped = $narrate -and $inActions -and -not $hasLineHook
+    $grouped = $narrate -and $inActions -and -not ($hasLineHook -or $hasErrorLineHook)
     $heartbeatSeconds = 30
     $nextHeartbeat = $heartbeatSeconds
 
@@ -209,7 +242,10 @@ function Invoke-AvmProcess {
                     }
                     else {
                         $null = $stderrBuilder.AppendLine($line)
-                        if ($live) { Write-AvmLog $line -Level Info }
+                        if ($hasErrorLineHook) {
+                            & $OnStdErrLine $line
+                        }
+                        elseif ($live) { Write-AvmLog $line -Level Info }
                         $stderrTask = $process.StandardError.ReadLineAsync()
                     }
                 }
@@ -246,6 +282,17 @@ function Invoke-AvmProcess {
         }
         $process.WaitForExit()
     }
+    catch {
+        if ($started -and -not $process.HasExited) {
+            try {
+                $process.Kill($true)
+                $process.WaitForExit()
+            }
+            catch { Write-AvmLog "Failed to stop process after output handling failed: $($_.Exception.Message)" -Level Verbose }
+        }
+        $process.Dispose()
+        throw
+    }
     finally {
         $stopwatch.Stop()
         if ($grouped) {
@@ -278,11 +325,13 @@ function Invoke-AvmProcess {
         if ($narrate) {
             Write-AvmLog ('  TIMEOUT: {0} (after {1})' -f $displayLabel, (Format-AvmDuration -Duration $stopwatch.Elapsed)) -Level Info
         }
-        $timeout = [System.TimeoutException]::new(
+        $timeoutError = [System.TimeoutException]::new(
             "Process '$FilePath' did not exit within $TimeoutSec seconds; killed.")
-        $timeout.Data['StdOut'] = $stdOut
-        $timeout.Data['StdErr'] = $stdErr
-        throw $timeout
+        $timeoutError.Data['StdOut'] = $stdOut
+        $timeoutError.Data['StdErr'] = $stdErr
+        # The caller's timeout is the overall budget, so a killed process is not retried.
+        $timeoutError.Data['AvmTransient'] = $false
+        throw $timeoutError
     }
 
     $succeeded = $SuccessExitCode -contains $exitCode
@@ -295,12 +344,15 @@ function Invoke-AvmProcess {
         else {
             Write-AvmLog ('  FAILED: {0} {1}' -f $displayLabel, $suffix) -Level Fail
             if ($hasLineHook) {
-                foreach ($replayLine in (Get-AvmProcessReplayLine -Label $displayLabel -StdErr $stdErr)) {
-                    Write-AvmLog $replayLine -Level Fail
+                if (-not $hasErrorLineHook) {
+                    foreach ($replayLine in (Get-AvmProcessReplayLine -Label $displayLabel -StdErr $stdErr)) {
+                        Write-AvmLog $replayLine -Level Fail
+                    }
                 }
             }
             elseif (-not $live) {
-                foreach ($replayLine in (Get-AvmProcessReplayLine -Label $displayLabel -StdOut $stdOut -StdErr $stdErr)) {
+                $replayError = if ($hasErrorLineHook) { '' } else { $stdErr }
+                foreach ($replayLine in (Get-AvmProcessReplayLine -Label $displayLabel -StdOut $stdOut -StdErr $replayError)) {
                     Write-AvmLog $replayLine -Level Fail
                 }
             }

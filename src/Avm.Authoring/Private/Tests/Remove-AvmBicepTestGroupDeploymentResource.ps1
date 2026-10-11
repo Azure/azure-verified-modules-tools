@@ -89,17 +89,9 @@ function Remove-AvmBicepTestGroupDeploymentResource {
                 throw [AvmProcessException]::new(
                     "Group '$ResourceGroupName' has uninspectable ownership tags on '$($resource.Id)'.")
             }
-            if ($tags -is [System.Collections.IDictionary]) {
-                $owners = @($tags.Keys | Where-Object {
-                        $_ -is [string] -and $_ -ieq 'avm-e2e-run-id'
-                    })
-                if ($owners.Count -gt 1 -or
-                    ($owners.Count -eq 1 -and
-                    ($owners[0] -cne 'avm-e2e-run-id' -or
-                    $tags['avm-e2e-run-id'] -cne $RunId))) {
-                    throw [AvmProcessException]::new(
-                        "Group '$ResourceGroupName' has foreign ownership on '$($resource.Id)'.")
-                }
+            if ((Get-AvmBicepRunOwnership -Tags $tags -RunId $RunId).State -in @('Ambiguous', 'Foreign')) {
+                throw [AvmProcessException]::new(
+                    "Group '$ResourceGroupName' has foreign ownership on '$($resource.Id)'.")
             }
         }
 

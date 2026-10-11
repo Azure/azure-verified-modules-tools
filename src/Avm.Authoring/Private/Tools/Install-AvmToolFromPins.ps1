@@ -39,21 +39,23 @@ function Install-AvmToolFromPins {
             'AVM1012')
     }
 
-    if (-not $Tool.sha256.ContainsKey($Platform)) {
+    $overridden = $Tool.ContainsKey('versionOverride')
+    if (-not $overridden -and -not $Tool.sha256.ContainsKey($Platform)) {
         throw [AvmToolException]::new(
             "Tool '$($Tool.name)' has no sha256 entry for platform '$Platform'.",
             'AVM1012')
     }
 
-    $toolsRoot = Get-AvmFolder -Kind Tools
-    $toolDir = Join-Path $toolsRoot $Tool.name
-    $versionDir = Join-Path $toolDir $Tool.version
-    $verified = Join-Path $versionDir '.verified'
-    $entrypointName = if ($IsWindows) { "$($Tool.entrypoint).exe" } else { $Tool.entrypoint }
-    $entrypointPath = Join-Path $versionDir $entrypointName
+    $cache = Get-AvmToolCacheEntry -Tool $Tool -Platform $Platform
+    $versionDir = $cache.Directory
+    $toolDir = Split-Path -Path $versionDir -Parent
+    $verified = $cache.Marker
+    $entrypointPath = $cache.Path
+    $entrypointName = Split-Path -Path $entrypointPath -Leaf
+    $isModule = $Tool.ContainsKey('kind') -and $Tool.kind -ceq 'powershell-module'
     Write-AvmLog ("install: target directory = {0}" -f $versionDir) -Level Verbose | Out-Null
 
-    if ((Test-Path -LiteralPath $verified) -and (Test-Path -LiteralPath $entrypointPath) -and -not $Force) {
+    if ($cache.Cached -and -not $Force) {
         Write-AvmLog ("install: cache hit for {0}/{1}" -f $Tool.name, $Tool.version) -Level Verbose | Out-Null
         return [pscustomobject]@{
             Name     = $Tool.name
@@ -64,15 +66,6 @@ function Install-AvmToolFromPins {
         }
     }
 
-    if ($Force -and (Test-Path -LiteralPath $versionDir)) {
-        Write-AvmLog ("install: force removing {0}" -f $versionDir) -Level Verbose | Out-Null
-        Remove-Item `
-            -LiteralPath $versionDir `
-            -Recurse `
-            -Force `
-            -ProgressAction SilentlyContinue
-    }
-
     if (-not (Test-Path -LiteralPath $toolDir)) {
         New-Item -ItemType Directory -Path $toolDir -Force | Out-Null
     }
@@ -81,7 +74,7 @@ function Install-AvmToolFromPins {
     Write-AvmLog ("install: acquiring cache lock {0}" -f $lockFile) -Level Verbose | Out-Null
     $lock = Lock-AvmToolCache -LockFile $lockFile
     try {
-        if ((Test-Path -LiteralPath $verified) -and (Test-Path -LiteralPath $entrypointPath) -and -not $Force) {
+        if ((Get-AvmToolCacheEntry -Tool $Tool -Platform $Platform).Cached -and -not $Force) {
             Write-AvmLog ("install: post-lock cache hit for {0}/{1}" -f $Tool.name, $Tool.version) -Level Verbose | Out-Null
             return [pscustomobject]@{
                 Name     = $Tool.name
@@ -113,7 +106,8 @@ function Install-AvmToolFromPins {
         }
         $url = $url.Replace('{ext}', $extToken)
         Write-AvmLog ("install: source = {0}" -f $url) -Level Verbose | Out-Null
-        Write-AvmLog ("install: archive = {0}; expected sha256 = {1}" -f $resolvedArchive, $Tool.sha256[$Platform]) -Level Verbose | Out-Null
+        $expectedSha256 = if ($overridden) { $null } else { $Tool.sha256[$Platform] }
+        Write-AvmLog ("install: archive = {0}; expected sha256 = {1}" -f $resolvedArchive, ($expectedSha256 ?? 'disabled by tool-version-overrides.json')) -Level Verbose | Out-Null
 
         $stagingRoot = Join-Path $toolDir '.staging'
         if (-not (Test-Path -LiteralPath $stagingRoot)) {
@@ -127,7 +121,10 @@ function Install-AvmToolFromPins {
             $archivePath = Join-Path $stagingDir ("download" + $archiveSuffix)
 
             Write-AvmLog ("install: downloading to {0}" -f $archivePath) -Level Verbose | Out-Null
-            Invoke-AvmHttp -Url $url -Destination $archivePath -ExpectedSha256 $Tool.sha256[$Platform] | Out-Null
+            $download = @{ Url = $url; Destination = $archivePath }
+            if (-not $overridden) { $download.ExpectedSha256 = $expectedSha256 }
+            else { $download.UnverifiedToolVersionOverride = $true }
+            Invoke-AvmHttp @download | Out-Null
             Write-AvmLog ("install: expanding {0}" -f $resolvedArchive) -Level Verbose | Out-Null
             Expand-AvmToolArchive -ArchivePath $archivePath -Archive $resolvedArchive -TargetDir $stagingDir -EntrypointBasename $Tool.entrypoint
             Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
@@ -138,23 +135,34 @@ function Install-AvmToolFromPins {
                     "Expected entrypoint '$entrypointName' missing after extracting $($Tool.name) $($Tool.version) for $Platform.",
                     'AVM1013')
             }
+            if ($isModule) {
+                $manifest = Import-PowerShellDataFile -LiteralPath $stagedEntrypoint -ErrorAction Stop
+                if ([version]$manifest.ModuleVersion -ne [version]$Tool.version) {
+                    throw [AvmToolException]::new("Downloaded module '$($Tool.name)' does not declare version $($Tool.version).", 'AVM1013')
+                }
+            }
 
             $meta = [pscustomobject]@{
-                name        = $Tool.name
-                version     = $Tool.version
-                platform    = $Platform
-                url         = $url
-                sha256      = $Tool.sha256[$Platform]
-                archive     = $resolvedArchive
-                installedAt = [DateTime]::UtcNow.ToString('o')
+                name             = $Tool.name
+                version          = $Tool.version
+                platform         = $Platform
+                url              = $url
+                sha256           = $expectedSha256
+                checksumVerified = -not $overridden
+                urlTemplate      = $Tool.urlTemplate
+                archive          = $resolvedArchive
+                installedAt      = [DateTime]::UtcNow.ToString('o')
             }
             $meta | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $stagingDir '.meta.json') -Encoding utf8
 
             try {
+                if (Test-Path -LiteralPath $versionDir) {
+                    Remove-Item -LiteralPath $versionDir -Recurse -Force -ProgressAction SilentlyContinue
+                }
                 Move-Item -LiteralPath $stagingDir -Destination $versionDir -Force
             }
             catch [System.IO.IOException] {
-                if (Test-Path -LiteralPath $verified) {
+                if ((Get-AvmToolCacheEntry -Tool $Tool -Platform $Platform).Cached) {
                     Write-AvmLog ("install: rename race lost for {0}/{1}; using completed cache entry" -f $Tool.name, $Tool.version) -Level Verbose | Out-Null
                     Remove-Item `
                         -LiteralPath $stagingDir `

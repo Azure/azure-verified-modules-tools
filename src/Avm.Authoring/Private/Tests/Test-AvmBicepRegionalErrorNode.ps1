@@ -51,7 +51,7 @@ function Test-AvmBicepRegionalErrorNode {
     foreach ($child in $children) {
         if (-not (Test-AvmBicepRegionalErrorNode -Node $child -Depth ($Depth + 1))) { return $false }
     }
-    if ($code -in @('InvalidTemplateDeployment', 'DeploymentFailed', 'MultipleErrorsOccurred')) {
+    if ($code -in @('InvalidTemplateDeployment', 'DeploymentFailed', 'MultipleErrorsOccurred', 'ResourceDeploymentFailure')) {
         return $children.Count -gt 0
     }
     $message = $properties['message']

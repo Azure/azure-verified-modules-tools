@@ -11,19 +11,14 @@ AfterAll {
 }
 
 Describe 'Get-AvmBicepConventionWorkflow' {
-    It 'requires the pinned YAML parser before reading a workflow' {
+    It 'resolves the pinned YAML parser through shared prerequisites before reading a workflow' {
         InModuleScope 'Avm.Authoring' {
-            Mock Get-Module { @() } -ParameterFilter {
-                $ListAvailable -and $Name -eq 'powershell-yaml'
-            }
-            Mock Import-Module { throw 'Parser must not be imported.' } -ParameterFilter {
-                $Name -eq 'powershell-yaml'
-            }
+            Mock Import-AvmPowerShellModule { throw [AvmToolException]::new('Run: avm tool install powershell-yaml') }
 
-            { Get-AvmBicepConventionWorkflow -Path 'unused.yml' } |
-                Should -Throw '*Install-PSResource -Name powershell-yaml -Version 0.4.12*'
-            Should -Invoke Import-Module -Exactly 0 -ParameterFilter {
-                $Name -eq 'powershell-yaml'
+            { Get-AvmBicepConventionWorkflow -Path 'unused.yml' -ModuleRoot $TestDrive } |
+                Should -Throw '*avm tool install powershell-yaml*'
+            Should -Invoke Import-AvmPowerShellModule -Exactly 1 -ParameterFilter {
+                $Name -ceq 'powershell-yaml' -and $ModuleRoot -eq $TestDrive
             }
         }
     }
@@ -33,9 +28,14 @@ Describe 'Get-AvmBicepConventionWorkflow' {
             Mock Get-Module {
                 [pscustomobject]@{ Name = 'powershell-yaml'; Version = [version]'0.4.2' }
             } -ParameterFilter { $ListAvailable -and $Name -eq 'powershell-yaml' }
+            Mock Get-AvmToolCacheEntry { [pscustomobject]@{ Cached = $false; Path = 'unused.psd1' } }
+            Mock Install-AvmToolFromPins { throw [AvmToolException]::new('Fixture download unavailable.') }
 
             { Get-AvmBicepConventionWorkflow -Path 'unused.yml' } |
                 Should -Throw '*powershell-yaml 0.4.12*'
+            Should -Invoke Install-AvmToolFromPins -Exactly 1 -ParameterFilter {
+                $Tool.name -ceq 'powershell-yaml' -and $Tool.version -ceq '0.4.12'
+            }
         }
     }
 }

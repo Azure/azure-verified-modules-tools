@@ -8,6 +8,10 @@ function Get-AvmAuthoringPlaceholder {
         placeholder that exported only this function. The function is retained for
         backward compatibility while the module grows out its real verb surface.
 
+    .PARAMETER SkipModuleVersionCheck
+        Skip the PowerShell Gallery check that otherwise stops the command when a
+        newer Avm.Authoring version is available. Writes a warning once.
+
     .EXAMPLE
         PS> Get-AvmAuthoringPlaceholder
     #>

@@ -9,6 +9,9 @@ function Invoke-AvmBicepDocsRender {
         [string] $SourcePath,
 
         [Parameter(Mandatory)]
+        [string] $TemplatePath,
+
+        [Parameter(Mandatory)]
         [string] $ToolPath,
 
         [Parameter(Mandatory)]
@@ -26,7 +29,8 @@ function Invoke-AvmBicepDocsRender {
             $temporaryPath, $json, [System.Text.UTF8Encoding]::new($false, $true))
         $arguments = @(
             'docs', 'generate', $SourcePath, '--stdout',
-            '--custom-template-value-file-path', $temporaryPath
+            '--custom-template-value-file-path', $temporaryPath,
+            '--template-file', $TemplatePath
         )
         if ($env:AVM_OFFLINE -eq '1') {
             $arguments += '--no-restore'

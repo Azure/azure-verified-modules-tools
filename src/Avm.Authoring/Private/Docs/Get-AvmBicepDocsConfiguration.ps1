@@ -26,25 +26,36 @@ function Get-AvmBicepDocsConfiguration {
         $parent = [System.IO.Directory]::GetParent($directory)
         $directory = if ($null -ne $parent) { $parent.FullName } else { $null }
     }
-    if (-not $configPath) {
-        throw [AvmConfigurationException]::new(
-            "No bicepconfig.json was found for '$ModulePath'. Add a repository-owned bicepconfig.json with documentation.template.file and a tracked AVM template before running 'avm docs'.")
+    $config = @{}
+    if ($configPath) {
+        try {
+            $config = [System.IO.File]::ReadAllText($configPath) | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+        }
+        catch {
+            throw [AvmConfigurationException]::new(
+                "Cannot parse Bicep documentation config '$configPath': $($_.Exception.Message)")
+        }
     }
-
-    try {
-        $config = [System.IO.File]::ReadAllText($configPath) | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+    if ($config -isnot [System.Collections.IDictionary]) {
+        throw [AvmConfigurationException]::new("Bicep documentation config '$configPath' must be an object.")
     }
-    catch {
-        throw [AvmConfigurationException]::new(
-            "Cannot parse Bicep documentation config '$configPath': $($_.Exception.Message)")
+    $template = Get-AvmBicepDocsTemplate
+    if (-not $config.Contains('documentation') -or
+        ($config['documentation'] -is [System.Collections.IDictionary] -and
+        -not $config['documentation'].Contains('template'))) {
+        return [pscustomobject]@{
+            ConfigPath   = $configPath
+            TemplatePath = $template.Path
+            Version      = $template.Version
+            Hash         = $template.Hash
+        }
     }
-    if ($config -isnot [System.Collections.IDictionary] -or
-        $config['documentation'] -isnot [System.Collections.IDictionary] -or
+    if ($config['documentation'] -isnot [System.Collections.IDictionary] -or
         $config['documentation']['template'] -isnot [System.Collections.IDictionary] -or
         $config['documentation']['template']['file'] -isnot [string] -or
         [string]::IsNullOrWhiteSpace($config['documentation']['template']['file'])) {
         throw [AvmConfigurationException]::new(
-            "Bicep documentation config '$configPath' must set documentation.template.file to a tracked, versioned AVM Scriban template. Add the repository-owned template and config; 'avm docs' never edits them.")
+            "Explicit Bicep documentation template configuration in '$configPath' must set documentation.template.file to a versioned AVM Scriban template.")
     }
 
     $relative = [string]$config['documentation']['template']['file']
@@ -53,7 +64,6 @@ function Get-AvmBicepDocsConfiguration {
             "documentation.template.file in '$configPath' must be relative to that config, not an installed-module or remote path.")
     }
 
-    $template = Get-AvmBicepDocsTemplate
     $path = [System.IO.Path]::GetFullPath((Join-Path -Path $directory -ChildPath $relative))
     if ([System.IO.Path]::GetFileName($path) -cne $template.Name -or
         -not [System.IO.File]::Exists($path)) {

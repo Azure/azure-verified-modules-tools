@@ -1,6 +1,6 @@
 # Contributing to `Avm.Authoring`
 
-This module is being built up in phases per [docs/avm-consolidation-plan.md](docs/avm-consolidation-plan.md). The engineering rules live in [docs/avm-implementation-spec.md](docs/avm-implementation-spec.md) — read that before sending a PR.
+The module's purpose, architecture, and engineering rules live in [docs/quality-spec.md](docs/quality-spec.md) — read it before sending a PR.
 
 The build, test, and lint scaffolding is live. The two things you most likely want:
 
@@ -16,19 +16,21 @@ The build, test, and lint scaffolding is live. The two things you most likely wa
 | [PowerShell 7](https://aka.ms/powershell)       | 7.4 (LTS)   | Everything                                          |
 | [Git](https://git-scm.com/downloads)            | 2.40        | Cloning, branching                                  |
 | [Microsoft.PowerShell.PSResourceGet](https://learn.microsoft.com/powershell/utility-modules/psresourceget/overview) | 1.0.0 | Publishing (`Publish-PSResource`)                  |
-| [Pester](https://pester.dev)                    | 5.5         | Running tests (`./build.ps1 test`)                  |
+| [Pester](https://pester.dev)                    | Managed pin | Running tests (`./build.ps1 test`)                  |
 | [PSScriptAnalyzer](https://learn.microsoft.com/powershell/utility-modules/psscriptanalyzer/overview) | 1.22        | Linting (`./build.ps1 lint`)                        |
 | [Invoke-Build](https://github.com/nightroman/Invoke-Build) | 5.11        | Running `./build.ps1` tasks                         |
 | [GitHub CLI](https://cli.github.com/)           | 2.40        | Optional — opening PRs from the terminal            |
 
-Install everything the module needs (one-time, user scope):
+After cloning the repository, install the build prerequisites (user scope):
 
 ```pwsh
 Install-PSResource Microsoft.PowerShell.PSResourceGet -Scope CurrentUser
-Install-PSResource Pester                              -Scope CurrentUser
-Install-PSResource PSScriptAnalyzer                    -Scope CurrentUser
-Install-PSResource InvokeBuild                         -Scope CurrentUser
+.\scripts\Install-AvmBuildPrerequisites.ps1 -IncludePSScriptAnalyzer -IncludeBicepPolicy
 ```
+
+Build and runtime commands resolve Pester from `avm.pins.jsonc` through the same
+cache-backed prerequisite mechanism, even when a newer version is installed.
+Start a fresh PowerShell session if a different Pester version is already loaded.
 
 PS 7.4 is required on **Windows**, **Linux**, and **macOS**. PS 5.1 is explicitly unsupported.
 
@@ -120,7 +122,7 @@ New-Item -ItemType SymbolicLink -Path $dst -Target $src
 
 ## 5. Validate the module layout
 
-The post-incident layout check (`Test-AvmModuleLayout`, [spec §12](docs/avm-implementation-spec.md#12-module-manifest-rules-post-incident)) enforces that the on-disk folder / file / manifest casing matches `Avm.Authoring` exactly. Run it any time via the `layout` task (it's also the first step of `pre-commit` and `ci`):
+The post-incident layout check (`Test-AvmModuleLayout`, [spec §12](docs/quality-spec.md#12-module-manifest-rules-post-incident)) enforces that the on-disk folder / file / manifest casing matches `Avm.Authoring` exactly. Run it any time via the `layout` task (it's also the first step of `pre-commit` and `ci`):
 
 ```pwsh
 ./build.ps1 layout
@@ -134,7 +136,7 @@ Expected output:
 
 `./build.ps1 build` applies the same hard casing guards while staging, so a green `build` is also a publish-path dry run. The release scripts themselves live in the ADO pipeline (see [§8](#8-cut-a-release-maintainers-only)), not in this repo.
 
-If either throws a casing error, the on-disk folder, file, or manifest casing has drifted from `Avm.Authoring` / `Avm.Authoring.psd1` / `Avm.Authoring.psm1`. Fix the casing on disk (rename the folder via `Move-Item` to a different name, then back to the correct one — see [spec §6.2](docs/avm-implementation-spec.md#case-sensitivity)) before retrying.
+If either throws a casing error, the on-disk folder, file, or manifest casing has drifted from `Avm.Authoring` / `Avm.Authoring.psd1` / `Avm.Authoring.psm1`. Fix the casing on disk (rename the folder via `Move-Item` to a different name, then back to the correct one — see [spec §6.2](docs/quality-spec.md#case-sensitivity)) before retrying.
 
 ---
 
@@ -143,9 +145,9 @@ If either throws a casing error, the on-disk folder, file, or manifest casing ha
 The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it through the `./build.ps1 <task>` forwarder from the repo root. `pre-commit` is the gate to run before every PR.
 
 ```pwsh
-./build.ps1 pre-commit        # layout + lint + unit + component tests — the local gate
-./build.ps1 ci                # full local CI gate: layout + lint + coverage + component
-./build.ps1 ci-tests          # CI matrix: layout + coverage + component (lint runs once on Ubuntu)
+./build.ps1 pre-commit        # docs-check + layout + lint + all unit/component tests
+./build.ps1 ci                # full local CI gate: docs-check + layout + lint + coverage + component
+./build.ps1 ci-tests          # docs-check + layout + all unit/component tests
 
 # Individual tasks
 ./build.ps1 layout            # casing + manifest-shape guard (Test-AvmModuleLayout)
@@ -153,7 +155,11 @@ The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it thr
 ./build.ps1 test              # Pester unit tests (excludes Component + Integration)
 ./build.ps1 coverage          # unit tests + coverage gate (fails below the 70% line floor)
 ./build.ps1 component         # Pester Component tier (real FS + real subprocess, stub binaries, no network)
+./build.ps1 test,component -TestGroup Authoring
+./build.ps1 test,component -TestGroup RepositoryManagement
+./build.ps1 test-workflows    # workflow definitions, installation behavior and CI contracts
 ./build.ps1 integration       # Pester Integration tier (real network + real binaries; not part of ci/pre-commit)
+./build.ps1 integration -IntegrationGroup Bicep # Compiler, docs and native policy; no deployment
 ./build.ps1 build             # stage a publishable tree under ./out/Avm.Authoring + verify exports
 ./build.ps1 clean             # remove ./out
 ./build.ps1 ?                 # list every task
@@ -163,8 +169,19 @@ Notes:
 
 - `test` runs the **unit** tier only. The `Component` and `Integration` tiers are separate tasks (and separate `-Tag`s) so routine local runs stay fast and offline.
 - `integration` is the only task that touches the network (it also runs the real pinned binaries) and is deliberately excluded from `pre-commit` and `ci`; run it on demand.
+- Integration defaults to all files. `-IntegrationGroup Bicep` selects `Bicep*.Tests.ps1`; `Terraform` selects the remaining shared/Terraform files. CI runs Bicep once per OS and retains both Terraform fixture legs per OS.
 - `build` stages the module as-committed. Version stamping is a release-time concern and lives in the ADO pipeline, so the in-repo `src/Avm.Authoring/Avm.Authoring.psd1` is never rewritten by the build.
 - A first run installs nothing for you — make sure the prerequisites in [§1](#1-prerequisites) (InvokeBuild, Pester, PSScriptAnalyzer) are present.
+
+`Authoring: CI`, `Workflows: CI` and `Repos: CI` run independently using native
+GitHub path filters on pull requests and main pushes. Each includes its tests
+and relevant shared dependencies and can be dispatched manually on its own.
+Only authoring retains the cross-platform matrix; workflow and
+repository-management tests run on Ubuntu. Unrelated documentation-only changes
+intentionally skip CI. Each workflow reports its own results.
+Run the full local `pre-commit` gate before pushing, not a scoped substitute.
+See [scoped CI](docs/quality-spec.md#scoped-ci) for the path-filter and test-group
+contract.
 
 ---
 
@@ -242,7 +259,7 @@ Remove-Variable key
 Remove-Item (Get-PSReadLineOption).HistorySavePath -Force  # clear the history file just in case
 ```
 
-**Never** pass the API key as a positional argument to `Read-Host -Prompt` or paste it into the chat / commit message / shell history. `./build.ps1 build` asserts the on-disk casing matches the manifest while staging ([spec §12](docs/avm-implementation-spec.md#12-module-manifest-rules-post-incident)), so publishing the staged tree keeps that guard — but it is still the pipeline, not this path, that is the sanctioned way to ship.
+**Never** pass the API key as a positional argument to `Read-Host -Prompt` or paste it into the chat / commit message / shell history. `./build.ps1 build` asserts the on-disk casing matches the manifest while staging ([spec §12](docs/quality-spec.md#12-module-manifest-rules-post-incident)), so publishing the staged tree keeps that guard — but it is still the pipeline, not this path, that is the sanctioned way to ship.
 
 ---
 
@@ -270,7 +287,7 @@ Remove-Item (Get-PSReadLineOption).HistorySavePath -Force  # clear the history f
 ### macOS
 
 - APFS is case-insensitive *but* case-preserving by default, like NTFS. The PSGallery casing trap from May 2026 reproduces here. Treat as case-sensitive.
-- Apple Silicon is the Tier 1 target ([spec §2](docs/avm-implementation-spec.md#operating-systems)); Intel macs run but get smoke tests only in CI.
+- Apple Silicon is the Tier 1 target ([spec §2](docs/quality-spec.md#operating-systems)); Intel macs run but get smoke tests only in CI.
 
 ---
 
@@ -294,8 +311,7 @@ Remove-Item (Get-PSReadLineOption).HistorySavePath -Force  # clear the history f
 
 | Topic                                            | File                                                                 |
 | ------------------------------------------------ | -------------------------------------------------------------------- |
-| Why the module exists and what we're building     | [docs/avm-consolidation-plan.md](docs/avm-consolidation-plan.md)     |
-| How to write spec-compliant code                  | [docs/avm-implementation-spec.md](docs/avm-implementation-spec.md)   |
-| Cross-cutting standards + traps to know about     | [docs/quality-standards.md](docs/quality-standards.md)               |
+| Purpose, architecture, and engineering rules      | [docs/quality-spec.md](docs/quality-spec.md)                         |
+| Public cmdlet and parameter reference             | [docs/reference/README.md](docs/reference/README.md)                 |
 | Module placeholder details                         | [src/Avm.Authoring/README.md](src/Avm.Authoring/README.md)           |
-| The casing incident (mandatory reading)            | [docs/avm-implementation-spec.md §12](docs/avm-implementation-spec.md#12-module-manifest-rules-post-incident) |
+| The casing incident (mandatory reading)            | [docs/quality-spec.md §12](docs/quality-spec.md#12-module-manifest-rules-post-incident) |

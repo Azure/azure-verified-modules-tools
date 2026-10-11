@@ -2,7 +2,7 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.5.0' }
 
 # Component-tier coverage for the managed-files sync verb
-# (Invoke-AvmSync -> Get-AvmModuleContext -> Sync-AvmManagedFile).
+# (Invoke-AvmSync -> Get-AvmModuleContextInternal -> Sync-AvmManagedFile).
 # Exercises the public verb end-to-end against a real on-disk fixture:
 # a Terraform module working tree plus a local governance source
 # (-ManagedFilesLocalPath), with no cmdlet-level mocks. Because the

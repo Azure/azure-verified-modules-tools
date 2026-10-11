@@ -1,4 +1,52 @@
 . (Join-Path $PSScriptRoot 'Common.ps1')
+. (Join-Path $PSScriptRoot '..' '..' 'repository-management' 'shared' 'TestTenant.ps1')
+
+function Get-AvmWorkflowModuleIdentity {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Root,
+        [Parameter(Mandatory)] [string] $ModulePath,
+        [AllowEmptyString()] [string] $ModuleClientIds,
+        [AllowEmptyString()] [string] $TenantId
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ModuleClientIds)) {
+        throw [ArgumentException]::new('VALIDATE_MODULE_CLIENT_IDS must contain the published module client-ID mapping; no shared identity fallback is supported.')
+    }
+    try {
+        $mapping = ConvertFrom-AvmTestTenantJson -Json $ModuleClientIds
+        if ($mapping -isnot [Collections.IDictionary]) {
+            throw [ArgumentException]::new('The module client-ID mapping must be a JSON object.')
+        }
+        $null = ConvertTo-AvmBicepModuleClientIdJson -ClientIds $mapping
+    }
+    catch [ArgumentException] {
+        throw [ArgumentException]::new('VALIDATE_MODULE_CLIENT_IDS is invalid; require unique canonical root paths and distinct nonempty client GUIDs.', $_.Exception)
+    }
+    $path = Resolve-AvmWorkflowPath -Root $Root -RelativePath $ModulePath
+    $relative = $ModulePath.Replace('\', '/')
+    if ([IO.Path]::GetRelativePath([IO.Path]::GetFullPath($Root), $path).Replace('\', '/') -cne $relative) {
+        throw [ArgumentException]::new('The module path must be canonical without empty or current-directory segments.')
+    }
+    $roots = @($mapping.Keys | Where-Object {
+            $relative -ceq $_ -or $relative.StartsWith("$_/", [StringComparison]::Ordinal)
+        })
+    if ($roots.Count -ne 1) {
+        throw [ArgumentException]::new("VALIDATE_MODULE_CLIENT_IDS must contain exactly one canonical root for '$relative'.")
+    }
+    $tenant = [guid]::Empty
+    if (-not [guid]::TryParseExact($TenantId, 'D', [ref]$tenant) -or $tenant -eq [guid]::Empty) {
+        throw [ArgumentException]::new('VALIDATE_TENANT_ID must be the nonempty GUID published with the module identity mapping.')
+    }
+    $client = ([guid]$mapping[$roots[0]]).ToString('D')
+    return @{
+        moduleRoot = $roots[0]
+        clientId = $client
+        tenantId = $tenant.ToString('D')
+        identityKey = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
+                [Text.Encoding]::UTF8.GetBytes("$($roots[0])|$client|$($tenant.ToString('D'))"))).ToLowerInvariant()
+    }
+}
 
 function Get-AvmWorkflowSubscriptions {
     [CmdletBinding()]
@@ -76,6 +124,8 @@ function Get-AvmWorkflowDeploymentMatrix {
         [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $TestFiles,
         [string] $PoolJson,
         [string] $FallbackSubscriptionId,
+        [string] $ModuleClientIds,
+        [string] $TenantId,
         [ValidateRange(0, 2147483647)] [int] $RandomSeed = 0,
         [switch] $DisplaySubscriptionNames
     )
@@ -83,7 +133,10 @@ function Get-AvmWorkflowDeploymentMatrix {
     $active = @($TestFiles | Where-Object { -not (ConvertTo-AvmWorkflowBoolean -Value $_.e2eIgnore) })
     $shared = $false
     $subscriptions = @()
+    $identity = $null
     if ($active.Count -gt 0) {
+        $identity = Get-AvmWorkflowModuleIdentity -Root $Root -ModulePath $ModulePath `
+            -ModuleClientIds $ModuleClientIds -TenantId $TenantId
         $subscriptions = @(Get-AvmWorkflowSubscriptions -PoolJson $PoolJson -FallbackSubscriptionId $FallbackSubscriptionId |
                 Get-Random -Shuffle -SetSeed $RandomSeed)
         $tool = Get-AvmTool -Name bicep -SkipModuleVersionCheck
@@ -106,6 +159,7 @@ function Get-AvmWorkflowDeploymentMatrix {
             $entry = @{
                 path = $test.path; name = $test.name; e2eIgnore = $ignored
                 subscriptionIndex = ''; subscriptionKey = ''
+                identityKey = ''
                 subscriptionName = 'Deployment disabled'
                 concurrencyGroup = "avm-deploy-$moduleKey-ignored-$([guid]::NewGuid().ToString('N'))"
             }
@@ -113,6 +167,7 @@ function Get-AvmWorkflowDeploymentMatrix {
                 $selected = $subscriptions[$index % $subscriptions.Count]
                 $entry.subscriptionIndex = $selected.index
                 $entry.subscriptionKey = $selected.key
+                $entry.identityKey = $identity.identityKey
                 $entry.subscriptionName = if ($DisplaySubscriptionNames) { $selected.name } else { "Configured subscription $($selected.index + 1)" }
                 $entry.concurrencyGroup = "avm-deploy-$moduleKey-$($selected.key)"
             }
@@ -132,11 +187,16 @@ function Get-AvmWorkflowAuthentication {
         [Parameter(Mandatory)] [Collections.IDictionary] $TestCase,
         [string] $PoolJson,
         [string] $FallbackSubscriptionId,
-        [string] $ClientId,
-        [string] $TenantId,
-        [string] $Credentials
+        [string] $ModuleClientIds,
+        [string] $TenantId
     )
 
+    $identity = Get-AvmWorkflowModuleIdentity -Root $Root -ModulePath $ModulePath `
+        -ModuleClientIds $ModuleClientIds -TenantId $TenantId
+    if ([string]$TestCase['identityKey'] -cnotmatch '^[0-9a-f]{64}$' -or
+        $TestCase['identityKey'] -cne $identity.identityKey) {
+        throw [ArgumentException]::new('The selected module identity no longer matches its root, client and tenant. Rerun selection.')
+    }
     $pool = @(Get-AvmWorkflowSubscriptions -PoolJson $PoolJson -FallbackSubscriptionId $FallbackSubscriptionId)
     $index = 0
     if (-not [int]::TryParse([string]$TestCase['subscriptionIndex'], [ref]$index) -or
@@ -146,48 +206,10 @@ function Get-AvmWorkflowAuthentication {
         throw [ArgumentException]::new('The selected subscription no longer matches the original pool index and digest. Rerun selection.')
     }
     $null = Resolve-AvmWorkflowPath -Root $Root -RelativePath "$ModulePath/$($TestCase.path)"
-    $exceptionsPath = Resolve-AvmWorkflowPath -Root $Root -RelativePath '.oidc-exceptions.json'
-    $exceptions = ConvertFrom-Json -InputObject (Get-Content -LiteralPath $exceptionsPath -Raw) -NoEnumerate
-    if ($exceptions -isnot [array]) { throw [ArgumentException]::new('.oidc-exceptions.json must be a JSON string array.') }
-    $useSecret = $false
-    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($exception in $exceptions) {
-        if ($exception -isnot [string] -or $exception -cnotmatch '^avm/(res|ptn|utl)/[a-z0-9-]+/[a-z0-9-]+$' -or
-            -not $seen.Add($exception)) {
-            throw [ArgumentException]::new('.oidc-exceptions.json must contain unique, exact top-level module paths.')
-        }
-        if ($ModulePath -ceq $exception -or $ModulePath.StartsWith("$exception/", [StringComparison]::Ordinal)) {
-            $useSecret = $true
-        }
-    }
-    $credentialJson = ''
-    if ($useSecret) {
-        try { $credentialObject = ConvertFrom-Json -InputObject $Credentials -AsHashtable }
-        catch { throw [ArgumentException]::new('This module requires valid AZURE_CREDENTIALS JSON.') }
-        foreach ($field in @('clientId', 'clientSecret', 'tenantId')) {
-            if ($credentialObject -isnot [Collections.IDictionary] -or $credentialObject[$field] -isnot [string] -or
-                [string]::IsNullOrWhiteSpace($credentialObject[$field])) {
-                throw [ArgumentException]::new('AZURE_CREDENTIALS requires nonempty clientId, clientSecret and tenantId strings.')
-            }
-        }
-        if (-not [string]::IsNullOrEmpty($TenantId) -and $TenantId -ine $credentialObject.tenantId) {
-            throw [ArgumentException]::new('AZURE_CREDENTIALS tenantId does not match the configured validation tenant.')
-        }
-        $TenantId = $credentialObject.tenantId
-        $ClientId = $credentialObject.clientId
-        $credentialObject.subscriptionId = $pool[$index].id
-        $credentialJson = ConvertTo-Json -InputObject $credentialObject -Compress -Depth 10
-    }
-    if ([string]::IsNullOrWhiteSpace($ClientId) -or [string]::IsNullOrWhiteSpace($TenantId) -or
-        $ClientId -match '[\x00-\x1f]' -or $TenantId -match '[\x00-\x1f]') {
-        throw [ArgumentException]::new('Validation client and tenant identifiers must be configured; ordinary modules do not fall back to secret authentication.')
-    }
     return @{
         subscriptionId = $pool[$index].id
-        tenantId = $TenantId
-        clientId = $ClientId
-        useSecret = $useSecret.ToString().ToLowerInvariant()
-        credentials = $credentialJson
+        tenantId = $identity.tenantId
+        clientId = $identity.clientId
     }
 }
 
@@ -195,7 +217,8 @@ function Confirm-AvmWorkflowAzureContext {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [string] $SubscriptionId,
-        [Parameter(Mandatory)] [string] $TenantId
+        [Parameter(Mandatory)] [string] $TenantId,
+        [Parameter(Mandatory)] [string] $ClientId
     )
 
     $context = Get-AzContext -ErrorAction Stop
@@ -203,8 +226,10 @@ function Confirm-AvmWorkflowAzureContext {
     $configured = [guid]::Empty
     if ($null -eq $context -or $context.Subscription.Id -ine $SubscriptionId -or
         -not [guid]::TryParseExact($context.Tenant.Id, 'D', [ref]$tenant) -or $tenant -eq [guid]::Empty -or
-        ([guid]::TryParseExact($TenantId, 'D', [ref]$configured) -and $configured -ne $tenant)) {
-        throw [InvalidOperationException]::new('The Azure PowerShell context does not match the selected subscription and tenant.')
+        -not [guid]::TryParseExact($TenantId, 'D', [ref]$configured) -or $configured -ne $tenant -or
+        $context.Account.Id -ine $ClientId -or $context.Account.Type -ine 'ServicePrincipal' -or
+        $context.Environment.Name -cne 'AzureCloud') {
+        throw [InvalidOperationException]::new('The Azure PowerShell context does not match the selected module client, tenant, subscription and cloud.')
     }
     return $tenant.ToString('D')
 }

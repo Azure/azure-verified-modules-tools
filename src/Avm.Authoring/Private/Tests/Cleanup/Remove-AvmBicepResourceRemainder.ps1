@@ -14,7 +14,10 @@ function Remove-AvmBicepResourceRemainder {
         [string[]] $ManagedResourceGroupIds = @(),
 
         [ValidateSet('', 'Enabled', 'Disabled', 'AlwaysON')]
-        [string] $OriginalSoftDeleteFeatureState = ''
+        [string] $OriginalSoftDeleteFeatureState = '',
+
+        # Relocation mode: purge protection or a remaining soft-deleted record blocks completion.
+        [switch] $RequireCompleteRemoval
     )
 
     Set-StrictMode -Version 3.0
@@ -57,6 +60,9 @@ function Remove-AvmBicepResourceRemainder {
                     $resourceName = $ResourceId.Split('/')[-1]
 
                     $matchingKeyVault = Get-AzKeyVault -InRemovedState | Where-Object { $_.resourceId -eq $ResourceId }
+                    if ($RequireCompleteRemoval -and $matchingKeyVault -and $matchingKeyVault.EnablePurgeProtection) {
+                        throw [AvmProcessException]::new("Purge-protected vault remains reserved: $ResourceId")
+                    }
                     if ($matchingKeyVault -and -not $matchingKeyVault.EnablePurgeProtection) {
                         Write-Verbose ('[*] Purging resource [{0}] of type [{1}]' -f $resourceName, $Type) -Verbose
                         if ($PSCmdlet.ShouldProcess(('Key Vault with ID [{0}]' -f $matchingKeyVault.Id), 'Purge')) {
@@ -64,7 +70,8 @@ function Remove-AvmBicepResourceRemainder {
                                 $null = Remove-AzKeyVault -ResourceId $matchingKeyVault.Id -InRemovedState -Force -Location $matchingKeyVault.Location -ErrorAction 'Stop'
                             }
                             catch {
-                                if ($_.Exception.Message -match 'purge protection (?:is )?enabled|PurgeProtectionEnabled') {
+                                if (-not $RequireCompleteRemoval -and
+                                    $_.Exception.Message -match 'purge protection (?:is )?enabled|PurgeProtectionEnabled') {
                                     Write-Warning ('Purge protection for key vault [{0}] enabled. Skipping. Scheduled purge date is [{1}]' -f $resourceName, $matchingKeyVault.ScheduledPurgeDate)
                                 }
                                 else {
@@ -193,6 +200,9 @@ function Remove-AvmBicepResourceRemainder {
                     break
                 }
 
+            }
+            if ($RequireCompleteRemoval -and (Test-AvmBicepSoftDeletedResource -ResourceId $ResourceId -Type $Type)) {
+                throw [AvmProcessException]::new("Soft-deleted resource remains reserved: $ResourceId")
             }
             break
         }

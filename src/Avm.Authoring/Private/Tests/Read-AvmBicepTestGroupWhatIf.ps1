@@ -116,15 +116,9 @@ function Read-AvmBicepTestGroupWhatIf {
             throw [AvmConfigurationException]::new(
                 "Bicep e2e what-if for '$File' returned uninspectable ownership tags for '$($resource.Id)'.")
         }
-        if ($tags -is [System.Collections.IDictionary]) {
-            $ownerKeys = @($tags.Keys | Where-Object { $_ -is [string] -and $_ -ieq 'avm-e2e-run-id' })
-            if ($ownerKeys.Count -gt 1 -or
-                ($ownerKeys.Count -eq 1 -and
-                ($ownerKeys[0] -cne 'avm-e2e-run-id' -or
-                $tags['avm-e2e-run-id'] -cne $RunId))) {
-                throw [AvmConfigurationException]::new(
-                    "Bicep e2e what-if for '$File' returned foreign or ambiguous ownership tags.")
-            }
+        if ((Get-AvmBicepRunOwnership -Tags $tags -RunId $RunId).State -in @('Ambiguous', 'Foreign')) {
+            throw [AvmConfigurationException]::new(
+                "Bicep e2e what-if for '$File' returned foreign or ambiguous ownership tags.")
         }
         if ($resource.Kind -eq 'Deployment') {
             $properties = $after['properties']

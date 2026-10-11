@@ -55,7 +55,7 @@ function Get-AvmBicepTestTokenMap {
         $values.Add('tenantId', $TenantId)
     }
     if (-not [string]::IsNullOrWhiteSpace($RunId)) {
-        if ($RunId -cnotmatch '^[0-9a-f]{32}$') {
+        if (-not (Test-AvmBicepRunId -RunId $RunId)) {
             throw [AvmConfigurationException]::new('Bicep e2e run ID must be 32 lowercase hexadecimal characters.')
         }
         $values.Add('avmE2eRunId', $RunId)

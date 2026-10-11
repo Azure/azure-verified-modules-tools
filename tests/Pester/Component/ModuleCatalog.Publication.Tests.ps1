@@ -262,6 +262,38 @@ Describe 'Component: module catalog publication boundaries' -Tag Component {
 }
 
 Describe 'Component: module catalog publication row retention' -Tag Component {
+    It 'protects a <Case> identity alongside permitted Bicep submodule removals' -TestCases @(
+        @{ Case = 'root'; ModuleName = 'avm/res/storage/storage-account' }
+        @{ Case = 'root ending in scope'; ModuleName = 'avm/res/insights/private-link-scope' }
+        @{ Case = 'malformed child'; ModuleName = 'avm/res/storage/storage-account//child' }
+        @{ Case = 'wrong CSV kind'; ModuleName = 'avm/ptn/lz/sub-vending/child' }
+        @{ Case = 'escaping child'; ModuleName = 'avm/res/storage/storage-account/../child' }
+        @{ Case = 'mis-cased child'; ModuleName = 'avm/res/storage/storage-account/Child' }
+    ) {
+        param($Case, $ModuleName)
+        $configuration = Read-AvmCatalogConfiguration
+        $root = New-CatalogPublicationFixture
+        $rows = @(foreach ($name in @('avm/res/storage/storage-account/removed-child', $ModuleName)) {
+                $row = [ordered]@{}
+                foreach ($key in $sourceRow.Keys) { $row[$key] = $sourceRow[$key] }
+                $row.ModuleName = $name
+                $row.RepoURL = "https://github.com/Azure/bicep-registry-modules/tree/main/$name"
+                $row
+            })
+        Set-CatalogPublicationFixtureRows -Root $root -SourceRows $rows -OutputRows @() -Force
+        $source = New-CatalogPublicationSourceFixture
+        $output = @($configuration.outputs | Where-Object { $_.kind -eq 'csv' -and $_.sourceFile -eq 'BicepResourceModules.csv' })[0]
+        [System.IO.File]::WriteAllText((Join-Path $source $output.sourcePath),
+            (ConvertTo-AvmCatalogCsv -Headers @($sourceRow.Keys) -Rows $rows))
+
+        $removals = Get-AvmCatalogPublicationRowRemovals -BundlePath $root -Configuration $configuration -SourceRoot $source
+
+        $removals | Should -HaveCount 1
+        $removals[0].moduleName | Should -BeExactly $ModuleName
+        { Test-AvmCatalogPublicationBundle -Path $root } | Should -Throw '*CSV row removals are blocked*'
+        { Test-AvmCatalogPublicationBundle -Path $root -Force } | Should -Not -Throw
+    }
+
     It 'permits only the verified <Ecosystem> exclusion without a publication override' -TestCases @(
         @{ Ecosystem = 'bicep'; File = 'BicepResourceModules.csv' }
         @{ Ecosystem = 'terraform'; File = 'TerraformResourceModules.csv' }

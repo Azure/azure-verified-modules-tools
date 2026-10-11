@@ -45,15 +45,9 @@ function Get-AvmCatalogTelemetryPrefix {
             if ($env:AVM_OFFLINE -eq '1') {
                 throw [AvmConfigurationException]::new('AVM_OFFLINE=1 prevents retrieving the published module catalog.')
             }
-            $tls12 = [System.Net.SecurityProtocolType]::Tls12
-            $protocols = $tls12
-            if ($null -ne [System.Net.SecurityProtocolType].GetField('Tls13')) {
-                $protocols = $tls12 -bor [System.Net.SecurityProtocolType]::Tls13
-            }
-            [System.Net.ServicePointManager]::SecurityProtocol = $protocols
             $module = Get-Module -Name Avm.Authoring
             $userAgent = 'Avm.Authoring/{0} ({1})' -f $module.Version, (Get-AvmToolPlatform)
-            $response = Invoke-WebRequest -Uri $CatalogUri -TimeoutSec 15 -UserAgent $userAgent -ErrorAction Stop
+            $response = Invoke-AvmWebRequest -Uri $CatalogUri -TimeoutSec 15 -UserAgent $userAgent -Label 'Module catalog request'
             $json = if ($response.Content -is [byte[]]) {
                 [System.Text.Encoding]::UTF8.GetString($response.Content)
             }

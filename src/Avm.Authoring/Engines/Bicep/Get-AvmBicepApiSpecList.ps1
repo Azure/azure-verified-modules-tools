@@ -17,8 +17,8 @@ function Get-AvmBicepApiSpecList {
         throw [AvmConfigurationException]::new('The API-version specification endpoint must be the fixed registry HTTPS URL.')
     }
     try {
-        $response = Invoke-WebRequest -Uri $uri -Method Get -Headers @{ Accept = 'application/json' } `
-            -MaximumRedirection 0 -SkipHttpErrorCheck -TimeoutSec 20 -ErrorAction Stop
+        $response = Invoke-AvmWebRequest -Uri $uri -Headers @{ Accept = 'application/json' } `
+            -MaximumRedirection 0 -SkipHttpErrorCheck -TimeoutSec 20 -Label 'Registry API-version specification request'
     }
     catch [System.Net.Http.HttpRequestException], [System.Net.WebException],
     [System.TimeoutException], [System.Management.Automation.RuntimeException] {

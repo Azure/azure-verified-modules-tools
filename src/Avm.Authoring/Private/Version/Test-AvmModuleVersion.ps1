@@ -67,18 +67,17 @@ function Test-AvmModuleVersion {
 
     if ($currentModule.Version -lt $latestVersion) {
         if ($WarnOnly) {
-            Write-Warning "Avm.Authoring $($currentModule.Version) has an update available: $latestVersion. Run 'avm update' to upgrade."
+            Write-Warning "Avm.Authoring $($currentModule.Version) has an update available: $latestVersion. Run 'avm upgrade' to update."
             return
         }
 
         $upgradeScript = 'Update-PSResource -Name Avm.Authoring -Scope CurrentUser'
         $reloadScript = 'Import-Module Avm.Authoring -Force'
         $message = @(
-            'A newer version of Avm.Authoring is required.'
             "Installed version: $($currentModule.Version)"
             "Latest version: $latestVersion"
             ''
-            'Upgrade and reload the module:'
+            'Update and reload the module:'
             "  $upgradeScript"
             "  $reloadScript"
             ''

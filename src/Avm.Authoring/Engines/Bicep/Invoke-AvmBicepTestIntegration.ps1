@@ -68,7 +68,7 @@ function Invoke-AvmBicepTestIntegration {
             'Bicep ARM validation requires an explicit, nonempty GUID -SubscriptionId.')
     }
     $SubscriptionId = $subscription.ToString('D')
-    $bicep = Resolve-AvmTool -Name 'bicep' -AllowPathFallback:$AllowPathFallback
+    $bicep = Resolve-AvmTool -Name 'bicep' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
     $az = Get-Command -Name 'az' -CommandType Application -ErrorAction SilentlyContinue |
         Select-Object -First 1
     if ($null -eq $az) {

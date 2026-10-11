@@ -2,6 +2,52 @@
 
 . (Join-Path $PSScriptRoot 'GroupSettings.ps1')
 
+function Assert-AvmBicepModulePath {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string] $Path)
+
+    if ($Path -cnotmatch '^avm/(res|ptn|utl)/[a-z0-9]+(-[a-z0-9]+)*/[a-z0-9]+(-[a-z0-9]+)*$' -or $Path.Length -gt 68) {
+        throw [System.ArgumentException]::new("Invalid root Bicep module path '$Path'; expected a canonical path of at most 68 characters.")
+    }
+}
+
+function Get-AvmTestIdentityName {
+    [CmdletBinding(DefaultParameterSetName = 'Terraform')]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory, ParameterSetName = 'Terraform')] [string] $Repository,
+        [Parameter(Mandatory, ParameterSetName = 'Bicep')] [string] $ModulePath,
+        [switch] $Legacy
+    )
+
+    if ($PSCmdlet.ParameterSetName -ceq 'Bicep') {
+        Assert-AvmBicepModulePath -Path $ModulePath
+        $source = $ModulePath
+        $stem = $source.Replace('/', '-')
+        $prefix = if ($Legacy) { 'id-avm-bicep-' } else { 'id-test-bicep-' }
+        if ($Legacy) {
+            $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($source))).Substring(0, 8).ToLowerInvariant()
+            return $prefix + $stem + '-' + $hash
+        }
+    }
+    else {
+        $parts = $Repository.Split('/')
+        if ($parts.Count -ne 2 -or $parts[0] -cnotmatch '^[A-Za-z0-9-]+$' -or $parts[1].Length -gt 100 -or
+            $parts[1].ToLowerInvariant() -cnotmatch '^terraform-(azure|azurerm|azapi)-avm-(res|ptn|utl)-[a-z0-9]+(-[a-z0-9]+)*$') {
+            throw [System.ArgumentException]::new('Test identity naming requires an owner-qualified AVM Terraform repository.')
+        }
+        if ($Legacy) { return $Repository.Replace('/', '-').Replace('windows', 'w5s') }
+        $source = $parts[1].ToLowerInvariant()
+        $stem = $source.Substring('terraform-'.Length).Replace('windows', 'w5s')
+        $prefix = 'id-test-terraform-'
+    }
+    $name = $prefix + $stem
+    if ($name.Length -gt 90) {
+        throw [System.ArgumentException]::new('The complete test identity name exceeds the repository limit of 90 characters; names are never truncated.')
+    }
+    return $name
+}
+
 function ConvertFrom-AvmTestTenantJson {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [string] $Json)
@@ -38,6 +84,36 @@ function ConvertFrom-AvmTestTenantJson {
             $document.Dispose()
         }
     }
+}
+
+function ConvertTo-AvmBicepModuleClientIdJson {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [System.Collections.IDictionary] $ClientIds,
+        [string[]] $ForbiddenClientIds = @()
+    )
+
+    if ($ClientIds.Count -eq 0) {
+        throw [System.ArgumentException]::new('The module client-ID mapping must not be empty.')
+    }
+    $normalized = [ordered]@{}
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($path in @($ClientIds.Keys | Sort-Object -CaseSensitive)) {
+        if ($path -isnot [string]) { throw [System.ArgumentException]::new('Module mapping keys must be canonical path strings.') }
+        Assert-AvmBicepModulePath -Path $path
+        $id = [guid]::Empty
+        if ($ClientIds[$path] -isnot [string] -or -not [guid]::TryParseExact($ClientIds[$path], 'D', [ref]$id) -or
+            $id -eq [guid]::Empty -or $id.ToString() -in $ForbiddenClientIds -or -not $seen.Add($id.ToString())) {
+            throw [System.ArgumentException]::new('Each module must have its own nonempty client ID, never a shared or controller identity.')
+        }
+        $normalized[$path] = $id.ToString()
+    }
+    $json = ConvertTo-Json -InputObject $normalized -Compress -Depth 3
+    if ([System.Text.Encoding]::UTF8.GetByteCount($json) -gt 48KB) {
+        throw [System.InvalidOperationException]::new('The compact module client-ID mapping exceeds the 48 KB Actions variable limit; publication requires a different storage contract.')
+    }
+    return $json
 }
 
 function Get-AvmBamiSettings {

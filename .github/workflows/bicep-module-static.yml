@@ -45,6 +45,7 @@ jobs:
           sparse-checkout: |
             .github/actions
             scripts/bicep-workflows
+            repository-management/shared
       - name: Run native static validation
         uses: ./.avm-tools/.github/actions/bicep-validation
         with:

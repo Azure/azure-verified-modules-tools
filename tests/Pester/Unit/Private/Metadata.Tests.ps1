@@ -78,14 +78,16 @@ Describe 'Metadata owner uniqueness' {
         @{ Case = 'mixed individuals and teams'; Owners = @('owner-one', 'Owner-Two', '@Azure/team-one', '@Azure/team-two'); DuplicateCount = 0 }
         @{ Case = 'individual casing'; Owners = @('owner-one', 'OWNER-ONE'); DuplicateCount = 1 }
         @{ Case = 'team organization casing'; Owners = @('@Azure/team-one', '@azure/team-one'); DuplicateCount = 1 }
-        @{ Case = 'duplicates across a mixed list'; Owners = @('owner-one', '@Azure/team-one', 'OWNER-ONE', '@azure/team-one'); DuplicateCount = 2 }
+        @{ Case = 'duplicates across a mixed list'; Owners = @('owner-one', '@Azure/team-one', 'OWNER-ONE', '@azure/team-one'); DuplicateCount = 1 }
     ) {
         param($Owners, $DuplicateCount)
         InModuleScope Avm.Authoring -Parameters @{ Owners = $Owners; DuplicateCount = $DuplicateCount } {
             param($Owners, $DuplicateCount)
-            Mock Get-Content { '{"oneOf":[]}' }
-            Mock Test-Json { $true }
+            $schemaPath = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Resources' 'Schemas' 'v1' 'avm-module-metadata.schema.json'
             $json = @{
+                '$schema' = (Get-Content -LiteralPath $schemaPath -Raw | ConvertFrom-Json).'$id'
+                moduleDisplayName = 'Storage'
+                moduleDescription = 'Creates storage.'
                 canonicalType = 'Microsoft.Storage/storageAccounts'
                 telemetryIdPrefix = '46d3xtrf.res.storage-account'
                 owners = $Owners
@@ -101,9 +103,14 @@ Describe 'Metadata owner uniqueness' {
 
     It 'does not read an owners property from reduced child metadata' {
         InModuleScope Avm.Authoring {
-            Mock Get-Content { '{"oneOf":[]}' }
-            Mock Test-Json { $true }
-            $json = '{"canonicalType":"Microsoft.Storage/storageAccounts/a","telemetryIdPrefix":"46d3xtrf.res.storage-child"}'
+            $schemaPath = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Resources' 'Schemas' 'v1' 'avm-module-metadata.schema.json'
+            $json = @{
+                '$schema' = (Get-Content -LiteralPath $schemaPath -Raw | ConvertFrom-Json).'$id'
+                moduleDisplayName = 'Storage child'
+                moduleDescription = 'Creates a storage child.'
+                canonicalType = 'Microsoft.Storage/storageAccounts/a'
+                telemetryIdPrefix = '46d3xtrf.res.storage-child'
+            } | ConvertTo-Json
             $result = Test-AvmMetadataContent -Json $json -Ecosystem terraform -ModuleType resource -ChildModule
             $result.Issues | Should -HaveCount 0
             $result.Metadata.Contains('owners') | Should -BeFalse

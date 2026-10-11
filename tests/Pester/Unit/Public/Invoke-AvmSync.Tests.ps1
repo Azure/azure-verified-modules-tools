@@ -11,11 +11,6 @@ AfterAll {
 }
 
 Describe 'Invoke-AvmSync' {
-    It 'is exported by the manifest' {
-        (Get-Command Invoke-AvmSync -Module Avm.Authoring -ErrorAction Stop) |
-            Should -Not -BeNullOrEmpty
-    }
-
     It 'is wired into the verb registry as "avm sync"' {
         $reg = InModuleScope 'Avm.Authoring' { Get-AvmVerbRegistry }
         $entry = $reg | Where-Object { $_.Path.Count -eq 1 -and $_.Path[0] -eq 'sync' }
@@ -50,7 +45,7 @@ Describe 'Invoke-AvmSync' {
             $ctx = [pscustomobject]@{
                 Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
             }
-            Mock Get-AvmModuleContext { $ctx }
+            Mock Get-AvmModuleContextInternal { $ctx }
             Mock Sync-AvmManagedFile {
                 [pscustomobject]@{ Engine = 'terraform'; Tool = 'managed-files'; Status = 'pass'; FilesProcessed = 0; Issues = @() }
             }
@@ -74,7 +69,7 @@ Describe 'Invoke-AvmSync' {
             $ctx = [pscustomobject]@{
                 Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
             }
-            Mock Get-AvmModuleContext { $ctx }
+            Mock Get-AvmModuleContextInternal { $ctx }
             Mock Sync-AvmManagedFile {
                 [pscustomobject]@{ Engine = 'terraform'; Tool = 'managed-files'; Status = 'pass'; FilesProcessed = 1; Issues = @() }
             }
@@ -97,7 +92,7 @@ Describe 'Invoke-AvmSync' {
             $ctx = [pscustomobject]@{
                 Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
             }
-            Mock Get-AvmModuleContext { $ctx }
+            Mock Get-AvmModuleContextInternal { $ctx }
             Mock Sync-AvmManagedFile {
                 [pscustomobject]@{ Engine = 'terraform'; Tool = 'managed-files'; Status = 'pass'; FilesProcessed = 0; Issues = @() }
             }
@@ -116,7 +111,7 @@ Describe 'Invoke-AvmSync' {
             $ctx = [pscustomobject]@{
                 Kind = 'terraform-module-repo'; Root = $D; Ecosystem = 'terraform'; Source = 'path-heuristic'
             }
-            Mock Get-AvmModuleContext { $ctx }
+            Mock Get-AvmModuleContextInternal { $ctx }
             Mock Sync-AvmManagedFile {
                 [pscustomobject]@{ Engine = 'terraform'; Tool = 'managed-files'; Status = 'pass'; FilesProcessed = 0; Issues = @() }
             }
@@ -137,7 +132,7 @@ Describe 'Invoke-AvmSync' {
                 $ctx = [pscustomobject]@{
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
-                Mock Get-AvmModuleContext { $ctx }
+                Mock Get-AvmModuleContextInternal { $ctx }
                 Mock Sync-AvmManagedFile { throw 'should not be called' }
                 Invoke-AvmSync -Path $D
             }
@@ -154,13 +149,13 @@ Describe 'Invoke-AvmSync' {
         }
     }
 
-    It 'forwards -Ecosystem to Get-AvmModuleContext' {
+    It 'forwards -Ecosystem to Get-AvmModuleContextInternal' {
         $dir = Join-Path $TestDrive ("eco-fwd-sync-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
             param($D)
             $script:eco = $null
-            Mock Get-AvmModuleContext {
+            Mock Get-AvmModuleContextInternal {
                 param($Path, $Ecosystem)
                 $script:eco = $Ecosystem
                 [pscustomobject]@{

@@ -18,7 +18,7 @@ function Get-AvmBicepTestGroupResource {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    if ($RunId -cnotmatch '^[0-9a-f]{32}$' -or
+    if (-not (Test-AvmBicepRunId -RunId $RunId) -or
         -not $ResourceGroupName.EndsWith("-$RunId", [System.StringComparison]::Ordinal)) {
         throw [AvmConfigurationException]::new(
             'Bicep e2e resource-group resources require the exact per-case group and run ID.')

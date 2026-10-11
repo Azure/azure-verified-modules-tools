@@ -43,11 +43,9 @@ never pass tokens, SAS credentials, or account keys through `-backend-config`.
 The state UAMI trusts the same repository-ID/`avm` environment subject as the
 existing provider UAMI, in its own tenant.
 
-Ordinary sync does not use Azure CLI login or automatic lock repair. The temporary
-migration job signs in with the existing TME state identity for private blob
-reads and create-only backups; tenant-only login needs no subscription Reader
-role. Native Terraform still uses explicit OIDC backend authentication, not CLI
-fallback. Providers use
+Ordinary workers sign Azure CLI in with the state-only identity for scoped
+lock inspection and recovery. Native Terraform still uses explicit OIDC
+backend authentication, not CLI fallback. Providers use
 the verified BAMI tenant, administration subscription, and controller from the
 settings bundle; old `ARM_CLIENT_ID`, `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID`
 and legacy subscription/group inputs are no longer source requirements.
@@ -77,15 +75,54 @@ references. PowerShell and managed-file generation do not need to provision an
 identity first. The eight-field producer and five-field Bicep projection remain
 unchanged. This is not a shared state for all repositories.
 
-Manual `plan_only` defaults to `true`. Once state consolidation is ready, both
-paths produce one complete native
+Manual `plan_only` defaults to `true`. Preview and apply both produce one complete native
 plan, even when a new identity's client ID is unknown. Apply validates that saved
-plan and applies it once. Identity replacements, foreign GitHub ownership,
-unexpected addresses/providers, and unrelated identity deletions are rejected.
-Only the exact permission retirement below is allowed. Failed or uncertain
-operations stop without a second plan/apply, automatic import, force-unlock, or
-blob-lease repair. `-WhatIf` returns before external discovery or file writes.
+plan and applies it once. Foreign GitHub ownership, unexpected addresses/providers,
+and unrelated identity deletions or replacements are rejected. Only the exact
+naming transition and permission retirement below are allowed. Failed or uncertain
+operations stop without a second plan/apply, automatic import, or state rewrite.
+The sole retry exception is a verified lock-acquisition failure before the native
+operation starts, as described below. `-WhatIf` returns before external discovery
+or file writes.
 Sync does not run module deployment tests.
+
+### Automatic state-lock recovery
+
+After native `plan` or saved-plan `apply` exhausts `-lock-timeout=5m`,
+one complete state-lock acquisition diagnostic permits one recovery attempt
+and one retry of the identical command. This also applies to `plan_only`.
+Release errors, provider errors, multiple error diagnostics, timeouts and
+interrupted applies never qualify. Recovery never replans an apply, disables
+locking, imports resources, rewrites state or repairs identity ownership.
+Local bootstrap, Bicep sync and callers without explicit backend context do
+not use this recovery path.
+
+Recovery is restricted to the trusted Tools `main` Terraform Sync workflow.
+It checks the current run/attempt and completely enumerates its jobs with a
+repository-scoped `actions: read` token, separate from the GitHub App token.
+Another active sync run, another active worker for the same state key, or
+unavailable/incomplete evidence stops recovery. Other state keys can continue.
+The initialized backend must match all five configured identity/storage
+values, the default workspace and the exact selected `<repoId>.tfstate`.
+Azure CLI must confirm the state-only tenant, subscription and client.
+
+Only blob properties and `terraformlockid` metadata are read; state contents
+are never downloaded or logged. Recovery checks any error-reported ID/path,
+rechecks active writers, then rereads the ETag, lease status and metadata
+immediately before release. Changed or malformed evidence stops recovery.
+A matching ID uses `terraform force-unlock` through the initialized backend.
+Missing metadata uses an exact-blob lease break conditional on the observed
+ETag; it never invents a lock ID. A failed/uncertain unlock does not fall back
+to breaking the lease. The lease must be observed released before retrying.
+
+**Risk:** an old timestamp, missing metadata or absence of an observed competing
+workflow is not proof of abandonment. Automatic recovery can release an
+unknown external writer's lock. An ETag check does not uniquely identify a
+lease generation or eliminate the final inspection/release race, especially
+when lock metadata is missing. This policy accepts that unknown-owner risk;
+it does not authorize live unlocking. It requires recorded SFI sign-off
+before merge; user risk acceptance is not that sign-off. Keep overlapping
+sync runs queued and do not run external writers against these states.
 
 Discovery, Terraform, GitHub policy changes, managed-file checks, and project
 details are folded in Actions logs. Effective selection, target repository,
@@ -97,101 +134,64 @@ Project synchronization requires successful GitHub App token setup. If that
 prerequisite is unavailable, a visible skip notice points to the earlier setup
 failure instead of reporting an unrelated Projects-permission error.
 
-## One-time state consolidation
+### Test identity naming
 
-Use a coordinated cutover without a configuration setting. The temporary
-`migrate-state` workflow prerequisite runs
-[`Invoke-RepositoryStateMigration.ps1`](scripts/Invoke-RepositoryStateMigration.ps1)
-before ordinary workers. It inventories the configured container's entire
-`bami-identities/<TEST_BAMI_TENANT_ID>/` prefix, recovery records, and ordinary
-`avm-*.tfstate` keys. Repository selection and exclusions limit ordinary
-configuration changes, not this inventory or ownership transfer. An excluded or
-archived repository still receives its required state transfer. A repository
-whose earlier run failed before sync is checked too; absence of a former source
-is not replaced with an invented state.
+Terraform uses `id-test-terraform-` followed by the complete lowercase repository
+name with exactly its leading `terraform-` removed. The GitHub owner is omitted;
+the provider (`azure`, `azurerm` or `azapi`) and module components remain. For
+example, `Azure/terraform-azurerm-avm-res-storage-storageaccount` becomes
+`id-test-terraform-azurerm-avm-res-storage-storageaccount`. Replace `windows`
+with `w5s` in the lowercase Terraform stem because Azure reserves that word:
+`terraform-azurerm-avm-ptn-azuremonitorwindowsagent` therefore uses
+`id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent`. No other words are
+abbreviated, and names have no hash or truncation.
 
-Known historical template/non-module keys are audited as old flat repository
-roots, not made migration targets or silently ignored. Their recorded GitHub
-identity and label/ruleset ownership are checked without requiring an excluded
-repository to still exist. The exact mixed-case OpenShift key is retained
-only when its old flat root proves consistent non-BAMI ownership, matches the
-canonical state's immutable repository identity, and shares no managed
-objects with another state. It is not renamed, merged, or deleted. Unknown
-keys or unproven historical ownership still stop publication, with an escaped
-key and backend scope in the diagnostic.
+The full identity name must fit the repository's existing 90-character bound.
+This is stricter than [Azure's 3-128-character identity limit](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-name-rules#microsoftmanagedidentity);
+the full federation names must also fit their
+[3-120-character limit](https://learn.microsoft.com/en-us/azure/templates/microsoft.managedidentity/userassignedidentities/federatedidentitycredentials).
+Discovery rejects normalized-name collisions across the complete installed
+repository inventory before selection, exclusions or archive filtering.
+Workers whose names contain `windows` or `w5s` recheck that inventory before
+Terraform, including directly invoked workers. Inventory failures stop the
+run; selecting only one colliding repository does not bypass the check.
+The distinct `id-test-bicep-` prefix separates [Bicep module identities](../bicep-test-tenant-sync/README.md#identity-names).
 
-The script defaults to preview. The workflow explicitly passes its existing
-`plan_only` value; no additional activation or approval input is introduced.
+An operator-approved saved plan may replace only the exact former
+`<owner>-<repository>` identity, including its historical `windows` to `w5s`
+substitution, with the computed new name for the same repository and tenant.
+The guard verifies the old resource ID, dedicated client/principal, tenant
+and immutable repository federation; a matching old name alone is insufficient.
+Retained credentials and individual group memberships must be replaced for
+the new identity. Obsolete memberships and the precise obsolete Owner
+assignment can be removed only for the verified old principal. The ordinary
+root's existing references publish the new client ID to the repository's
+consumer settings; their shape and precedence do not change.
 
-The job verifies backend identity, private container access, GitHub IDs, BAMI
-scope, four federation subjects, default providers, and unique ownership.
-It prepares every transfer before publication, using native
-`terraform state mv -state=... -state-out=...` on local copies to move the whole
-source `module.azure` into ordinary `module.bami[0]`. Obsolete membership and
-direct Owner objects move too, preserving ownership for the normal plan's exact
-retirement guards. Destination `module.azure[0]` remains the bounded,
-old-tenant forget-only retirement.
+The backend/controller, shared `id-avm-bicep`, dedicated Bicep identities and
+Terraform names without `windows` are unchanged.
+Identity replacement changes client IDs and invalidates old federation, so
+coordinate the first approved reconciliation with active tests and inspect
+explicit consumer overrides. Failed or partially completed operations stop
+for review; there is no automatic identity rollback, state repair or blind retry.
+If a failed rename already deleted the old identity, a separately approved
+fresh plan may create the missing identity and credentials at the corrected
+name. Surviving foreign or unverifiable membership/federation ownership still
+fails the guard; never manufacture old identity evidence to bypass it.
+The narrow replacement exception requires recorded SFI sign-off before merge,
+separately from operator approval for any live run.
 
-[`Test-RepositoryStateTransfer.ps1`](scripts/Test-RepositoryStateTransfer.ps1)
-still only inspects four local before/after files and is reused by migration.
-It checks original hashes, separate lineages, one native move's serial increments, GitHub/BAMI identity
-values, default provider bindings, complete address transfer, and preservation
-of attributes, private metadata, sensitive paths, and original outputs.
-Terraform's cached `check_results` and writer-version metadata are not compared:
-native state commands may discard or reorder validation results, which the
-ordinary plan/apply recomputes. Resource contents and ownership are still checked.
-Tainted/deposed instances, namespace or physical-object ownership collisions,
-missing original ownership, and changed snapshots stop before publication.
-An absent destination, partial source, ambiguous repository alias, or incomplete
-recovery record requires operator review; the workflow does not guess a repair.
+## Completed BAMI state consolidation
 
-Before either push, the job creates and reads back
-`bami-consolidation/<tenantGuid>/<repoId>/backup.zip` in the existing private
-container. It contains untouched originals, locally staged images, exact scope,
-tool version, and SHA-256 hashes. Uploads use create-only conditions and hash
-verification, not immutability policies or cryptographic signatures. States
-are published only through native locked `terraform state push`, source first,
-with exact checkpoint checks between operations. No raw state-blob overwrite,
-force push, lease break, or import is used. Private snapshots are never uploaded
-as GitHub artifacts.
+The [6 October 2026 run](https://github.com/Azure/azure-verified-modules-tools/actions/runs/37429326384)
+completed the one-time consolidation and all 229 ordinary sync workers.
+Ordinary sync now starts after matrix generation without a migration-readiness
+gate. Former split-state blobs, historical ordinary states, `backup.zip` archives,
+and recovery/completion records remain retained. This source cleanup does not
+read, rewrite, or delete those backend objects or reconcile pre-existing overlaps.
+Never resume the old split-state writer or restore stale snapshots blindly.
 
-Native moves retain root outputs in their original state rather than copying
-them, and clear affected dependency caches. The unified root declares the
-identity/group outputs and rebuilds dependencies on its first guarded apply.
-Keep the drained source and untouched backups; do not delete state to migrate.
-Native publication advances serial again; the job verifies the published
-content, lineage, and expected serial rather than assuming byte equality with
-the staged file. A create-only `complete.json` records the accepted publication.
-Later runs accept legitimate ordinary destination serial, output, and membership
-changes while requiring unchanged identity/federation owners and the exact
-drained source. They do not repeat completed transfers.
-
-Cross-state publication is not atomic: source-first publication creates a
-temporary ownership gap without duplicate ownership. An interrupted run may
-resume only an exact recorded checkpoint, completing the missing push or
-completion record. Unknown changes, locks, authentication failures, and timeouts
-stop without automatic state-write retries. Keep every old or out-of-workflow
-writer paused during recovery; never restore snapshots blindly.
-
-1. Obtain approval, freeze schedules, queued/active old revisions, dispatches,
-   retries, and manual writers, then coordinate the merge. The user/operator
-   controls that freeze; this code never cancels or disables runs.
-1. On approved main, `plan_only=true` performs read-only remote inventory and
-   local staging. It creates no backup/checkpoint blobs and pushes no states.
-   Pending migrations make `ready=false`, visibly skipping ordinary workers
-   rather than planning duplicate identities.
-1. An explicitly approved `plan_only=false` run performs the complete transfer,
-   verifies single ownership, then runs the selected ordinary saved plan/apply.
-   Scheduled and repository-dispatch runs also use apply mode, so keep their
-   launch under operator control. The existing `repository-sync` concurrency
-   group serializes revisions; conflicting active/old queued runs are reported,
-   not cancelled. A rerun after interruption rechecks recovery before writing.
-1. Review migration and normal-plan outcomes, including excluded repositories,
-   before approving writer resumption. Never rerun the split writer. Remove the
-   temporary migration support only in the later cleanup change after verification.
-
-Passing source CI does not establish live inventory, access, or operational
-readiness, and does not authorize a cutover.
+## Operational prerequisites
 
 Before any operator-approved BAMI run, verify the bootstrap group's Owner
 assignment retains the
@@ -232,12 +232,12 @@ The checked-in default and Fabric selection are:
   {
     "name": "default",
     "repositories": ["*"],
-    "entraGroups": ["avm-test-entra-readers", "avm-test-identity-owners"]
+    "entraGroups": ["avm-test-entra-readers", "avm-test-management-group-owners"]
   },
   {
     "name": "fabric",
     "repositories": ["avm-ptn-unified-data-platform"],
-    "entraGroups": ["avm-test-fabric-admins"]
+    "entraGroups": ["avm-test-entra-fabric-admins"]
   }
 ]
 ```

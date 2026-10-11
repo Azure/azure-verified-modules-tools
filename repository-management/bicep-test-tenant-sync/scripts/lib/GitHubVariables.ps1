@@ -8,6 +8,7 @@ function Get-AvmBicepTestTenantVariableNames {
     'VALIDATE_SUBSCRIPTION_IDS'
     'VALIDATE_MANAGEMENT_GROUP_ID'
     'VALIDATE_PERSISTENT_SUBSCRIPTION_ID'
+    'VALIDATE_MODULE_CLIENT_IDS'
 }
 
 function Invoke-AvmBicepTestTenantVariableApi {
@@ -16,7 +17,8 @@ function Invoke-AvmBicepTestTenantVariableApi {
         [ValidateSet('GET', 'POST', 'PATCH', IgnoreCase = $false)] [string] $Method = 'GET',
         [ValidateSet(
             'VALIDATE_TENANT_ID', 'VALIDATE_CLIENT_ID', 'VALIDATE_SUBSCRIPTION_IDS',
-            'VALIDATE_MANAGEMENT_GROUP_ID', 'VALIDATE_PERSISTENT_SUBSCRIPTION_ID', IgnoreCase = $false
+            'VALIDATE_MANAGEMENT_GROUP_ID', 'VALIDATE_PERSISTENT_SUBSCRIPTION_ID',
+            'VALIDATE_MODULE_CLIENT_IDS', IgnoreCase = $false
         )] [string] $Name,
         [AllowEmptyString()] [string] $Value,
         [ValidateRange(1, 10000)] [int] $Page = 1
@@ -31,6 +33,9 @@ function Invoke-AvmBicepTestTenantVariableApi {
     }
     elseif (-not $Name -or -not $PSBoundParameters.ContainsKey('Value') -or $PSBoundParameters.ContainsKey('Page')) {
         throw [System.ArgumentException]::new('A variable write requires an allowed name and explicit value, without pagination.')
+    }
+    if ($Method -cne 'GET' -and [System.Text.Encoding]::UTF8.GetByteCount($Value) -gt 48KB) {
+        throw [System.ArgumentException]::new('An Actions variable value must not exceed 48 KB.')
     }
     if ($env:AVM_OFFLINE -ceq '1') {
         throw [System.InvalidOperationException]::new('AVM_OFFLINE=1: refusing GitHub variable operations.')
@@ -52,14 +57,29 @@ function Invoke-AvmBicepTestTenantVariableApi {
         '--header', 'X-GitHub-Api-Version: 2022-11-28',
         '--header', 'Cache-Control: no-cache', $endpoint
     )
-    if ($Method -cne 'GET') {
-        $arguments += @('--raw-field', "name=$Name", '--raw-field', "value=$Value")
+    $requestPath = $null
+    try {
+        if ($Method -cne 'GET') {
+            if ($Name -ceq 'VALIDATE_MODULE_CLIENT_IDS') {
+                # A 48 KB variable can exceed Windows' command-line limit.
+                $requestPath = (New-TemporaryFile -ErrorAction Stop).FullName
+                $request = ConvertTo-Json -InputObject @{ name = $Name; value = $Value } -Compress
+                [IO.File]::WriteAllText($requestPath, $request, [Text.UTF8Encoding]::new($false))
+                $arguments += @('--input', $requestPath)
+            }
+            else {
+                $arguments += @('--raw-field', "name=$Name", '--raw-field', "value=$Value")
+            }
+        }
+        # Do not retry writes: a lost response can hide a successful mutation.
+        $response = Invoke-RepositorySyncProcess -Command 'gh' -Arguments $arguments -TimeoutSec 60 -EnvVars @{
+            GH_TOKEN = $token
+            GH_ENTERPRISE_TOKEN = $null
+            GITHUB_ENTERPRISE_TOKEN = $null
+        }
     }
-    # Do not retry writes: a lost response can hide a successful mutation.
-    $response = Invoke-RepositorySyncProcess -Command 'gh' -Arguments $arguments -TimeoutSec 60 -EnvVars @{
-        GH_TOKEN = $token
-        GH_ENTERPRISE_TOKEN = $null
-        GITHUB_ENTERPRISE_TOKEN = $null
+    finally {
+        if ($null -ne $requestPath) { Remove-Item -LiteralPath $requestPath -Force -ErrorAction Stop }
     }
     if ($response.ExitCode -ne 0) {
         $httpStatus = [regex]::Match([string]$response.StdErr, '\(HTTP ([0-9]{3})\)')

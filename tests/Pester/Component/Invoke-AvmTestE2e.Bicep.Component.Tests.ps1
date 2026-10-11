@@ -147,6 +147,19 @@ Describe 'Component: Bicep native end-to-end workflow' -Tag Component {
         $result.CleanupPending | Should -BeNullOrEmpty
     }
 
+    It 'reports nested Azure error codes but never Azure messages for a validation failure' {
+        $script:fixture.ValidationError = [System.Management.Automation.ErrorRecord]::new(
+            [InvalidOperationException]::new('do-not-print-secret'), 'AvmBicepTemplateValidationFailed', 'InvalidResult',
+            @(@{ Code = 'InvalidTemplateDeployment'; Message = 'do-not-print-secret'
+                    Details = @(@{ Code = 'AllocationFailed'; Message = 'Subscription quota exceeded. do-not-print-secret' }) }))
+        $result = Invoke-AvmTestE2e @script:options
+        $result.Status | Should -Be 'fail'
+        $script:fixture.Calls | Should -Not -Contain 'create'
+        $messages = $result.Issues.Message -join ' '
+        $messages | Should -Match 'Azure error codes: InvalidTemplateDeployment, AllocationFailed\.'
+        ($result | ConvertTo-Json -Depth 20) | Should -Not -Match 'do-not-print-secret'
+    }
+
     It 'never reuses or deletes a pre-existing resource group' {
         $script:fixture.GroupExists = $true
         $result = Invoke-AvmTestE2e @script:options

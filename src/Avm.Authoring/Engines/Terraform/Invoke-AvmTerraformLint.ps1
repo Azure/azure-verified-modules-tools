@@ -160,6 +160,7 @@ function Initialize-AvmTerraformLintScope {
         -TerraformPath $Options.TerraformPath `
         -WorkingDirectory $Scope.Dir `
         -Label ('{0}: terraform init' -f $Scope.Label) `
+        -PreserveDependencySelections `
         -StreamOutput:$Options.StreamOutput
 
     if ($Scope.Label -like 'examples/*') {
@@ -457,7 +458,7 @@ function Invoke-AvmTerraformLint {
         and lint execution are bounded parallel phases; each distinct TFLint
         configuration is initialized once between them:
 
-            terraform init -upgrade -input=false
+            terraform init -input=false (preserve compatible lock selections)
             tflint --init   --config <absolute ruleset>          (install plugins)
             tflint --config <absolute ruleset> --format=json \
                    --minimum-failure-severity=<threshold>        (lint)
@@ -542,8 +543,8 @@ function Invoke-AvmTerraformLint {
             ("The terraform lint engine runs PowerShell hooks only. Refactor these shell hooks to '.ps1': {0}" -f ($shellHooks -join ', ')))
     }
 
-    $tool = Resolve-AvmTool -Name 'tflint' -AllowPathFallback:$AllowPathFallback
-    $terraform = Resolve-AvmTool -Name 'terraform' -AllowPathFallback:$AllowPathFallback
+    $tool = Resolve-AvmTool -Name 'tflint' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
+    $terraform = Resolve-AvmTool -Name 'terraform' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
     $baseConfigDir = Resolve-AvmTflintConfigDir
     $sourceScopes = @(
         Get-AvmTflintScope -Root $Context.Root -ConfigDir $baseConfigDir
@@ -585,7 +586,22 @@ function Invoke-AvmTerraformLint {
 
     try {
         Write-AvmLog ("lint: staging terraform module at {0}" -f $stageRoot) -Level Verbose | Out-Null
-        Copy-AvmTerraformModuleTree -SourceRoot $Context.Root -DestinationRoot $stageRoot
+        Copy-AvmTerraformModuleTree `
+            -SourceRoot $Context.Root `
+            -DestinationRoot $stageRoot `
+            -IncludeDependencyLocks
+        foreach ($sourceScope in $sourceScopes) {
+            $relativeScope = [System.IO.Path]::GetRelativePath($Context.Root, $sourceScope.Dir)
+            $stagedScope = if ($relativeScope -ceq '.') {
+                $stageRoot
+            }
+            else {
+                Join-Path $stageRoot $relativeScope
+            }
+            $null = Copy-AvmTerraformModuleCache `
+                -SourceWorkingDirectory $sourceScope.Dir `
+                -DestinationWorkingDirectory $stagedScope
+        }
         $scopes = @(Get-AvmTflintScope -Root $stageRoot -ConfigDir $configSet.ConfigDir)
         foreach ($scope in $scopes) {
             if ($configSet.ScopeConfigNames.ContainsKey($scope.RelPath)) {
@@ -632,6 +648,7 @@ function Invoke-AvmTerraformLint {
                 -ArgumentList @('--init', '--config', $scope.Config) `
                 -WorkingDirectory $scope.Dir `
                 -IgnoreExitCode `
+                -RetryNetworkFailure `
                 -StreamOutput:$streamOutput `
                 -Label ('{0}: tflint init' -f $scope.Label)
             if ($init.ExitCode -ne 0) {

@@ -10,6 +10,8 @@
       layout      - Verify on-disk casing and manifest shape.
       lint        - Run PSScriptAnalyzer with repo settings.
       test        - Run Pester unit tests (excludes Component and Integration).
+                    By default this tier shards across up to 6 pwsh child
+                    processes. Set AVM_UNIT_SHARD_COUNT to override.
       coverage    - Run unit tests with coverage; fails below the spec §18 floor.
       test-workflows - Run workflow-definition unit tests.
       component   - Run Pester tests under tests/Pester/Component/ (real FS + real subprocess, stub binaries, no network).
@@ -21,16 +23,24 @@
                     release pipeline, not here; the in-repo manifest is never
                     modified.
       clean       - Remove ./out.
-      pre-commit  - Composite: layout + lint + test + component. The recommended local gate.
-      ci          - Full local CI gate: layout + lint + coverage + component.
-      ci-tests    - Matrix CI gate: layout + coverage + component. CI lints once
+      docs        - Generate docs/reference from public comment-based help.
+      docs-check  - Fail when docs/reference is missing, stale, or has extra pages.
+      pre-commit  - Composite: docs-check + layout + lint + test + component.
+      ci          - Full local CI gate: docs-check + layout + lint + coverage + component.
+      ci-unit     - CI unit-test matrix leg: docs-check + layout + unit tests.
+      ci-coverage - CI Ubuntu unit-test matrix leg with coverage.
+      ci-component - CI component-test matrix leg.
+      ci-tests    - Matrix CI gate: docs-check + layout + test + component. CI lints once
                     in a separate Ubuntu job and runs workflow tests separately.
 
     The test, coverage, component, and integration tasks write an NUnit result
-    file per tier under out/test-results/. The CI workflows upload it as an
-    artifact, and a companion workflow_run workflow renders the pass/fail report
-    on the pull request and run summary via the publish-test-results action.
+    file per tier under out/test-results/. The split CI workflows upload it as
+    an artifact and publish their own test reports.
     Locally this is just a file write under the gitignored out/ tree.
+
+    TestGroup selects All (the local default), Authoring, or RepositoryManagement
+    for unit and component tasks, including the unit coverage task. Workflow
+    tests run separately in CI. The local pre-commit task still runs every group.
 
     The default task (`.`) is `layout`.
 #>
@@ -41,7 +51,13 @@
 param(
     [string] $Configuration = 'Debug',
 
-    [string[]] $TestName = @()
+    [string[]] $TestName = @(),
+
+    [ValidateSet('All', 'Authoring', 'RepositoryManagement')]
+    [string] $TestGroup = 'All',
+
+    [ValidateSet('All', 'Bicep', 'Terraform')]
+    [string] $IntegrationGroup = 'All'
 )
 
 Set-StrictMode -Version 3.0
@@ -55,6 +71,7 @@ $script:testsRoot    = Join-Path $script:repoRoot 'tests' 'Pester'
 $script:workflowUnitTestsRoot = Join-Path $script:testsRoot 'Unit' 'Workflows'
 $script:settingsPath = Join-Path $script:moduleRoot 'Resources' 'PSScriptAnalyzerSettings.psd1'
 $script:outRoot      = Join-Path $script:repoRoot 'out'
+$script:cmdletDocsGenerator = Join-Path $script:repoRoot 'scripts' 'Generate-AvmCmdletDocumentation.ps1'
 $script:testNameFilter = $TestName
 
 # Single source of truth for the spec section 18 line-coverage floor. The CI
@@ -82,6 +99,16 @@ function script:Assert-Module {
     Import-Module @importArgs
 }
 
+function script:Import-AvmBuildPester {
+    $module = Import-Module -Name $script:manifestPath -PassThru -ErrorAction Stop
+    try {
+        $null = & $module { Import-AvmPowerShellModule -Name Pester -Global }
+    }
+    finally {
+        Remove-Module -ModuleInfo $module -Force
+    }
+}
+
 function script:Invoke-AvmPester {
     param(
         [Parameter(Mandatory)] [object] $Configuration
@@ -104,6 +131,10 @@ function script:Invoke-AvmPester {
         $env:GITHUB_ACTIONS = ''
         $env:GITHUB_STEP_SUMMARY = ''
         $result = Invoke-Pester -Configuration $Configuration
+        if ($result.FailedContainersCount -gt 0) {
+            $paths = @($result.Containers | Where-Object Result -eq 'Failed' | ForEach-Object { $_.Item })
+            throw "$($result.FailedContainersCount) Pester test file(s) failed to load or run: $($paths -join ', ')"
+        }
         if ($script:testNameFilter.Count -gt 0 -and $result.TotalCount -eq 0) {
             throw "No tests matched TestName: $($script:testNameFilter -join ', ')."
         }
@@ -128,14 +159,6 @@ function script:Invoke-AvmPester {
     }
 }
 
-# PSScriptAnalyzer occasionally throws NullReferenceException from inside its
-# own rule pipeline (no file/line in our code is named). Across runners we
-# have seen the same NRE on both windows-latest and ubuntu-latest on the same
-# commits that pass on re-run, so the failure is a transient analyzer-engine
-# race rather than a lint finding. This wrapper retries ONLY that specific
-# failure (matched by exception type or message), in a fresh analyzer
-# invocation, up to AVM_LINT_MAX_ATTEMPTS times. Real findings come back as
-# DiagnosticRecord objects -- not exceptions -- and never trigger a retry.
 function script:Invoke-ScriptAnalyzerWithRetry {
     param(
         [Parameter(Mandatory)] [hashtable] $Params
@@ -149,18 +172,23 @@ function script:Invoke-ScriptAnalyzerWithRetry {
             return Invoke-ScriptAnalyzer @Params
         }
         catch {
-            $isNre = $false
+            $retryReason = $null
             $ex = $_.Exception
             while ($ex) {
                 if ($ex -is [System.NullReferenceException] -or
                     $ex.Message -match 'Object reference not set to an instance of an object') {
-                    $isNre = $true
+                    $retryReason = 'threw NullReferenceException'
+                    break
+                }
+                if ($ex -is [System.Management.Automation.CommandNotFoundException] -and
+                    $ex.CommandName -ceq 'Get-Command') {
+                    $retryReason = 'could not resolve Get-Command'
                     break
                 }
                 $ex = $ex.InnerException
             }
-            if (-not $isNre -or $attempt -eq $max) { throw }
-            Write-Information ("PSScriptAnalyzer threw NullReferenceException on attempt {0}/{1}; retrying. This is a known transient analyzer-engine race." -f $attempt, $max) -InformationAction Continue
+            if (-not $retryReason -or $attempt -eq $max) { throw }
+            Write-Information ("PSScriptAnalyzer {0} on attempt {1}/{2}; retrying." -f $retryReason, $attempt, $max) -InformationAction Continue
             Start-Sleep -Milliseconds (500 * $attempt)
         }
     }
@@ -249,6 +277,33 @@ function script:Get-AvmTestResultPath {
     Join-Path $dir ("{0}.xml" -f $Tier)
 }
 
+function script:Get-AvmScopedTestFile {
+    [CmdletBinding()]
+    [OutputType([System.IO.FileInfo])]
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [ValidateSet('Unit', 'Component')] [string] $Tier,
+        [ValidateSet('All', 'Authoring', 'RepositoryManagement')] [string] $Group = 'All'
+    )
+
+    $files = @(Get-ChildItem -LiteralPath $Path -Filter '*.Tests.ps1' -File -Recurse |
+        Where-Object {
+            $relative = [System.IO.Path]::GetRelativePath($Path, $_.FullName).Replace('\', '/')
+            $repositoryTest = $Tier -eq 'Unit' ?
+                $relative -clike 'RepositoryManagement/*' :
+                $relative -cmatch '^(BicepModuleIdentities|BicepTestTenantSync|ModuleCatalog|Repository|TerraformCodeowners)[^/]*\.Tests\.ps1$'
+            $sharedTest = $Tier -eq 'Unit' -and $relative -ceq 'Module/TerraformInitUpgrade.Tests.ps1'
+            $workflowTest = $Tier -eq 'Unit' -and $relative -clike 'Workflows/*'
+            $Group -eq 'All' -or $sharedTest -or
+                ($Group -eq 'RepositoryManagement' -and $repositoryTest) -or
+                ($Group -eq 'Authoring' -and -not $repositoryTest -and -not $workflowTest)
+        } | Sort-Object -Property FullName)
+    if ($files.Count -eq 0) {
+        throw [System.IO.InvalidDataException]::new("No $Tier test files found for group '$Group' in '$Path'.")
+    }
+    $files
+}
+
 . (Join-Path $PSScriptRoot 'AvmPesterSharding.ps1')
 
 # --- tasks ------------------------------------------------------------------
@@ -269,6 +324,7 @@ task layout {
 }
 
 task lint {
+    script:Import-AvmBuildPester
     script:Assert-Module -Name 'PSScriptAnalyzer'
 
     $params = @{
@@ -313,7 +369,7 @@ task lint {
 }
 
 task 'test-repository-management' {
-    script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
+    script:Import-AvmBuildPester
     $config = New-PesterConfiguration
     $config.Run.Path = Join-Path $script:testsRoot 'Unit' 'RepositoryManagement'
     $config.Run.PassThru = $true
@@ -348,8 +404,13 @@ task infra {
 task 'test-tenant-terraform' {
     Import-Module $script:manifestPath -Force
     . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'RetryHelpers.ps1')
-    foreach ($directory in @('terraform', [System.IO.Path]::Combine('terraform', 'modules', 'azure'))) {
+    foreach ($directory in @(
+        'terraform',
+        [System.IO.Path]::Combine('terraform', 'modules', 'azure'),
+        [System.IO.Path]::Combine('..', 'bicep-test-tenant-sync', 'terraform')
+    )) {
         $directoryName = $directory.Replace([string][System.IO.Path]::DirectorySeparatorChar, '-')
+        if ($directory.StartsWith('..')) { $directoryName = 'bicep-identities' }
         $root = Join-Path $script:repoRoot 'repository-management' 'repository-sync' $directory
         $formatPaths = @('main.tf', 'variables.tf', 'tests')
         if ($directory -eq 'terraform') {
@@ -476,32 +537,8 @@ task 'test-tenant-terraform' {
                     }
                     $candidatePlan = $plans[0]['test_plan']
                     if (-not $candidatePlan.Contains('planned_values')) {
-                        $changes = $candidatePlan['resource_changes']
-                        $resources = @($changes | ForEach-Object {
-                            @{ address = $_['address']; mode = $_['mode']; type = $_['type']; values = $_['change']['after'] }
-                        })
-                        $evidence = $candidatePlan['output_changes']['test_group_contract']['after']
-                        if ($evidence -isnot [System.Collections.IDictionary] -or
-                            $evidence['groups'] -isnot [System.Collections.IDictionary]) {
-                            throw [System.IO.InvalidDataException]::new('The actual mocked plan must expose observed provider and group evidence.')
-                        }
-                        $dataResources = @(@{
-                            address = 'module.bami[0].data.azapi_client_config.current'
-                            mode = 'data'; type = 'azapi_client_config'; values = $evidence['azure_context']
-                        }, @{
-                            address = 'module.bami[0].data.azuread_client_config.current'
-                            mode = 'data'; type = 'azuread_client_config'; values = $evidence['graph_context']
-                        })
-                        foreach ($name in $evidence['groups'].Keys) {
-                            $key = ConvertTo-Json -InputObject $name -Compress
-                            $address = "module.bami[0].data.azuread_group.test_permissions[$key]"
-                            $dataResources += @{ address = $address; mode = 'data'; type = 'azuread_group'; values = $evidence['groups'][$name] }
-                        }
-                        $candidatePlan = @{
-                            errored = $false
-                            resource_changes = $changes
-                            planned_values = @{ root_module = @{ resources = $resources } }
-                            prior_state = @{ values = @{ root_module = @{ resources = $dataResources } } }
+                        $candidatePlan = ConvertFrom-AvmTestTerraformPlan -Plan $candidatePlan -GroupContracts @{
+                            'module.bami[0]' = $candidatePlan['output_changes']['test_group_contract']['after']
                         }
                     }
                     . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'RepositoryConfig.ps1')
@@ -531,13 +568,125 @@ task 'test-tenant-terraform' {
                     }
                     Write-Build Green '  unified plan passes the ownership guard; one apply resolves GitHub and identity dependencies'
                 }
+                if ($directoryName -ceq 'terraform-modules-azure') {
+                    . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'TestTenant.ps1')
+                    . (Join-Path $script:repoRoot 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'lib' 'ModuleConfig.ps1')
+                    . (Join-Path $script:repoRoot 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'lib' 'ModuleIdentitySync.ps1')
+                    . (Join-Path $script:repoRoot 'tests' 'fixtures' 'TestTenant.ps1')
+                    . (Join-Path $script:repoRoot 'tests' 'fixtures' 'BicepIdentities.ps1')
+                    $settings = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)
+                    foreach ($ecosystem in @('terraform', 'bicep')) {
+                        $plans = @($events | Where-Object {
+                            $_['type'] -ceq 'test_plan' -and $_['@testrun'] -ceq "rename_legacy_${ecosystem}_identity"
+                        })
+                        if ($plans.Count -ne 1) {
+                            throw [System.IO.InvalidDataException]::new("Expected one actual mocked $ecosystem identity rename plan.")
+                        }
+                        $address = if ($ecosystem -ceq 'bicep') { 'module.bicep["avm/res/fabric/capacity"]' } else { 'module.azure' }
+                        $evidence = $plans[0]['test_plan']['output_changes']['test_group_contract']['after']
+                        $candidatePlan = ConvertFrom-AvmTestTerraformPlan -Plan $plans[0]['test_plan'] `
+                            -GroupContracts @{ $address = $evidence } -AddressPrefix "$address."
+                        if (@($candidatePlan.resource_changes | Where-Object { $_['change']['actions'] -contains 'delete' }).Count -ne
+                            $(if ($ecosystem -ceq 'bicep') { 5 } else { 7 })) {
+                            throw [System.IO.InvalidDataException]::new('A mocked naming migration must replace its identity, every credential and both individual memberships.')
+                        }
+                        if ($ecosystem -ceq 'bicep') {
+                            $previous = Assert-AvmBicepIdentityPlan -Plan $candidatePlan -Settings $settings `
+                                -Modules @{ 'avm/res/fabric/capacity' = @('repository-readers', 'repository-owners') } `
+                                -Context (New-AvmTestBicepIdentityContext) -PassThru
+                            $previous = $previous['avm/res/fabric/capacity']
+                        }
+                        else {
+                            $previous = Assert-AvmBamiIdentityPlan -Plan $candidatePlan -Settings $settings `
+                                -Repository 'Azure/terraform-azurerm-avm-ptn-azuremonitorwindowsagent' -RepositoryId '1234' `
+                                -RepositoryOwnerId '6844498' -RepositorySyncRepositoryId '1239632211' `
+                                -EntraGroupNames @('repository-readers', 'repository-owners') -PassThru
+                        }
+                        if ($previous.client_id -cne '10000000-0000-4000-8000-000000000106') {
+                            throw [System.IO.InvalidDataException]::new('The guard must recover the actual previous identity from the mocked rename plan.')
+                        }
+                        Write-Build Green "  $ecosystem naming replacement passes its production ownership guard"
+                    }
+                    $recoveryPlans = @($events | Where-Object {
+                        $_['type'] -ceq 'test_plan' -and $_['@testrun'] -ceq 'recreate_windows_identity_after_its_legacy_resources_were_deleted'
+                    })
+                    if ($recoveryPlans.Count -ne 1) {
+                        throw [System.IO.InvalidDataException]::new('Expected one actual mocked windows identity recreation plan.')
+                    }
+                    $plan = $recoveryPlans[0]['test_plan']
+                    $candidatePlan = ConvertFrom-AvmTestTerraformPlan -Plan $plan -AddressPrefix 'module.azure.' `
+                        -GroupContracts @{ 'module.azure' = $plan['output_changes']['test_group_contract']['after'] }
+                    $managed = @($candidatePlan.resource_changes | Where-Object { $_['mode'] -ceq 'managed' })
+                    if ($managed.Count -ne 7 -or @($managed | Where-Object { (@($_['change']['actions']) -join ',') -cne 'create' }).Count -gt 0) {
+                        throw [System.IO.InvalidDataException]::new('Recovery after legacy deletion must only create the seven missing identity resources.')
+                    }
+                    Assert-AvmBamiIdentityPlan -Plan $candidatePlan -Settings $settings `
+                        -Repository 'Azure/terraform-azurerm-avm-ptn-azuremonitorwindowsagent' -RepositoryId '1234' `
+                        -RepositoryOwnerId '6844498' -RepositorySyncRepositoryId '1239632211' `
+                        -EntraGroupNames @('repository-readers', 'repository-owners')
+                    Write-Build Green '  windows identity recreation passes its production ownership guard'
+                }
+                if ($directoryName -ceq 'bicep-identities') {
+                    . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'TestTenant.ps1')
+                    . (Join-Path $script:repoRoot 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'lib' 'ModuleConfig.ps1')
+                    . (Join-Path $script:repoRoot 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'lib' 'ModuleIdentitySync.ps1')
+                    . (Join-Path $script:repoRoot 'tests' 'fixtures' 'TestTenant.ps1')
+                    . (Join-Path $script:repoRoot 'tests' 'fixtures' 'BicepIdentities.ps1')
+                    $plans = @($events | Where-Object {
+                        $_['type'] -ceq 'test_plan' -and $_['@testrun'] -ceq 'module_plan_binds_identities_groups_and_workflows'
+                    })
+                    if ($plans.Count -ne 1) {
+                        throw [System.IO.InvalidDataException]::new('Expected one actual mocked-provider Bicep module plan.')
+                    }
+                    $candidatePlan = $plans[0]['test_plan']
+                    if (-not $candidatePlan.Contains('planned_values')) {
+                        $contracts = $candidatePlan['output_changes']['test_group_contract']['after']
+                        if ($contracts -isnot [System.Collections.IDictionary] -or $contracts.Count -ne 2) {
+                            throw [System.IO.InvalidDataException]::new('The Bicep mock plan must expose both modules and their observed group evidence.')
+                        }
+                        $groupContracts = @{}
+                        foreach ($path in $contracts.Keys) {
+                            $groupContracts["module.bicep[`"$path`"]"] = $contracts[$path]
+                        }
+                        $candidatePlan = ConvertFrom-AvmTestTerraformPlan -Plan $candidatePlan -GroupContracts $groupContracts
+                    }
+                    $configuration = ConvertFrom-AvmTestTenantJson -Json (
+                        Get-Content -LiteralPath (Join-Path $script:repoRoot 'repository-management' 'bicep-config' 'config.json') -Raw
+                    )
+                    $modules = Resolve-AvmBicepModuleSettings -ModulePaths @('avm/res/fabric/capacity', 'avm/res/storage/storage-account') -Configuration $configuration
+                    $settings = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)
+                    Assert-AvmBicepIdentityPlan -Plan $candidatePlan -Settings $settings -Modules $modules -Context (New-AvmTestBicepIdentityContext)
+                    $applied = @($events | Where-Object {
+                        $_['type'] -ceq 'test_state' -and $_['@testrun'] -ceq 'one_apply_returns_the_complete_module_mapping'
+                    })
+                    if ($applied.Count -ne 1) {
+                        throw [System.IO.InvalidDataException]::new('Expected one applied Bicep identity mock state.')
+                    }
+                    $null = ConvertTo-AvmBicepIdentityMapping -Identities $applied[0]['test_state']['outputs']['test_identities']['value'] `
+                        -ModulePaths @($modules.Keys) -Settings $settings
+                    $stable = @($events | Where-Object {
+                        $_['type'] -ceq 'test_plan' -and $_['@testrun'] -ceq 'subsequent_plan_keeps_the_same_names_and_client_ids'
+                    })
+                    if ($stable.Count -ne 1 -or @($stable[0]['test_plan']['resource_changes'] | Where-Object {
+                        $_['mode'] -ceq 'managed' -and (@($_['change']['actions']) -join ',') -cne 'no-op'
+                    }).Count -gt 0) {
+                        throw [System.IO.InvalidDataException]::new('An unchanged Bicep inventory must not replace or modify its applied identities, federation or memberships.')
+                    }
+                    $groupContracts = @{}
+                    foreach ($path in $modules.Keys) {
+                        $groupContracts["module.bicep[`"$path`"]"] = $stable[0]['test_plan']['output_changes']['test_group_contract']['after'][$path]
+                    }
+                    $stablePlan = ConvertFrom-AvmTestTerraformPlan -Plan $stable[0]['test_plan'] -GroupContracts $groupContracts
+                    Assert-AvmBicepIdentityPlan -Plan $stablePlan -Settings $settings -Modules $modules -Context (New-AvmTestBicepIdentityContext)
+                    Write-Build Green '  Bicep mock plan passes the ownership guard; one apply produces the complete dedicated mapping'
+                }
             }
         }
     }
 }
 
 task test {
-    script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
+    script:Import-AvmBuildPester
 
     $unitPath = Join-Path $script:testsRoot 'Unit'
     if (-not (Test-Path -LiteralPath $unitPath)) {
@@ -545,8 +694,9 @@ task test {
         return
     }
 
+    $unitFiles = @(Get-AvmScopedTestFile -Path $unitPath -Tier Unit -Group $TestGroup)
     $config = New-PesterConfiguration
-    $config.Run.Path                = $unitPath
+    $config.Run.Path                = @($unitFiles.FullName)
     $config.Run.PassThru            = $true
     $config.Run.Exit                = $false
     $config.Output.Verbosity        = 'Detailed'
@@ -555,14 +705,26 @@ task test {
     $config.TestResult.OutputPath   = script:Get-AvmTestResultPath -Tier 'unit'
     $config.Filter.ExcludeTag       = @('Integration', 'Component')
 
-    $result = script:Invoke-AvmPester -Configuration $config
+    $shardCount = script:Get-AvmPesterShardCount -Tier 'unit'
+    if ($script:testNameFilter.Count -gt 0 -or $shardCount -eq 1) {
+        script:Clear-AvmTierTestResult -Tier 'unit'
+        $result = script:Invoke-AvmPester -Configuration $config
+    }
+    else {
+        $result = @(
+            script:Invoke-AvmPesterShardedTier -Tier 'unit' -File $unitFiles -ShardCount $shardCount
+        )[-1]
+        if ($result.TotalCount -eq 0) {
+            throw "No unit tests ran from $unitPath."
+        }
+    }
     if ($result.FailedCount -gt 0) {
         throw "$($result.FailedCount) Pester test(s) failed."
     }
 }
 
 task coverage {
-    script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
+    script:Import-AvmBuildPester
 
     $unitPath = Join-Path $script:testsRoot 'Unit'
     if (-not (Test-Path -LiteralPath $unitPath)) {
@@ -575,18 +737,20 @@ task coverage {
         $null = New-Item -ItemType Directory -Path $coverageOut -Force
     }
 
+    $unitFiles = @(Get-AvmScopedTestFile -Path $unitPath -Tier Unit -Group $TestGroup | Where-Object {
+            $relative = [System.IO.Path]::GetRelativePath($unitPath, $_.FullName).Replace('\', '/')
+            $relative -cnotlike 'Workflows/*'
+        })
     $config = New-PesterConfiguration
-    $config.Run.Path                           = $unitPath
-    if (Test-Path -LiteralPath $script:workflowUnitTestsRoot) {
-        $config.Run.ExcludePath                = @($script:workflowUnitTestsRoot)
-    }
+    $config.Run.Path                           = @($unitFiles.FullName)
     $config.Run.PassThru                       = $true
     $config.Run.Exit                           = $false
-    $config.Output.Verbosity                   = 'Detailed'
+    $config.Output.Verbosity                   = if ($env:AVM_COVERAGE_VERBOSE -eq '1') { 'Detailed' } else { 'Minimal' }
     $config.Filter.ExcludeTag                  = @('Integration', 'Component')
     $config.TestResult.Enabled                 = $true
     $config.TestResult.OutputFormat            = 'NUnitXml'
     $config.TestResult.OutputPath              = script:Get-AvmTestResultPath -Tier 'unit'
+    script:Clear-AvmTierTestResult -Tier 'unit'
     $config.CodeCoverage.Enabled               = $true
     $config.CodeCoverage.Path                  = @(
         (Join-Path $script:moduleRoot 'Public'),
@@ -633,7 +797,7 @@ task coverage {
 }
 
 task 'test-workflows' {
-    script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
+    script:Import-AvmBuildPester
 
     if (-not (Test-Path -LiteralPath $script:workflowUnitTestsRoot)) {
         Write-Build Yellow "  no workflow unit tests found at $script:workflowUnitTestsRoot"
@@ -657,10 +821,10 @@ task 'test-workflows' {
 }
 
 task build layout, {
-    if (Test-Path -LiteralPath $script:outRoot) {
-        Remove-Item -LiteralPath $script:outRoot -Recurse -Force -ProgressAction SilentlyContinue
-    }
     $stage = Join-Path $script:outRoot 'Avm.Authoring'
+    if (Test-Path -LiteralPath $stage) {
+        Remove-Item -LiteralPath $stage -Recurse -Force -ProgressAction SilentlyContinue
+    }
     $null = New-Item -ItemType Directory -Path $stage -Force
 
     # Copy everything except scratch and test scaffolding into the staged tree.
@@ -694,13 +858,23 @@ task clean {
     Write-Build Green '  clean OK'
 }
 
+task docs {
+    & $script:cmdletDocsGenerator
+    Write-Build Green '  docs OK: generated docs/reference'
+}
+
+task 'docs-check' {
+    & $script:cmdletDocsGenerator -Check
+    Write-Build Green '  docs-check OK: generated reference is current'
+}
+
 # Spec section 18 Component tier: real FS + real subprocess, stub binaries on
 # PATH, no network. Tests live under tests/Pester/Component/ and are tagged
 # `Component` so they are excluded from `test` / `coverage` (which run the Unit
 # tier only). This task runs them in isolation, with no coverage instrumentation
 # -- the coverage floor is a Unit-tier contract.
 task component {
-    script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
+    script:Import-AvmBuildPester
 
     $componentPath = Join-Path $script:testsRoot 'Component'
     if (-not (Test-Path -LiteralPath $componentPath)) {
@@ -708,14 +882,10 @@ task component {
         return
     }
 
-    $componentFiles = @(Get-ChildItem -LiteralPath $componentPath -Filter '*.Tests.ps1' -File -Recurse | Sort-Object -Property FullName)
-    if ($componentFiles.Count -eq 0) {
-        Write-Build Yellow "  no component test files found at $componentPath"
-        return
-    }
+    $componentFiles = @(Get-AvmScopedTestFile -Path $componentPath -Tier Component -Group $TestGroup)
 
     $config = New-PesterConfiguration
-    $config.Run.Path                = $componentPath
+    $config.Run.Path                = @($componentFiles.FullName)
     $config.Run.PassThru            = $true
     $config.Run.Exit                = $false
     $config.Output.Verbosity        = 'Detailed'
@@ -724,7 +894,7 @@ task component {
     $config.TestResult.OutputPath   = script:Get-AvmTestResultPath -Tier 'component'
     $config.Filter.Tag              = @('Component')
 
-    $shardCount = script:Get-AvmComponentShardCount
+    $shardCount = script:Get-AvmPesterShardCount -Tier 'component'
     if ($script:testNameFilter.Count -gt 0 -or $shardCount -eq 1) {
         if ($script:testNameFilter.Count -gt 0) {
             Write-Build Gray '  component : using single-process runner because -TestName is active'
@@ -732,6 +902,7 @@ task component {
         else {
             Write-Build Gray '  component : using single-process runner because AVM_COMPONENT_SHARD_COUNT is 1'
         }
+        script:Clear-AvmTierTestResult -Tier 'component'
         $result = script:Invoke-AvmPester -Configuration $config
     }
     else {
@@ -758,8 +929,8 @@ task component {
 # `pre-commit` or `ci` so routine builds never touch the network. Wire this into
 # a PR / on-demand workflow or invoke on demand. Honours `$env:AVM_OFFLINE`
 # indirectly -- the tests themselves Skip when offline rather than fail.
-task integration {
-    script:Assert-Module -Name 'Pester' -MinimumVersion '5.5.0'
+task integration build, {
+    script:Import-AvmBuildPester
 
     $integrationPath = Join-Path $script:testsRoot 'Integration'
     if (-not (Test-Path -LiteralPath $integrationPath)) {
@@ -768,7 +939,7 @@ task integration {
     }
 
     $config = New-PesterConfiguration
-    $config.Run.Path                = $integrationPath
+    $config.Run.Path                = @(Get-AvmIntegrationTestFile -Path $integrationPath -Group $IntegrationGroup)
     $config.Run.PassThru            = $true
     $config.Run.Exit                = $false
     $config.Output.Verbosity        = 'Detailed'
@@ -787,13 +958,14 @@ task integration {
     Write-Build Green "  integration OK: $($result.PassedCount) passed, $($result.SkippedCount) skipped"
 }
 
-task 'pre-commit' layout, lint, test, component
+task 'pre-commit' 'docs-check', layout, lint, test, component
 
-# The CI matrix runs layout + coverage + component; lint and workflow tests run
-# in dedicated Ubuntu jobs. The full local ci task includes lint. Integration
-# remains a separate real-network job, and pre-commit runs unit tests without
-# coverage while retaining the component tier.
-task 'ci-tests' layout, coverage, component
-task ci layout, lint, coverage, component
+# CI runs unit and component matrices independently so both tiers can use the
+# full job-level parallelism. The combined task remains for local parity.
+task 'ci-unit' 'docs-check', layout, test
+task 'ci-coverage' 'docs-check', layout, coverage
+task 'ci-component' component
+task 'ci-tests' 'docs-check', layout, test, component
+task ci 'docs-check', layout, lint, coverage, component
 
 task . layout

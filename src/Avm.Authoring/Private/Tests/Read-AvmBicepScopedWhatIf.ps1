@@ -94,26 +94,18 @@ function Read-AvmBicepScopedWhatIf {
             }
         }
         $tags = $after['tags']
-        if ($RequireOwnedGroup -and $tags -is [System.Collections.IDictionary]) {
-            $ownerKeys = @($tags.Keys | Where-Object { $_ -is [string] -and $_ -ieq 'avm-e2e-run-id' })
-            if ($ownerKeys.Count -gt 1 -or
-                ($ownerKeys.Count -eq 1 -and $ownerKeys[0] -cne 'avm-e2e-run-id')) {
-                throw [AvmConfigurationException]::new(
-                    "Bicep e2e what-if for '$File' returned ambiguous ownership tags for '$($resource.Id)'.")
-            }
-        }
-        $ownedGroup = $tags -is [System.Collections.IDictionary]
-        if ($ownedGroup) {
-            $ownedGroup = $tags['avm-e2e-run-id'] -ceq $RunId
-        }
-        if ($resource.Kind -eq 'Group' -and -not $ownedGroup) {
+        $ownership = Get-AvmBicepRunOwnership -Tags $tags -RunId $RunId
+        if ($RequireOwnedGroup -and $ownership.State -eq 'Ambiguous') {
             throw [AvmConfigurationException]::new(
-                "Bicep e2e group '$($resource.Id)' must include its exact avm-e2e-run-id ownership tag.")
+                "Bicep e2e what-if for '$File' returned ambiguous ownership tags for '$($resource.Id)'.")
+        }
+        if ($resource.Kind -eq 'Group' -and $ownership.State -ne 'Owned') {
+            throw [AvmConfigurationException]::new(
+                "Bicep e2e group '$($resource.Id)' must include its exact $((Get-AvmBicepConfiguration)['e2e']['ownershipTag']) ownership tag.")
         }
         if ($RequireOwnedGroup -and $resource.Kind -ne 'Group' -and
             (($null -ne $tags -and $tags -isnot [System.Collections.IDictionary]) -or
-            ($tags -is [System.Collections.IDictionary] -and
-            $tags.Contains('avm-e2e-run-id') -and -not $ownedGroup))) {
+            $ownership.State -eq 'Foreign')) {
             throw [AvmConfigurationException]::new(
                 "Bicep e2e what-if for '$File' returned unverified ownership tags for '$($resource.Id)'.")
         }

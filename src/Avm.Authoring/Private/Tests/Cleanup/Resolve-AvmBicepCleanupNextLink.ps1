@@ -4,7 +4,10 @@ function Resolve-AvmBicepCleanupNextLink {
     param(
         [AllowNull()]
         [AllowEmptyString()]
-        [string] $NextLink
+        [string] $NextLink,
+
+        # When set, the next page must stay on this exact path; only the query may change.
+        [string] $ExpectedPath
     )
 
     Set-StrictMode -Version 3.0
@@ -15,6 +18,9 @@ function Resolve-AvmBicepCleanupNextLink {
     }
     if ($NextLink.StartsWith('/') -and -not $NextLink.StartsWith('//') -and
         $NextLink -notmatch '[\\#\x00-\x1f]') {
+        if ($ExpectedPath -and $NextLink.Split('?', 2)[0] -ine $ExpectedPath) {
+            throw [AvmProcessException]::new('Azure collection returned a nextLink outside its original path.')
+        }
         return $NextLink
     }
     $nextUri = $null
@@ -30,6 +36,9 @@ function Resolve-AvmBicepCleanupNextLink {
         -not [string]::IsNullOrEmpty($nextUri.UserInfo) -or
         -not [string]::IsNullOrEmpty($nextUri.Fragment)) {
         throw [AvmProcessException]::new('Azure collection returned a foreign nextLink.')
+    }
+    if ($ExpectedPath -and $nextUri.AbsolutePath -ine $ExpectedPath) {
+        throw [AvmProcessException]::new('Azure collection returned a nextLink outside its original path.')
     }
     return $nextUri.PathAndQuery
 }

@@ -82,6 +82,7 @@ jobs:
           sparse-checkout: |
             .github/actions
             scripts/bicep-workflows
+            repository-management/shared
       - name: Create module release tags
         uses: ./.avm-tools/.github/actions/bicep-release-tags
         with:

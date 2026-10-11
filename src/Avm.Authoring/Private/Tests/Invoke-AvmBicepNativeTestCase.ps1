@@ -41,6 +41,7 @@ function Invoke-AvmBicepNativeTestCase {
     )
 
     Set-StrictMode -Version 3.0
+    $ownerTag = (Get-AvmBicepConfiguration)['e2e']['ownershipTag']
     $ErrorActionPreference = 'Stop'
 
     if (-not $PSCmdlet.ShouldProcess($Item.Case.RelativeDirectory, 'Run native Bicep deployment test')) {
@@ -65,6 +66,22 @@ function Invoke-AvmBicepNativeTestCase {
     }
     Invoke-AvmBicepAzureContext -SubscriptionId $Item.SubscriptionId -TenantId $TenantId -ScriptBlock {
         Assert-AvmBicepAzureIdentity -AzPath $executionOptions.AzPath -SubscriptionId $Item.SubscriptionId -TenantId $TenantId
+        $features = @(Get-AvmPropertyValue -InputObject $Item -Name 'RequiredFeatures')
+        if ($features.Count -gt 0) {
+            try {
+                $null = Invoke-AvmFeatureRegistration -Cli (Resolve-AvmAzureCli) -Root $executionOptions.RepositoryRoot `
+                    -SubscriptionId ([guid]$Item.SubscriptionId).ToString('D') -Feature $features
+            }
+            catch [AvmException] {
+                $registrationIssues = [System.Collections.Generic.List[object]]::new()
+                Add-AvmBicepTestIssue -Issues $registrationIssues -File $Item.Case.RelativePath `
+                    -Code 'feature-registration-failed' -Message $_.Exception.Message
+                return [pscustomobject]@{
+                    Status = 'fail'; AssertionResults = @(); PostResults = @(); Issues = $registrationIssues.ToArray()
+                    CleanupPending = @(); CleanupDeferred = $false; StatePath = ''
+                }
+            }
+        }
         $environment = Get-AvmPropertyValue -InputObject (Get-AzContext -ErrorAction Stop) -Name 'Environment'
         $environmentName = [string](Get-AvmPropertyValue -InputObject $environment -Name 'Name')
         $handle = New-AvmBicepCleanupState -SubscriptionId $Item.SubscriptionId -TenantId $TenantId `
@@ -138,20 +155,50 @@ function Invoke-AvmBicepNativeTestCase {
                 $state['ownedResourceGroups'] = @(@{ id = $groupId; runId = $Item.RunId })
                 Save-AvmBicepCleanupState -State $state -Path $handle.Path -Confirm:$false
                 $group = New-AzResourceGroup -Name $groupName -Location $selectedLocation `
-                    -Tag @{ 'avm-e2e-run-id' = $Item.RunId } -ErrorAction Stop
+                    -Tag @{ $ownerTag = $Item.RunId } -ErrorAction Stop
                 if ((Get-AvmPropertyValue -InputObject $group -Name 'ResourceId') -ine $groupId -or
                     (Get-AvmPropertyValue -InputObject (
-                        Get-AvmPropertyValue -InputObject $group -Name 'Tags') -Name 'avm-e2e-run-id') -cne $Item.RunId) {
+                        Get-AvmPropertyValue -InputObject $group -Name 'Tags') -Name $ownerTag) -cne $Item.RunId) {
                     throw [AvmProcessException]::new('The new resource group identity and ownership tag could not be verified.')
                 }
             }
-            $validated = Test-AvmBicepNativeDeployment -DeploymentInput $options `
-                -TemplateContent $Item.TemplateContent -ResourceType $Item.ResourceType `
-                -ResourceLocation $selectedLocation -TokenResourceLocation $Item.TokenResourceLocation `
-                -ParameterResourceLocationToken:($references.Contains('resourceLocation')) -RetryLimit $executionOptions.ValidationRetryLimit
-            $deployed = New-AvmBicepNativeDeployment -State $state -StatePath $handle.Path `
-                -DeploymentInput $validated.DeploymentInput -RetryLimit $executionOptions.DeploymentRetryLimit -Confirm:$false
-            if ($deployed.Status -ne 'pass') {
+            $unavailableRegions = @()
+            $relocationBlocked = $false
+            $firstAttempt = 1
+            while ($true) {
+                $validated = Test-AvmBicepNativeDeployment -DeploymentInput $options `
+                    -TemplateContent $Item.TemplateContent -ResourceType $Item.ResourceType `
+                    -ResourceLocation $selectedLocation -TokenResourceLocation $Item.TokenResourceLocation `
+                    -ParameterResourceLocationToken:($references.Contains('resourceLocation')) `
+                    -UnavailableRegions $unavailableRegions -RetryLimit $executionOptions.ValidationRetryLimit
+                $canRelocate = $validated.CanRelocate -and -not $executionOptions.KeepResources -and
+                $validated.AttemptedRegions.Count -lt $executionOptions.ValidationRetryLimit
+                $deployed = New-AvmBicepNativeDeployment -State $state -StatePath $handle.Path `
+                    -DeploymentInput $validated.DeploymentInput -RetryLimit $executionOptions.DeploymentRetryLimit `
+                    -FirstAttempt $firstAttempt -AllowRelocation:$canRelocate -Confirm:$false
+                if ($deployed.Status -ne 'relocate') { break }
+
+                # A wholly regional failure must be fully removed, including deployment records, before another region is tried.
+                Write-AvmLog -Level Warning -Message "Deployment '$($deployed.DeploymentName)' failed for regional reasons; removing it before relocating."
+                $relocationCleanup = Invoke-AvmBicepCleanup -StatePath $handle.Path -SubscriptionId $Item.SubscriptionId `
+                    -TenantId $TenantId -RequireCompleteRemoval -Confirm:$false
+                if (-not $relocationCleanup.Cleaned) {
+                    foreach ($issue in $relocationCleanup.Issues) { Write-AvmLog -Level Warning -Message $issue.Message }
+                    Add-AvmBicepTestIssue -Issues $issues -File $Item.Case.RelativePath -Code 'relocation-blocked' `
+                        -Message "Cleanup did not confirm removal of every outstanding deployment, so relocation stopped. Cleanup state: '$($handle.Path)'."
+                    $relocationBlocked = $true
+                    $deployed.Status = 'fail'
+                    break
+                }
+                $state = Read-AvmBicepCleanupState -Path $handle.Path
+                $state['status'] = 'Pending'
+                $state['deployments'] = @()
+                $state['resources'] = @()
+                Save-AvmBicepCleanupState -State $state -Path $handle.Path -Confirm:$false
+                $unavailableRegions = $validated.AttemptedRegions
+                $firstAttempt = $deployed.Attempt + 1
+            }
+            if ($deployed.Status -ne 'pass' -and -not $relocationBlocked) {
                 Add-AvmBicepTestIssue -Issues $issues -File $Item.Case.RelativePath -Code 'deployment-failed' `
                     -Message "Deployment '$($deployed.DeploymentId)' ended with '$($deployed.Outcome)' outcome. Cleanup state is retained at '$($handle.Path)'."
             }
@@ -163,7 +210,9 @@ function Invoke-AvmBicepNativeTestCase {
                 throw
             }
             $detail = if ($_.Exception -is [AvmConfigurationException]) { $_.Exception.Message } else {
-                'Native preparation, validation or submission failed. Raw parameters and Azure responses are not logged.'
+                $codes = @(Get-AvmBicepSafeErrorCode -ErrorRecord $_)
+                $codeText = if ($codes.Count -gt 0) { " Azure error codes: $($codes -join ', ')." } else { '' }
+                "Native preparation, validation or submission failed.$codeText Raw parameters and Azure responses are not logged."
             }
             Add-AvmBicepTestIssue -Issues $issues -File $Item.Case.RelativePath -Code 'native-execution-failed' `
                 -Message "$detail Cleanup state: '$($handle.Path)'."

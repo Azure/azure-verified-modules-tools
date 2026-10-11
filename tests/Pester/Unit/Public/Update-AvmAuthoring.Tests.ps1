@@ -14,7 +14,31 @@ AfterAll {
 }
 
 Describe 'Update-AvmAuthoring' {
-    It 'is routed as avm update and bypasses the stale-version gate' {
+    It 'is routed as avm upgrade and bypasses the stale-version gate' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Test-AvmModuleVersion {
+                throw [AvmModuleVersionException]::new(
+                    [version]'1.0.0',
+                    [version]'2.0.0',
+                    'stale')
+            }
+            Mock Update-AvmAuthoring {
+                [pscustomobject]@{
+                    Name   = 'Avm.Authoring'
+                    Status = 'current'
+                    Marker = 'routed'
+                }
+            }
+
+            $result = Invoke-Avm upgrade --passthru
+
+            $result.Marker | Should -Be 'routed'
+            Should -Invoke Update-AvmAuthoring -Times 1 -Exactly
+            Should -Invoke Test-AvmModuleVersion -Times 0 -Exactly
+        }
+    }
+
+    It 'retains avm update as a backwards-compatible alias' {
         InModuleScope 'Avm.Authoring' {
             Mock Test-AvmModuleVersion {
                 throw [AvmModuleVersionException]::new(
@@ -115,6 +139,45 @@ Describe 'Update-AvmAuthoring' {
             $caught | Should -BeOfType ([AvmToolException])
             $caught.Message | Should -Match 'Update-PSResource -Name Avm\.Authoring -Scope CurrentUser'
             $caught.Message | Should -Match 'gallery unavailable'
+        }
+    }
+
+    It 'does not reinstall when a transient failure hid a completed update' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Get-AvmLatestModuleVersion { [version]'2.0.0' }
+            Mock Get-Module {
+                [pscustomobject]@{ Version = [version]'1.0.0' }
+            } -ParameterFilter { $Name -eq 'Avm.Authoring' }
+            Mock Wait-AvmRetryDelay
+            Mock Write-Warning
+            Mock Update-PSResource { throw [System.Net.Http.HttpRequestException]::new('The operation has timed out.') }
+            Mock Get-InstalledPSResource { [pscustomobject]@{ Name = 'Avm.Authoring'; Version = '2.0.0' } }
+
+            (Update-AvmAuthoring -Confirm:$false).Status | Should -Be 'updated'
+
+            Should -Invoke Update-PSResource -Exactly 1
+            Should -Invoke Get-InstalledPSResource -Exactly 1 -ParameterFilter { $Version -eq '2.0.0' }
+        }
+    }
+
+    It 'retries a transient update failure when the new version is not installed' {
+        InModuleScope 'Avm.Authoring' {
+            $state = @{ Calls = 0 }
+            Mock Get-AvmLatestModuleVersion { [version]'2.0.0' }
+            Mock Get-Module {
+                [pscustomobject]@{ Version = [version]'1.0.0' }
+            } -ParameterFilter { $Name -eq 'Avm.Authoring' }
+            Mock Wait-AvmRetryDelay
+            Mock Write-Warning
+            Mock Update-PSResource {
+                $state.Calls++
+                if ($state.Calls -eq 1) { throw [System.Net.Http.HttpRequestException]::new('Connection reset by peer') }
+            }
+            Mock Get-InstalledPSResource
+
+            (Update-AvmAuthoring -Confirm:$false).Status | Should -Be 'updated'
+
+            Should -Invoke Update-PSResource -Exactly 2
         }
     }
 }

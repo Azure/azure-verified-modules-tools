@@ -41,6 +41,7 @@ function Invoke-AvmWorkflowE2e {
         [Parameter(Mandatory)] [ValidateSet('Deploy', 'Complete')] [string] $Phase,
         [Parameter(Mandatory)] [string] $SubscriptionId,
         [Parameter(Mandatory)] [string] $TenantId,
+        [Parameter(Mandatory)] [string] $ClientId,
         [Parameter(Mandatory)] [string] $StatePath,
         [Parameter(Mandatory)] [string] $ResultDirectory,
         [string] $Example,
@@ -66,6 +67,7 @@ function Invoke-AvmWorkflowE2e {
         if (-not [string]::IsNullOrEmpty($CustomLocation)) { $parameters.ResourceLocation = $CustomLocation }
     }
     if ($PSCmdlet.ShouldProcess("$ModulePath in the selected test subscription", "Run native Bicep $Phase phase")) {
+        $null = Confirm-AvmWorkflowAzureContext -SubscriptionId $SubscriptionId -TenantId $TenantId -ClientId $ClientId
         $result = Invoke-AvmTestE2e @parameters -Confirm:$false
         Write-AvmWorkflowResult -Name $Phase.ToLowerInvariant() -Result $result -Directory $ResultDirectory
     }
@@ -76,7 +78,8 @@ function Invoke-AvmWorkflowRecovery {
     param(
         [Parameter(Mandatory)] [string] $StatePath,
         [Parameter(Mandatory)] [string] $SubscriptionId,
-        [Parameter(Mandatory)] [string] $TenantId
+        [Parameter(Mandatory)] [string] $TenantId,
+        [Parameter(Mandatory)] [string] $ClientId
     )
 
     if (-not (Test-Path -LiteralPath $StatePath -PathType Leaf)) {
@@ -84,6 +87,7 @@ function Invoke-AvmWorkflowRecovery {
         return
     }
     if ($PSCmdlet.ShouldProcess($StatePath, 'Recover native Bicep cleanup without rerunning source or assertions')) {
+        $null = Confirm-AvmWorkflowAzureContext -SubscriptionId $SubscriptionId -TenantId $TenantId -ClientId $ClientId
         $result = Invoke-AvmTestCleanup -StatePath $StatePath -SubscriptionId $SubscriptionId `
             -TenantId $TenantId -SkipModuleVersionCheck -Confirm:$false
         if ($result.Status -ne 'pass') {

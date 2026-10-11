@@ -18,18 +18,7 @@ function Resolve-AvmRepositoryEntraGroups {
         [Parameter(Mandatory)] [string] $RepositoryId
     )
 
-    foreach ($entry in $Groups) {
-        $group = ConvertTo-AvmSettingDictionary -Value $entry
-        if ($group.Contains('entraGroups')) {
-            $null = ConvertTo-AvmEntraGroupNames -Names $group['entraGroups']
-        }
-    }
-    $names = @(
-        foreach ($entry in @(Get-AvmOrderedGroup -Groups $Groups -SelectorProperty 'repositories' -Item $RepositoryId)) {
-            if ($entry.Group.Contains('entraGroups')) { $entry.Group['entraGroups'] }
-        }
-    )
-    return ConvertTo-AvmEntraGroupNames -Names $names
+    return Resolve-AvmGroupEntraGroups -Groups $Groups -SelectorProperty 'repositories' -Item $RepositoryId
 }
 
 function Resolve-RepositorySettings {

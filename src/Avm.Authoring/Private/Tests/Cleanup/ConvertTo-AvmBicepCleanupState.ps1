@@ -18,7 +18,7 @@ function ConvertTo-AvmBicepCleanupState {
             throw [AvmConfigurationException]::new("Cleanup state requires a string '$name'.")
         }
     }
-    if ($State['runId'] -cnotmatch '^[0-9a-f]{32}$' -or
+    if (-not (Test-AvmBicepRunId -RunId $State['runId']) -or
         $State['status'] -cnotin @('Pending', 'CleanupPending', 'Complete')) {
         throw [AvmConfigurationException]::new('Cleanup state has an invalid run ID or status.')
     }
@@ -58,7 +58,7 @@ function ConvertTo-AvmBicepCleanupState {
     $seen.Clear()
     foreach ($entry in $State['ownedResourceGroups']) {
         if ($entry -isnot [System.Collections.IDictionary] -or $entry['id'] -isnot [string] -or
-            $entry['runId'] -isnot [string] -or $entry['runId'] -cnotmatch '^[0-9a-f]{32}$') {
+            -not (Test-AvmBicepRunId -RunId $entry['runId'])) {
             throw [AvmConfigurationException]::new('Invalid owned resource-group cleanup record.')
         }
         $resource = ConvertTo-AvmBicepCleanupResource -ResourceIds @($entry['id'])

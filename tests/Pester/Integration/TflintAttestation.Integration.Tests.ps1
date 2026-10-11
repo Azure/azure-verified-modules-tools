@@ -208,4 +208,146 @@ output "deprecated_lock" {
         @($run.CanonicalResult.Issues | Where-Object Code -like 'avm_interface_*_deprecated') |
             Should -BeNullOrEmpty
     }
+
+    It 'preserves utility override behavior for <Utility>' -ForEach @(
+        @{
+            Utility = 'Naming'
+            Configs = @(
+                @{
+                    Name = 'avm.tflint.hcl'
+                    Rules = @('avm_output_resource_id_required', 'avm_provider_modtm_version_constraint')
+                    Disabled = @('avm_output_resource_id_required', 'avm_provider_modtm_version_constraint')
+                }
+            )
+        }
+        @{
+            Utility = 'IP-addresses'
+            Configs = @(
+                @{ Name = 'avm.tflint.hcl'; Rules = @('required_output_rmfr7'); Disabled = @('avm_output_resource_id_required') }
+                @{ Name = 'avm.tflint_example.hcl'; Rules = @('terraform_required_version'); Disabled = @('terraform_required_version') }
+            )
+        }
+        @{
+            Utility = 'Regions'
+            Configs = @(
+                @{ Name = 'avm.tflint.hcl'; Rules = @('required_output_rmfr7'); Disabled = @('avm_output_resource_id_required') }
+                @{ Name = 'avm.tflint_module.hcl'; Rules = @('required_output_rmfr7'); Disabled = @('avm_output_resource_id_required') }
+                @{ Name = 'avm.tflint_example.hcl'; Rules = @('terraform_output_separate'); Disabled = @() }
+            )
+        }
+    ) -Skip:((Test-Path Env:\AVM_OFFLINE) -and ($env:AVM_OFFLINE -eq '1')) {
+        Install-AvmTool -Name tflint -ErrorAction Stop -SkipModuleVersionCheck
+        $root = Join-Path $TestDrive $Utility
+        $directories = @($root, (Join-Path $root 'modules' 'child'), (Join-Path $root 'examples' 'default'))
+        foreach ($directory in $directories) {
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+            @'
+locals {
+  value = "local-only"
+}
+output "value" {
+  value       = local.value
+  description = "A local utility value."
+}
+'@ | Set-Content -LiteralPath (Join-Path $directory 'main.tf') -Encoding utf8NoBOM
+        }
+        $overridePaths = foreach ($configuration in $Configs) {
+            $path = Join-Path $root ($configuration.Name -replace '\.hcl$', '.override.hcl')
+            $text = ($configuration.Rules | ForEach-Object { "rule `"$_`" {`n  enabled = false`n}`n" }) -join "`n"
+            [System.IO.File]::WriteAllText($path, $text)
+            $path
+        }
+        $before = Get-FileHash -LiteralPath $overridePaths
+        $runs = InModuleScope 'Avm.Authoring' -Parameters @{
+            Root = $root
+            Configs = $Configs
+            PluginDir = (Join-Path $TestDrive 'utility-plugins')
+        } {
+            param($Root, $Configs, $PluginDir)
+            $tool = Resolve-AvmTool -Name tflint
+            $configDir = Resolve-AvmTflintConfigDir
+            $scopes = @(Get-AvmTflintScope -Root $Root -ConfigDir $configDir)
+            $set = New-AvmTflintConfigSet -Root $Root -BaseConfigDir $configDir -Scopes $scopes
+            try {
+                $init = Invoke-AvmProcess -FilePath $tool.Path `
+                    -ArgumentList @('--init', '--config', (Join-Path $configDir 'avm.tflint.hcl')) `
+                    -WorkingDirectory $Root -EnvVars @{ TFLINT_PLUGIN_DIR = $PluginDir } -IgnoreExitCode
+                $init.ExitCode | Should -Be 0 -Because $init.StdErr
+                foreach ($configuration in $Configs) {
+                    $scope = $scopes | Where-Object { [System.IO.Path]::GetFileName($_.Config) -eq $configuration.Name }
+                    $baseline = Invoke-AvmProcess -FilePath $tool.Path `
+                        -ArgumentList @('--config', $scope.Config, '--format=json') `
+                        -WorkingDirectory $scope.Dir -EnvVars @{ TFLINT_PLUGIN_DIR = $PluginDir } -IgnoreExitCode
+                    $candidate = Invoke-AvmProcess -FilePath $tool.Path `
+                        -ArgumentList @('--config', (Join-Path $set.ConfigDir $configuration.Name), '--format=json') `
+                        -WorkingDirectory $scope.Dir -EnvVars @{ TFLINT_PLUGIN_DIR = $PluginDir } -IgnoreExitCode
+                    [pscustomobject]@{
+                        Name = $configuration.Name
+                        Disabled = $configuration.Disabled
+                        Baseline = $baseline
+                        Candidate = $candidate
+                    }
+                }
+            }
+            finally {
+                Remove-Item -LiteralPath $set.StageDir -Recurse -Force
+            }
+        }
+
+        @($runs).Count | Should -Be $Configs.Count
+        foreach ($run in $runs) {
+            $run.Baseline.ExitCode | Should -BeIn @(0, 2) -Because $run.Baseline.StdErr
+            $run.Candidate.ExitCode | Should -BeIn @(0, 2) -Because $run.Candidate.StdErr
+            $baselinePayload = $run.Baseline.StdOut | ConvertFrom-Json
+            $candidatePayload = $run.Candidate.StdOut | ConvertFrom-Json
+            $baselinePayload.errors | Should -BeNullOrEmpty
+            $candidatePayload.errors | Should -BeNullOrEmpty
+            if ($run.Disabled -contains 'avm_output_resource_id_required') {
+                @($baselinePayload.issues | Where-Object { $_.rule.name -eq 'avm_output_resource_id_required' }).Count | Should -Be 1
+            }
+            @($candidatePayload.issues | Where-Object { $_.rule.name -in $run.Disabled }) | Should -BeNullOrEmpty
+            $expected = @($baselinePayload.issues |
+                    Where-Object { $_.rule.name -notin $run.Disabled } |
+                    ForEach-Object { $_ | ConvertTo-Json -Depth 20 -Compress } |
+                    Sort-Object)
+            $actual = @($candidatePayload.issues |
+                    ForEach-Object { $_ | ConvertTo-Json -Depth 20 -Compress } |
+                    Sort-Object)
+            ($actual -join "`n") | Should -Be ($expected -join "`n")
+        }
+        (Get-FileHash -LiteralPath $overridePaths).Hash | Should -Be $before.Hash
+    }
+
+    It 'retains native errors for unsupported utility override <Rule>' -ForEach @(
+        @{ Rule = 'required_output_rmfr7'; Enabled = 'true' }
+        @{ Rule = 'terraform_output_separate'; Enabled = 'true' }
+        @{ Rule = 'unknown_utility_rule'; Enabled = 'false' }
+    ) -Skip:((Test-Path Env:\AVM_OFFLINE) -and ($env:AVM_OFFLINE -eq '1')) {
+        Install-AvmTool -Name tflint -ErrorAction Stop -SkipModuleVersionCheck
+        $root = Join-Path $TestDrive $Rule
+        New-Item -ItemType Directory -Path $root -Force | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $root 'main.tf'), 'locals { value = 1 }')
+        $overridePath = Join-Path $root 'override.hcl'
+        [System.IO.File]::WriteAllText($overridePath, "rule `"$Rule`" {`n  enabled = $Enabled`n}`n")
+        $run = InModuleScope 'Avm.Authoring' -Parameters @{
+            Root = $root
+            Override = $overridePath
+            PluginDir = (Join-Path $TestDrive 'utility-plugins')
+        } {
+            param($Root, $Override, $PluginDir)
+            $tool = Resolve-AvmTool -Name tflint
+            $base = Join-Path (Resolve-AvmTflintConfigDir) 'avm.tflint.hcl'
+            $merged = Join-Path $Root 'merged.hcl'
+            Merge-AvmTflintConfig -BasePath $base -OverridePath $Override -DestinationPath $merged
+            $init = Invoke-AvmProcess -FilePath $tool.Path `
+                -ArgumentList @('--init', '--config', $base) `
+                -WorkingDirectory $Root -EnvVars @{ TFLINT_PLUGIN_DIR = $PluginDir } -IgnoreExitCode
+            $init.ExitCode | Should -Be 0 -Because $init.StdErr
+            Invoke-AvmProcess -FilePath $tool.Path `
+                -ArgumentList @('--config', $merged, '--format=json') `
+                -WorkingDirectory $Root -EnvVars @{ TFLINT_PLUGIN_DIR = $PluginDir } -IgnoreExitCode
+        }
+        $run.ExitCode | Should -Be 1
+        "$($run.StdOut)`n$($run.StdErr)" | Should -Match "Rule not found: $Rule"
+    }
 }

@@ -1,10 +1,8 @@
 #Requires -Version 7.4
 
-# Typed exception classes per spec section 14. Loaded by Avm.Authoring.psm1
-# alongside every other Private/ file via dot-sourcing. PowerShell parses
-# 'class' blocks at dot-source time so the type is visible to subsequent
-# Private/ and Public/ files via the type accelerator and via
-# '[Avm.Errors.AvmToolException]::new(...)'.
+# Typed exception classes. Avm.Authoring.psm1 dot-sources
+# this file before every other Private/ file, reusing one parsed copy per
+# runspace so the class types stay stable across Import-Module -Force.
 #
 # The base class derives from System.Exception so that our own throws look the
 # same as framework exceptions to PowerShell's exception machinery and to

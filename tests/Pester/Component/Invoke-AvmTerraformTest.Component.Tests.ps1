@@ -7,7 +7,7 @@ BeforeAll {
     . (Join-Path $script:repoRoot 'tests' 'helpers' 'Install-AvmStubLauncher.ps1')
 
     $script:savedEnvironment = @{}
-    foreach ($name in @('PATH', 'AVM_HOME', 'TF_DATA_DIR', 'AVM_STUB_TERRAFORM_TRACE')) {
+    foreach ($name in @('PATH', 'AVM_HOME', 'TF_DATA_DIR', 'TF_PLUGIN_CACHE_DIR', 'AVM_STUB_TERRAFORM_TRACE')) {
         $script:savedEnvironment[$name] = [System.Environment]::GetEnvironmentVariable($name)
     }
     $launchers = Install-AvmStubLauncher `
@@ -16,6 +16,7 @@ BeforeAll {
         -PinsPath (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Resources' 'avm.pins.jsonc')
     $env:PATH = $launchers + [System.IO.Path]::PathSeparator + $env:PATH
     $env:TF_DATA_DIR = $null
+    $env:TF_PLUGIN_CACHE_DIR = $null
 
     function Set-ValidationFixtureFile {
         param(
@@ -78,6 +79,10 @@ Describe 'Component: Terraform example validation and module coverage' -Tag 'Com
         $validations.Directory | Should -Contain (Join-Path $script:fixtureRoot 'examples' 'ignored')
         $validations.Directory | Should -Not -Contain $script:fixtureRoot
         @($validations.DataDirectory | Select-Object -Unique).Count | Should -Be 2
+        $pluginCaches = @($trace | Where-Object Command -eq 'init' | Select-Object -ExpandProperty PluginCache -Unique)
+        $pluginCaches.Count | Should -Be 1
+        $pluginCaches[0] | Should -Not -BeNullOrEmpty
+        Test-Path -LiteralPath $pluginCaches[0] -PathType Container | Should -BeTrue
         foreach ($validation in $validations) {
             Test-Path -LiteralPath $validation.DataDirectory | Should -BeFalse
             @($trace | Where-Object {

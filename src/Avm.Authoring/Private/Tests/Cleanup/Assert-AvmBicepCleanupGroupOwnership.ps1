@@ -9,6 +9,7 @@ function Assert-AvmBicepCleanupGroupOwnership {
     )
 
     Set-StrictMode -Version 3.0
+    $ownerTag = (Get-AvmBicepConfiguration)['e2e']['ownershipTag']
     $ErrorActionPreference = 'Stop'
 
     foreach ($owned in $State['ownedResourceGroups']) {
@@ -21,7 +22,7 @@ function Assert-AvmBicepCleanupGroupOwnership {
         if ($null -ne $group -and
             ((Get-AvmPropertyValue -InputObject $group -Name 'ResourceId') -ine $owned['id'] -or
             (Get-AvmPropertyValue -InputObject (
-                Get-AvmPropertyValue -InputObject $group -Name 'Tags') -Name 'avm-e2e-run-id') -cne $owned['runId'])) {
+                Get-AvmPropertyValue -InputObject $group -Name 'Tags') -Name $ownerTag) -cne $owned['runId'])) {
             throw [AvmConfigurationException]::new('Resource-group ownership changed before cleanup.')
         }
     }

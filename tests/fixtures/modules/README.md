@@ -1,6 +1,11 @@
-# On-disk Terraform module fixtures
+# On-disk module fixtures
 
-This tree holds full, copy-faithful AVM Terraform module shells used as
+This tree holds reusable Bicep and Terraform module fixtures. Tests copy them
+into isolated temporary repositories before editing or running commands.
+The Bicep policy fixture has no registry utility tree and is compiler-only:
+its integration tests never deploy it.
+
+The Terraform shells are used as
 integration-test substrate for `avm pre-commit -Ecosystem terraform`,
 `avm pr-check -Ecosystem terraform`, and the individual engine cmdlets
 (`Invoke-AvmFormat`, `Invoke-AvmLint`, `Invoke-AvmTest`, `Invoke-AvmDocs`,
@@ -18,12 +23,15 @@ workstation (`./build.ps1 doctor && avm pre-commit -Ecosystem terraform -Path te
 
 | Fixture                              | Provider(s)                                  | Purpose                                                                                            |
 | ------------------------------------ | -------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `bicep-storage/` | Bicep / Pester / PSRule.Rules.Azure | Independent consumer with typed tags, metadata-backed telemetry, version/changelog, module workflow and ownership, defaults/WAF examples and an authored unit test. Built-package acceptance exercises native compliance and four policy baselines per example, with isolated invalid mutations. |
+| `bicep-docs/` | Bicep | Documentation module with a child container, compiled snapshots, and scoped e2e examples. Existing component and real-compiler tests copy and extend it for parameter, UDT, output, and rendering checks. |
+| `bicep-existing-references/` | Bicep / Microsoft Graph extension | Compiler fixture forwarding existing Graph and Key Vault IDs to a local helper. It is not a publishable AVM module or an Azure deployment test. |
 | `terraform-azurerm-avm-res-mock/`    | `hashicorp/azurerm` + `azapi` + `modtm` + `random` | Mock AVM resource module with two examples (`default`, `default-ignore`) and a `tests/unit/` `tftest.hcl`. Validates the full `format → lint → test → docs` + `check policy` chain. |
 | `terraform-azure-avm-res-mock/`      | `Azure/azure` (AzAPI-only) + `modtm`         | Mock AVM resource module with **three** examples (`default`, `ignored_example`, `second_example`), all three TFLint override variants, PowerShell lifecycle hooks, dotenv input, example-local policy exceptions, an adversarial Event Hub policy violation, and **both** `tests/unit/` *and* `tests/integration/` `tftest.hcl`. Exercises override merging, policy isolation, lifecycle hooks, integration discovery, and multi-example sorting. |
 
 ## Source
 
-Both fixtures were copied from
+The Terraform fixtures were copied from
 legacy Terraform governance repository
 at commit `7f8c4ee4d68095310ddd8722f9cc27d32a0de82c` (default branch
 `main`, 2026-06-16). Upstream paths:
@@ -50,7 +58,7 @@ the upstream governance pipeline was removed:
 - Legacy AVM shim scripts (`avm`, `avm.bat`, `avm.ps1`) — replaced by the
   `Avm.Authoring` CLI in this repo.
 - `Makefile` — replaced by `./build.ps1` and the `avm` verbs.
-- Repository boilerplate (`LICENSE`, `AGENTS.md`, `CODE_OF_CONDUCT.md`,
+- Repository boilerplate (`LICENSE`, agent instructions, `CODE_OF_CONDUCT.md`,
   `CONTRIBUTING.md`, `SECURITY.md`, `SUPPORT.md`) — would shadow or
   confuse this repo's own copies.
 - Editor / tooling metadata (`.editorconfig`, `.devcontainer/`,
@@ -92,7 +100,7 @@ encoding remains deterministic.
   its current TestDrive scaffold onto either of these fixtures. Separate
   follow-up slice; the existing test still has value as a hermetic
   fixture-builder smoke.
-- A keyvault-flavoured fixture (`terraform-azurerm-avm-res-keyvault-vault`
-  per the Phase 2 §3 demo deliverable in `docs/progress.md`). That
+- A keyvault-flavoured fixture (`terraform-azurerm-avm-res-keyvault-vault`).
+  That
   module is real (not a mock) and would pull live provider downloads;
   add when the demo slice itself is ready.

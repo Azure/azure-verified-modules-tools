@@ -179,11 +179,24 @@ try {
         }
         Import-Module 'Microsoft.PowerShell.PSResourceGet' -Force
 
-        $existing = Find-PSResource `
-            -Name $packageId `
-            -Version $version `
-            -Repository $Repository `
-            -ErrorAction SilentlyContinue
+        . (Join-Path -Path $PSScriptRoot -ChildPath 'Import-AvmNetworkRetry.ps1')
+        # Not-found is reported as a non-terminating error; only transient
+        # lookup errors are retried, and exhaustion fails before publishing.
+        $existing = Invoke-AvmRetry -RetryActivity "Checking whether $packageId $version is published" -RetryAction {
+            $findErrors = $null
+            $found = Find-PSResource `
+                -Name $packageId `
+                -Version $version `
+                -Repository $Repository `
+                -ErrorAction SilentlyContinue `
+                -ErrorVariable findErrors
+            foreach ($findError in @($findErrors)) {
+                if ((Get-AvmNetworkFailureKind -ErrorRecord $findError) -eq 'Transient') {
+                    throw $findError
+                }
+            }
+            $found
+        }
         if ($existing) {
             $message = "$packageId $version is already published on $Repository."
             if ($SkipIfAlreadyPublished) {

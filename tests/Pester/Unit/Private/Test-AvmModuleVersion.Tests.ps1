@@ -91,7 +91,8 @@ Describe 'Test-AvmModuleVersion' {
             $caught.ExitCode | Should -Be 10
             $caught.CurrentVersion | Should -Be (Get-Module Avm.Authoring).Version
             $caught.LatestVersion | Should -Be ([version]'99.0.0')
-            $caught.Message | Should -Match 'A newer version of Avm.Authoring is required'
+            $caught.Message | Should -Match 'Installed version:'
+            $caught.Message | Should -Match 'Latest version: 99\.0\.0'
             $caught.Message | Should -Match 'Update-PSResource -Name Avm\.Authoring -Scope CurrentUser'
             $caught.Message | Should -Match 'Import-Module Avm\.Authoring -Force'
         }
@@ -108,7 +109,7 @@ Describe 'Test-AvmModuleVersion' {
             $records.Count | Should -Be 1
             $records[0] | Should -BeOfType ([System.Management.Automation.WarningRecord])
             [string]$records[0] | Should -Match 'update available: 99\.0\.0'
-            [string]$records[0] | Should -Match 'avm update'
+            [string]$records[0] | Should -Match 'avm upgrade'
         }
     }
 
@@ -128,10 +129,12 @@ Describe 'Test-AvmModuleVersion' {
             Mock Find-PSResource {
                 throw [System.Net.Http.HttpRequestException]::new('private diagnostic')
             }
+            Mock Wait-AvmRetryDelay { }
 
             $warnings = @(Test-AvmModuleVersion 3>&1)
 
             $warnings.Count | Should -Be 1
+            Should -Invoke Find-PSResource -Exactly 2
             [string]$warnings[0] | Should -Match 'Unable to check PowerShell Gallery'
             [string]$warnings[0] | Should -Match 'The Gallery request failed'
             [string]$warnings[0] | Should -Not -Match 'private diagnostic'
@@ -186,6 +189,34 @@ Describe 'Test-AvmModuleVersion' {
 
             $warnings.Count | Should -Be 0
             Should -Invoke Find-PSResource -Times 0 -Exactly
+        }
+    }
+
+    Context 'public commands that resolve module context' {
+        It 'honours -SkipModuleVersionCheck when the Gallery has a newer version: <Command>' -ForEach @(
+            @{ Command = 'Invoke-AvmLint'; Engine = 'Invoke-AvmTerraformLint' }
+            @{ Command = 'Invoke-AvmFormat'; Engine = 'Format-AvmTerraformModule' }
+            @{ Command = 'Invoke-AvmTransform'; Engine = 'Invoke-AvmTerraformTransform' }
+            @{ Command = 'Invoke-AvmDocs'; Engine = 'Invoke-AvmTerraformDocs' }
+            @{ Command = 'Invoke-AvmTest'; Engine = 'Invoke-AvmTerraformTest' }
+        ) {
+            $root = Join-Path $TestDrive "skip-$Command"
+            $null = New-Item -ItemType Directory -Path $root -Force
+            [System.IO.File]::WriteAllText((Join-Path $root 'main.tf'), "terraform {}`n")
+            InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root; Command = $Command; Engine = $Engine } {
+                param($Root, $Command, $Engine)
+                Mock Find-PSResource { [pscustomobject]@{ Name = 'Avm.Authoring'; Version = '9999.0.0' } }
+                Mock $Engine { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; Issues = @() } }
+                Mock Write-AvmLog
+
+                { & $Command -Path $Root -Ecosystem terraform } | Should -Throw -ExceptionType ([AvmModuleVersionException])
+                Should -Invoke $Engine -Exactly 0
+
+                $script:AvmLatestModuleVersion = $null
+                $script:AvmModuleVersionCheckCompleted = $false
+                $null = & $Command -Path $Root -Ecosystem terraform -SkipModuleVersionCheck 3>$null
+                Should -Invoke $Engine -Exactly 1
+            }
         }
     }
 }
