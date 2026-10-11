@@ -57,6 +57,12 @@ function Invoke-AvmProcess {
         collapsed GitHub Actions group: the caller's lines are already the
         curated progress view and must stay visible. Requires -StreamOutput.
 
+    .PARAMETER OnStdErrLine
+        Scriptblock invoked with each stderr line as it arrives. The caller
+        owns stderr rendering, so raw stderr is not echoed or replayed to the
+        log. Captured data and exception details are unchanged. Requires
+        -StreamOutput.
+
     .PARAMETER SuccessExitCode
         Exit codes treated as success for narration and failure replay. Does
         not affect the AvmProcessException throw, which is governed by
@@ -87,6 +93,7 @@ function Invoke-AvmProcess {
         [switch] $StreamOutput,
         [string] $Label,
         [scriptblock] $OnStdOutLine,
+        [scriptblock] $OnStdErrLine,
         [int[]] $SuccessExitCode = @(0),
         [switch] $RetryNetworkFailure
     )
@@ -132,8 +139,9 @@ function Invoke-AvmProcess {
     $detailedOutput = -not (Test-AvmNestedCommandContext) -or (Test-AvmVerboseEnabled)
     $narrate = [bool]$StreamOutput -and $detailedOutput
     $hasLineHook = $null -ne $OnStdOutLine
+    $hasErrorLineHook = $null -ne $OnStdErrLine
     $live = $narrate -and ($inActions -or (Test-AvmVerboseEnabled))
-    $grouped = $narrate -and $inActions -and -not $hasLineHook
+    $grouped = $narrate -and $inActions -and -not ($hasLineHook -or $hasErrorLineHook)
     $heartbeatSeconds = 30
     $nextHeartbeat = $heartbeatSeconds
 
@@ -234,7 +242,10 @@ function Invoke-AvmProcess {
                     }
                     else {
                         $null = $stderrBuilder.AppendLine($line)
-                        if ($live) { Write-AvmLog $line -Level Info }
+                        if ($hasErrorLineHook) {
+                            & $OnStdErrLine $line
+                        }
+                        elseif ($live) { Write-AvmLog $line -Level Info }
                         $stderrTask = $process.StandardError.ReadLineAsync()
                     }
                 }
@@ -270,6 +281,17 @@ function Invoke-AvmProcess {
             }
         }
         $process.WaitForExit()
+    }
+    catch {
+        if ($started -and -not $process.HasExited) {
+            try {
+                $process.Kill($true)
+                $process.WaitForExit()
+            }
+            catch { Write-AvmLog "Failed to stop process after output handling failed: $($_.Exception.Message)" -Level Verbose }
+        }
+        $process.Dispose()
+        throw
     }
     finally {
         $stopwatch.Stop()
@@ -322,12 +344,15 @@ function Invoke-AvmProcess {
         else {
             Write-AvmLog ('  FAILED: {0} {1}' -f $displayLabel, $suffix) -Level Fail
             if ($hasLineHook) {
-                foreach ($replayLine in (Get-AvmProcessReplayLine -Label $displayLabel -StdErr $stdErr)) {
-                    Write-AvmLog $replayLine -Level Fail
+                if (-not $hasErrorLineHook) {
+                    foreach ($replayLine in (Get-AvmProcessReplayLine -Label $displayLabel -StdErr $stdErr)) {
+                        Write-AvmLog $replayLine -Level Fail
+                    }
                 }
             }
             elseif (-not $live) {
-                foreach ($replayLine in (Get-AvmProcessReplayLine -Label $displayLabel -StdOut $stdOut -StdErr $stdErr)) {
+                $replayError = if ($hasErrorLineHook) { '' } else { $stdErr }
+                foreach ($replayLine in (Get-AvmProcessReplayLine -Label $displayLabel -StdOut $stdOut -StdErr $replayError)) {
                     Write-AvmLog $replayLine -Level Fail
                 }
             }

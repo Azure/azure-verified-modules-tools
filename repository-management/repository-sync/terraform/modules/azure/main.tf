@@ -39,7 +39,7 @@ resource "azapi_resource" "identity_federated_credentials" {
   for_each = var.github_repository_environment_names
 
   type      = "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview"
-  name      = "${local.owner_repo_name}-${each.value}"
+  name      = var.github_workflow_ref == null ? "${local.owner_repo_name}-${each.value}" : "${local.owner_repo_name}-module-${each.value}"
   parent_id = azapi_resource.identity.id
   locks     = [azapi_resource.identity.id]
   body = {
@@ -50,7 +50,10 @@ resource "azapi_resource" "identity_federated_credentials" {
       # modules/github/github.actions_oidc.tf. The `context` claim is not
       # included literally in `sub`; it expands to its value, which is
       # `environment:<name>` when the job references an environment.
-      subject = "repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:${each.value}:job_workflow_ref:${var.github_job_workflow_ref}"
+      subject = join("", [
+        "repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:${each.value}:job_workflow_ref:${var.github_job_workflow_ref}",
+        var.github_workflow_ref == null ? "" : ":workflow_ref:${var.github_workflow_ref}"
+      ])
     }
   }
 }

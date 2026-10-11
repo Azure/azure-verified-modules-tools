@@ -142,7 +142,7 @@ Describe 'State identity wiring' {
         )
     }
 
-    It 'plans, privately reads, and applies one guarded plan without retry or state repair' {
+    It 'plans, privately reads, and applies one guarded plan without legacy retries or state rewrites' {
         $path = Join-Path $script:repoRoot (
             'repository-management/repository-sync/scripts/lib/TerraformOperations.ps1'
         )
@@ -182,7 +182,7 @@ Describe 'State identity wiring' {
         $source.IndexOf('Invoke-TerraformPlanAndApply') | Should -BeLessThan $source.IndexOf('Remove-LegacyBranchProtection')
     }
 
-    It 'uses explicit BAMI provider inputs and OIDC backend metadata without CLI login in ordinary workers' {
+    It 'uses backend-only CLI recovery authentication without changing provider OIDC' {
         $workflow = Get-Content -LiteralPath (Join-Path $script:repoRoot (
             '.github/workflows/repository-management-sync.yml'
         )) -Raw
@@ -203,8 +203,18 @@ Describe 'State identity wiring' {
         $syncStep | Should -Match '-bamiSettings \$bamiSettings'
         $worker = [regex]::Match($workflow, '(?ms)^  run-sync:.*$').Value
         $worker | Should -Not -BeNullOrEmpty
-        $worker | Should -Not -Match 'azure/login|gh auth login'
-        $workflow | Should -Not -Match 'azure/login|gh auth login'
+        $worker | Should -Not -Match 'gh auth login'
+        $login = [regex]::Match($worker, '(?ms)^      - name: Sign in with the state backend identity\r?\n.*?(?=^      - name:)').Value
+        $login | Should -Match 'uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c'
+        foreach ($name in @('tenant', 'subscription', 'client')) {
+            $login | Should -Match ($name + '-id: \$\{\{ steps\.state-backend\.outputs\.' + $name + '-id \}\}')
+        }
+        $login | Should -Not -Match 'TEST_BAMI|secrets\.|ARM_OIDC_TOKEN'
+        @([regex]::Matches($worker, 'uses: azure/login@')) | Should -HaveCount 1
+        $worker | Should -Match '(?m)^      actions: read\r?$'
+        $worker | Should -Match '(?m)^      contents: read\r?$'
+        $worker | Should -Match '(?m)^      id-token: write\r?$'
+        $syncStep | Should -Match 'ACTIONS_STATE_LOCK_TOKEN: \$\{\{ github\.token \}\}'
         $workflow | Should -Match '-stateTenantId \$env:ARM_BACKEND_TENANT_ID'
         $workflow | Should -Match '-stateClientId \$env:ARM_BACKEND_CLIENT_ID'
         $workflow | Should -Match '-stateSubscriptionId \$env:ARM_BACKEND_SUBSCRIPTION_ID'
@@ -337,7 +347,7 @@ Describe 'State backend workflow resolution' {
         @{ Mode = 'partial' }
     ) {
         $workflow = Get-Content -Raw (Join-Path $script:repoRoot '.github/workflows/repository-management-sync.yml')
-        $step = [regex]::Match($workflow, '(?ms)^      - name: Resolve state backend\r?\n.*?^        run: \|\r?\n(?<body>.*?)^      - name: Run sync')
+        $step = [regex]::Match($workflow, '(?ms)^      - name: Resolve state backend\r?\n.*?^        run: \|\r?\n(?<body>.*?)(?=^      - name:)')
         $step.Success | Should -BeTrue
         $bindings = @([regex]::Matches($step.Value, '(?m)^          ([A-Z_]+): \$\{\{ vars\.\1 \}\}') |
             ForEach-Object { $_.Groups[1].Value } | Sort-Object)

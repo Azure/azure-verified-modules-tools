@@ -14,11 +14,61 @@ function New-AvmTestBamiSettings {
     }
 }
 
+function ConvertFrom-AvmTestTerraformPlan {
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Plan,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $GroupContracts,
+        [string] $AddressPrefix = ''
+    )
+
+    if ($Plan['resource_changes'] -isnot [System.Collections.IList] -or $GroupContracts.Count -eq 0) {
+        throw [System.IO.InvalidDataException]::new('An actual mocked Terraform plan and its observed group contracts are required.')
+    }
+    $changes = @(foreach ($source in $Plan['resource_changes']) {
+        $change = @{}
+        foreach ($key in $source.Keys) { $change[$key] = $source[$key] }
+        $change['address'] = "$AddressPrefix$($source['address'])"
+        if ($source.Contains('previous_address')) {
+            $change['previous_address'] = "$AddressPrefix$($source['previous_address'])"
+        }
+        $change
+    })
+    $resources = @(foreach ($change in $changes) {
+        if ($null -ne $change['change']['after']) {
+            @{
+                address = $change['address']; mode = $change['mode']; type = $change['type']
+                provider_name = $change['provider_name']; values = $change['change']['after']
+            }
+        }
+    })
+    $dataResources = @(foreach ($address in $GroupContracts.Keys) {
+        $evidence = $GroupContracts[$address]
+        if ($evidence -isnot [System.Collections.IDictionary] -or $evidence['groups'] -isnot [System.Collections.IDictionary]) {
+            throw [System.IO.InvalidDataException]::new('The actual mocked plan must expose observed provider and group evidence.')
+        }
+        @{ address = "$address.data.azapi_client_config.current"; mode = 'data'; type = 'azapi_client_config'; values = $evidence['azure_context'] }
+        @{ address = "$address.data.azuread_client_config.current"; mode = 'data'; type = 'azuread_client_config'; values = $evidence['graph_context'] }
+        foreach ($name in $evidence['groups'].Keys) {
+            $key = ConvertTo-Json -InputObject $name -Compress
+            @{ address = "$address.data.azuread_group.test_permissions[$key]"; mode = 'data'; type = 'azuread_group'; values = $evidence['groups'][$name] }
+        }
+    })
+    $result = @{
+        resource_changes = $changes
+        planned_values = @{ root_module = @{ resources = $resources } }
+        prior_state = @{ values = @{ root_module = @{ resources = $dataResources } } }
+    }
+    foreach ($key in @('errored', 'complete')) {
+        if ($Plan.Contains($key)) { $result[$key] = $Plan[$key] }
+    }
+    return $result
+}
+
 function New-AvmTestBamiIdentity {
     return @{
         tenant_id = '10000000-0000-4000-8000-000000000001'
         client_id = '10000000-0000-4000-8000-000000000006'
-        identity_resource_id = '/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-example-repo'
+        identity_resource_id = '/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-terraform-azurerm-avm-ptn-example-repo'
         repository_id = '1234'
         repository_owner_id = '6844498'
     }
@@ -30,12 +80,22 @@ function New-AvmTestBamiPlan {
         [switch] $ValidationPending,
         [switch] $OwnerMigration,
         [switch] $LegacyMembershipMigration,
+        [switch] $NamingMigration,
         [string] $RemovedGroup,
         [string[]] $GroupNames = @('avm-test-management-group-owners', 'avm-test-entra-readers'),
         [string] $RepositoryOwnerId = '6844498',
         [string] $RepositorySyncRepositoryId = '1239632211',
         [string] $JobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main',
-        [string] $ModuleAddress = 'module.azure'
+        [string] $ModuleAddress = 'module.azure',
+        [string] $IdentityName = 'id-test-terraform-azurerm-avm-ptn-example-repo',
+        [string] $PreviousIdentityName = 'Azure-terraform-azurerm-avm-ptn-example-repo',
+        [string] $PreviousClientId = '10000000-0000-4000-8000-000000000106',
+        [string] $PreviousPrincipalId = '10000000-0000-4000-8000-000000000107',
+        [string] $RepositoryId = '1234',
+        [string] $ClientId = '10000000-0000-4000-8000-000000000006',
+        [string] $PrincipalId = '10000000-0000-4000-8000-000000000007',
+        [string] $WorkflowRef,
+        [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test')
     )
 
     $condition = @'
@@ -60,8 +120,10 @@ AND
 )
 '@
     $identity = New-AvmTestBamiIdentity
+    $identity.identity_resource_id = $identity.identity_resource_id.Replace('id-test-terraform-azurerm-avm-ptn-example-repo', $IdentityName)
+    $identity.client_id = $ClientId
+    $identity.repository_id = $RepositoryId
     $settings = New-AvmTestBamiSettings
-    $principalId = '10000000-0000-4000-8000-000000000007'
     if (-not $KnownClient) { $identity.Remove('client_id') }
     $resources = @(
         @{
@@ -71,7 +133,7 @@ AND
             values = @{
                 type = 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-07-31-preview'
                 parent_id = '/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test'
-                name = 'Azure-terraform-azurerm-avm-ptn-example-repo'
+                name = $IdentityName
                 id = if ($KnownClient) { $identity.identity_resource_id } else { $null }
                 output = if ($KnownClient) {
                     @{ properties = @{ tenantId = $identity.tenant_id; clientId = $identity.client_id; principalId = $principalId } }
@@ -95,26 +157,36 @@ AND
         }
         $number++
     }
-    foreach ($environment in @('pr-check', 'integration-test', 'examples-test', 'avm-validation')) {
-        $resources += @{
-            address = if ($environment -ceq 'avm-validation') { 'module.azure.azapi_resource.validation_federated_credential' } else {
-                'module.azure.azapi_resource.identity_federated_credentials["' + $environment + '"]'
+    $credentials = @(
+        foreach ($environment in $Environments) {
+            $subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:${environment}:job_workflow_ref:$JobWorkflowRef"
+            if ($WorkflowRef) { $subject += ":workflow_ref:$WorkflowRef" }
+            @{
+                Address = 'module.azure.azapi_resource.identity_federated_credentials["' + $environment + '"]'
+                Name = if ($WorkflowRef) { "$IdentityName-module-$environment" } else { "$IdentityName-$environment" }
+                Subject = $subject
             }
+        }
+        @{
+            Address = 'module.azure.azapi_resource.validation_federated_credential'
+            Name = "$IdentityName-avm-validation"
+            Subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
+        }
+    )
+    foreach ($credential in $credentials) {
+        $resources += @{
+            address = $credential.Address
             mode = 'managed'
             type = 'azapi_resource'
             values = @{
                 type = 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview'
-                name = "Azure-terraform-azurerm-avm-ptn-example-repo-$environment"
+                name = $credential.Name
                 parent_id = if ($KnownClient) { $identity.identity_resource_id } else { $null }
                 body = @{
                     properties = @{
                         audiences = @('api://AzureADTokenExchange')
                         issuer = 'https://token.actions.githubusercontent.com'
-                        subject = if ($environment -ceq 'avm-validation') {
-                            "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
-                        } else {
-                            "repository_owner_id:${RepositoryOwnerId}:repository_id:1234:environment:${environment}:job_workflow_ref:$JobWorkflowRef"
-                        }
+                        subject = $credential.Subject
                     }
                 }
             }
@@ -137,8 +209,11 @@ AND
             }
             @{ address = $_.address; mode = $_.mode; type = $_.type
                 change = @{
-                    actions = $actions; after = $_.values.Clone(); after_unknown = $unknown; after_sensitive = @{}
-                    before = if ($KnownClient -and $actions[0] -ceq 'no-op') { $_.values.Clone() } else { $null }
+                    actions = $actions; after = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $_.values -Depth 10) -AsHashtable
+                    after_unknown = $unknown; after_sensitive = @{}
+                    before = if ($KnownClient -and $actions[0] -ceq 'no-op') {
+                        ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $_.values -Depth 10) -AsHashtable
+                    } else { $null }
                 }
             }
         })
@@ -198,6 +273,20 @@ AND
         }
         $item.provider_name = $item.type -like 'azapi_*' ? 'registry.terraform.io/azure/azapi' : 'registry.terraform.io/hashicorp/azuread'
     }
+    if ($NamingMigration) {
+        $previous = New-AvmTestBamiPlan -KnownClient -IdentityName $PreviousIdentityName -ModuleAddress $ModuleAddress `
+            -ClientId $PreviousClientId -PrincipalId $PreviousPrincipalId -GroupNames $GroupNames `
+            -RepositoryOwnerId $RepositoryOwnerId -RepositoryId $RepositoryId -RepositorySyncRepositoryId $RepositorySyncRepositoryId `
+            -JobWorkflowRef $JobWorkflowRef -WorkflowRef $WorkflowRef -Environments $Environments `
+            -OwnerMigration:$OwnerMigration -LegacyMembershipMigration:$LegacyMembershipMigration -RemovedGroup $RemovedGroup
+        foreach ($change in $changes) {
+            $old = @($previous.resource_changes | Where-Object { $_.address -ceq $change.address })[0]
+            $change.change.before = $old.change.before
+            if ($null -ne $change.change.after) {
+                $change.change.actions = @('delete', 'create')
+            }
+        }
+    }
     return @{
         format_version = '1.2'
         errored = $false
@@ -222,19 +311,25 @@ function New-AvmTestRepositorySyncPlan {
     param(
         [switch] $KnownClient,
         [switch] $OwnerMigration,
-        [switch] $LegacyMembershipMigration
+        [switch] $LegacyMembershipMigration,
+        [switch] $NamingMigration,
+        [string] $Repository = 'Azure/terraform-azurerm-avm-ptn-example-repo',
+        [string] $IdentityName = 'id-test-terraform-azurerm-avm-ptn-example-repo',
+        [string] $PreviousIdentityName = 'Azure-terraform-azurerm-avm-ptn-example-repo'
     )
 
     $plan = New-AvmTestBamiPlan -ModuleAddress 'module.bami[0]' -KnownClient:$KnownClient `
-        -OwnerMigration:$OwnerMigration -LegacyMembershipMigration:$LegacyMembershipMigration
+        -OwnerMigration:$OwnerMigration -LegacyMembershipMigration:$LegacyMembershipMigration -NamingMigration:$NamingMigration `
+        -IdentityName $IdentityName -PreviousIdentityName $PreviousIdentityName
+    $repositoryName = $Repository.Split('/')[1]
     $github = @{
         address = 'module.github.github_repository.this'
         mode = 'managed'
         type = 'github_repository'
         provider_name = 'registry.terraform.io/integrations/github'
         values = @{
-            id = 'terraform-azurerm-avm-ptn-example-repo'; repo_id = 1234
-            name = 'terraform-azurerm-avm-ptn-example-repo'; full_name = 'Azure/terraform-azurerm-avm-ptn-example-repo'
+            id = $repositoryName; repo_id = 1234
+            name = $repositoryName; full_name = $Repository
         }
     }
     $plan.planned_values.root_module.child_modules += @{
@@ -249,7 +344,8 @@ function New-AvmTestRepositorySyncPlan {
 }
 
 function New-AvmTestRetiredIdentityChanges {
-    $plan = New-AvmTestBamiPlan -KnownClient -OwnerMigration -LegacyMembershipMigration -GroupNames @() -ModuleAddress 'module.azure[0]'
+    $plan = New-AvmTestBamiPlan -KnownClient -OwnerMigration -LegacyMembershipMigration -GroupNames @() -ModuleAddress 'module.azure[0]' `
+        -IdentityName 'Azure-terraform-azurerm-avm-ptn-example-repo'
     $plan = ($plan | ConvertTo-Json -Depth 100).Replace('10000000-', '20000000-').Replace('rg-bami-test', 'rg-retired-test') |
         ConvertFrom-Json -AsHashtable -Depth 100
     foreach ($change in $plan.resource_changes) {

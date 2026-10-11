@@ -4,6 +4,12 @@ BeforeAll {
     . (Join-Path $lib 'Logging.ps1')
     . (Join-Path $lib 'RetryHelpers.ps1')
     . (Join-Path $lib 'TerraformOperations.ps1')
+    Import-Module (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
+    $script:pwshPath = (Get-Process -Id $PID).Path
+}
+
+AfterAll {
+    Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
 Describe 'Repository sync folded native logs' -Tag Component {
@@ -112,6 +118,53 @@ Describe 'Repository sync folded native logs' -Tag Component {
             $caught.Message | Should -Not -Match 'must-stay-private'
             $caught.Data.Contains('StdOut') | Should -BeFalse
         }
+        Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter { $null -eq $OnOutputLine }
+    }
+
+    It 'retains quiet successful output without installing streaming callbacks' {
+        $records = @()
+        $result = Invoke-RepositorySyncTerraform -Root $TestDrive -Arguments @('plan') -Quiet -InformationVariable records
+        $result | Should -BeNullOrEmpty
+        $records | Should -BeNullOrEmpty
+        Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter { $null -eq $OnOutputLine }
+    }
+
+    It 'rejects streaming private output before invoking a process: <Mode>' -ForEach @(
+        @{ Mode = 'Json'; Options = @{ Json = $true }; Arguments = @('show', 'saved.tfplan') }
+        @{ Mode = 'Quiet'; Options = @{ Quiet = $true }; Arguments = @('plan') }
+        @{ Mode = 'native JSON'; Options = @{}; Arguments = @('show', '-json', 'saved.tfplan') }
+        @{ Mode = 'native JSON assignment'; Options = @{}; Arguments = @('show', '-json=true', 'saved.tfplan') }
+        @{ Mode = 'native double-hyphen JSON'; Options = @{}; Arguments = @('show', '--json', 'saved.tfplan') }
+        @{ Mode = 'native double-hyphen JSON assignment'; Options = @{}; Arguments = @('show', '--json=true', 'saved.tfplan') }
+    ) {
+        { Invoke-RepositorySyncTerraform -Root $TestDrive -Arguments $Arguments -StreamOutput @Options } |
+            Should -Throw '*human-readable Terraform output*'
+        Should -Invoke Invoke-RepositorySyncProcess -Exactly 0
+    }
+
+    It 'redacts partial streamed diagnostics on timeout without exposing captured data' {
+        Mock Invoke-RepositorySyncProcess {
+            param($OnOutputLine)
+            & $OnOutputLine 'resource.example: Still creating... child-only-secret'
+            $timeout = [System.TimeoutException]::new('synthetic timeout')
+            $timeout.Data['StdOut'] = 'resource.example: Still creating... child-only-secret'
+            $timeout.Data['StdErr'] = "provider error $env:GH_TOKEN"
+            throw $timeout
+        }
+        $records = @()
+        $caught = $null
+        try {
+            Invoke-RepositorySyncTerraform -Root $TestDrive -Arguments @('apply', 'saved.tfplan') -StreamOutput `
+                -Environment @{ ARM_CLIENT_SECRET = 'child-only-secret' } -InformationVariable records
+        }
+        catch { $caught = $_.Exception }
+        $caught | Should -BeOfType ([System.TimeoutException])
+        $caught.Data.Contains('StdOut') | Should -BeFalse
+        $caught.Message | Should -Match 'Still creating\.\.\. \*\*\*'
+        $caught.Message | Should -Match 'provider error \*\*\*'
+        ($records | Out-String) | Should -Match 'Still creating\.\.\. \*\*\*'
+        @($caught.Message, ($records | Out-String)) -join "`n" |
+            Should -Not -Match 'child-only-secret|synthetic-token-do-not-print'
     }
 
     It 'does not emit GitHub group commands outside Actions' {
@@ -119,5 +172,79 @@ Describe 'Repository sync folded native logs' -Tag Component {
         $records = @()
         $null = Invoke-RepositorySyncLogGroup -Name 'Local details' -Action { 'data' } -InformationVariable records
         ($records | Out-String) | Should -Not -Match '::group::|::endgroup::'
+    }
+}
+
+Describe 'Repository Terraform incremental output' -Tag Component {
+    BeforeEach {
+        $script:previousActions = $env:GITHUB_ACTIONS
+        $env:GITHUB_ACTIONS = 'true'
+        $script:childPath = Join-Path $TestDrive 'streaming.ps1'
+        $script:ackOut = Join-Path $TestDrive ([guid]::NewGuid().ToString('N') + '.stdout')
+        $script:ackErr = Join-Path $TestDrive ([guid]::NewGuid().ToString('N') + '.stderr')
+        @'
+param([string] $AckOut, [string] $AckErr, [int] $ExitCode)
+[Console]::Out.WriteLine('azapi_resource.identity: Creating id-test-bicep-avm-res-storage-storage-account...')
+[Console]::Out.WriteLine('client_id = 10000000-0000-4000-8000-000000000006')
+[Console]::Out.WriteLine('sensitive_attribute = (sensitive value)')
+[Console]::Error.WriteLine("provider warning $env:ARM_CLIENT_SECRET")
+[Console]::Out.Flush()
+[Console]::Error.Flush()
+$deadline = [datetime]::UtcNow.AddSeconds(10)
+while ((-not [IO.File]::Exists($AckOut) -or -not [IO.File]::Exists($AckErr)) -and [datetime]::UtcNow -lt $deadline) {
+    Start-Sleep -Milliseconds 20
+}
+if (-not [IO.File]::Exists($AckOut) -or -not [IO.File]::Exists($AckErr)) { exit 19 }
+[Console]::Out.WriteLine('azapi_resource.identity: Creation complete after 1s')
+exit $ExitCode
+'@ | Set-Content -LiteralPath $script:childPath -Encoding utf8NoBOM
+        Mock Get-Command {
+            [pscustomobject]@{ Source = $script:pwshPath }
+        } -ParameterFilter { $Name -eq 'terraform' -and $CommandType -eq 'Application' }
+    }
+
+    AfterEach {
+        [Environment]::SetEnvironmentVariable('GITHUB_ACTIONS', $script:previousActions)
+    }
+
+    It 'publishes redacted resource progress before the child can exit with <ExitCode>' -ForEach @(
+        @{ ExitCode = 0 }
+        @{ ExitCode = 7 }
+    ) {
+        $messages = [System.Collections.Generic.List[string]]::new()
+        $caught = $null
+        try {
+            Invoke-RepositorySyncTerraform -Root $TestDrive -StreamOutput -Arguments @(
+                '-NoProfile', '-NonInteractive', '-File', $script:childPath, $script:ackOut, $script:ackErr, [string]$ExitCode
+            ) -Environment @{ ARM_CLIENT_SECRET = "private-first-line`nprivate-second-line" } 6>&1 |
+                ForEach-Object {
+                    $text = [string]$_.MessageData
+                    $messages.Add($text)
+                    if ($text -cmatch 'Creating id-test-bicep-avm-res-storage-storage-account') {
+                        [IO.File]::WriteAllText($script:ackOut, 'observed live stdout')
+                    }
+                    if ($text -ceq 'provider warning ***') {
+                        [IO.File]::WriteAllText($script:ackErr, 'observed live redacted stderr')
+                    }
+                }
+        }
+        catch { $caught = $_.Exception }
+        Test-Path -LiteralPath $script:ackOut | Should -BeTrue
+        Test-Path -LiteralPath $script:ackErr | Should -BeTrue
+        $messages | Should -Contain 'azapi_resource.identity: Creation complete after 1s'
+        $messages | Should -Contain 'client_id = 10000000-0000-4000-8000-000000000006'
+        $messages | Should -Contain 'sensitive_attribute = (sensitive value)'
+        $messages | Should -Contain '***'
+        ($messages -join "`n") | Should -Not -Match 'private-first-line|private-second-line'
+        if ($ExitCode -eq 0) {
+            $caught | Should -BeNullOrEmpty
+            @($messages | Where-Object { $_ -cmatch 'Creation complete after 1s' }).Count | Should -Be 1
+        }
+        else {
+            $caught | Should -BeOfType ([System.InvalidOperationException])
+            $caught.Data['ExitCode'] | Should -Be 7
+            $caught.Message | Should -Match 'no automatic apply retry or state repair'
+            $caught.Message | Should -Not -Match 'private-first-line|private-second-line'
+        }
     }
 }

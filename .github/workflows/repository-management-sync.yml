@@ -40,7 +40,7 @@ permissions:
   id-token: write
   contents: read
 
-# Queue overlapping runs; state locks are never broken automatically.
+# Queue runs; only scoped acquisition failures qualify for bounded lock recovery.
 concurrency:
   group: repository-sync
   cancel-in-progress: false
@@ -82,6 +82,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: avm
     needs: generate-matrix
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       max-parallel: ${{ fromJson(needs.generate-matrix.outputs.matrixParallel) }}
@@ -154,6 +158,13 @@ jobs:
           "storage-account=$($state.StorageAccountName)" >> $env:GITHUB_OUTPUT
           "container=$($state.ContainerName)" >> $env:GITHUB_OUTPUT
 
+      - name: Sign in with the state backend identity
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        with:
+          tenant-id: ${{ steps.state-backend.outputs.tenant-id }}
+          subscription-id: ${{ steps.state-backend.outputs.subscription-id }}
+          client-id: ${{ steps.state-backend.outputs.client-id }}
+
       - name: Run sync for ${{ matrix.repoId }}
         run: |
 
@@ -202,6 +213,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ACTIONS_STATE_LOCK_TOKEN: ${{ github.token }}
           AVM_APP_BOT_LOGIN: ${{ vars.AVM_APP_BOT_LOGIN }}
           AVM_APP_BOT_USER_ID: ${{ vars.AVM_APP_BOT_USER_ID }}
           ARM_BACKEND_TENANT_ID: ${{ steps.state-backend.outputs.tenant-id }}

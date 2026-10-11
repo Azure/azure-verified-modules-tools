@@ -188,6 +188,13 @@ $issueLog = @(Invoke-RepositorySyncLogGroup -Name 'Terraform repository configur
         $planParameters.repository = $repositorySyncContext.Repository
         $planParameters.repositorySyncRepositoryId = $repositorySyncContext.RepositoryId
     }
+    if (-not $repositoryCreationModeEnabled) {
+        $planParameters.stateStorageAccountName = $stateStorageAccountName
+        $planParameters.stateContainerName = $stateContainerName
+        $planParameters.stateSubscriptionId = $stateSubscriptionId
+        $planParameters.stateTenantId = $stateTenantId
+        $planParameters.stateClientId = $stateClientId
+    }
     if ($settings.WorkloadIdentityFederationSubjectClaimOverrides.ContainsKey('jobWorkflowRef')) {
         $planParameters.jobWorkflowRef = $settings.WorkloadIdentityFederationSubjectClaimOverrides['jobWorkflowRef']
     }

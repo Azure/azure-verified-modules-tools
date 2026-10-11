@@ -4,6 +4,15 @@ BeforeAll {
     . (Join-Path $lib 'Logging.ps1')
     . (Join-Path $lib 'TestTenant.ps1')
     . (Join-Path $script:root 'tests' 'fixtures' 'TestTenant.ps1')
+
+    function Set-TestLockBackend {
+        param([hashtable] $Parameters)
+        $Parameters.stateTenantId = '44444444-4444-4444-8444-444444444444'
+        $Parameters.stateSubscriptionId = '55555555-5555-4555-8555-555555555555'
+        $Parameters.stateClientId = '66666666-6666-4666-8666-666666666666'
+        $Parameters.stateStorageAccountName = 'stateaccount'
+        $Parameters.stateContainerName = 'tfstate'
+    }
 }
 
 Describe 'Repository Terraform saved-plan execution' -Tag Component {
@@ -13,6 +22,10 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
             Calls = [System.Collections.Generic.List[object]]::new()
             FailAt = ''
             InvalidJson = $false
+            LockAt = ''
+            LocksRemaining = 0
+            LockText = 'Error: Error acquiring the state lock'
+            TimeoutAt = ''
         }
         $fixture = $script:fixture
         Mock Invoke-RepositorySyncProcess ({
@@ -21,6 +34,11 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
             $fixture.Calls.Add(@{
                 Arguments = @($Arguments); Root = $WorkingDirectory; Environment = $EnvVars; Timeout = $TimeoutSec
             })
+            if ($fixture.TimeoutAt -ceq $Arguments[0]) { throw [System.TimeoutException]::new('interrupted process') }
+            if ($fixture.LockAt -ceq $Arguments[0] -and $fixture.LocksRemaining -gt 0) {
+                $fixture.LocksRemaining--
+                return @{ ExitCode = 23; StdOut = ''; StdErr = $fixture.LockText }
+            }
             if ($fixture.FailAt -ceq $Arguments[0]) {
                 return @{ ExitCode = 7; StdOut = 'failed native output'; StdErr = 'native failure detail' }
             }
@@ -30,6 +48,7 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
             return @{ ExitCode = 0; StdOut = $text; StdErr = '' }
         }.GetNewClosure())
         Mock Start-Process { throw 'No legacy process or state-repair path is permitted.' }
+        Mock Clear-TerraformStateLock { $true }
         $script:parameters = @{
             terraformModulePath = $TestDrive
             repoId = 'avm-ptn-example-repo'
@@ -49,13 +68,17 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
         $script:parameters.environment = Get-RepositorySyncTerraformEnvironment -Root $TestDrive -Settings $script:parameters.bamiSettings
     }
 
-    It 'uses one guarded saved plan with known client <Known> and plan-only <PlanOnly>' -ForEach @(
-        @{ Known = $false; PlanOnly = $false }
-        @{ Known = $false; PlanOnly = $true }
-        @{ Known = $true; PlanOnly = $false }
-        @{ Known = $true; PlanOnly = $true }
+    It 'uses one guarded saved plan with known client <Known>, naming migration <Rename> and plan-only <PlanOnly>' -ForEach @(
+        @{ Known = $false; Rename = $false; PlanOnly = $false }
+        @{ Known = $false; Rename = $false; PlanOnly = $true }
+        @{ Known = $true; Rename = $false; PlanOnly = $false }
+        @{ Known = $true; Rename = $false; PlanOnly = $true }
+        @{ Known = $false; Rename = $true; PlanOnly = $false }
+        @{ Known = $false; Rename = $true; PlanOnly = $true }
+        @{ Known = $true; Rename = $true; PlanOnly = $false }
+        @{ Known = $true; Rename = $true; PlanOnly = $true }
     ) {
-        $script:fixture.Plan = New-AvmTestRepositorySyncPlan -KnownClient:$Known
+        $script:fixture.Plan = New-AvmTestRepositorySyncPlan -KnownClient:$Known -NamingMigration:$Rename
         $script:parameters.planOnly = $PlanOnly
         $null = Invoke-TerraformPlanAndApply @script:parameters
         $script:fixture.Calls.Arguments | Where-Object { $_ -ceq 'plan' } | Should -HaveCount 1
@@ -115,9 +138,15 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
         @{ Case = 'split address'; Mutate = { param($p) $p.resource_changes[0].address = 'module.azure.azapi_resource.identity' }; Message = '*provider binding*' }
         @{ Case = 'partial transfer'; Mutate = { param($p) $p.planned_values.root_module.child_modules[0].resources = @($p.planned_values.root_module.child_modules[0].resources | Select-Object -Skip 1) }; Message = '*complete dedicated*' }
         @{ Case = 'wrong identity resource ID'; Mutate = { param($p) $p.planned_values.root_module.child_modules[0].resources[0].values.id += '-wrong' }; Message = '*expected repository*' }
-        @{ Case = 'controller client'; Mutate = { param($p) $p.planned_values.root_module.child_modules[0].resources[0].values.output.properties.clientId = '10000000-0000-4000-8000-000000000002' }; Message = '*dedicated repository client*' }
+        @{ Case = 'controller client'; Mutate = {
+            param($p)
+            $p.planned_values.root_module.child_modules[0].resources[0].values.output.properties.clientId = '10000000-0000-4000-8000-000000000002'
+            $p.resource_changes[0].change.after.output.properties.clientId = '10000000-0000-4000-8000-000000000002'
+        }; Message = '*dedicated repository client*' }
+        @{ Case = 'inconsistent identity output'; Mutate = { param($p) $p.resource_changes[0].change.after.output.properties.clientId = '10000000-0000-4000-8000-000000000099' }; Message = '*outputs must agree*' }
         @{ Case = 'unrefreshed evidence'; Mutate = { param($p) $p.Remove('prior_state') }; Message = '*refreshed Terraform*' }
         @{ Case = 'errored plan'; Mutate = { param($p) $p.errored = $true }; Message = '*incomplete or errored*' }
+        @{ Case = 'incomplete plan'; Mutate = { param($p) $p.complete = $false }; Message = '*incomplete or errored*' }
         @{ Case = 'incomplete retired state'; Mutate = { param($p) $p.resource_changes += @(New-AvmTestRetiredIdentityChanges | Select-Object -Skip 1) }; Message = '*Partial retired-tenant*' }
         @{ Case = 'BAMI identity under retired address'; Mutate = {
             param($p)
@@ -147,6 +176,101 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
         { Invoke-TerraformPlanAndApply @script:parameters } | Should -Throw "*Terraform $Command failed (exit code 7)*"
         $script:fixture.Calls.Count | Should -Be $Calls
         Should -Invoke Start-Process -Exactly 0
+    }
+
+    It 'recovers one acquisition failure before <Command> without changing the saved plan, preview <PlanOnly>' -ForEach @(
+        @{ Command = 'plan'; PlanOnly = $true }
+        @{ Command = 'plan'; PlanOnly = $false }
+        @{ Command = 'apply'; PlanOnly = $false }
+    ) {
+        Set-TestLockBackend -Parameters $script:parameters
+        $script:parameters.planOnly = $PlanOnly
+        $script:fixture.LockAt = $Command
+        $script:fixture.LocksRemaining = 1
+        $null = Invoke-TerraformPlanAndApply @script:parameters
+        $attempts = @($script:fixture.Calls | Where-Object { $_.Arguments[0] -ceq $Command })
+        $attempts.Count | Should -Be 2
+        $attempts[1].Arguments | Should -Be $attempts[0].Arguments
+        $script:fixture.Calls.Count | Should -Be ($PlanOnly ? 3 : 4)
+        @($script:fixture.Calls | Where-Object { $_.Arguments[0] -ceq 'show' }) | Should -HaveCount 1
+        Should -Invoke Clear-TerraformStateLock -Exactly 1 -ParameterFilter {
+            $storageAccountName -ceq 'stateaccount' -and $containerName -ceq 'tfstate' -and
+            $blobName -ceq 'avm-ptn-example-repo.tfstate' -and
+            $repository -ceq 'Azure/terraform-azurerm-avm-ptn-example-repo' -and
+            $tenantId -ceq '44444444-4444-4444-8444-444444444444' -and
+            $subscriptionId -ceq '55555555-5555-4555-8555-555555555555' -and
+            $clientId -ceq '66666666-6666-4666-8666-666666666666' -and
+            $environment.ARM_CLIENT_ID -ceq '10000000-0000-4000-8000-000000000002'
+        }
+    }
+
+    It 'stops after the second acquisition failure and preserves the native exit code' {
+        Set-TestLockBackend -Parameters $script:parameters
+        $script:fixture.LockAt = 'apply'
+        $script:fixture.LocksRemaining = 2
+        $errorRecord = { Invoke-TerraformPlanAndApply @script:parameters } | Should -Throw '*no further automatic retry*' -PassThru
+        $errorRecord.Exception.Data['ExitCode'] | Should -Be 23
+        $script:fixture.Calls.Count | Should -Be 4
+        Should -Invoke Clear-TerraformStateLock -Exactly 1
+    }
+
+    It 'retains the original exit code and sanitized diagnostics when release fails' {
+        Set-TestLockBackend -Parameters $script:parameters
+        $script:parameters.environment.GH_TOKEN = 'synthetic-lock-credential'
+        $script:fixture.LockAt = 'plan'
+        $script:fixture.LocksRemaining = 1
+        Mock Clear-TerraformStateLock { throw [System.InvalidOperationException]::new('release failed synthetic-lock-credential') }
+        $errorRecord = { Invoke-TerraformPlanAndApply @script:parameters } | Should -Throw '*release failed ***' -PassThru
+        $errorRecord.Exception.Data['ExitCode'] | Should -Be 23
+        $errorRecord.Exception.Message | Should -Not -Match 'synthetic-lock-credential'
+        $script:fixture.Calls.Count | Should -Be 1
+        Should -Invoke Clear-TerraformStateLock -Exactly 1
+    }
+
+    It 'does not recover or retry a timeout during <Command>' -ForEach @(
+        @{ Command = 'plan'; Count = 1 }
+        @{ Command = 'apply'; Count = 3 }
+    ) {
+        Set-TestLockBackend -Parameters $script:parameters
+        $script:fixture.TimeoutAt = $Command
+        { Invoke-TerraformPlanAndApply @script:parameters } | Should -Throw '*timed out*Inspect state ownership*'
+        $script:fixture.Calls.Count | Should -Be $Count
+        Should -Invoke Clear-TerraformStateLock -Exactly 0
+    }
+
+    It 'does not recover release failures or an ordinary provider error' -ForEach @(
+        @{ Text = 'Error: Error releasing the state lock' }
+        @{ Text = "Error: Error acquiring the state lock`nError: Apply interrupted" }
+        @{ Text = 'Error: Azure request failed' }
+    ) {
+        Set-TestLockBackend -Parameters $script:parameters
+        $script:fixture.LockAt = 'apply'
+        $script:fixture.LocksRemaining = 1
+        $script:fixture.LockText = $Text
+        { Invoke-TerraformPlanAndApply @script:parameters } | Should -Throw '*exit code 23*'
+        $script:fixture.Calls.Count | Should -Be 3
+        Should -Invoke Clear-TerraformStateLock -Exactly 0
+    }
+
+    It 'keeps JSON reads and callers without an explicit backend out of recovery: <Command>' -ForEach @(
+        @{ Command = 'show'; Backend = $true; Count = 2 }
+        @{ Command = 'plan'; Backend = $false; Count = 1 }
+    ) {
+        if ($Backend) { Set-TestLockBackend -Parameters $script:parameters }
+        $script:fixture.LockAt = $Command
+        $script:fixture.LocksRemaining = 1
+        { Invoke-TerraformPlanAndApply @script:parameters } | Should -Throw '*exit code 23*'
+        $script:fixture.Calls.Count | Should -Be $Count
+        Should -Invoke Clear-TerraformStateLock -Exactly 0
+    }
+
+    It 'does not retry when lock recovery is declined' {
+        Set-TestLockBackend -Parameters $script:parameters
+        $script:fixture.LockAt = 'plan'
+        $script:fixture.LocksRemaining = 1
+        Mock Clear-TerraformStateLock { $false }
+        { Invoke-TerraformPlanAndApply @script:parameters } | Should -Throw '*recovery was declined*'
+        $script:fixture.Calls.Count | Should -Be 1
     }
 
     It 'does not echo malformed plan JSON or apply it' {

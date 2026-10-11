@@ -52,7 +52,7 @@ override_resource {
   target          = azapi_resource.identity
   override_during = plan
   values = {
-    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-example-repo"
+    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-terraform-azurerm-avm-ptn-example-repo"
     output = {
       properties = {
         principalId = "10000000-0000-4000-8000-000000000007"
@@ -204,7 +204,7 @@ run "controller_cannot_receive_repository_group_edges" {
     target          = azapi_resource.identity
     override_during = plan
     values = {
-      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-example-repo"
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-terraform-azurerm-avm-ptn-example-repo"
       output = {
         properties = {
           principalId = "10000000-0000-4000-8000-000000000011"
@@ -229,7 +229,7 @@ run "shared_bicep_client_is_rejected_even_without_group_edges" {
     target          = azapi_resource.identity
     override_during = plan
     values = {
-      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-example-repo"
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-terraform-azurerm-avm-ptn-example-repo"
       output = {
         properties = {
           principalId = "10000000-0000-4000-8000-000000000007"
@@ -241,4 +241,227 @@ run "shared_bicep_client_is_rejected_even_without_group_edges" {
   }
 
   expect_failures = [output.client_id]
+}
+
+run "seed_legacy_terraform_identity" {
+  command   = apply
+  state_key = "terraform-name-migration"
+
+  variables {
+    identity_name          = "Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent"
+    github_repository_name = "terraform-azurerm-avm-ptn-azuremonitorwindowsagent"
+  }
+
+  override_resource {
+    target          = azapi_resource.identity
+    override_during = plan
+    values = {
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent"
+      output = {
+        properties = {
+          principalId = "10000000-0000-4000-8000-000000000107"
+          clientId    = "10000000-0000-4000-8000-000000000106"
+          tenantId    = "10000000-0000-4000-8000-000000000001"
+        }
+      }
+    }
+  }
+
+  override_resource {
+    target = azapi_resource.identity_federated_credentials["pr-check"]
+    values = {
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-pr-check"
+    }
+  }
+  override_resource {
+    target = azapi_resource.identity_federated_credentials["integration-test"]
+    values = {
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-integration-test"
+    }
+  }
+  override_resource {
+    target = azapi_resource.identity_federated_credentials["examples-test"]
+    values = {
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-examples-test"
+    }
+  }
+  override_resource {
+    target = azapi_resource.validation_federated_credential
+    values = {
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-avm-validation"
+    }
+  }
+}
+
+run "rename_legacy_terraform_identity" {
+  command   = plan
+  state_key = "terraform-name-migration"
+
+  variables {
+    github_repository_name = "terraform-azurerm-avm-ptn-azuremonitorwindowsagent"
+  }
+
+  override_resource {
+    target          = azapi_resource.identity
+    override_during = plan
+    values = {
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent"
+      output = {
+        properties = {
+          principalId = "10000000-0000-4000-8000-000000000007"
+          clientId    = "10000000-0000-4000-8000-000000000006"
+          tenantId    = "10000000-0000-4000-8000-000000000001"
+        }
+      }
+    }
+  }
+
+  # Mock providers do not execute AzAPI's replacement planning.
+  plan_options {
+    replace = [
+      azapi_resource.identity,
+      azapi_resource.identity_federated_credentials["pr-check"],
+      azapi_resource.identity_federated_credentials["integration-test"],
+      azapi_resource.identity_federated_credentials["examples-test"],
+      azapi_resource.validation_federated_credential,
+      azuread_group_member.test_permissions["repository-readers"],
+      azuread_group_member.test_permissions["repository-owners"]
+    ]
+  }
+
+  assert {
+    condition = (
+      azapi_resource.identity.name == "id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent" &&
+      output.client_id == "10000000-0000-4000-8000-000000000006" &&
+      alltrue([for edge in azuread_group_member.test_permissions :
+        edge.member_object_id == "10000000-0000-4000-8000-000000000007"
+      ])
+    )
+    error_message = "The legacy identity and its individual memberships must change together to the new dedicated principal."
+  }
+}
+
+run "recreate_windows_identity_after_its_legacy_resources_were_deleted" {
+  command   = plan
+  state_key = "windows-identity-absent"
+
+  variables {
+    github_repository_name = "terraform-azurerm-avm-ptn-azuremonitorwindowsagent"
+  }
+
+  override_resource {
+    target          = azapi_resource.identity
+    override_during = plan
+    values = {
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent"
+      output = {
+        properties = {
+          principalId = "10000000-0000-4000-8000-000000000007"
+          clientId    = "10000000-0000-4000-8000-000000000006"
+          tenantId    = "10000000-0000-4000-8000-000000000001"
+        }
+      }
+    }
+  }
+
+  assert {
+    condition = (
+      azapi_resource.identity.name == "id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent" &&
+      alltrue([for environment, credential in azapi_resource.identity_federated_credentials :
+        credential.name == "id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent-${environment}" &&
+        credential.parent_id == azapi_resource.identity.id
+      ])
+    )
+    error_message = "A fresh plan after legacy deletion must recreate only the corrected identity and its bound credentials."
+  }
+}
+
+run "seed_legacy_bicep_identity" {
+  command   = apply
+  state_key = "bicep-name-migration"
+
+  variables {
+    identity_name                       = "id-avm-bicep-avm-res-fabric-capacity-32f81a9a"
+    github_repository_name              = "bicep-registry-modules"
+    github_repository_id                = "447791597"
+    github_repository_environment_names = ["avm-validation"]
+    github_workflow_ref                 = "Azure/bicep-registry-modules/.github/workflows/avm.res.fabric.capacity.yml@refs/heads/main"
+    github_job_workflow_ref             = "Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml@refs/heads/main"
+  }
+
+  override_resource {
+    target          = azapi_resource.identity
+    override_during = plan
+    values = {
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-bicep-avm-res-fabric-capacity-32f81a9a"
+      output = {
+        properties = {
+          principalId = "10000000-0000-4000-8000-000000000107"
+          clientId    = "10000000-0000-4000-8000-000000000106"
+          tenantId    = "10000000-0000-4000-8000-000000000001"
+        }
+      }
+    }
+  }
+  override_resource {
+    target = azapi_resource.identity_federated_credentials["avm-validation"]
+    values = {
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-bicep-avm-res-fabric-capacity-32f81a9a/federatedIdentityCredentials/id-avm-bicep-avm-res-fabric-capacity-32f81a9a-module-avm-validation"
+    }
+  }
+  override_resource {
+    target = azapi_resource.validation_federated_credential
+    values = {
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-bicep-avm-res-fabric-capacity-32f81a9a/federatedIdentityCredentials/id-avm-bicep-avm-res-fabric-capacity-32f81a9a-avm-validation"
+    }
+  }
+}
+
+run "rename_legacy_bicep_identity" {
+  command   = plan
+  state_key = "bicep-name-migration"
+
+  variables {
+    identity_name                       = "id-test-bicep-avm-res-fabric-capacity"
+    github_repository_name              = "bicep-registry-modules"
+    github_repository_id                = "447791597"
+    github_repository_environment_names = ["avm-validation"]
+    github_workflow_ref                 = "Azure/bicep-registry-modules/.github/workflows/avm.res.fabric.capacity.yml@refs/heads/main"
+    github_job_workflow_ref             = "Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml@refs/heads/main"
+  }
+
+  plan_options {
+    replace = [
+      azapi_resource.identity,
+      azapi_resource.identity_federated_credentials["avm-validation"],
+      azapi_resource.validation_federated_credential,
+      azuread_group_member.test_permissions["repository-readers"],
+      azuread_group_member.test_permissions["repository-owners"]
+    ]
+  }
+
+  override_resource {
+    target          = azapi_resource.identity
+    override_during = plan
+    values = {
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-fabric-capacity"
+      output = {
+        properties = {
+          principalId = "10000000-0000-4000-8000-000000000007"
+          clientId    = "10000000-0000-4000-8000-000000000006"
+          tenantId    = "10000000-0000-4000-8000-000000000001"
+        }
+      }
+    }
+  }
+
+  assert {
+    condition = (
+      azapi_resource.identity.name == "id-test-bicep-avm-res-fabric-capacity" &&
+      output.client_id == "10000000-0000-4000-8000-000000000006" &&
+      azapi_resource.identity_federated_credentials["avm-validation"].name ==
+      "id-test-bicep-avm-res-fabric-capacity-module-avm-validation"
+    )
+    error_message = "The old hashed Bicep identity must transition to its full hash-free name while preserving separate caller-bound federation."
+  }
 }

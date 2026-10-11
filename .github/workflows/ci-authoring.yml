@@ -1,36 +1,60 @@
 name: 'Authoring: CI'
 
-# Avm.Authoring CI runs on changes to main, pull requests, and manual dispatch.
-# Lint runs once; the three test tiers retain their platform coverage:
-#
-#   * lint        -- PSScriptAnalyzer once on Ubuntu.
-#   * unit        -- layout, generated-doc, and unit-test validation across
-#                    three OSes; the Ubuntu leg also collects coverage.
-#   * component   -- filesystem and subprocess component tests across three
-#                    OSes, in parallel with the unit matrix.
-#   * workflows   -- workflow-definition unit tests (`./build.ps1
-#                    test-workflows`) on Ubuntu, matching the workflow runner
-#                    OS they validate.
-#   * integration -- real-binary Terraform integration tests (`./build.ps1
-#                    integration`) that run the wired `avm pre-commit` and
-#                    `avm pr-check` chains end to end against the on-disk fixture
-#                    modules using the actual pinned tools (terraform,
-#                    terraform-docs, tflint, conftest, mapotf) downloaded into an
-#                    isolated AVM_HOME -- not the stub launchers the Component
-#                    tier uses. It needs real network (tool + provider downloads)
-#                    and Azure OIDC, so it is slower than the build gate and runs
-#                    as its own 3 OS x 2 fixture job matrix here.
-#   * bicep-integration -- compiler/native-policy cases once per OS, independent
-#                    of Terraform fixtures and without Azure authentication.
-#
-# A single `report` job aggregates every test tier into one test-results
-# report. Lint is a separate check and has no test artifact.
-
 on:
   push:
     branches: [main]
+    paths:
+      - 'src/Avm.Authoring/**'
+      - 'build/**'
+      - 'build.ps1'
+      - 'scripts/**'
+      - 'tests/**'
+      - '!tests/Pester/Unit/RepositoryManagement/**'
+      - '!tests/Pester/Unit/Workflows/**'
+      - '!tests/Pester/Component/BicepModuleIdentities*.Tests.ps1'
+      - '!tests/Pester/Component/BicepTestTenantSync*.Tests.ps1'
+      - '!tests/Pester/Component/ModuleCatalog*.Tests.ps1'
+      - '!tests/Pester/Component/Repository*.Tests.ps1'
+      - '!tests/Pester/Component/TerraformCodeowners*.Tests.ps1'
+      - '!tests/Pester/Helpers/ModuleCatalogFixture.ps1'
+      - '!tests/fixtures/TestTenant.ps1'
+      - '!tests/fixtures/BicepIdentities.ps1'
+      - 'docs/reference/**'
+      - '.github/workflows/ci-authoring.yml'
+      - '.github/workflows/terraform-module.yml'
+      - '.github/workflows/release.yml'
+      - '.github/actions/**'
+      - '.gitattributes'
+      - '.gitignore'
+      - 'CHANGELOG.md'
+      - 'LICENSE'
   pull_request:
     branches: [main]
+    paths:
+      - 'src/Avm.Authoring/**'
+      - 'build/**'
+      - 'build.ps1'
+      - 'scripts/**'
+      - 'tests/**'
+      - '!tests/Pester/Unit/RepositoryManagement/**'
+      - '!tests/Pester/Unit/Workflows/**'
+      - '!tests/Pester/Component/BicepModuleIdentities*.Tests.ps1'
+      - '!tests/Pester/Component/BicepTestTenantSync*.Tests.ps1'
+      - '!tests/Pester/Component/ModuleCatalog*.Tests.ps1'
+      - '!tests/Pester/Component/Repository*.Tests.ps1'
+      - '!tests/Pester/Component/TerraformCodeowners*.Tests.ps1'
+      - '!tests/Pester/Helpers/ModuleCatalogFixture.ps1'
+      - '!tests/fixtures/TestTenant.ps1'
+      - '!tests/fixtures/BicepIdentities.ps1'
+      - 'docs/reference/**'
+      - '.github/workflows/ci-authoring.yml'
+      - '.github/workflows/terraform-module.yml'
+      - '.github/workflows/release.yml'
+      - '.github/actions/**'
+      - '.gitattributes'
+      - '.gitignore'
+      - 'CHANGELOG.md'
+      - 'LICENSE'
   workflow_dispatch:
 
 permissions:
@@ -102,12 +126,9 @@ jobs:
 
       - name: Run unit tests
         shell: pwsh
-        run: ./build.ps1 ${{ matrix.task }}
+        run: ./build.ps1 ${{ matrix.task }} -TestGroup Authoring
 
       - name: Upload test results
-        # Upload the NUnit result XML even when the test task fails, so the results
-        # are downloadable per leg and consumed by the `report` job below, which
-        # aggregates every leg of both tiers into a single pull-request report.
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -145,41 +166,13 @@ jobs:
 
       - name: Run component tests
         shell: pwsh
-        run: ./build.ps1 ci-component
+        run: ./build.ps1 ci-component -TestGroup Authoring
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-results-component-${{ matrix.os }}
-          path: out/test-results/*.xml
-          if-no-files-found: warn
-          retention-days: 7
-
-  workflows:
-    name: Workflow tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install build prerequisites
-        shell: pwsh
-        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -Confirm:$false
-
-      - name: Run workflow tests
-        shell: pwsh
-        run: ./build.ps1 test-workflows
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-results-workflows-ubuntu-latest
           path: out/test-results/*.xml
           if-no-files-found: warn
           retention-days: 7
@@ -278,9 +271,6 @@ jobs:
         run: ./build.ps1 integration -IntegrationGroup Terraform
 
       - name: Upload test results
-        # Upload the NUnit result XML even when the integration task fails, so
-        # the results are downloadable per matrix leg and consumed by the
-        # `report` job below, which aggregates every leg into one report.
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -324,18 +314,14 @@ jobs:
           retention-days: 7
 
   report:
-    name: Publish test results
-    needs: [unit, component, workflows, integration, bicep-integration]
-    # Run even when a build, workflow, or integration leg fails (so red tests
-    # still get reported), but not when the run was cancelled. Aggregates every
-    # leg into one report. Runs outside the `avm` environment with no id-token --
-    # it only reads the result artifacts, never Azure.
+    name: Report authoring tests
+    needs: [unit, component, integration, bicep-integration]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      checks: write          # create the Checks-tab test report
-      pull-requests: write   # post / update the results comment
+      checks: write         # publish this workflow's test report
+      pull-requests: write  # publish this workflow's results comment
       contents: read
     steps:
       - name: Download test results
@@ -345,16 +331,9 @@ jobs:
           path: artifacts
 
       - name: Publish test results
-        # Renders a job summary on this run, plus a Checks-tab entry and a
-        # pull-request comment when the token has write access (same-repo PRs).
-        # On fork PRs the token is read-only, so it degrades to the job summary
-        # only; action_fail defaults to false, so reporting never reds the build.
-        # report_individual_runs keeps each matrix leg distinct, so a test that
-        # fails on one OS / fixture is reported as a real failure on that leg
-        # instead of being de-duplicated and mislabelled flaky.
         uses: EnricoMi/publish-unit-test-result-action@d0a4676d0e0b938bc201470d88276b7c74c712b3 # v2.24.0
-        if: ${{ !cancelled() }}
         with:
-          check_name: Test results
+          check_name: Authoring test results
+          comment_title: Authoring test results
           files: artifacts/**/*.xml
           report_individual_runs: "true"
