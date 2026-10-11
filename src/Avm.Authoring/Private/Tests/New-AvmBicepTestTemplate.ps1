@@ -22,7 +22,9 @@ function New-AvmBicepTestTemplate {
 
         [string] $SourceRoot,
 
-        [switch] $DeferResourceLocation
+        [switch] $DeferResourceLocation,
+
+        [switch] $DeferTokens
     )
 
     Set-StrictMode -Version 3.0
@@ -65,8 +67,11 @@ function New-AvmBicepTestTemplate {
     else {
         $Tokens
     }
-    $content = Resolve-AvmBicepTestToken -Content ([string]$build.StdOut) `
-        -SourcePath $SourcePath -Tokens $effectiveTokens -DeferResourceLocation:$DeferResourceLocation
+    $content = [string]$build.StdOut
+    if (-not $DeferTokens) {
+        $content = Resolve-AvmBicepTestToken -Content $content `
+            -SourcePath $SourcePath -Tokens $effectiveTokens -DeferResourceLocation:$DeferResourceLocation
+    }
     $template = $content | ConvertFrom-Json -AsHashtable -ErrorAction Stop
     $hasGroupDeployment = $false
     if ($scope -eq 'sub' -and -not [string]::IsNullOrWhiteSpace($OwnedGroupRunId)) {

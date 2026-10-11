@@ -9,7 +9,9 @@ function New-AvmBicepNativeDeployment {
         [ValidateSet('Initial', 'InPlace', 'Fresh')] [string] $Mode = 'Initial',
         [string] $NamingId,
         [string] $ResourceLocation,
-        [switch] $ClassifyRetry
+        [switch] $ClassifyRetry,
+        [ValidateScript({ $_.Kind -eq [System.DateTimeKind]::Utc })]
+        [datetime] $RecoveryDeadlineUtc
     )
 
     Set-StrictMode -Version 3.0
@@ -26,6 +28,7 @@ function New-AvmBicepNativeDeployment {
     $inputOptions = $DeploymentInput.Clone()
     $inputOptions.DeploymentName = $name
     $observationOptions = @{}
+    if ($PSBoundParameters.ContainsKey('RecoveryDeadlineUtc')) { $observationOptions.RecoveryDeadlineUtc = $RecoveryDeadlineUtc }
     if ($DeploymentInput.Scope -in @('mg', 'sub')) {
         $submissionProfile = Get-AzContext -ErrorAction Stop
         $tenant = Get-AvmPropertyValue -InputObject $submissionProfile -Name 'Tenant'

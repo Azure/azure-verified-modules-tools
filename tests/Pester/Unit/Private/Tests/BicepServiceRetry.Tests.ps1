@@ -11,7 +11,7 @@ BeforeAll {
 AfterAll { Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue }
 
 Describe 'Bicep service regional retry: <Kind>' -ForEach @(
-    @{ Kind = 'SearchSku' }, @{ Kind = 'SearchSemantic' }
+    @{ Kind = 'SearchSku' }, @{ Kind = 'SearchService' }, @{ Kind = 'SearchSemantic' }
     @{ Kind = 'ContainerApps' }, @{ Kind = 'ContainerAppsNewCluster' }
 ) {
     BeforeEach {
@@ -253,7 +253,7 @@ Describe 'Bicep service provider boundaries' {
     }
 
     It 'keeps untargeted Search evidence independent of subscription metadata: <Kind>' -ForEach @(
-        @{ Kind = 'SearchSku' }, @{ Kind = 'SearchSemantic' }
+        @{ Kind = 'SearchSku' }, @{ Kind = 'SearchService' }, @{ Kind = 'SearchSemantic' }
     ) {
         $fixture = New-BicepServiceRetryFixture -Kind $Kind
         InModuleScope Avm.Authoring -Parameters @{ Node = $fixture.Response } {
@@ -300,6 +300,40 @@ Describe 'Bicep service provider boundaries' {
                 Test-AvmBicepRetryErrorNode -Node $Node -ResourceLocation eastus `
                     -SubscriptionId '11111111-1111-1111-1111-111111111111' | Should -BeTrue
             }
+        }
+    }
+
+    It 'requires the exact Search service-capacity code and message: <Change>' -ForEach @(
+        @{ Change = 'missing code' }, @{ Change = 'numeric code' }, @{ Change = 'empty code' }
+        @{ Change = 'lowercase code' }, @{ Change = 'leading text' }, @{ Change = 'trailing text' }
+        @{ Change = 'trailing newline' }, @{ Change = 'message casing' }, @{ Change = 'missing request ID' }
+        @{ Change = 'invalid GUID' }, @{ Change = 'short GUID' }, @{ Change = 'braced GUID' }
+        @{ Change = 'request label casing' }, @{ Change = 'missing punctuation' }, @{ Change = 'different advice' }
+        @{ Change = 'SKU message' }
+    ) {
+        $fixture = New-BicepServiceRetryFixture -Kind SearchService
+        $leaf = $fixture.Leaf
+        switch ($Change) {
+            'missing code' { $leaf.Remove('code') }
+            'numeric code' { $leaf.code = 1 }
+            'empty code' { $leaf.code = '' }
+            'lowercase code' { $leaf.code = 'insufficientresourcesavailable' }
+            'leading text' { $leaf.message = 'Other failure. ' + $leaf.message }
+            'trailing text' { $leaf.message += ' Other failure.' }
+            'trailing newline' { $leaf.message += "`n" }
+            'message casing' { $leaf.message = $leaf.message.Replace('The region', 'the region') }
+            'missing request ID' { $leaf.message = $leaf.message -replace ' RequestId: .+$', '' }
+            'invalid GUID' { $leaf.message = $leaf.message.Replace('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'unavailable') }
+            'short GUID' { $leaf.message = $leaf.message.Substring(0, $leaf.message.Length - 1) }
+            'braced GUID' { $leaf.message = $leaf.message.Replace('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa}') }
+            'request label casing' { $leaf.message = $leaf.message.Replace('RequestId:', 'RequestID:') }
+            'missing punctuation' { $leaf.message = $leaf.message.Replace('region. RequestId', 'region RequestId') }
+            'different advice' { $leaf.message = $leaf.message.Replace('another region', 'another subscription') }
+            'SKU message' { $leaf.message = (New-BicepServiceRetryFixture -Kind SearchSku).Leaf.message }
+        }
+        InModuleScope Avm.Authoring -Parameters @{ Node = $fixture.Response } {
+            param($Node)
+            Test-AvmBicepRetryErrorNode -Node $Node -ResourceLocation eastus | Should -BeFalse
         }
     }
 

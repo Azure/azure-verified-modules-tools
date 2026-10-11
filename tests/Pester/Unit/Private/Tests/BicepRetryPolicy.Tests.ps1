@@ -16,6 +16,7 @@ Describe 'Bicep retry policy validation and generic matching' {
             $policy['limits']['regionAttempts'] | Should -Be 3
             $policy['reads']['attempts'] | Should -Be 3
             $policy['observation']['timeoutSeconds'] | Should -Be 3600
+            $policy['observation']['coordinatorTimeoutSeconds'] | Should -Be 14400
             $policy['modes']['InPlace']['location'] | Should -BeExactly 'Preserve'
             $policy['modes']['Fresh']['location'] | Should -BeExactly 'NextEligible'
             @($policy['rules'] | ForEach-Object { $_['mode'] } | Sort-Object -Unique) | Should -Be @('Fresh', 'InPlace')
@@ -29,6 +30,7 @@ Describe 'Bicep retry policy validation and generic matching' {
         @{ Invalid = 'missing mode' }, @{ Invalid = 'zero attempts' }, @{ Invalid = 'too many attempts' }
         @{ Invalid = 'too many regions' }, @{ Invalid = 'negative delay' }, @{ Invalid = 'too many reads' }
         @{ Invalid = 'unbounded observation' }, @{ Invalid = 'duplicate rule' }, @{ Invalid = 'invalid regex' }
+        @{ Invalid = 'unbounded coordinator' }, @{ Invalid = 'missing coordinator' }, @{ Invalid = 'zero coordinator' }
         @{ Invalid = 'absent capture' }, @{ Invalid = 'missing target types' }, @{ Invalid = 'ambiguous empty code' }
         @{ Invalid = 'contradictory targets' }, @{ Invalid = 'contradictory parent' }
         @{ Invalid = 'missing JSON evidence' }, @{ Invalid = 'invalid numeric bounds' }, @{ Invalid = 'case-duplicate field' }
@@ -47,6 +49,9 @@ Describe 'Bicep retry policy validation and generic matching' {
                 'negative delay' { $policy['limits']['delaySeconds'] = -1 }
                 'too many reads' { $policy['reads']['attempts'] = 4 }
                 'unbounded observation' { $policy['observation']['timeoutSeconds'] = 3601 }
+                'unbounded coordinator' { $policy['observation']['coordinatorTimeoutSeconds'] = 14401 }
+                'missing coordinator' { $policy['observation'].Remove('coordinatorTimeoutSeconds') }
+                'zero coordinator' { $policy['observation']['coordinatorTimeoutSeconds'] = 0 }
                 'duplicate rule' { $policy['rules'] += $policy['rules'][0] }
                 'invalid regex' { $policy['rules'][0]['messagePatterns'] = @('[') }
                 'absent capture' { $policy['rules'][0]['regionCapture'] = 'absent' }

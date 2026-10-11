@@ -365,9 +365,33 @@ requires an explicit subscription GUID, validates every entry before calling
 Azure CLI, verifies that the CLI is selected to that subscription, and never
 unregisters a feature. The protected Terraform integration and e2e jobs run it
 only when the manifest is nonempty. Bicep `avm test e2e` reads the manifest
-before confirmation and registers the features once per selected subscription
-after the identity check and before validation; a registration failure fails
-the case without deploying.
+before confirmation and registers the features once per selected subscription.
+
+Bicep registry modules may also declare `.required-resource-providers.json`
+at the repository root. It maps exact lowercase `avm/res|ptn|utl/...` module
+paths to arrays of provider namespaces. This selection is independent of
+identity-root selection: never inherit a parent's requirements for a child,
+read a nested provider manifest, or accept an underscore filename alternative.
+Validate the whole map, including unselected entries, before dependencies or
+Azure calls. Reject duplicate keys/namespaces, malformed JSON, non-string
+entries, unsafe namespace syntax, files over 64 KiB, more than 32 requirements
+per module and namespace parts over 128 characters. Missing, empty and unrelated
+maps are logged registration no-ops; WhatIf validates without Azure calls.
+
+One private parser and registration implementation serves features and providers.
+After compilation and identity verification, Bicep All/Deploy completes feature
+registration and its provider refresh, then required provider registration,
+before template/parameter token replacement, validation or deployment.
+Registered providers are left alone; Registering providers are polled without
+resubmission; NotRegistered/Unregistered providers register once and are polled.
+Recheck the selected subscription, tenant, cloud and principal before each
+registration command/read, and bind every response to the requested identity.
+Approval, unknown states, native errors, timeouts and cancellation fail explicitly;
+registration failure cannot continue to tokens or deployment. Complete and
+cleanup do not read these manifests or register prerequisites. Registrations
+persist; never unregister, grant roles, accept service terms or switch the
+authenticated account. Terraform's feature-only API and automatic-provider-
+registration safeguards are unchanged.
 
 Rules:
 
@@ -867,7 +891,8 @@ response with an explicitly empty supported-zone list, and exact
 `LocationNotAvailableForResourceType` provider-availability response. The latter
 must name the selected region and a valid provider-qualified resource type,
 with a distinct non-global available-region list that excludes the rejected
-region. Exact Search SKU-capacity and semantic-availability responses also
+region. Exact Search SKU-capacity, semantic-availability and
+service-capacity `InsufficientResourcesAvailable` responses
 qualify only for the selected non-global region. Container Apps managed
 environment capacity requires its complete AKS diagnostic envelope, matching
 strict JSON body and recognized, unique diagnostic headers. For these service
@@ -885,7 +910,13 @@ Record every attempt before submission and verify the native response's exact
 deployment ID. Deployment retries require an exact Failed root and complete
 eligible operation evidence, not preflight rejection alone. A submission
 timeout watches the same deployment
-for up to an hour (stopping after three consecutive read timeouts); a
+under one absolute UTC deadline shared by every attempt and recovery route
+in the case. `observation.coordinatorTimeoutSeconds` defaults to four hours
+and can only be lowered. Do not reset the deadline on a fresh/in-place attempt,
+start another status read at/after it, or accept a terminal result returned
+at/after it. Clamp the final sleep to the fractional time remaining.
+Direct private observation without a coordinator retains its one-hour default.
+Three consecutive read timeouts still stop observation; a
 recovered `Failed` state counts as confirmed. Unknown or cancelled outcomes
 never resubmit. Before either retry mode, strictly discover the failed attempt's
 terminal root and nested Create operations and atomically save the union of
@@ -983,6 +1014,11 @@ roots. Pending history deletion prevents a Complete outcome. These fields
 do not permit nested root entries or authorize another deployment retry.
 
 Capture post-removal metadata before deleting resources or their parents.
+Ordinary role assignments are removed by exact validated ARM ID with
+`DELETE ?api-version=2022-04-01`, without Graph principal resolution or broad
+role enumeration. Only typed HTTP 200, 204 or 404 confirms removal/absence;
+202 and malformed/error responses remain failures. Scheduled/PIM role cleanup
+retains its separate APIs.
 If the native SDK reports a plain, unclassified named-group failure without
 HTTP metadata, verify only that group with an exact ARM GET in the selected
 subscription. Treat it as absent only for HTTP 404 with the structured
@@ -1099,6 +1135,15 @@ Schema enforced by `Test-AvmPins`:
   `ScriptsToProcess` initializer metadata is not the requested module.
   Initializer failures still fail the import, and selected version, path and
   dependency checks remain mandatory.
+- PowerShell module ZIP validation reads every entry and requires one root
+  manifest plus NuGet metadata identifying the exact pinned package/version.
+  A locally detected `InvalidDataException` while reading/extracting the ZIP
+  permits exactly one retry in a new staging directory. Apply this to each
+  pinned dependency as well as the requested module. Never retry checksum,
+  transport, permission, metadata or import failures as archive corruption.
+  A failed replacement must not remove the existing verified package before
+  validation; keep the lock, checksum/host/offline controls and atomic per-package
+  publication. Do not replace stable pins with dynamic prerelease resolution.
 - Both composite commands resolve and import-check all applicable prerequisites
   before metadata/step 1, after the module-upgrade and context/clean-tree guards.
   `pr-check -ExcludeSteps` removes prerequisites used only by excluded steps,
@@ -1111,6 +1156,17 @@ Schema enforced by `Test-AvmPins`:
   before composite step 1. Pester must also have the configured module path:
   reject even the same version from another path before importing a second
   engine, and require a fresh PowerShell session.
+
+`PrivateData.AvmCapabilities.BicepRequiredResourceProviders = 1` identifies the
+native prerequisite contract above.
+`PrivateData.AvmCapabilities.PowerShellModuleArchiveRecovery = 1` identifies
+the managed module archive-recovery contract. Consumers require exact integer
+markers on the selected installed Avm.Authoring package, not on a separately
+checked-out workflow source tree. Existing `Get-AvmTool -Path` inspection and
+`Install-AvmTool -Path` installation are the dependency adapter boundary; no
+second provider parser, ZIP recovery implementation or wrapper-only public API
+is permitted. Capabilities are not evidence that a combined runtime/workflow
+package has been released or qualified.
 
 ### Repository tool versions
 

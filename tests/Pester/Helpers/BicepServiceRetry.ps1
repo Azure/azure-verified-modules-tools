@@ -1,6 +1,6 @@
 function New-BicepServiceRetryFixture {
     param(
-        [ValidateSet('SearchSku', 'SearchSemantic', 'ContainerApps', 'ContainerAppsNewCluster')]
+        [ValidateSet('SearchSku', 'SearchService', 'SearchSemantic', 'ContainerApps', 'ContainerAppsNewCluster')]
         [string] $Kind,
         [string] $Region = 'eastus',
         [string] $SubscriptionId = '11111111-1111-1111-1111-111111111111'
@@ -28,6 +28,13 @@ function New-BicepServiceRetryFixture {
         $leaf = @{
             code = 'ResourcesForSkuUnavailable'
             message = "The region '$Region' currently does not have enough resources available to provision services with the SKU 'standard'. Try creating the service in another region or selecting a different SKU. RequestId: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        }
+        $node = $leaf
+    }
+    elseif ($Kind -eq 'SearchService') {
+        $leaf = @{
+            code = 'InsufficientResourcesAvailable'
+            message = "The region '$Region' is currently out of the resources required to provision new services. Try creating the service in another region. RequestId: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
         }
         $node = $leaf
     }

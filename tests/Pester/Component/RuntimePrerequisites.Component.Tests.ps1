@@ -23,6 +23,8 @@ BeforeAll {
 }
 "@)
         [System.IO.File]::WriteAllText((Join-Path $directory "$Name.psm1"), "function Get-AvmFixtureValue { '$Version' }")
+        [System.IO.File]::WriteAllText((Join-Path $directory "$Name.nuspec"),
+            "<package><metadata><id>$Name</id><version>$Version</version></metadata></package>")
         if ($Initializer) {
             [System.IO.File]::WriteAllText((Join-Path $directory 'AvmFixtureInitializer.ps1'), $Initializer)
         }
@@ -141,6 +143,115 @@ Describe 'Component: runtime prerequisites' -Tag Component {
             Should -Invoke Invoke-WebRequest -Exactly 2
         }
         $env:PSModulePath | Should -BeExactly $before
+    }
+
+    It 'retries a locally detected corrupt module archive once in a clean staging directory' {
+        InModuleScope Avm.Authoring -Parameters @{ F = $script:fixture } {
+            param($F)
+            $script:expandModuleArchive = (Get-Command Expand-AvmToolArchive).ScriptBlock
+            $script:archiveStages = [Collections.Generic.List[string]]::new()
+            Mock Expand-AvmToolArchive {
+                $script:archiveStages.Add($TargetDir)
+                if ($script:archiveStages.Count -eq 1) {
+                    [IO.File]::WriteAllText((Join-Path $TargetDir 'partial.txt'), 'partial extraction')
+                    throw [IO.InvalidDataException]::new('Local ZIP read failed.')
+                }
+                & $script:expandModuleArchive @PesterBoundParameters
+            }
+            $result = Install-AvmTool -Name AvmFixtureDependency -PinsPath $F.PinsPath -Path $F.Root
+            $result.Action | Should -BeExactly 'installed'
+            @($script:archiveStages | Select-Object -Unique).Count | Should -Be 2
+            foreach ($stage in $script:archiveStages) { Test-Path -LiteralPath $stage | Should -BeFalse }
+            $directory = Split-Path $result.Path -Parent
+            Test-Path -LiteralPath (Join-Path $directory 'partial.txt') | Should -BeFalse
+            $metadata = Get-Content (Join-Path $directory '.meta.json') -Raw | ConvertFrom-Json
+            $metadata.checksumVerified | Should -BeTrue
+            $metadata.sha256 | Should -BeExactly $F.Dependency.Sha256
+            Should -Invoke Invoke-WebRequest -Exactly 2
+            (Install-AvmTool -Name AvmFixtureDependency -PinsPath $F.PinsPath -Path $F.Root).Action | Should -BeExactly 'cache-hit'
+            Should -Invoke Invoke-WebRequest -Exactly 2
+        }
+    }
+
+    It 'does not publish a genuinely corrupt ZIP after two locally failed reads' {
+        [IO.File]::WriteAllText($script:fixture.Dependency.Archive, 'not a ZIP archive')
+        $script:fixture.Pins.powerShellModules.AvmFixtureDependency.sha256 =
+            (Get-FileHash -LiteralPath $script:fixture.Dependency.Archive).Hash.ToLowerInvariant()
+        Save-RuntimePins -Fixture $script:fixture
+        InModuleScope Avm.Authoring -Parameters @{ F = $script:fixture } {
+            param($F)
+            $failure = { Install-AvmTool -Name AvmFixtureDependency -PinsPath $F.PinsPath -Path $F.Root } |
+                Should -Throw -PassThru
+            $archiveFailure = $failure.Exception
+            while ($null -ne $archiveFailure -and $archiveFailure -isnot [IO.InvalidDataException]) {
+                $archiveFailure = $archiveFailure.InnerException
+            }
+            $archiveFailure | Should -BeOfType ([IO.InvalidDataException])
+            Should -Invoke Invoke-WebRequest -Exactly 2
+            @(Get-ChildItem -LiteralPath $env:AVM_HOME -Filter '.verified' -Recurse -Force).Count | Should -Be 0
+            @(Get-ChildItem -LiteralPath $env:AVM_HOME -Filter 'download.zip' -Recurse -Force).Count | Should -Be 0
+        }
+    }
+
+    It 'does not retry permanent package metadata failures: <Failure>' -ForEach @(
+        @{ Failure = 'wrong package id' }, @{ Failure = 'wrong package version' }, @{ Failure = 'missing metadata' }
+        @{ Failure = 'duplicate metadata' }, @{ Failure = 'invalid XML' }, @{ Failure = 'external XML entity' }
+        @{ Failure = 'wrong module version' }, @{ Failure = 'missing module manifest' }
+    ) {
+        $directory = $script:fixture.Dependency.Directory
+        $metadataPath = Join-Path $directory 'AvmFixtureDependency.nuspec'
+        switch ($Failure) {
+            'wrong package id' { Set-Content $metadataPath '<package><metadata><id>ForeignPackage</id><version>1.0.0</version></metadata></package>' }
+            'wrong package version' { Set-Content $metadataPath '<package><metadata><id>AvmFixtureDependency</id><version>2.0.0</version></metadata></package>' }
+            'missing metadata' { Remove-Item -LiteralPath $metadataPath }
+            'duplicate metadata' { Copy-Item -LiteralPath $metadataPath -Destination (Join-Path $directory 'other.nuspec') }
+            'invalid XML' { Set-Content $metadataPath '<package>' }
+            'external XML entity' { Set-Content $metadataPath '<!DOCTYPE package [<!ENTITY probe SYSTEM "file:///never-read">]><package>&probe;</package>' }
+            'wrong module version' { Set-Content (Join-Path $directory 'AvmFixtureDependency.psd1') "@{ ModuleVersion = '2.0.0' }" }
+            'missing module manifest' { Remove-Item -LiteralPath (Join-Path $directory 'AvmFixtureDependency.psd1') }
+        }
+        Remove-Item -LiteralPath $script:fixture.Dependency.Archive
+        [IO.Compression.ZipFile]::CreateFromDirectory($directory, $script:fixture.Dependency.Archive)
+        $script:fixture.Pins.powerShellModules.AvmFixtureDependency.sha256 =
+            (Get-FileHash -LiteralPath $script:fixture.Dependency.Archive).Hash.ToLowerInvariant()
+        Save-RuntimePins -Fixture $script:fixture
+        InModuleScope Avm.Authoring -Parameters @{ F = $script:fixture } {
+            param($F)
+            { Install-AvmTool -Name AvmFixtureDependency -PinsPath $F.PinsPath -Path $F.Root } | Should -Throw
+            Should -Invoke Invoke-WebRequest -Exactly 1
+            @(Get-ChildItem -LiteralPath $env:AVM_HOME -Filter '.verified' -Recurse -Force).Count | Should -Be 0
+        }
+    }
+
+    It 'does not treat downloader InvalidDataException or extraction permission errors as recoverable ZIP corruption: <Boundary>' -ForEach @(
+        @{ Boundary = 'download' }, @{ Boundary = 'extraction' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ F = $script:fixture; Boundary = $Boundary } {
+            param($F, $Boundary)
+            if ($Boundary -eq 'download') {
+                Mock Invoke-AvmHttp { throw [IO.InvalidDataException]::new('Downloader error, not local ZIP evidence.') }
+                { Install-AvmTool -Name AvmFixtureDependency -PinsPath $F.PinsPath -Path $F.Root } | Should -Throw '*Downloader error*'
+                Should -Invoke Invoke-AvmHttp -Exactly 1
+            }
+            else {
+                Mock Expand-AvmToolArchive { throw [UnauthorizedAccessException]::new('Extraction denied.') }
+                { Install-AvmTool -Name AvmFixtureDependency -PinsPath $F.PinsPath -Path $F.Root } | Should -Throw '*Extraction denied*'
+                Should -Invoke Invoke-WebRequest -Exactly 1
+            }
+        }
+    }
+
+    It 'preserves an existing verified package when a forced replacement fails before publication' {
+        $installed = Install-AvmTool -Name AvmFixtureDependency -PinsPath $script:fixture.PinsPath -Path $script:fixture.Root
+        $content = [IO.File]::ReadAllText($installed.Path)
+        InModuleScope Avm.Authoring -Parameters @{ F = $script:fixture } {
+            param($F)
+            Mock Expand-AvmToolArchive { throw [IO.InvalidDataException]::new('Failed replacement archive.') }
+            { Install-AvmTool -Name AvmFixtureDependency -PinsPath $F.PinsPath -Path $F.Root -Force } | Should -Throw
+            Should -Invoke Expand-AvmToolArchive -Exactly 2
+        }
+        [IO.File]::ReadAllText($installed.Path) | Should -BeExactly $content
+        Test-Path -LiteralPath (Join-Path (Split-Path $installed.Path) '.verified') | Should -BeTrue
     }
 
     It 'reuses an installed exact module version without a download' {

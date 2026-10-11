@@ -33,8 +33,6 @@ function Get-AvmBicepAzureRequirement {
                 'Remove-AzResourceGroup'               = @('Name', 'Force')
                 'Get-AzResourceLock'                   = @('Scope', 'LockName')
                 'Remove-AzResourceLock'                = @('LockId', 'Force')
-                'Get-AzRoleAssignment'                 = @('Scope')
-                'Remove-AzRoleAssignment'              = @('InputObject')
                 'Get-AzRoleEligibilityScheduleRequest' = @('Scope', 'Name')
                 'New-AzRoleEligibilityScheduleRequest' = @('Name', 'Scope', 'PrincipalId', 'RequestType', 'RoleDefinitionId')
                 'Get-AzRoleAssignmentScheduleRequest'  = @('Scope', 'Name')

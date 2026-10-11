@@ -16,6 +16,9 @@ Describe 'Integration: isolated runtime prerequisites' -Tag Integration {
     AfterAll { Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue }
 
     It 'runs packaged metadata, Bicep Pester, YAML and PSRule with no installed modules, then reuses the cache offline' -Skip:($env:AVM_OFFLINE -eq '1') {
+        $capability = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities.PowerShellModuleArchiveRecovery
+        $capability | Should -BeOfType ([int])
+        $capability | Should -Be 1
         $root = Join-Path $TestDrive 'consumer'
         $cache = Join-Path $TestDrive 'avm-home'
         $null = New-Item -ItemType Directory -Path $root

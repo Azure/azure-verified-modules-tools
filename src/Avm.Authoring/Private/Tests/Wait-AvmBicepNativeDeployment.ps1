@@ -20,7 +20,10 @@ function Wait-AvmBicepNativeDeployment {
         [int] $TimeoutSeconds,
 
         [ValidateRange(0, 60)]
-        [int] $PollIntervalSeconds
+        [int] $PollIntervalSeconds,
+
+        [ValidateScript({ $_.Kind -eq [System.DateTimeKind]::Utc })]
+        [datetime] $RecoveryDeadlineUtc
     )
 
     Set-StrictMode -Version 3.0
@@ -35,11 +38,14 @@ function Wait-AvmBicepNativeDeployment {
     if ($PSBoundParameters.ContainsKey('DefaultProfile')) {
         $request.DefaultProfile = $DefaultProfile
     }
-    $deadline = [datetime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $now = Get-Date -AsUTC
+    $deadline = if ($PSBoundParameters.ContainsKey('RecoveryDeadlineUtc')) { $RecoveryDeadlineUtc }
+    else { $now.AddSeconds($TimeoutSeconds) }
     # The poll cap bounds the watch even when the clock barely moves between reads.
-    $maximumPolls = [Math]::Ceiling($TimeoutSeconds / [Math]::Max($PollIntervalSeconds, 1)) + 1
+    $maximumPolls = [Math]::Ceiling(($deadline - $now).TotalSeconds / [Math]::Max($PollIntervalSeconds, 1)) + 1
     $consecutiveTimeouts = 0
-    for ($poll = 0; $poll -lt $maximumPolls -and [datetime]::UtcNow -lt $deadline; $poll++) {
+    $lastReadFailure = $null
+    for ($poll = 0; $poll -lt $maximumPolls -and (Get-Date -AsUTC) -lt $deadline; $poll++) {
         $response = $null
         try {
             $response = Invoke-AzRestMethod @request
@@ -47,6 +53,7 @@ function Wait-AvmBicepNativeDeployment {
         }
         catch {
             if (-not (Test-AvmBicepRetryErrorRecord -ErrorRecord $_ -Kind MetadataTimeout)) { throw }
+            $lastReadFailure = $_
             $consecutiveTimeouts++
             if ($consecutiveTimeouts -ge $policy['consecutiveTimeouts']) {
                 $exception = [System.TimeoutException]::new(
@@ -57,6 +64,7 @@ function Wait-AvmBicepNativeDeployment {
             Write-AvmLog -Level Warning -Message (
                 "Status read for '$DeploymentId' timed out ($consecutiveTimeouts/$($policy['consecutiveTimeouts'])); the deployment is not resubmitted.")
         }
+        if ((Get-Date -AsUTC) -ge $deadline) { break }
         if ($null -ne $response) {
             $statusCode = $null
             if ($response -is [System.Collections.IDictionary]) { $statusCode = $response['StatusCode'] }
@@ -95,9 +103,11 @@ function Wait-AvmBicepNativeDeployment {
             }
             Write-AvmLog -Level Info -Message "Deployment '$DeploymentId' remains '$state'; watching the same deployment."
         }
-        $remaining = ($deadline - [datetime]::UtcNow).TotalSeconds
-        if ($remaining -gt 0) { Start-Sleep -Seconds ([Math]::Min($PollIntervalSeconds, [Math]::Ceiling($remaining))) }
+        $remaining = ($deadline - (Get-Date -AsUTC)).TotalSeconds
+        if ($remaining -gt 0) { Start-Sleep -Seconds ([Math]::Min([double]$PollIntervalSeconds, $remaining)) }
     }
-    throw [System.TimeoutException]::new(
-        "Status recovery for '$DeploymentId' exceeded the $TimeoutSeconds-second recovery window.")
+    $exception = [System.TimeoutException]::new(
+        "Status recovery for '$DeploymentId' exceeded its recovery window ending at $($deadline.ToString('o')).")
+    if ($null -ne $lastReadFailure) { $exception.Data['ReadErrorRecord'] = $lastReadFailure }
+    throw $exception
 }

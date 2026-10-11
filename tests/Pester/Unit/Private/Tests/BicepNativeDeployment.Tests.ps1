@@ -198,6 +198,35 @@ Describe 'Bicep native deployment retries' {
         }
     }
 
+    It 'forwards one absolute deadline through <Route> recovery' -ForEach @(
+        @{ Route = 'timeout'; Scope = 'sub' }
+        @{ Route = 'nested read'; Scope = 'sub' }
+        @{ Route = 'management-group 403'; Scope = 'mg' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Route = $Route; Scope = $Scope } {
+            param($Route, $Scope)
+            $script:inputOptions.Scope = $Scope
+            if ($Scope -eq 'mg') { $script:inputOptions.ManagementGroupId = 'test' }
+            $script:deadline = [datetime]::new(2026, 10, 11, 4, 0, 0, [DateTimeKind]::Utc)
+            Mock Invoke-AvmBicepNativeArmOperation {
+                switch ($Route) {
+                    'timeout' { throw [TimeoutException]::new('Original timeout.') }
+                    'nested read' { throw [InvalidOperationException]::new('Original nested-read error.') }
+                    default { throw [Net.Http.HttpRequestException]::new('Original forbidden error.', $null, [Net.HttpStatusCode]::Forbidden) }
+                }
+            }
+            Mock Test-AvmBicepNestedDeploymentReadFailure { $Route -eq 'nested read' }
+            Mock Wait-AvmBicepNativeDeployment { @{ State = 'Succeeded'; Outputs = @{} } }
+            $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' `
+                -DeploymentInput $script:inputOptions -RecoveryDeadlineUtc $script:deadline
+            $result.Status | Should -Be 'pass'
+            Should -Invoke Wait-AvmBicepNativeDeployment -Exactly 1 -ParameterFilter {
+                $RecoveryDeadlineUtc -eq $script:deadline -and $DefaultProfile.Tenant.Id -eq '00000000-0000-0000-0000-000000000002'
+            }
+            Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
+        }
+    }
+
     It 'preserves a rejected submission for discovery without assuming it is retryable' {
         InModuleScope Avm.Authoring {
             Mock Invoke-AvmBicepNativeArmOperation {
@@ -663,6 +692,134 @@ Describe 'Bicep native deployment timeout recovery' {
             { Wait-AvmBicepNativeDeployment -DeploymentId $script:id -PollIntervalSeconds 0 } |
                 Should -Throw -ExpectedMessage '*Canceled*'
             Should -Invoke Invoke-AzRestMethod -Exactly 1
+        }
+    }
+}
+
+Describe 'Bicep native shared recovery deadline' {
+    BeforeEach {
+        InModuleScope Avm.Authoring {
+            $script:id = '/subscriptions/00000000-0000-0000-0000-000000000001/providers/Microsoft.Resources/deployments/deadline'
+            $script:clock = [datetime]::new(2026, 10, 11, 0, 0, 0, [DateTimeKind]::Utc)
+            $script:deadline = $script:clock.AddHours(4)
+            Mock Get-Date { $script:clock }
+            Mock Write-AvmLog {}
+            Mock Start-Sleep { $script:clock = $script:clock.AddSeconds($Seconds) }
+        }
+    }
+
+    It 'does not start a recovery read when the shared deadline is <Timing>' -ForEach @(
+        @{ Timing = 'now'; Offset = 0 }, @{ Timing = 'past'; Offset = -1 }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Offset = $Offset } {
+            param($Offset)
+            Mock Invoke-AzRestMethod { throw 'Expired recovery must not issue a GET.' }
+            { Wait-AvmBicepNativeDeployment -DeploymentId $script:id -RecoveryDeadlineUtc $script:clock.AddSeconds($Offset) } |
+                Should -Throw '*recovery window*'
+            Should -Invoke Invoke-AzRestMethod -Exactly 0
+            Should -Invoke Start-Sleep -Exactly 0
+        }
+    }
+
+    It 'accepts <Terminal> only strictly before the deadline (<Ticks> ticks)' -ForEach @(
+        foreach ($terminal in @('Succeeded', 'Failed')) {
+            @{ Terminal = $terminal; Ticks = -1; Accepted = $true }
+            @{ Terminal = $terminal; Ticks = 0; Accepted = $false }
+            @{ Terminal = $terminal; Ticks = 1; Accepted = $false }
+        }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Terminal = $Terminal; Ticks = $Ticks; Accepted = $Accepted } {
+            param($Terminal, $Ticks, $Accepted)
+            Mock Invoke-AzRestMethod {
+                $script:clock = $script:deadline.AddTicks($Ticks)
+                @{ StatusCode = 200; Content = (@{ id = $script:id; properties = @{ provisioningState = $Terminal } } | ConvertTo-Json) }
+            }
+            if ($Accepted) {
+                (Wait-AvmBicepNativeDeployment -DeploymentId $script:id -RecoveryDeadlineUtc $script:deadline).State |
+                    Should -Be $Terminal
+            }
+            else {
+                { Wait-AvmBicepNativeDeployment -DeploymentId $script:id -RecoveryDeadlineUtc $script:deadline } |
+                    Should -Throw '*recovery window*'
+            }
+            Should -Invoke Invoke-AzRestMethod -Exactly 1
+            Should -Invoke Start-Sleep -Exactly 0
+        }
+    }
+
+    It 'clamps the final sleep to fractional time remaining for <Response>' -ForEach @(
+        @{ Response = 'Running' }, @{ Response = 'Timeout' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Response = $Response } {
+            param($Response)
+            Mock Invoke-AzRestMethod {
+                $script:clock = $script:deadline.AddMilliseconds(-250)
+                if ($Response -eq 'Timeout') { throw [TimeoutException]::new('Read timed out.') }
+                @{ StatusCode = 200; Content = (@{ id = $script:id; properties = @{ provisioningState = 'Running' } } | ConvertTo-Json) }
+            }
+            { Wait-AvmBicepNativeDeployment -DeploymentId $script:id -RecoveryDeadlineUtc $script:deadline } |
+                Should -Throw '*recovery window*'
+            Should -Invoke Invoke-AzRestMethod -Exactly 1
+            Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 0.25 }
+            $script:clock | Should -Be $script:deadline
+        }
+    }
+
+    It 'retains the one-hour default when no coordinator supplies a deadline' {
+        InModuleScope Avm.Authoring {
+            Mock Invoke-AzRestMethod {
+                $script:clock = $script:clock.AddHours(1)
+                @{ StatusCode = 200; Content = (@{ id = $script:id; properties = @{ provisioningState = 'Succeeded' } } | ConvertTo-Json) }
+            }
+            { Wait-AvmBicepNativeDeployment -DeploymentId $script:id } | Should -Throw '*recovery window*'
+            Should -Invoke Invoke-AzRestMethod -Exactly 1
+        }
+    }
+
+    It 'preserves a timed-out read returned at the deadline without another sleep' {
+        InModuleScope Avm.Authoring {
+            $script:classifyTimedOutRead = (Get-Command Test-AvmBicepRetryErrorRecord).ScriptBlock
+            Mock Test-AvmBicepRetryErrorRecord {
+                $script:observedRead = $ErrorRecord
+                & $script:classifyTimedOutRead @PesterBoundParameters
+            }
+            Mock Invoke-AzRestMethod {
+                $script:clock = $script:deadline
+                try { throw [TimeoutException]::new('Original timeout diagnostic.') }
+                catch { $script:originalRead = $_; throw }
+            }
+            $caught = $null
+            try { Wait-AvmBicepNativeDeployment -DeploymentId $script:id -RecoveryDeadlineUtc $script:deadline }
+            catch { $caught = $_ }
+            $caught.Exception | Should -BeOfType ([TimeoutException])
+            [object]::ReferenceEquals($caught.Exception.Data['ReadErrorRecord'], $script:observedRead) | Should -BeTrue
+            [object]::ReferenceEquals($script:observedRead.Exception, $script:originalRead.Exception) | Should -BeTrue
+            $script:observedRead.Exception.Message | Should -BeExactly 'Original timeout diagnostic.'
+            Should -Invoke Invoke-AzRestMethod -Exactly 1
+            Should -Invoke Start-Sleep -Exactly 0
+        }
+    }
+
+    It 'rejects a <Kind> deadline before reading or submitting' -ForEach @(
+        @{ Kind = 'local' }, @{ Kind = 'unspecified' }, @{ Kind = 'null' }, @{ Kind = 'invalid' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Kind = $Kind } {
+            param($Kind)
+            $value = switch ($Kind) {
+                'local' { [datetime]::SpecifyKind($script:deadline, [DateTimeKind]::Local) }
+                'unspecified' { [datetime]::SpecifyKind($script:deadline, [DateTimeKind]::Unspecified) }
+                'null' { $null }
+                'invalid' { 'not a UTC deadline' }
+            }
+            Mock Invoke-AzRestMethod { throw 'Read must not start.' }
+            Mock Invoke-AvmBicepNativeArmOperation { throw 'Submission must not start.' }
+            Mock Save-AvmBicepCleanupState { throw 'State must not change.' }
+            { Wait-AvmBicepNativeDeployment -DeploymentId $script:id -RecoveryDeadlineUtc $value } | Should -Throw
+            { New-AvmBicepNativeDeployment -State @{ runId = 'fixture' } -StatePath 'unused.json' `
+                    -DeploymentInput @{ Scope = 'sub' } -RecoveryDeadlineUtc $value } | Should -Throw
+            Should -Invoke Invoke-AzRestMethod -Exactly 0
+            Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 0
+            Should -Invoke Save-AvmBicepCleanupState -Exactly 0
         }
     }
 }

@@ -17,6 +17,16 @@ subscription, management-group and tenant scope, including nested
 and cross-scope module deployments. Select authorized test targets:
 resources created or updated by the test can be removed afterwards.
 
+Bicep registry modules read repository-root .required-features.json and
+.required-resource-providers.json maps using the exact module Path.
+Validate each whole map before dependency preparation or Azure calls.
+After compilation and identity verification, register features and
+propagate their providers, then register required provider namespaces,
+before token replacement, validation or deployment. Missing, empty or
+unrelated maps skip registration. WhatIf validates configuration without
+Azure access. Complete and cleanup never register prerequisites, and
+registrations are never undone. No additional caller input is needed.
+
 Packaged Resources/bicep/retry-policy.json selects bounded retries
 from complete structured failure evidence. InPlace reuses the exact
 deployment, template and parameters. Fresh generates a new external
@@ -25,6 +35,9 @@ by default. Fixed caller inputs and names authored inside Bicep are
 not rewritten, so Fresh does not guarantee all resource names differ.
 No resources are deleted between attempts. Resource evidence is saved
 before another attempt can overwrite deployment-operation history.
+Status recovery shares one configured four-hour deadline across all
+attempts in a case; it never starts a read or accepts a terminal result
+at or after that deadline.
 
 Successful deployments run their case-local Pester assertions, then
 post.ps1, then native cleanup adapted from the registry workflow.
@@ -244,6 +257,8 @@ Explicit values or files take precedence over CI inputs.
 ### -Path
 
 Module directory, or an enclosing context. Defaults to the current location.
+Required provider declarations use only the exact Bicep registry module
+key in the root .required-resource-providers.json, without inheritance.
 
 | Property | Value |
 | --- | --- |

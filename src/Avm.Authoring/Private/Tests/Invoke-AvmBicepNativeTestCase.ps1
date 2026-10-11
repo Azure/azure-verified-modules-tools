@@ -28,29 +28,42 @@ function Invoke-AvmBicepNativeTestCase {
     }
     $executionOptions = @{
         Location = $Location; RepositoryRoot = $RepositoryRoot; AzPath = $AzPath; CiInput = $CiInput
+        SubscriptionId = $Item.SubscriptionId; TenantId = $TenantId
         ManagementGroupId = $ManagementGroupId; ResourceGroupPrefix = $ResourceGroupPrefix
         ResourceLocation = $ResourceLocation; StatePath = $StatePath; Phase = $Phase
         DeploymentRetryLimit = $DeploymentRetryLimit; ValidationRetryLimit = $ValidationRetryLimit
-        KeepResources = [bool]$KeepResources
+        KeepResources       = [bool]$KeepResources
+        RecoveryDeadlineUtc = (Get-Date -AsUTC).AddSeconds($Item.RetryPolicy['observation']['coordinatorTimeoutSeconds'])
     }
     Invoke-AvmBicepAzureContext -SubscriptionId $Item.SubscriptionId -TenantId $TenantId -ScriptBlock {
         Assert-AvmBicepAzureIdentity -AzPath $executionOptions.AzPath -SubscriptionId $Item.SubscriptionId -TenantId $TenantId
-        $features = @(Get-AvmPropertyValue -InputObject $Item -Name 'RequiredFeatures')
-        if ($features.Count -gt 0) {
+        $assertRegistrationIdentity = {
+            Assert-AvmBicepAzureIdentity -AzPath $executionOptions.AzPath `
+                -SubscriptionId $executionOptions.SubscriptionId -TenantId $executionOptions.TenantId
+        }
+        foreach ($kind in @('Feature', 'Provider')) {
+            $requirements = @(Get-AvmPropertyValue -InputObject $Item -Name "Required$($kind)s")
+            if ($requirements.Count -eq 0) { continue }
             try {
-                $null = Invoke-AvmFeatureRegistration -Cli (Resolve-AvmAzureCli) -Root $executionOptions.RepositoryRoot `
-                    -SubscriptionId ([guid]$Item.SubscriptionId).ToString('D') -Feature $features
+                $null = Invoke-AvmSubscriptionRegistration -Cli (Resolve-AvmAzureCli) -Root $executionOptions.RepositoryRoot `
+                    -SubscriptionId ([guid]$Item.SubscriptionId).ToString('D') -Kind $kind -Requirement $requirements `
+                    -AssertIdentity $assertRegistrationIdentity -Confirm:$false
             }
             catch [AvmException] {
                 $registrationIssues = [System.Collections.Generic.List[object]]::new()
                 Add-AvmBicepTestIssue -Issues $registrationIssues -File $Item.Case.RelativePath `
-                    -Code 'feature-registration-failed' -Message $_.Exception.Message
+                    -Code "$($kind.ToLowerInvariant())-registration-failed" -Message $_.Exception.Message
                 return [pscustomobject]@{
                     Status = 'fail'; AssertionResults = @(); PostResults = @(); Issues = $registrationIssues.ToArray()
                     CleanupPending = @(); CleanupDeferred = $false; StatePath = ''
                 }
             }
         }
+        foreach ($preparedInput in $Item.AttemptInputs) {
+            $preparedInput.TemplateContent = Resolve-AvmBicepTestToken -Content $preparedInput.TemplateContent `
+                -SourcePath $Item.Case.Path -Tokens $preparedInput.Tokens -DeferResourceLocation
+        }
+        $Item.Template = ConvertFrom-Json -InputObject $Item.AttemptInputs[0].TemplateContent -AsHashtable -ErrorAction Stop
         $environment = Get-AvmPropertyValue -InputObject (Get-AzContext -ErrorAction Stop) -Name 'Environment'
         $environmentName = [string](Get-AvmPropertyValue -InputObject $environment -Name 'Name')
         $handle = New-AvmBicepCleanupState -SubscriptionId $Item.SubscriptionId -TenantId $TenantId `
@@ -149,6 +162,7 @@ function Invoke-AvmBicepNativeTestCase {
                 }
                 $deployed = New-AvmBicepNativeDeployment -State $state -StatePath $handle.Path `
                     -DeploymentInput $validated.DeploymentInput -Attempt $attempt -Mode $mode -NamingId $attemptInput.NamingId `
+                    -RecoveryDeadlineUtc $executionOptions.RecoveryDeadlineUtc `
                     -ClassifyRetry:($attempt -lt $attemptLimit) -ResourceLocation $validated.Location -Confirm:$false
                 if ($deployed.Status -eq 'pass' -or $attempt -eq $attemptLimit -or -not $deployed.RetryMode -or
                     ($deployed.RetryMode -eq 'Fresh' -and -not $canFresh)) { break }

@@ -222,9 +222,9 @@ Describe 'Component: Bicep native scoped workflow and hosted completion' -Tag Co
     It 'registers declared features in the selected subscription before validation' {
         Set-Content -LiteralPath (Join-Path $script:fixture.Root '.required-features.json') -Value '["Microsoft.Compute/EncryptionAtHost"]'
         Mock Resolve-AvmAzureCli -ModuleName Avm.Authoring { [pscustomobject]@{ Path = 'fake-az'; ArgumentPrefix = [string[]]@(); EnvVars = @{} } }
-        Mock Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring {
-            $script:fixture.Calls.Add("register:${SubscriptionId}:$($Feature.FullName -join ',')")
-            [pscustomobject]@{ RegisteredFeatures = @($Feature.FullName); AlreadyRegisteredFeatures = @() }
+        Mock Invoke-AvmSubscriptionRegistration -ModuleName Avm.Authoring {
+            $script:fixture.Calls.Add("register:${SubscriptionId}:$($Requirement.FullName -join ',')")
+            [pscustomobject]@{ Registered = @($Requirement.FullName); AlreadyRegistered = @() }
         }
         $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'pass'
@@ -236,7 +236,7 @@ Describe 'Component: Bicep native scoped workflow and hosted completion' -Tag Co
     It 'reports a failed registration without validating or deploying' {
         Set-Content -LiteralPath (Join-Path $script:fixture.Root '.required-features.json') -Value '["Microsoft.Compute/EncryptionAtHost"]'
         Mock Resolve-AvmAzureCli -ModuleName Avm.Authoring { [pscustomobject]@{ Path = 'fake-az'; ArgumentPrefix = [string[]]@(); EnvVars = @{} } }
-        Mock Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring {
+        Mock Invoke-AvmSubscriptionRegistration -ModuleName Avm.Authoring {
             throw (& (Get-Module Avm.Authoring) {
                     [AvmException]::new('Feature Microsoft.Compute/EncryptionAtHost is Pending in subscription test.', 'AVM1070')
                 })
@@ -253,9 +253,9 @@ Describe 'Component: Bicep native scoped workflow and hosted completion' -Tag Co
 
     It 'rejects an invalid feature manifest before any Azure operation' {
         Set-Content -LiteralPath (Join-Path $script:fixture.Root '.required-features.json') -Value '["not-a-feature"]'
-        Mock Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring { throw 'Registration must not run.' }
+        Mock Invoke-AvmSubscriptionRegistration -ModuleName Avm.Authoring { throw 'Registration must not run.' }
         { Invoke-AvmTestE2e @script:options } | Should -Throw -ExpectedMessage '*Namespace/FeatureName*'
-        Should -Invoke Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring -Exactly 0
+        Should -Invoke Invoke-AvmSubscriptionRegistration -ModuleName Avm.Authoring -Exactly 0
         $script:fixture.Calls | Should -Not -Contain 'validate'
     }
 
@@ -290,10 +290,10 @@ Describe 'Component: Bicep native scoped workflow and hosted completion' -Tag Co
             Mock Resolve-AvmAzureCli -ModuleName Avm.Authoring {
                 [pscustomobject]@{ Path = 'fake-az'; ArgumentPrefix = [string[]]@(); EnvVars = @{} }
             }
-            Mock Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring {
-                $script:fixture.Calls.Add("register:${SubscriptionId}:$($script:fixture.CurrentTenant):$($Feature.FullName -join ',')")
+            Mock Invoke-AvmSubscriptionRegistration -ModuleName Avm.Authoring {
+                $script:fixture.Calls.Add("register:${SubscriptionId}:$($script:fixture.CurrentTenant):$($Requirement.FullName -join ',')")
                 $SubscriptionId | Should -BeExactly $script:fixture.CurrentSubscription
-                [pscustomobject]@{ RegisteredFeatures = @($Feature.FullName); AlreadyRegisteredFeatures = @() }
+                [pscustomobject]@{ Registered = @($Requirement.FullName); AlreadyRegistered = @() }
             }
             $result = Invoke-AvmTestE2e @script:options
             $result.Status | Should -Be 'pass'
@@ -315,9 +315,9 @@ Describe 'Component: Bicep native scoped workflow and hosted completion' -Tag Co
             if ($Local) {
                 Set-Content -LiteralPath (Join-Path $script:fixture.Root '.required-features.json') -Value '["Microsoft.Compute/EncryptionAtHost"]'
             }
-            Mock Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring { throw 'Registration must not run.' }
+            Mock Invoke-AvmSubscriptionRegistration -ModuleName Avm.Authoring { throw 'Registration must not run.' }
             { Invoke-AvmTestE2e @script:options } | Should -Throw -ExpectedMessage $Message
-            Should -Invoke Invoke-AvmFeatureRegistration -ModuleName Avm.Authoring -Exactly 0
+            Should -Invoke Invoke-AvmSubscriptionRegistration -ModuleName Avm.Authoring -Exactly 0
             Should -Invoke Assert-AvmBicepAzureDependency -ModuleName Avm.Authoring -Exactly 0
             Should -Invoke Invoke-AvmBicepAzureContext -ModuleName Avm.Authoring -Exactly 0
             $script:fixture.Calls.Count | Should -Be 0

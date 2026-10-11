@@ -20,10 +20,14 @@ function Wait-AvmAzureRegistration {
         [string] $Name,
 
         [Parameter(Mandatory)]
+        [ValidateRange(1, 120)]
         [int] $MaximumPolls,
 
         [Parameter(Mandatory)]
-        [int] $PollIntervalSeconds
+        [ValidateRange(0, 60)]
+        [int] $PollIntervalSeconds,
+
+        [scriptblock] $AssertIdentity
     )
 
     Set-StrictMode -Version 3.0
@@ -34,7 +38,7 @@ function Wait-AvmAzureRegistration {
         if ($attempt -gt 1) {
             Start-Sleep -Seconds $PollIntervalSeconds
         }
-        $state = Get-AvmAzureRegistrationState -Kind $Kind -Cli $Cli -Root $Root `
+        $state = Get-AvmAzureRegistrationState -Kind $Kind -Cli $Cli -Root $Root -AssertIdentity $AssertIdentity `
             -SubscriptionId $SubscriptionId -Namespace $Namespace -Name $Name
         if ($state -ceq 'Registered') {
             return

@@ -12,7 +12,7 @@ BeforeAll {
 AfterAll { Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue }
 
 Describe 'Component: Bicep native service retry <Kind>' -Tag Component -ForEach @(
-    @{ Kind = 'SearchSku' }, @{ Kind = 'SearchSemantic' }
+    @{ Kind = 'SearchSku' }, @{ Kind = 'SearchService' }, @{ Kind = 'SearchSemantic' }
     @{ Kind = 'ContainerApps' }, @{ Kind = 'ContainerAppsNewCluster' }
 ) {
     BeforeEach {

@@ -3,7 +3,7 @@
   "limits": { "deploymentAttempts": 3, "regionAttempts": 3, "delaySeconds": 5 },
   "modes": { "InPlace": { "location": "Preserve" }, "Fresh": { "location": "NextEligible" } },
   "reads": { "attempts": 3, "initialDelaySeconds": 5 },
-  "observation": { "timeoutSeconds": 3600, "pollIntervalSeconds": 15, "consecutiveTimeouts": 3 },
+  "observation": { "timeoutSeconds": 3600, "coordinatorTimeoutSeconds": 14400, "pollIntervalSeconds": 15, "consecutiveTimeouts": 3 },
   "regions": {
     "allowed": [
       "swedencentral", "belgiumcentral", "norwayeast", "eastasia", "polandcentral",
@@ -94,6 +94,16 @@
       "targetTypes": ["Microsoft.Search/searchServices"],
       "messagePatterns": [
         "\\AThe region '(?<region>[A-Za-z0-9]+(?: [A-Za-z0-9]+)*)' currently does not have enough resources available to provision services with the SKU '[A-Za-z][A-Za-z0-9_]*'\\. Try creating the service in another region or selecting a different SKU\\. RequestId: [0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\\z"
+      ],
+      "regionCapture": "region"
+    },
+    {
+      "id": "search-service-capacity",
+      "mode": "Fresh",
+      "code": "InsufficientResourcesAvailable",
+      "targetTypes": ["Microsoft.Search/searchServices"],
+      "messagePatterns": [
+        "\\AThe region '(?<region>[A-Za-z0-9]+(?: [A-Za-z0-9]+)*)' is currently out of the resources required to provision new services\\. Try creating the service in another region\\. RequestId: [0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\\z"
       ],
       "regionCapture": "region"
     },

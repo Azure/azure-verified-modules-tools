@@ -103,6 +103,43 @@ Describe 'Component: Bicep native attempt contexts and finalization' -Tag Compon
     }
     AfterEach { Remove-NativeBicepWorkflowFixture -Fixture $script:fixture }
 
+    It 'shares the configured recovery deadline across validation and every <Mode> attempt' -ForEach @(
+        @{ Mode = 'InPlace'; Failure = 'Transient' }
+        @{ Mode = 'Fresh'; Failure = 'Regional' }
+    ) {
+        $script:fixture.RetrySequence.Clear()
+        $script:fixture.RetrySequence.Enqueue($Failure)
+        $script:fixture.RetrySequence.Enqueue($Failure)
+        InModuleScope Avm.Authoring {
+            $script:retryClock = [datetime]::new(2026, 10, 11, 0, 0, 0, [DateTimeKind]::Utc)
+            $script:caseDeadline = $script:retryClock.AddHours(4)
+            $script:caseDeadlines = [Collections.Generic.List[datetime]]::new()
+            $script:submitNativeAttempt = (Get-Command New-AvmBicepNativeDeployment).ScriptBlock
+            $script:validateNativeAttempt = (Get-Command Test-AvmBicepNativeDeployment).ScriptBlock
+            Mock Get-Date { $script:retryClock }
+            Mock Test-AvmBicepNativeDeployment {
+                $script:retryClock = $script:retryClock.AddMinutes(30)
+                & $script:validateNativeAttempt @PesterBoundParameters
+            }
+            Mock New-AvmBicepNativeDeployment {
+                $script:caseDeadlines.Add($RecoveryDeadlineUtc)
+                $script:retryClock = $script:retryClock.AddMinutes(30)
+                & $script:submitNativeAttempt @PesterBoundParameters
+            }
+        }
+        (Invoke-AvmTestE2e @script:options).Status | Should -Be 'pass'
+        InModuleScope Avm.Authoring {
+            $script:caseDeadlines.Count | Should -Be 3
+            foreach ($deadline in $script:caseDeadlines) {
+                $deadline.Kind | Should -Be ([DateTimeKind]::Utc)
+                $deadline | Should -Be $script:caseDeadline
+            }
+        }
+        @($script:fixture.NativeInputs | Where-Object Operation -eq 'Create').Count | Should -Be 3
+        $history = Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json
+        $history.attempts.mode | Should -Be @('Initial', $Mode, $Mode)
+    }
+
     It 'executes configured <Mode>/<Placement> semantics at <Scope> scope' -ForEach @(
         @{ Mode = 'InPlace'; Placement = 'NextEligible'; Scope = 'sub' }
         @{ Mode = 'InPlace'; Placement = 'NextEligible'; Scope = 'group' }
