@@ -216,14 +216,15 @@ Describe 'State identity wiring' {
         }
         $login | Should -Not -Match 'TEST_BAMI|secrets\.|ARM_OIDC_TOKEN'
         @([regex]::Matches($worker, 'uses: azure/login@')) | Should -HaveCount 1
-        $worker | Should -Match '(?m)^      actions: read\r?$'
+        $worker | Should -Not -Match '(?m)^      actions:'
         $worker | Should -Match '(?m)^      contents: read\r?$'
         $worker | Should -Match '(?m)^      id-token: write\r?$'
-        $syncStep | Should -Match 'ACTIONS_STATE_LOCK_TOKEN: \$\{\{ github\.token \}\}'
+        $syncStep | Should -Not -Match 'ACTIONS_STATE_LOCK_TOKEN'
         $caller = [regex]::Match($dispatcher, '(?ms)^  sync-repository:.*$').Value
-        foreach ($permission in @('actions: read', 'contents: read', 'id-token: write')) {
+        foreach ($permission in @('contents: read', 'id-token: write')) {
             $caller | Should -Match ('(?m)^      ' + [regex]::Escape($permission) + '\r?$')
         }
+        $caller | Should -Not -Match '(?m)^      actions:'
         $workflow | Should -Match '-stateTenantId \$env:ARM_BACKEND_TENANT_ID'
         $workflow | Should -Match '-stateClientId \$env:ARM_BACKEND_CLIENT_ID'
         $workflow | Should -Match '-stateSubscriptionId \$env:ARM_BACKEND_SUBSCRIPTION_ID'
@@ -238,6 +239,23 @@ Describe 'State identity wiring' {
         $workflow | Should -Not -Match 'ARM_BACKEND_ENVIRONMENT_VARIABLE_SUFFIX|ARM_OIDC_TOKEN:'
         $dispatcher | Should -Match 'cancel-in-progress: false'
         $workflow | Should -Not -Match 'AVM_SYNC_PAUSED'
+    }
+
+    It 'serializes the state-writing job across branches with GitHub Actions concurrency' {
+        $workflow = Get-Content -LiteralPath (Join-Path $script:repoRoot (
+            '.github/workflows/repository-management-sync-repository.yml'
+        )) -Raw
+        $worker = [regex]::Match($workflow, '(?ms)^  run-sync:.*?(?=^  [a-z][a-z0-9-]+:|\z)').Value
+        $concurrency = [regex]::Match($worker, '(?ms)^    concurrency:\r?\n(?<settings>.*?)(?=^    \S|\z)')
+        $concurrency.Success | Should -BeTrue
+        $concurrency.Groups['settings'].Value | Should -Match '(?m)^      group: repository-sync-state-\$\{\{ inputs\.repo_id \}\}\r?$'
+        $concurrency.Groups['settings'].Value | Should -Match '(?m)^      cancel-in-progress: false\r?$'
+        $concurrency.Value | Should -Not -Match 'github\.(ref|sha|run_id)|inputs\.repo_name'
+        $worker | Should -Match '(?m)^          REPO_ID: \$\{\{ inputs\.repo_id \}\}\r?$'
+        $source = Get-Content -LiteralPath (Join-Path $script:repoRoot (
+            'repository-management/repository-sync/scripts/lib/RetryHelpers.ps1'
+        )) -Raw
+        $source | Should -Not -Match 'actions/runs|actions/workflows|ACTIONS_STATE_LOCK_TOKEN|terraformlockid|force-unlock'
     }
 
     It 'pins the sole provider root to BAMI values without state-identity fallback' {

@@ -51,8 +51,10 @@ jobs:
     name: Prepare ${{ inputs.repo_name }}
     runs-on: ubuntu-latest
     environment: avm
+    concurrency:
+      group: repository-sync-state-${{ inputs.repo_id }}
+      cancel-in-progress: false
     permissions:
-      actions: read
       contents: read
       id-token: write
     env:
@@ -202,7 +204,6 @@ jobs:
         env:
           SYNC_REPO_NAME: ${{ inputs.repo_name }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          ACTIONS_STATE_LOCK_TOKEN: ${{ github.token }}
           AVM_APP_BOT_LOGIN: ${{ vars.AVM_APP_BOT_LOGIN }}
           AVM_APP_BOT_USER_ID: ${{ vars.AVM_APP_BOT_USER_ID }}
           ARM_BACKEND_TENANT_ID: ${{ steps.state-backend.outputs.tenant-id }}

@@ -44,7 +44,6 @@ permissions:
   id-token: write
   contents: read
 
-# Queue runs; only scoped acquisition failures qualify for bounded lock recovery.
 concurrency:
   group: repository-sync
   cancel-in-progress: false
@@ -76,7 +75,6 @@ jobs:
     needs: generate-matrix
     if: needs.generate-matrix.result == 'success'
     permissions:
-      actions: read
       contents: read
       id-token: write
     strategy:

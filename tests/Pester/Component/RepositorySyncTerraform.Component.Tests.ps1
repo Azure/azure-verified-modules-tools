@@ -20,6 +20,7 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
         $script:fixture = @{
             Plan = New-AvmTestRepositorySyncPlan -KnownClient
             Calls = [System.Collections.Generic.List[object]]::new()
+            Events = [System.Collections.Generic.List[string]]::new()
             FailAt = ''
             FailureOutput = 'native failure detail'
             InvalidJson = $false
@@ -32,6 +33,7 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
         Mock Invoke-RepositorySyncProcess ({
             param($Command, $Arguments, $WorkingDirectory, $EnvVars, $TimeoutSec)
             if ($Command -cne 'terraform') { throw 'Unexpected command in isolated Terraform test.' }
+            $fixture.Events.Add($Arguments[0])
             $fixture.Calls.Add(@{
                 Arguments = @($Arguments); Root = $WorkingDirectory; Environment = $EnvVars; Timeout = $TimeoutSec
             })
@@ -49,7 +51,10 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
             return @{ ExitCode = 0; StdOut = $text; StdErr = '' }
         }.GetNewClosure())
         Mock Start-Process { throw 'No legacy process or state-repair path is permitted.' }
-        Mock Clear-TerraformStateLock { $true }
+        Mock Clear-TerraformStateLock {
+            $script:fixture.Events.Add('state-preflight')
+            $true
+        }
         $script:parameters = @{
             terraformModulePath = $TestDrive
             repoId = 'avm-ptn-example-repo'
@@ -179,22 +184,19 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
         Should -Invoke Start-Process -Exactly 0
     }
 
-    It 'recovers one acquisition failure before <Command> without changing the saved plan, preview <PlanOnly>' -ForEach @(
-        @{ Command = 'plan'; PlanOnly = $true }
-        @{ Command = 'plan'; PlanOnly = $false }
-        @{ Command = 'apply'; PlanOnly = $false }
+    It 'checks state before every plan or saved-plan apply without waiting for failure, preview <PlanOnly>' -ForEach @(
+        @{ PlanOnly = $true; Preflights = 1 }
+        @{ PlanOnly = $false; Preflights = 2 }
     ) {
         Set-TestLockBackend -Parameters $script:parameters
         $script:parameters.planOnly = $PlanOnly
-        $script:fixture.LockAt = $Command
-        $script:fixture.LocksRemaining = 1
         $null = Invoke-TerraformPlanAndApply @script:parameters
-        $attempts = @($script:fixture.Calls | Where-Object { $_.Arguments[0] -ceq $Command })
-        $attempts.Count | Should -Be 2
-        $attempts[1].Arguments | Should -Be $attempts[0].Arguments
-        $script:fixture.Calls.Count | Should -Be ($PlanOnly ? 3 : 4)
+        $script:fixture.Calls.Count | Should -Be ($PlanOnly ? 2 : 3)
+        $expectedEvents = @('state-preflight', 'plan', 'show')
+        if (-not $PlanOnly) { $expectedEvents += @('state-preflight', 'apply') }
+        @($script:fixture.Events) | Should -Be $expectedEvents
         @($script:fixture.Calls | Where-Object { $_.Arguments[0] -ceq 'show' }) | Should -HaveCount 1
-        Should -Invoke Clear-TerraformStateLock -Exactly 1 -ParameterFilter {
+        Should -Invoke Clear-TerraformStateLock -Exactly $Preflights -ParameterFilter {
             $storageAccountName -ceq 'stateaccount' -and $containerName -ceq 'tfstate' -and
             $blobName -ceq 'avm-ptn-example-repo.tfstate' -and
             $repository -ceq 'Azure/terraform-azurerm-avm-ptn-example-repo' -and
@@ -205,41 +207,39 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
         }
     }
 
-    It 'stops after the second acquisition failure and preserves the native exit code' {
+    It 'does not unlock again or retry a new acquisition failure after preflight' {
         Set-TestLockBackend -Parameters $script:parameters
         $script:fixture.LockAt = 'apply'
-        $script:fixture.LocksRemaining = 2
-        $errorRecord = { Invoke-TerraformPlanAndApply @script:parameters } | Should -Throw '*no further automatic retry*' -PassThru
+        $script:fixture.LocksRemaining = 1
+        $errorRecord = { Invoke-TerraformPlanAndApply @script:parameters } | Should -Throw '*no automatic retry*' -PassThru
         $errorRecord.Exception.Data['ExitCode'] | Should -Be 23
-        $script:fixture.Calls.Count | Should -Be 4
-        Should -Invoke Clear-TerraformStateLock -Exactly 1
+        $script:fixture.Calls.Count | Should -Be 3
+        Should -Invoke Clear-TerraformStateLock -Exactly 2
     }
 
-    It 'retains the original exit code and sanitized diagnostics when release fails' {
+    It 'does not start Terraform or invent its exit code when preflight fails' {
         Set-TestLockBackend -Parameters $script:parameters
         $script:parameters.environment.GH_TOKEN = 'synthetic-lock-credential'
-        $script:fixture.LockAt = 'plan'
-        $script:fixture.LocksRemaining = 1
         Mock Clear-TerraformStateLock { throw [System.InvalidOperationException]::new('release failed synthetic-lock-credential') }
         $errorRecord = { Invoke-TerraformPlanAndApply @script:parameters } | Should -Throw '*release failed ***' -PassThru
-        $errorRecord.Exception.Data['ExitCode'] | Should -Be 23
+        $errorRecord.Exception.Data.Contains('ExitCode') | Should -BeFalse
         $errorRecord.Exception.Message | Should -Not -Match 'synthetic-lock-credential'
-        $script:fixture.Calls.Count | Should -Be 1
+        $script:fixture.Calls.Count | Should -Be 0
         Should -Invoke Clear-TerraformStateLock -Exactly 1
     }
 
-    It 'does not recover or retry a timeout during <Command>' -ForEach @(
-        @{ Command = 'plan'; Count = 1 }
-        @{ Command = 'apply'; Count = 3 }
+    It 'does not repeat preflight or retry a timeout during <Command>' -ForEach @(
+        @{ Command = 'plan'; Count = 1; Preflights = 1 }
+        @{ Command = 'apply'; Count = 3; Preflights = 2 }
     ) {
         Set-TestLockBackend -Parameters $script:parameters
         $script:fixture.TimeoutAt = $Command
         { Invoke-TerraformPlanAndApply @script:parameters } | Should -Throw '*timed out*Inspect state ownership*'
         $script:fixture.Calls.Count | Should -Be $Count
-        Should -Invoke Clear-TerraformStateLock -Exactly 0
+        Should -Invoke Clear-TerraformStateLock -Exactly $Preflights
     }
 
-    It 'does not recover release failures or an ordinary provider error' -ForEach @(
+    It 'does not repeat preflight after release failures or an ordinary provider error' -ForEach @(
         @{ Text = 'Error: Error releasing the state lock' }
         @{ Text = "Error: Error acquiring the state lock`nError: Apply interrupted" }
         @{ Text = 'Error: Azure request failed' }
@@ -250,28 +250,26 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
         $script:fixture.LockText = $Text
         { Invoke-TerraformPlanAndApply @script:parameters } | Should -Throw '*exit code 23*'
         $script:fixture.Calls.Count | Should -Be 3
-        Should -Invoke Clear-TerraformStateLock -Exactly 0
+        Should -Invoke Clear-TerraformStateLock -Exactly 2
     }
 
-    It 'keeps JSON reads and callers without an explicit backend out of recovery: <Command>' -ForEach @(
-        @{ Command = 'show'; Backend = $true; Count = 2 }
-        @{ Command = 'plan'; Backend = $false; Count = 1 }
+    It 'does not add preflight to JSON reads or callers without an explicit backend: <Command>' -ForEach @(
+        @{ Command = 'show'; Backend = $true; Count = 2; Preflights = 1 }
+        @{ Command = 'plan'; Backend = $false; Count = 1; Preflights = 0 }
     ) {
         if ($Backend) { Set-TestLockBackend -Parameters $script:parameters }
         $script:fixture.LockAt = $Command
         $script:fixture.LocksRemaining = 1
         { Invoke-TerraformPlanAndApply @script:parameters } | Should -Throw '*exit code 23*'
         $script:fixture.Calls.Count | Should -Be $Count
-        Should -Invoke Clear-TerraformStateLock -Exactly 0
+        Should -Invoke Clear-TerraformStateLock -Exactly $Preflights
     }
 
-    It 'does not retry when lock recovery is declined' {
+    It 'does not start Terraform when state preflight is declined' {
         Set-TestLockBackend -Parameters $script:parameters
-        $script:fixture.LockAt = 'plan'
-        $script:fixture.LocksRemaining = 1
         Mock Clear-TerraformStateLock { $false }
-        { Invoke-TerraformPlanAndApply @script:parameters } | Should -Throw '*recovery was declined*'
-        $script:fixture.Calls.Count | Should -Be 1
+        { Invoke-TerraformPlanAndApply @script:parameters } | Should -Throw '*preflight was declined*'
+        $script:fixture.Calls.Count | Should -Be 0
     }
 
     It 'does not echo malformed plan JSON or apply it' {

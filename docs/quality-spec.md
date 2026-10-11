@@ -1491,26 +1491,26 @@ This section is the implementation-level expression of the **Security stance** p
 
 ### Repository-sync state-lock recovery
 
-- Ordinary remote Terraform sync may attempt recovery once per native command
-  only after a complete, unambiguous state-lock acquisition failure. Retry the
-  identical plan or verified saved-plan apply at most once. Never recover
-  release failures, other errors, timeouts or interrupted applies; never disable
-  locking or rewrite/import state. Local bootstrap and Bicep sync do not opt in.
-- Require trusted Tools `main` workflow/current-attempt evidence, complete
-  current-job discovery and no observed active competing run or same-state
-  worker. Use the repository-scoped Actions read token, not broader App
-  permissions. Check the initialized default-workspace backend against the
-  exact selected key and all configured tenant/subscription/client/account/
-  container values. CLI recovery authenticates only as the state identity;
+- Ordinary remote Terraform sync checks the selected state blob before each
+  native plan or verified saved-plan apply, including plan-only runs. A missing
+  or unlocked blob needs no release. Break a held lease at most once and verify
+  release before starting Terraform. Failed or interrupted native commands are
+  not replayed; never disable locking or rewrite/import state. Local bootstrap
+  and Bicep sync do not opt in.
+- Use GitHub Actions job concurrency keyed by the canonical repository state ID,
+  independent of branch and provider prefix, with `cancel-in-progress: false`.
+  Retain workflow-wide serialization; do not implement custom run/job polling
+  or require an additional Actions read token. Permit any Tools branch in the
+  Terraform Sync workflow for the selected repository. Check the initialized
+  default-workspace backend against the exact selected key and all configured
+  tenant/subscription/client/account/container values.
+  CLI recovery authenticates only as the state identity;
   native Terraform and BAMI providers retain explicit OIDC and disabled CLI
   fallback.
-- Inspect blob properties/lock metadata, never resource state contents.
-  Validate error-reported and stored ID/path, then recheck active writers and
-  unchanged ETag/lease/metadata immediately before release. Known IDs use the
-  initialized backend's force-unlock. Missing metadata permits only a scoped
-  ETag-conditional lease break without a fabricated ID. Failed or uncertain
-  release stops without fallback or retry; verify release before retrying
-  acquisition. Preserve original native errors/exit codes and redact credentials.
+- Inspect blob existence and lease properties, never resource state contents or
+  Terraform lock metadata. Use Azure's ETag-conditional lease break on the exact
+  blob. Failed or uncertain release stops without fallback or retry.
+  Preserve original native errors/exit codes and redact credentials.
 - Unknown-owner recovery is an explicit risk-accepted exception, not verified
   abandonment. Timestamps and empty metadata are not ownership proof; the
   ETag check cannot eliminate external-writer or lease-generation races.

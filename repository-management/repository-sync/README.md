@@ -89,38 +89,30 @@ Sync does not run module deployment tests.
 
 ### Automatic state-lock recovery
 
-After native `plan` or saved-plan `apply` exhausts `-lock-timeout=5m`,
-one complete state-lock acquisition diagnostic permits one recovery attempt
-and one retry of the identical command. This also applies to `plan_only`.
-Release errors, provider errors, multiple error diagnostics, timeouts and
-interrupted applies never qualify. Recovery never replans an apply, disables
-locking, imports resources, rewrites state or repairs identity ownership.
-Local bootstrap, Bicep sync and callers without explicit backend context do
-not use this recovery path.
+Before each native `plan` or verified saved-plan `apply`, including
+`plan_only`, the worker checks the exact selected state blob. A missing or
+unlocked blob needs no action. A held lease is broken once, conditional on
+the observed ETag, and must be verified released before Terraform starts.
+Failure or uncertainty stops the command; native errors and interrupted
+operations are not replayed. State contents and Terraform lock IDs are never
+downloaded, parsed or rewritten.
 
-Recovery is restricted to the trusted Tools `main` Terraform Sync workflow.
-It checks the current run/attempt and completely enumerates its jobs with a
-repository-scoped `actions: read` token, separate from the GitHub App token.
-Another active sync run, another active worker for the same state key, or
-unavailable/incomplete evidence stops recovery. Other state keys can continue.
+This runs from any branch of the Tools Terraform Sync workflow. GitHub
+Actions provides serialization: the preparation job's concurrency group is
+`repository-sync-state-${{ inputs.repo_id }}`, with `cancel-in-progress: false`.
+The key is independent of branch and repository naming prefix. The existing
+workflow-wide `repository-sync` concurrency group is retained. No custom
+run/job polling or additional Actions token is required.
+
 The initialized backend must match all five configured identity/storage
-values, the default workspace and the exact selected `<repoId>.tfstate`.
+values, the default workspace and the selected `<repoId>.tfstate`.
 Azure CLI must confirm the state-only tenant, subscription and client.
+Local bootstrap, Bicep sync and callers without explicit backend context
+do not use this preflight.
 
-Only blob properties and `terraformlockid` metadata are read; state contents
-are never downloaded or logged. Recovery checks any error-reported ID/path,
-rechecks active writers, then rereads the ETag, lease status and metadata
-immediately before release. Changed or malformed evidence stops recovery.
-A matching ID uses `terraform force-unlock` through the initialized backend.
-Missing metadata uses an exact-blob lease break conditional on the observed
-ETag; it never invents a lock ID. A failed/uncertain unlock does not fall back
-to breaking the lease. The lease must be observed released before retrying.
-
-**Risk:** an old timestamp, missing metadata or absence of an observed competing
-workflow is not proof of abandonment. Automatic recovery can release an
-unknown external writer's lock. An ETag check does not uniquely identify a
-lease generation or eliminate the final inspection/release race, especially
-when lock metadata is missing. This policy accepts that unknown-owner risk;
+**Risk:** workflow concurrency does not exclude an external Terraform writer.
+An ETag condition does not uniquely identify a lease generation. This policy
+accepts that unknown-owner risk;
 it does not authorize live unlocking. It requires recorded SFI sign-off
 before merge; user risk acceptance is not that sign-off. Keep overlapping
 sync runs queued and do not run external writers against these states.
