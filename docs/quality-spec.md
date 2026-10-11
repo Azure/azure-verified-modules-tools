@@ -1537,6 +1537,16 @@ This section is the implementation-level expression of the **Security stance** p
 - Under strict mode, test property existence through
   `$object.PSObject.Properties[$name]`, and wrap possibly empty or single-item
   pipeline results in `@(...)` before using `.Count` or indexing.
+- Windows build test entry points initialize Pester's shared
+  `HKEY_CURRENT_USER\Software\Pester` parent key before invoking tests or
+  launching shards. Standalone shard workers use the same initializer.
+  Preserve an existing key; never force replacement or delete shared registry
+  data. Retry only a creation `IOException` categorized as `ResourceExists`,
+  rechecking the key before each attempt. The limit is three attempts with
+  100 ms and 200 ms delays and visible retry diagnostics. Exhaustion rethrows
+  the final error; probe failures, access denial and other errors fail
+  immediately. Test assertions, test containers and entire test runs are never
+  retried by this recovery.
 
 ### Layers
 

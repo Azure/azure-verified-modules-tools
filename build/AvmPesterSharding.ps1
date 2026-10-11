@@ -17,6 +17,33 @@ function script:Get-AvmIntegrationTestFile {
     $files.FullName
 }
 
+function script:Initialize-AvmPesterRegistry {
+    $registryPath = 'Microsoft.PowerShell.Core\Registry::HKEY_CURRENT_USER\Software\Pester'
+    $maxAttempts = 3
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        if (Test-Path -LiteralPath $registryPath -PathType Container -ErrorAction Stop) {
+            return
+        }
+
+        try {
+            # Registry -Force would delete the existing key, including other shards' data.
+            $null = New-Item -Path $registryPath -ErrorAction Stop
+            return
+        }
+        catch [System.IO.IOException] {
+            if ($_.CategoryInfo.Category -ne [System.Management.Automation.ErrorCategory]::ResourceExists -or
+                $attempt -eq $maxAttempts) {
+                throw
+            }
+
+            Write-Information (
+                "Pester registry creation collided with another process on attempt $attempt/$maxAttempts; retrying initialization."
+            ) -InformationAction Continue
+            Start-Sleep -Milliseconds (100 * $attempt)
+        }
+    }
+}
+
 function script:Resolve-AvmPowerShellPath {
     if ($PSHOME) {
         $fileName = if ($IsWindows) { 'pwsh.exe' } else { 'pwsh' }
