@@ -644,6 +644,51 @@ Providers required by state:
         }
     }
 
+    Context 'telemetry identifier assertions' {
+        It 'recognizes only complete count comparisons: <Condition>' -TestCases @(
+            @{ Condition = 'length(random_uuid.telemetry) == 0'; Count = 1 }
+            @{ Condition = 'length(random_uuid.telemetry) == 1'; Count = 1 }
+            @{ Condition = "length (`n random_uuid.telemetry `n) == 1"; Count = 1 }
+            @{ Condition = 'length(random_uuid.telemetry) == 10'; Count = 0 }
+            @{ Condition = 'length(random_uuid.telemetry) == 1 && var.enabled'; Count = 0 }
+            @{ Condition = 'length(random_uuid.telemetry[0].result) == 36'; Count = 0 }
+            @{ Condition = 'one(random_uuid.telemetry).result != ""'; Count = 0 }
+            @{ Condition = 'length(random_uuid.telemetry_other) == 1'; Count = 0 }
+            @{ Condition = '"length(random_uuid.telemetry) == 1"'; Count = 0 }
+        ) {
+            param($Condition, $Count)
+            $script:fixture.After.test.runs.root.assert = @(@{ mptf = @{ attributes = @{ condition = $Condition } } })
+            $result = InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {
+                param($Fixture)
+                Get-AvmTerraformTelemetryTestCountMigration -Test $Fixture.After.test -ModuleTargets $Fixture.Targets
+            }
+            $result.ReferenceCount | Should -Be $Count
+            $result.Replacement | Should -BeExactly '${1}terraform_data.telemetry${2}'
+        }
+
+        It 'does not migrate assertions belonging to an uninstrumented selected target' {
+            $script:fixture.Targets[1].Profiles = @('module', 'common')
+            foreach ($run in $script:fixture.After.test.runs.Values) {
+                $run.assert = @(@{ mptf = @{ attributes = @{ condition = 'length(random_uuid.telemetry) == 0' } } })
+            }
+            $result = InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {
+                param($Fixture)
+                Get-AvmTerraformTelemetryTestCountMigration -Test $Fixture.After.test -ModuleTargets $Fixture.Targets
+            }
+            $result.ReferenceCount | Should -Be 1
+        }
+
+        It 'reports malformed assertion inspection explicitly' {
+            $script:fixture.After.test.runs.root.assert = @(@{})
+            {
+                InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {
+                    param($Fixture)
+                    Get-AvmTerraformTelemetryTestCountMigration -Test $Fixture.After.test -ModuleTargets $Fixture.Targets
+                }
+            } | Should -Throw '*Cannot inspect telemetry assertions*'
+        }
+    }
+
     Context 'migration decisions' {
         BeforeEach {
             Mock Get-AvmTerraformUnitTestInspection -ModuleName Avm.Authoring { $Scope.Inspection }
@@ -675,6 +720,49 @@ Providers required by state:
                     $ArgumentList -join '|' -ceq ('clean-backup|--tf-dir|' + $Fixture.Root +
                         '|--test-file|' + $Fixture.Scope.RelativePath)
                 }
+            }
+        }
+
+        It 'accounts for retired identifier assertions and verifies their exact native rule' {
+            foreach ($run in $script:fixture.After.test.runs.Values) {
+                $run.assert = @(@{ mptf = @{ attributes = @{ condition = 'length(random_uuid.telemetry) == 0' } } })
+            }
+            Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
+                [pscustomobject]@{ ExitCode = 0; StdOut = 'true'; StdErr = '' }
+            } -ParameterFilter { $ArgumentList[0] -eq 'debug' }
+            Invoke-UnitMigrationFixture -Fixture $script:fixture
+            Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                $UnitTestPlans[0].TelemetryCountMigration.ReferenceCount -eq 2 -and
+                $UnitTestPlans[0].RetiredProviderReferences.random -eq 2 -and
+                $UnitTestPlans[0].MockMigrationValidated
+            }
+            Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                $ArgumentList[0] -eq 'debug' -and
+                $ArgumentList -ccontains 'migrate_telemetry_counts=true' -and
+                $ArgumentList[-1].Contains('telemetry_counts["counts"].regex') -and
+                $ArgumentList[-1].Contains('telemetry_counts["counts"].replacement')
+            }
+            Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                $ArgumentList[0] -eq 'transform' -and $ArgumentList -ccontains 'migrate_telemetry_counts=true'
+            }
+        }
+
+        It 'rejects an unsupported count rule before cleanup: <Response>' -TestCases @(
+            @{ Response = 'false' }
+            @{ Response = '{}' }
+            @{ Response = 'invalid JSON' }
+        ) {
+            param($Response)
+            $script:fixture.After.test.runs.root.assert = @(
+                @{ mptf = @{ attributes = @{ condition = 'length(random_uuid.telemetry) == 1' } } })
+            $script:fixture.Options.EnvVars['AVM_TEST_CAPABILITY_RESPONSE'] = $Response
+            Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
+                [pscustomobject]@{ ExitCode = 0; StdOut = $EnvVars['AVM_TEST_CAPABILITY_RESPONSE']; StdErr = '' }
+            } -ParameterFilter { $ArgumentList[0] -eq 'debug' }
+            { Invoke-UnitMigrationFixture -Fixture $script:fixture } | Should -Throw '*telemetry count assertions*'
+            Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 0
+            Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter {
+                $ArgumentList[0] -in @('transform', 'clean-backup')
             }
         }
 

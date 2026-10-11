@@ -507,6 +507,44 @@ function Get-AvmTerraformUnitTestMockProviderName {
     }
 }
 
+function Get-AvmTerraformTelemetryTestCountMigration {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Test,
+        [Parameter(Mandatory)] [object[]] $ModuleTargets
+    )
+
+    Set-StrictMode -Version 3.0
+    $pattern = '^(length[ \t\r\n]*[(][ \t\r\n]*)random_uuid[.]telemetry([ \t\r\n]*[)][ \t\r\n]*==[ \t\r\n]*[01])$'
+    $instrumentedPaths = @($ModuleTargets | Where-Object { $_.Profiles -contains 'root' } |
+            ForEach-Object { $_.Path })
+    $count = 0
+    foreach ($name in $Test.runs.Keys) {
+        if ($Test.run_modules[$name].dir -cnotin $instrumentedPaths) { continue }
+        $run = $Test.runs[$name]
+        if (-not $run.Contains('assert')) { continue }
+        foreach ($assertion in $run.assert) {
+            if ($assertion -isnot [System.Collections.IDictionary] -or
+                $assertion['mptf'] -isnot [System.Collections.IDictionary] -or
+                $assertion.mptf['attributes'] -isnot [System.Collections.IDictionary]) {
+                throw [AvmConfigurationException]::new("Cannot inspect telemetry assertions in unit-test run '$name'.")
+            }
+            $condition = $assertion.mptf.attributes['condition']
+            if ($condition -is [string] -and
+                [regex]::IsMatch($condition.Trim(), $pattern,
+                    [System.Text.RegularExpressions.RegexOptions]::CultureInvariant, [TimeSpan]::FromSeconds(1))) {
+                $count++
+            }
+        }
+    }
+    return [pscustomobject]@{
+        ReferenceCount = $count
+        Pattern        = $pattern
+        Replacement    = '${1}terraform_data.telemetry${2}'
+    }
+}
+
 function Invoke-AvmTerraformUnitTestMigration {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -562,6 +600,7 @@ function Invoke-AvmTerraformUnitTestMigration {
         $instrumentedTargets = @($ModuleTargets |
                 Where-Object { $targetPaths.Contains($_.Path) -and $_.Profiles -contains 'root' })
         $migratesTelemetry = $scope.Owner.Profiles -contains 'root' -or $instrumentedTargets.Count -gt 0
+        $telemetryCounts = Get-AvmTerraformTelemetryTestCountMigration -Test $after.test -ModuleTargets $ModuleTargets
         $telemetryResourceIds = @{}
         if ($migratesTelemetry) {
             foreach ($name in @($after.test.mock_providers.Keys | Where-Object { $_ -cmatch '^azapi(\.|$)' })) {
@@ -623,10 +662,10 @@ function Invoke-AvmTerraformUnitTestMigration {
                 $providerMockBindings[$name] = "{`n" + (($names | ForEach-Object { "  $_ = $_" }) -join "`n") + "`n}"
             }
         }
-        $retiredProviderReferences = @{ modtm = 0; random = 0 }
+        $retiredProviderReferences = @{ modtm = 0; random = $telemetryCounts.ReferenceCount }
         $hasProviderMappings = @($after.test.runs.Values |
                 Where-Object { $_.mptf.attributes.Contains('providers') }).Count -gt 0
-        $validateMocks = $newLocations.Count -gt 0 -or
+        $validateMocks = $newLocations.Count -gt 0 -or $telemetryCounts.ReferenceCount -gt 0 -or
         $missingRandomRequirements.Count -gt 0 -or
         ($migratesTelemetry -and ($hasEmptyModtm -or $hasEmptyAzapi -or $telemetryResourceIds.Count -gt 0 -or
             ($hasProviderMappings -and $hasRandomMock -and -not $randomMockRetained)))
@@ -709,12 +748,16 @@ function Invoke-AvmTerraformUnitTestMigration {
             $bindingsJson = (ConvertTo-Json -InputObject $providerMockBindings -Depth 5 -Compress).Replace('${', '$${').Replace('%{', '%%{')
             $arguments += @('--mptf-var', "provider_mock_bindings=$bindingsJson")
         }
+        if ($telemetryCounts.ReferenceCount -gt 0) {
+            $arguments += @('--mptf-var', 'migrate_telemetry_counts=true')
+        }
         $plans.Add([pscustomobject]@{
                 Path                             = $scope.File.FullName
                 Scope                            = $scope
                 TargetPaths                      = @($targetPaths)
                 NewLocationPaths                 = @($newLocations)
                 TelemetrySubscriptionResourceIds = $telemetryResourceIds
+                TelemetryCountMigration          = $telemetryCounts
                 ProviderMockBindings             = $providerMockBindings
                 MockMigrationValidated           = $validateMocks
                 AddDefaultAzapiMock              = $migratesTelemetry -and $hasEmptyModtm -and
@@ -725,7 +768,8 @@ function Invoke-AvmTerraformUnitTestMigration {
     }
 
     foreach ($plan in $plans | Where-Object {
-            $_.TelemetrySubscriptionResourceIds.Count -gt 0 -or $_.ProviderMockBindings.Count -gt 0
+            $_.TelemetrySubscriptionResourceIds.Count -gt 0 -or $_.ProviderMockBindings.Count -gt 0 -or
+            $_.TelemetryCountMigration.ReferenceCount -gt 0
         }) {
         $capabilities = [System.Collections.Generic.List[string]]::new()
         $capabilityName = 'label-safe object merging'
@@ -750,6 +794,14 @@ function Invoke-AvmTerraformUnitTestMigration {
                 $capabilities.Add("try(transform.update_in_place.provider_mocks[$nameJson].dynamic_block_body == $bodyJson, false)")
             }
         }
+        if ($plan.TelemetryCountMigration.ReferenceCount -gt 0) {
+            $capabilityName += ' and telemetry count assertions'
+            $patternJson = ConvertTo-Json -InputObject $plan.TelemetryCountMigration.Pattern -Compress
+            $replacementJson = (ConvertTo-Json -InputObject $plan.TelemetryCountMigration.Replacement -Compress).Replace('${', '$${')
+            $capabilities.Add(
+                "try(transform.regex_replace_expression.telemetry_counts[`"counts`"].regex == $patternJson, false) && " +
+                "try(transform.regex_replace_expression.telemetry_counts[`"counts`"].replacement == $replacementJson, false)")
+        }
         $arguments = @('debug') + $plan.Arguments[1..($plan.Arguments.Count - 1)] + @(
             '--eval',
             ('alltrue([' + ($capabilities -join ', ') + '])')
@@ -772,7 +824,7 @@ function Invoke-AvmTerraformUnitTestMigration {
     foreach ($plan in $plans |
             Where-Object {
                 $_.NewLocationPaths.Count -gt 0 -or $_.TelemetrySubscriptionResourceIds.Count -gt 0 -or
-                $_.ProviderMockBindings.Count -gt 0
+                $_.ProviderMockBindings.Count -gt 0 -or $_.TelemetryCountMigration.ReferenceCount -gt 0
             }) {
         try {
             $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList $plan.Arguments `

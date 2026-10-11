@@ -454,6 +454,9 @@ run "root" { command = plan }
         @{ Capability = 'object merging'; Setting = 'merge_object_attributes' }
         @{ Capability = 'alias targeting'; Setting = 'target_block_address' }
         @{ Capability = 'distinct alias values'; Setting = 'subscription_resource_id' }
+        @{ Capability = 'the telemetry count pattern'; Setting = 'count_regex' }
+        @{ Capability = 'the telemetry count replacement'; Setting = 'count_replacement' }
+        @{ Capability = 'the telemetry count rule'; Setting = 'count_removed' }
     ) {
         param($Setting)
         $fixture = New-NativeTestFixture
@@ -470,7 +473,13 @@ mock_provider "azapi" {
     }
   }
 }
-run "root" { command = plan }
+run "root" {
+  command = plan
+  assert {
+    condition     = length(random_uuid.telemetry) == 0
+    error_message = "Keep the identifier assertion."
+  }
+}
 '@
         [System.IO.File]::WriteAllText($fixture.Test, $source, $script:utf8)
         $before = Read-NativeTestFixture -Fixture $fixture
@@ -493,6 +502,18 @@ run "root" { command = plan }
             $content = $content.Replace('var.telemetry_subscription_resource_ids[each.key]',
                 'var.telemetry_subscription_resource_ids["azapi"]')
             $content | Should -Not -Match 'var.telemetry_subscription_resource_ids\[each\.key\]'
+        }
+        elseif ($Setting -eq 'count_regex') {
+            $content = $content.Replace('random_uuid[.]telemetry', 'random_uuid[.]other')
+            $content | Should -Not -Match 'random_uuid\[\.\]telemetry'
+        }
+        elseif ($Setting -eq 'count_replacement') {
+            $content = $content.Replace('terraform_data.telemetry', 'terraform_data.other')
+            $content | Should -Not -Match 'terraform_data\.telemetry'
+        }
+        elseif ($Setting -eq 'count_removed') {
+            $content = [regex]::Replace($content, '(?ms)^transform "regex_replace_expression" "telemetry_counts" \{.*?^\}\r?\n?', '')
+            $content | Should -Not -Match 'transform "regex_replace_expression" "telemetry_counts"'
         }
         else {
             $content = [regex]::Replace($content, "(?m)^([ \t]*$Setting[ \t]*=[ \t]*)true(?=\r?$)", '${1}false')

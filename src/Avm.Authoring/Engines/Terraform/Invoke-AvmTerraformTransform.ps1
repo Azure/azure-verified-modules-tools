@@ -350,6 +350,8 @@ function Remove-AvmLegacyTelemetryTestMock {
     $azapiMock = '(?m)^[ \t]*mock_provider[ \t]+"azapi"[ \t]*\{'
     $emptyAzapiMock = '(?m)^[ \t]*mock_provider[ \t]+"azapi"[ \t]*\{[ \t\r\n]*\}[ \t]*(?:\r?\n)?'
     $legacyReference = '(?<![A-Za-z0-9_])modtm_telemetry\.telemetry(?![A-Za-z0-9_])'
+    $legacyIdentifierReference = '(?<![A-Za-z0-9_-])random_uuid(?:\s|/\*[\s\S]*?\*/|//[^\r\n]*|#[^\r\n]*)*\.' +
+    '(?:\s|/\*[\s\S]*?\*/|//[^\r\n]*|#[^\r\n]*)*telemetry(?![A-Za-z0-9_-])'
     $emptyRandomMock = '(?m)^[ \t]*mock_provider[ \t]+"random"[ \t]*\{[ \t\r\n]*\}[ \t]*(?:\r?\n)?'
     $randomMock = '(?m)^[ \t]*mock_provider[ \t]+"random"[ \t]*\{'
     $randomUse = @{}
@@ -369,6 +371,17 @@ function Remove-AvmLegacyTelemetryTestMock {
         }
 
         $original = [System.IO.File]::ReadAllText($file.FullName)
+        $identifierReferences = [regex]::Matches($original, $legacyIdentifierReference,
+            [System.Text.RegularExpressions.RegexOptions]::CultureInvariant, [TimeSpan]::FromSeconds(1)).Count
+        $validatedIdentifierReferences = if ($validatedMocks -and
+            $null -ne $unitPlan.PSObject.Properties['TelemetryCountMigration']) {
+            $unitPlan.TelemetryCountMigration.ReferenceCount
+        }
+        else { 0 }
+        if ($identifierReferences -ne $validatedIdentifierReferences) {
+            throw [AvmConfigurationException]::new(
+                "Test file '$($file.FullName)' still references retired random_uuid.telemetry; only complete length(random_uuid.telemetry) == 0 or == 1 assertions on instrumented unit-test targets can be migrated automatically. Review other references manually.")
+        }
         $isUnitTest = $scope.IsUnitTest
         $retiredMock = [regex]::Match($original, $emptyMock)
         $updated = [regex]::Replace($original, $emptyMock, '')

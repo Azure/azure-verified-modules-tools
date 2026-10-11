@@ -921,6 +921,69 @@ mock_provider "random" {
         Get-Content -LiteralPath $custom -Raw | Should -Match 'random_string\.suffix'
     }
 
+    It 'rejects unaccounted retired identifier references even when random remains: <Reference>' -TestCases @(
+        @{ Reference = 'random_uuid.telemetry[0].result' }
+        @{ Reference = 'one(random_uuid.telemetry).result' }
+        @{ Reference = 'random_uuid /* keep */ . /* keep */ telemetry[0].result' }
+        @{ Reference = 'length(random_uuid.telemetry) == 0' }
+        @{ Reference = '"random_uuid.telemetry"' }
+    ) {
+        param($Reference)
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'main.tf') -Encoding utf8NoBOM `
+            -Value 'resource "random_string" "authored" { length = 4 }'
+        $testDir = Join-Path $script:moduleDir 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $testDir -Force
+        $standard = Join-Path $testDir 'a-standard.tftest.hcl'
+        $custom = Join-Path $testDir 'z-custom.tftest.hcl'
+        Set-Content -LiteralPath $standard -Encoding utf8NoBOM -Value 'mock_provider "modtm" {}'
+        $source = "mock_provider `"random`" {}`nrun `"authored`" {`n  assert {`n    condition = $Reference`n  }`n}`n"
+        [System.IO.File]::WriteAllText($custom, $source, [System.Text.UTF8Encoding]::new($false))
+        $before = [System.IO.File]::ReadAllBytes($standard)
+        {
+            InModuleScope Avm.Authoring -Parameters @{ Root = $script:moduleDir } {
+                param($Root)
+                Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets @(
+                    [pscustomobject]@{ Path = $Root; Profiles = @('root') })
+            }
+        } | Should -Throw '*still references retired random_uuid.telemetry*'
+        [System.IO.File]::ReadAllBytes($standard) | Should -Be $before
+        [System.IO.File]::ReadAllText($custom) | Should -BeExactly $source
+    }
+
+    It 'retains validated count assertions for the native rewrite while removing the unused random mock' {
+        $unit = Join-Path $script:moduleDir 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $unit -Force
+        $testFile = Join-Path $unit 'counts.tftest.hcl'
+        Set-Content -LiteralPath $testFile -Encoding utf8NoBOM -Value @'
+mock_provider "random" {}
+run "disabled" {
+  assert {
+    condition     = length(random_uuid.telemetry) == 0
+    error_message = "Preserve this assertion."
+  }
+}
+'@
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:moduleDir; TestFile = $testFile } {
+            param($Root, $TestFile)
+            Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets @(
+                [pscustomobject]@{ Path = $Root; Profiles = @('root') }
+            ) -UnitTestPlans @(
+                [pscustomobject]@{
+                    Path = $TestFile
+                    TargetPaths = @($Root)
+                    MockMigrationValidated = $true
+                    AddDefaultAzapiMock = $false
+                    TelemetryCountMigration = [pscustomobject]@{ ReferenceCount = 1 }
+                    RetiredProviderReferences = @{ modtm = 0; random = 1 }
+                }
+            )
+        }
+        $content = [System.IO.File]::ReadAllText($testFile)
+        $content | Should -Not -Match 'mock_provider "random"'
+        $content | Should -Match 'length\(random_uuid\.telemetry\) == 0'
+        $content | Should -Match 'Preserve this assertion\.'
+    }
+
     It 'rejects custom modtm mocks before changing another test file' {
         $testDir = Join-Path $script:moduleDir 'tests' 'unit'
         $null = New-Item -ItemType Directory -Path $testDir -Force

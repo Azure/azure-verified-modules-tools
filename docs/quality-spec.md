@@ -740,7 +740,15 @@ or data sources remain in the module. The transform also removes obsolete
 `modtm` provider declarations in examples and standalone test modules when
 they have no remaining `modtm` resources or data sources, empty `modtm` test
 mocks, and standard references to the old telemetry resource. Direct unit
-tests receive a missing AzAPI mock when retiring their empty modtm mock;
+assertions whose complete condition is `length(random_uuid.telemetry) == 0`
+or `== 1` are migrated to `terraform_data.telemetry` only when their selected
+target is instrumented. The count, comparison, error message and surrounding
+comments are preserved. Native profile inspection must confirm the exact
+expression-replacement rule before any test files change. Every reference to
+the retired identifier in that file must be accounted for by these assertions;
+other uses, including references in comments or strings that prevent that
+proof, require review even when unrelated random use retains the provider.
+Direct unit tests receive a missing AzAPI mock when retiring their empty modtm mock;
 empty AzAPI mocks, including comment-only bodies, receive a valid synthetic
 subscription resource ID for `azapi_client_config` without losing comments.
 Default and literally named aliased AzAPI mocks receive only a missing

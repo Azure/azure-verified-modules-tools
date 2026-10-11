@@ -1452,6 +1452,41 @@ run "example" {
         $result.StdErr | Should -BeNullOrEmpty
     }
 
+    It 'rejects unsupported retired identifier assertions without changing test files: <Expression>' -TestCases @(
+        @{ Expression = 'random_uuid.telemetry[0].result != ""' }
+        @{ Expression = 'length(random_uuid.telemetry) == 1 && var.enable_telemetry' }
+    ) {
+        param($Expression)
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $root -WithLegacy -WithLocation
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+resource "random_string" "authored" {
+  length = 4
+}
+'@
+        $unit = Join-Path $root 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $unit -Force
+        $standard = Join-Path $unit 'a-standard.tftest.hcl'
+        $custom = Join-Path $unit 'z-custom.tftest.hcl'
+        Set-Content -LiteralPath $standard -Encoding utf8NoBOM -Value 'mock_provider "modtm" {}'
+        $source = @"
+mock_provider "modtm" {}
+mock_provider "random" {}
+run "authored" {
+  command = plan
+  assert {
+    condition     = $Expression
+    error_message = "Keep this authored assertion for review."
+  }
+}
+"@
+        [System.IO.File]::WriteAllText($custom, $source, [System.Text.UTF8Encoding]::new($false))
+        $before = [System.IO.File]::ReadAllBytes($standard)
+        { Invoke-TelemetryEngine -Root $root } | Should -Throw '*still references retired random_uuid.telemetry*'
+        [System.IO.File]::ReadAllBytes($standard) | Should -Be $before
+        [System.IO.File]::ReadAllText($custom) | Should -BeExactly $source
+    }
+
     It 'preserves inherited random mock values in root and selected child runs' {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $child = Join-Path $root 'modules' 'child'
@@ -1539,6 +1574,10 @@ run "root" {
     )
     error_message = "The root must retain both authored mock values."
   }
+  assert {
+    condition     = length(random_uuid.telemetry) == 1
+    error_message = "Keep the root telemetry identifier count."
+  }
 }
 
 run "child" {
@@ -1552,6 +1591,10 @@ run "child" {
       azapi_resource.telemetry[0].parent_id == "/subscriptions/11111111-1111-1111-1111-111111111111"
     )
     error_message = "The selected child must retain both authored mock values."
+  }
+  assert {
+    condition     = length(random_uuid.telemetry) == 1
+    error_message = "Keep the child telemetry identifier count."
   }
 }
 
@@ -1590,6 +1633,8 @@ run "clock" {
         $content | Should -Match '(?m)^\s*azapi\s*=\s*azapi\s*$'
         $content | Should -Match '(?m)^\s*random\s*=\s*random\s*$'
         $content | Should -Not -Match '(?m)^\s*time\s*=\s*time\s*$'
+        $content | Should -Not -Match 'random_uuid\.telemetry'
+        [regex]::Matches($content, 'length\(terraform_data\.telemetry\) == 1').Count | Should -Be 2
         [regex]::Matches($content, '(?m)^\s*providers\s*=\s*\{').Count | Should -Be 2
         foreach ($target in @($root, $child)) {
             Get-Content -LiteralPath (Join-Path $target 'terraform.tf') -Raw |
@@ -1868,6 +1913,11 @@ run "root_on" {
     )
     error_message = "Telemetry must work without changing the location or unrelated mock."
   }
+  # Preserve the independent identifier check.
+  assert {
+    condition     = length(random_uuid.telemetry) == 1
+    error_message = "Keep the enabled identifier count."
+  }
 __ASSERTION__
 }
 
@@ -1879,6 +1929,10 @@ run "root_off" {
   assert {
     condition     = length(modtm_telemetry.telemetry) == 0
     error_message = "Keep the authored telemetry opt-out assertion."
+  }
+  assert {
+    condition     = length(random_uuid.telemetry) == 0
+    error_message = "Keep the disabled identifier count."
   }
 }
 
@@ -1899,6 +1953,10 @@ run "child_on" {
     )
     error_message = "Keep the local child target and its authored region."
   }
+  assert {
+    condition     = length(random_uuid.telemetry) == 1
+    error_message = "Keep the selected child's identifier count."
+  }
 __ASSERTION__
 }
 '@
@@ -1918,6 +1976,12 @@ __ASSERTION__
         $first | Should -Not -Match 'mock_provider "(modtm|random)"'
         $first | Should -Match 'source\s*=\s*"\./modules/child"'
         $first | Should -Match 'enable_telemetry\s*=\s*false'
+        $first | Should -Not -Match 'random_uuid\.telemetry'
+        $first | Should -Match '# Preserve the independent identifier check\.'
+        $first | Should -Match 'Keep the enabled identifier count\.'
+        $first | Should -Match 'Keep the disabled identifier count\.'
+        [regex]::Matches($first, 'length\(terraform_data\.telemetry\) == 1').Count | Should -Be 2
+        [regex]::Matches($first, 'length\(terraform_data\.telemetry\) == 0').Count | Should -Be 1
         (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'pass'
         [System.IO.File]::ReadAllText($testPath) | Should -BeExactly $first
         Assert-TelemetryTerraformValid -Root $root -TestDirectory 'tests/unit'

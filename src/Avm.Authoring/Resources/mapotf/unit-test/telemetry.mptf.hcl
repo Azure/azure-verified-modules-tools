@@ -8,6 +8,11 @@ variable "provider_mock_bindings" {
   default = {}
 }
 
+variable "migrate_telemetry_counts" {
+  type    = bool
+  default = false
+}
+
 locals {
   telemetry_mock_updates = {
     for name, mock in local.test_file.mock_providers : name => mock
@@ -42,4 +47,10 @@ transform "update_in_place" "provider_mocks" {
   for_each             = var.provider_mock_bindings
   target_block_address = local.test_file.runs[each.key].mptf.block_address
   dynamic_block_body   = "providers = ${each.value}\n"
+}
+
+transform "regex_replace_expression" "telemetry_counts" {
+  for_each    = var.migrate_telemetry_counts ? toset(["counts"]) : toset([])
+  regex       = "^(length[ \\t\\r\\n]*[(][ \\t\\r\\n]*)random_uuid[.]telemetry([ \\t\\r\\n]*[)][ \\t\\r\\n]*==[ \\t\\r\\n]*[01])$"
+  replacement = "$${1}terraform_data.telemetry$${2}"
 }
