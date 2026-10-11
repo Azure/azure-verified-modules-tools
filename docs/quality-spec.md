@@ -887,6 +887,10 @@ package, not registry utilities or copied compliance scripts.
 Callers pin every tools `uses` reference and `tools-ref` to the same full
 immutable commit SHA and supply an exact qualified `avm-authoring-version`.
 There is no floating, development-version or missing-release fallback.
+The tools checkout does not supply the runtime module: each native phase
+imports the selected PSGallery package. Package qualification must exercise
+the workflow adapter with that runtime, including InPlace/Fresh retries and
+final-only cleanup; interface-parameter checks alone do not prove this behavior.
 Nested reusable calls remain relative to that tools revision. Executable
 jobs check out the complete caller at its intended target and separately
 check out tools actions, workflow support and shared repository-management
@@ -944,9 +948,14 @@ approval. Per-target locks cover deployment, assertions and cleanup; shared
 tenant/management-group/linked-template scopes additionally take the shared
 outer lock. Queue rather than cancel. Pass full CI variables/secrets only to
 Deploy; retain generic `gci` and separate custom resource location from fixed
-`WestEurope` metadata location. Renewal precedes Complete, failure recovery
-uses persisted state without replaying authored hooks, and cancellation
-prevents starting renewal or recovery. Artifacts contain only allowed
+`WestEurope` metadata location. Renewal precedes Complete after either a
+successful or failed Deploy. Native completion validates saved state, runs
+the final terminal deployment's post hook once, and then cleans every attempt;
+it must not mask the original deployment failure. KeepResources skips post
+and cleanup. Unsafe, changed-source or interrupted-completion state must not
+replay authored code. Cleanup-only recovery uses persisted state without
+authored hooks, and cancellation prevents starting renewal, completion or
+recovery. Artifacts contain only allowed
 diagnostics and credential-free state; skipped or malformed executions are
 not passing results.
 

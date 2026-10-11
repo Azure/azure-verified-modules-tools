@@ -158,7 +158,8 @@ Describe 'terraform-module fork isolation' {
                 $Name | Should -Be 'Avm.Authoring'
             }
             function Invoke-AvmPrCheck { param([string] $Path) }
-            function avm { throw 'Checks must not execute with an older module.' }
+            function Invoke-AvmFixture { throw 'Checks must not execute with an older module.' }
+            Set-Alias -Name avm -Value Invoke-AvmFixture -Scope Local
 
             { & $script:forkCheckScript } | Should -Throw '*Fork checks require an Avm.Authoring release with -ExcludeSteps*'
         }
@@ -171,10 +172,11 @@ Describe 'terraform-module fork isolation' {
                 $Name | Should -Be 'Avm.Authoring'
             }
             function Invoke-AvmPrCheck { param([string[]] $ExcludeSteps) }
-            function avm {
+            function Invoke-AvmFixture {
                 param([string] $Verb, [string[]] $ExcludeSteps)
                 [pscustomobject]@{ Verb = $Verb; Exclusions = $ExcludeSteps }
             }
+            Set-Alias -Name avm -Value Invoke-AvmFixture -Scope Local
 
             & $script:forkCheckScript
         }

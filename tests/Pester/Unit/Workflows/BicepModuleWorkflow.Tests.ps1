@@ -279,6 +279,7 @@ Describe 'Bicep required checks and deployment guards' {
             $login.with.'enable-AzPSSession' | Should -BeTrue
             $login.with.Contains('creds') | Should -BeFalse
         }
+
         foreach ($step in $action.runs.steps | Where-Object {
                 $_['id'] -in @('deploy', 'complete') -or $_.name -eq 'Recover unfinished native cleanup'
             }) {
@@ -295,6 +296,31 @@ Describe 'Bicep required checks and deployment guards' {
             (Get-Content -LiteralPath (Join-Path $script:root $path) -Raw) |
                 Should -Not -Match 'VALIDATE_CLIENT_ID|AZURE_CREDENTIALS|oidc-exceptions|useSecret'
         }
+    }
+
+    It 'selects completion for deploy <Deploy>, renewal <Renew> and cancellation <Cancelled>' -ForEach @(
+        @{ Deploy = 'success'; Renew = 'success'; Cancelled = $false; Expected = $true }
+        @{ Deploy = 'failure'; Renew = 'success'; Cancelled = $false; Expected = $true }
+        @{ Deploy = 'skipped'; Renew = 'success'; Cancelled = $false; Expected = $false }
+        @{ Deploy = 'cancelled'; Renew = 'success'; Cancelled = $false; Expected = $false }
+        @{ Deploy = 'success'; Renew = 'failure'; Cancelled = $false; Expected = $false }
+        @{ Deploy = 'failure'; Renew = 'failure'; Cancelled = $false; Expected = $false }
+        @{ Deploy = 'failure'; Renew = 'skipped'; Cancelled = $false; Expected = $false }
+        @{ Deploy = 'failure'; Renew = 'cancelled'; Cancelled = $false; Expected = $false }
+        @{ Deploy = 'success'; Renew = 'success'; Cancelled = $true; Expected = $false }
+        @{ Deploy = 'failure'; Renew = 'success'; Cancelled = $true; Expected = $false }
+    ) {
+        $steps = $script:actions['bicep-deployment'].runs.steps
+        $complete = $steps | Where-Object { $_['id'] -eq 'complete' }
+        $condition = $complete.if.Replace('${{', '').Replace('}}', '').
+            Replace('cancelled()', '$Cancelled').Replace('success()', '$Succeeded').Replace('failure()', '$Failed').
+            Replace('steps.deploy.outcome', '$Deploy').Replace('steps.renew_oidc.outcome', '$Renew').
+            Replace('&&', '-and').Replace('||', '-or').Replace('==', '-eq').Replace('!', '-not ')
+        $Succeeded = $Deploy -eq 'success' -and $Renew -eq 'success'
+        $Failed = -not $Succeeded
+        & ([scriptblock]::Create($condition)) | Should -Be $Expected
+        ($steps | Where-Object { $_['id'] -eq 'deploy' }).Contains('continue-on-error') | Should -BeFalse
+        $complete.Contains('continue-on-error') | Should -BeFalse
     }
 
     It 'requires mapping selection only for requested Azure tests, never static, preview or tag-only work' {

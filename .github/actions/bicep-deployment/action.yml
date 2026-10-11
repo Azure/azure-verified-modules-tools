@@ -143,7 +143,7 @@ runs:
         enable-AzPSSession: true
     - name: Assert and complete native test case
       id: complete
-      if: ${{ !cancelled() && (success() || failure()) && steps.deploy.outcome == 'success' && steps.renew_oidc.outcome == 'success' }}
+      if: ${{ !cancelled() && (success() || failure()) && (steps.deploy.outcome == 'success' || steps.deploy.outcome == 'failure') && steps.renew_oidc.outcome == 'success' }}
       shell: pwsh
       env:
         AVM_ACTION_PATH: ${{ github.action_path }}
