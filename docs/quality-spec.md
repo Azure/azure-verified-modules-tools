@@ -1520,6 +1520,11 @@ This section is the implementation-level expression of the **Security stance** p
 ### Test framework
 
 - Pester 5.5+.
+- Before concurrent Windows shards start, open or create `HKCU\Software\Pester`
+  with `RegistryKey.CreateSubKey` and dispose the handle. Preserve existing
+  values and children; Pester creates and removes only its per-run subkeys.
+  Never force-recreate the shared parent, suppress access failures or disable
+  TestRegistry. Unix bootstrap remains unchanged.
 - All tests use `Describe` / `Context` / `It` blocks; no Pester 4 syntax.
 - Reserve `<name>` placeholders in test titles for actual `-TestCases`
   parameters; use another notation for illustrative paths.

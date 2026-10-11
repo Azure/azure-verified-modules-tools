@@ -174,6 +174,32 @@ Describe 'Invoke-AvmPesterShardedTier' {
         $script:buildMessages = [System.Collections.Generic.List[string]]::new()
     }
 
+    It 'propagates <Kind> bootstrap failures without starting a shard' -ForEach @(
+        @{ Kind = 'access'; Failure = [UnauthorizedAccessException]::new('Registry access denied.') }
+        @{ Kind = 'I/O'; Failure = [IO.IOException]::new('Registry storage unavailable.') }
+    ) {
+        $script:bootstrapFailure = $Failure
+        $script:bootstrapCalls = 0
+        $probe = script:New-TestFile -Name 'NotStarted.Tests.ps1' -Length 1
+        $initializer = (Get-Command Initialize-AvmPesterRegistryRoot).ScriptBlock
+        Set-Item -LiteralPath 'Function:script:Initialize-AvmPesterRegistryRoot' -Value {
+            $script:bootstrapCalls++
+            throw $script:bootstrapFailure
+        }
+        Mock Start-Process { throw 'A shard must not start after bootstrap failure.' }
+
+        try {
+            { Invoke-AvmPesterShardedTier -Tier 'unit' -File @($probe) -ShardCount 1 } |
+                Should -Throw $Failure.Message
+
+            $script:bootstrapCalls | Should -Be 1
+            Should -Invoke Start-Process -Exactly 0
+        }
+        finally {
+            Set-Item -LiteralPath 'Function:script:Initialize-AvmPesterRegistryRoot' -Value $initializer
+        }
+    }
+
     It 'warns when a unit shard writes to its isolated AVM_HOME' {
         $probe = Join-Path $TestDrive 'Writes.Tests.ps1'
         [IO.File]::WriteAllText($probe, @'
@@ -234,6 +260,19 @@ Describe 'broken teardown' {
             -Path ($passing + [IO.Path]::PathSeparator + $broken) -OutputPath $output 2>&1
         $LASTEXITCODE | Should -Be 1
         ([xml](Get-Content -LiteralPath $output -Raw)).'test-results'.total | Should -Be 1
+    }
+
+    It 'fails a shard when container setup fails, even if another container passes' {
+        $passing = Join-Path $TestDrive 'Passing.Tests.ps1'
+        $broken = Join-Path $TestDrive 'SetupFailure.Tests.ps1'
+        [IO.File]::WriteAllText($passing, "Describe 'ok' { It 'passes' { 1 | Should -Be 1 } }")
+        [IO.File]::WriteAllText($broken, "BeforeAll { throw 'fixture setup failure' }; Describe 'broken' { It 'never runs' { 1 | Should -Be 1 } }")
+        $shard = Join-Path $script:repoRoot 'build' 'Invoke-AvmPesterShard.ps1'
+        $output = Join-Path $TestDrive 'setup-failure.xml'
+        $null = & pwsh -NoLogo -NoProfile -NonInteractive -File $shard `
+            -Path ($passing + [IO.Path]::PathSeparator + $broken) -OutputPath $output 2>&1
+        $LASTEXITCODE | Should -Be 1
+        ([xml](Get-Content -LiteralPath $output -Raw)).'test-results'.failures | Should -BeGreaterThan 0
     }
 
     It 'applies excluded tags and isolates temp and AVM_HOME per shard' {
