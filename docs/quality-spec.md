@@ -899,6 +899,15 @@ caller-owned implementation. Remote initializers resolve their scripts from
 `github.action_path`. Ordinary callers retain `github.sha`; generic callers
 forward their checked `targetCommit` through every validation tier.
 
+For generic pull requests, `pullRequestHeadCommit` is the event's head SHA.
+The checked-out target must be the tested merge with exactly two parents:
+its second parent must match that head, and its first parent is the only
+comparison base. Ignore the mutable event base; never substitute a branch
+tip or merge-base. Unavailable or malformed merge history fails before
+matrix outputs. Pushes retain their before-to-target comparison and
+static-only all-module fallback when the base is unavailable; manual
+selection does not inspect pull-request history.
+
 Static validation invokes `Invoke-AvmTestUnit -Recurse -IncludeCompliance`
 only after the package declares integer
 `PrivateData.AvmCapabilities.BicepPackagedCompliance = 1`. A compiled asset
@@ -909,6 +918,19 @@ invalid, unmatched or incorrectly cased selectors fail. Required baselines
 are `Azure.Pillar.Reliability` and `CB.AVM.WAF.Security`; `Azure.Default`
 and `Azure.Pillar.Security` are advisory. Missing dependencies, empty results
 and uninspectable evaluations still fail.
+
+Policy preparation requires integer package capability
+`PrivateData.AvmCapabilities.PowerShellModuleArchiveRecovery = 1`. Resolve
+PSRule and PSRule.Rules.Azure with `Get-AvmTool` at the same caller module
+path used for validation. Reuse the exact installed or managed-cache versions;
+prepare missing packages through `Install-AvmTool`, including its pinned
+dependencies, then confirm readiness. Do not maintain a second package
+downloader, custom repository or direct policy dependency installation in
+workflow support. The native installer owns checksum validation, download
+staging, bounded local archive-corruption recovery and atomic publication.
+Retain the selected release's exact dependency pins and repository overrides,
+not a new floating prerelease lookup. Bootstrap or import failures are errors
+even for advisory baselines; advisory rule findings remain warnings.
 
 Only requested, nonignored Azure cases require identity selection. Static,
 policy, discovery, release preview and tag-only execution must not require
@@ -942,6 +964,20 @@ per job/execution context. Check the selected service principal, tenant,
 subscription and cloud before Deploy, Complete and state-only recovery;
 the package also guards CLI/PowerShell agreement. Deployment identities do
 not replace unrelated publication credentials.
+
+Before deployment authentication, require integer package capability
+`PrivateData.AvmCapabilities.BicepRequiredResourceProviders = 1`. The native
+Deploy/All runner alone discovers and validates repository-root
+`.required-features.json` and `.required-resource-providers.json`, using the
+exact module path rather than the identity map's canonical-root inheritance.
+Feature prerequisites precede provider prerequisites, then token replacement,
+validation and deployment, in the already selected tenant/subscription
+context. The optional provider map contains namespace arrays, not feature
+names or identities. Missing, empty and unrelated requirements do not issue
+registration calls. WhatIf, Complete, cleanup and nondeployment workflow
+paths never register. Registration persists after testing and does not grant
+the test identity additional permissions. The marker does not qualify a
+release containing the other required runtime and policy interfaces.
 
 Keep `avm-validation` for selection/execution and `publish-approval` for tag
 approval. Per-target locks cover deployment, assertions and cleanup; shared

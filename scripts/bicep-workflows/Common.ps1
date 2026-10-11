@@ -126,7 +126,8 @@ function Initialize-AvmWorkflow {
         [Parameter(Mandatory)] [AllowEmptyString()] [string] $Version,
         [Parameter(Mandatory)]
         [ValidateSet('Static', 'Policy', 'Deployment', 'Matrix', 'Package')]
-        [string] $Profile
+        [string] $Profile,
+        [string] $Path = $PWD.Path
     )
 
     if ($Version -cnotmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$' -or $Version -ceq '0.0.0') {
@@ -135,14 +136,19 @@ function Initialize-AvmWorkflow {
     if (-not $PSCmdlet.ShouldProcess("Bicep $Profile workflow", 'Prepare package and dependencies')) { return }
     $null = Install-AvmWorkflowModule -Name Avm.Authoring -Version $Version -Confirm:$false
     Import-AvmWorkflowPackage -Version $Version
-    if ($Profile -eq 'Static') {
+    if ($Profile -in @('Static', 'Policy', 'Deployment')) {
+        $requiredCapability = switch ($Profile) {
+            Static { 'BicepPackagedCompliance' }
+            Policy { 'PowerShellModuleArchiveRecovery' }
+            Deployment { 'BicepRequiredResourceProviders' }
+        }
         $package = Get-Module Avm.Authoring | Where-Object { $_.Version -eq [version]$Version } | Select-Object -First 1
         $capabilities = if ($null -ne $package -and $package.PrivateData -is [Collections.IDictionary]) {
             $package.PrivateData['AvmCapabilities']
         }
         if ($capabilities -isnot [Collections.IDictionary] -or
-            $capabilities['BicepPackagedCompliance'] -isnot [int] -or $capabilities['BicepPackagedCompliance'] -ne 1) {
-            throw [InvalidOperationException]::new('The selected package lacks BicepPackagedCompliance capability 1; registry-owned compliance is not a fallback.')
+            $capabilities[$requiredCapability] -isnot [int] -or $capabilities[$requiredCapability] -ne 1) {
+            throw [InvalidOperationException]::new("The selected package lacks $requiredCapability capability 1; a qualified migration release is required.")
         }
     }
     if ($Profile -in @('Static', 'Deployment')) {
@@ -157,8 +163,29 @@ function Initialize-AvmWorkflow {
                 throw [InvalidOperationException]::new("The selected package lacks Bicep policy $parameter support; a qualified migration release is required.")
             }
         }
-        $null = Install-AvmWorkflowModule -Name PSRule -Version 2.9.0 -Confirm:$false
-        $null = Install-AvmWorkflowModule -Name PSRule.Rules.Azure -Version 1.47.0 -Confirm:$false
+        $policyNames = @('PSRule', 'PSRule.Rules.Azure')
+        for ($inspection = 0; $inspection -lt 2; $inspection++) {
+            $policyTools = @(Get-AvmTool -Name $policyNames -Path $Path -SkipModuleVersionCheck)
+            if ($policyTools.Count -ne $policyNames.Count) {
+                throw [InvalidOperationException]::new('Managed PSRule preparation requires both selected packages.')
+            }
+            foreach ($name in $policyNames) {
+                if (@($policyTools | Where-Object Name -CEQ $name).Count -ne 1) {
+                    throw [InvalidOperationException]::new("Managed PSRule preparation requires exactly one $name result.")
+                }
+            }
+            foreach ($tool in $policyTools) {
+                if ($tool.Status -cnotin @('installed', 'installed-on-module-path', 'not-installed')) {
+                    throw [InvalidOperationException]::new("Cannot prepare $($tool.Name) with managed status '$($tool.Status)'.")
+                }
+            }
+            $missing = @($policyTools | Where-Object Status -CEQ 'not-installed' | ForEach-Object Name)
+            if ($missing.Count -eq 0) { break }
+            if ($inspection -gt 0) {
+                throw [InvalidOperationException]::new('Managed PSRule preparation did not provide every selected package.')
+            }
+            $null = Install-AvmTool -Name $missing -Path $Path -SkipModuleVersionCheck -Confirm:$false
+        }
     }
     if ($Profile -eq 'Deployment') {
         foreach ($parameter in @('Phase', 'CleanupStatePath', 'UseCiInputs', 'Recurse')) {
@@ -170,7 +197,7 @@ function Initialize-AvmWorkflow {
         $null = Install-AvmWorkflowModule -Name Az.Subscription -Version 0.12.0 -Minimum -Confirm:$false
     }
     if ($Profile -ne 'Package') {
-        $null = Install-AvmTool -Name bicep -SkipModuleVersionCheck
+        $null = Install-AvmTool -Name bicep -Path $Path -SkipModuleVersionCheck
     }
     Write-AvmWorkflowOutput -Name AVM_AUTHORING_VERSION -Value $Version -FilePath $env:GITHUB_ENV
 }

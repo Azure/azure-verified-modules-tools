@@ -5,11 +5,14 @@ inputs:
     description: Exact qualified Avm.Authoring release.
     required: true
   baseCommit:
-    description: Full base commit SHA when available.
+    description: Previous commit SHA for push events; pull requests derive the tested merge's first parent.
     required: false
   targetCommit:
     description: Full target commit SHA.
     required: true
+  pullRequestHeadCommit:
+    description: Event head SHA, required for pull requests and matched to the tested merge's second parent.
+    required: false
   eventName:
     description: push, pull_request or workflow_dispatch.
     required: true
@@ -64,6 +67,7 @@ runs:
         AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
         BASE_COMMIT: ${{ inputs.baseCommit }}
         TARGET_COMMIT: ${{ inputs.targetCommit }}
+        PULL_REQUEST_HEAD_COMMIT: ${{ inputs.pullRequestHeadCommit }}
         EVENT_NAME: ${{ inputs.eventName }}
         MODULE_PATHS: ${{ inputs.modulePaths }}
         CREATE_RELEASE_TAG: ${{ inputs.createReleaseTag }}
@@ -79,6 +83,7 @@ runs:
         $parameters = @{
           Root = $env:GITHUB_WORKSPACE; EventName = $env:EVENT_NAME
           BaseCommit = $env:BASE_COMMIT; TargetCommit = $env:TARGET_COMMIT; ModulePaths = $env:MODULE_PATHS
+          PullRequestHeadCommit = $env:PULL_REQUEST_HEAD_COMMIT
           CreateReleaseTag = ConvertTo-AvmWorkflowBoolean $env:CREATE_RELEASE_TAG
           PublishOnly = ConvertTo-AvmWorkflowBoolean $env:PUBLISH_ONLY
           StaticValidation = ConvertTo-AvmWorkflowBoolean $env:STATIC_VALIDATION

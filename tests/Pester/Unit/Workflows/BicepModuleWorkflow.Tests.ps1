@@ -100,6 +100,30 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             Should -Be @('baseCommit', 'hasModules', 'includeAllVersionedModules', 'moduleMatrix', 'targetCommit', 'workflowInput')
     }
 
+    It 'forwards the event pull request head as data without deriving a branch tip or mutable base' {
+        $action = $script:actions['bicep-workflow-matrix']
+        $action.inputs.pullRequestHeadCommit.required | Should -BeFalse
+        $action.inputs.pullRequestHeadCommit.Contains('default') | Should -BeFalse
+        $step = $action.runs.steps[0]
+        $step.env.PULL_REQUEST_HEAD_COMMIT | Should -BeExactly '${{ inputs.pullRequestHeadCommit }}'
+        $step.run | Should -Match 'PullRequestHeadCommit = \$env:PULL_REQUEST_HEAD_COMMIT'
+        $step.run.IndexOf('Initialize-AvmWorkflowMatrix @parameters') |
+            Should -BeLessThan $step.run.IndexOf('Write-AvmWorkflowOutput')
+    }
+
+    It 'prepares managed policy tools with the same validated caller path as native analysis' {
+        $steps = $script:actions['bicep-validation'].runs.steps
+        $setup = $steps | Where-Object { $_['id'] -eq 'setup' }
+        $setup.env.MODULE_PATH | Should -BeExactly '${{ inputs.modulePath }}'
+        $setup.run | Should -Match 'Resolve-AvmWorkflowPath -Root \$env:GITHUB_WORKSPACE -RelativePath \$env:MODULE_PATH'
+        $setup.run | Should -Match 'Initialize-AvmWorkflow .* -Path \$modulePath '
+        $validation = $steps | Where-Object { $_['name'] -eq 'Run package validation' }
+        $validation.env.MODULE_PATH | Should -BeExactly '${{ inputs.modulePath }}'
+        $validation.run | Should -Match 'ModulePath = \$env:MODULE_PATH'
+        $validation.Contains('if') | Should -BeFalse
+        $setup.Contains('continue-on-error') | Should -BeFalse
+    }
+
     It 'parses every embedded PowerShell script without interpolated workflow expressions' {
         $steps = @(
             foreach ($workflow in $script:workflows.Values) {
@@ -298,6 +322,21 @@ Describe 'Bicep required checks and deployment guards' {
         }
     }
 
+    It 'keeps prerequisite discovery native and package qualification ahead of Azure login' {
+        $action = $script:actions['bicep-deployment']
+        $steps = @($action.runs.steps)
+        $setup = $steps | Where-Object { $_['id'] -eq 'setup' }
+        $login = $steps | Where-Object { $_['id'] -eq 'login_oidc' }
+        [array]::IndexOf($steps, $setup) | Should -BeLessThan ([array]::IndexOf($steps, $login))
+        $setup.run | Should -Match 'Initialize-AvmWorkflow.*-Profile Deployment'
+        $setup.Contains('continue-on-error') | Should -BeFalse
+        $login.Contains('if') | Should -BeFalse
+        $action.inputs.modulePath.description | Should -Match '\.required-features\.json'
+        $action.inputs.modulePath.description | Should -Match '\.required-resource-providers\.json'
+        $action.inputs.modulePath.description | Should -Match 'exact.*path'
+        ($steps | ConvertTo-Json -Depth 20) | Should -Not -Match 'Register-.*(Feature|Provider)|required-resource-providers'
+    }
+
     It 'selects completion for deploy <Deploy>, renewal <Renew> and cancellation <Cancelled>' -ForEach @(
         @{ Deploy = 'success'; Renew = 'success'; Cancelled = $false; Expected = $true }
         @{ Deploy = 'failure'; Renew = 'success'; Cancelled = $false; Expected = $true }
@@ -321,6 +360,39 @@ Describe 'Bicep required checks and deployment guards' {
         & ([scriptblock]::Create($condition)) | Should -Be $Expected
         ($steps | Where-Object { $_['id'] -eq 'deploy' }).Contains('continue-on-error') | Should -BeFalse
         $complete.Contains('continue-on-error') | Should -BeFalse
+    }
+
+    It 'executes renewal and recovery guards for <Scenario>' -ForEach @(
+        @{ Scenario = 'success'; Deploy = 'success'; Renew = 'success'; Complete = 'success'; Remove = 'true'; Cancelled = $false; Expected = @($true, $true, $false) }
+        @{ Scenario = 'failed deployment'; Deploy = 'failure'; Renew = 'success'; Complete = 'failure'; Remove = 'true'; Cancelled = $false; Expected = @($true, $true, $true) }
+        @{ Scenario = 'failed retained deployment'; Deploy = 'failure'; Renew = 'success'; Complete = 'failure'; Remove = 'false'; Cancelled = $false; Expected = @($true, $true, $false) }
+        @{ Scenario = 'skipped deployment'; Deploy = 'skipped'; Renew = 'skipped'; Complete = 'skipped'; Remove = 'true'; Cancelled = $false; Expected = @($false, $false, $false) }
+        @{ Scenario = 'failed renewal'; Deploy = 'failure'; Renew = 'failure'; Complete = 'skipped'; Remove = 'true'; Cancelled = $false; Expected = @($true, $false, $false) }
+        @{ Scenario = 'failed completion'; Deploy = 'success'; Renew = 'success'; Complete = 'failure'; Remove = 'true'; Cancelled = $false; Expected = @($true, $true, $true) }
+        @{ Scenario = 'cancelled deployment'; Deploy = 'cancelled'; Renew = 'skipped'; Complete = 'skipped'; Remove = 'true'; Cancelled = $true; Expected = @($false, $false, $false) }
+        @{ Scenario = 'cancellation after deployment'; Deploy = 'success'; Renew = 'skipped'; Complete = 'skipped'; Remove = 'true'; Cancelled = $true; Expected = @($false, $false, $false) }
+    ) {
+        $steps = $script:actions['bicep-deployment'].runs.steps
+        $selected = @(
+            $steps | Where-Object { $_['id'] -eq 'renew_oidc' }
+            $steps | Where-Object { $_['id'] -eq 'complete' }
+            $steps | Where-Object name -EQ 'Recover unfinished native cleanup'
+        )
+        $priorOutcomes = [Collections.Generic.List[string]]::new()
+        $priorOutcomes.Add($Deploy)
+        for ($index = 0; $index -lt $selected.Count; $index++) {
+            $Succeeded = -not $Cancelled -and -not $priorOutcomes.Contains('failure')
+            $Failed = -not $Cancelled -and $priorOutcomes.Contains('failure')
+            $condition = $selected[$index].if.Replace('${{', '').Replace('}}', '').
+                Replace('cancelled()', '$Cancelled').Replace('success()', '$Succeeded').Replace('failure()', '$Failed').
+                Replace('steps.deploy.outcome', '$Deploy').Replace('steps.renew_oidc.outcome', '$Renew').
+                Replace('fromJSON(inputs.workflowInput).removeDeployment', '$Remove').
+                Replace('!=', '-ne').Replace('&&', '-and').Replace('||', '-or').Replace('==', '-eq').Replace('!', '-not ')
+            & ([scriptblock]::Create($condition)) | Should -Be $Expected[$index]
+            $selected[$index].Contains('continue-on-error') | Should -BeFalse
+            if ($index -eq 0) { $priorOutcomes.Add($Renew) }
+            if ($index -eq 1) { $priorOutcomes.Add($Complete) }
+        }
     }
 
     It 'requires mapping selection only for requested Azure tests, never static, preview or tag-only work' {

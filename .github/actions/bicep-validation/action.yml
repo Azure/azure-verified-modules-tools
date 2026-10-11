@@ -33,7 +33,8 @@ runs:
         $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Common.ps1')
         if ($env:OPERATION -cnotin @('Static', 'Policy')) { throw 'Unknown Bicep validation operation.' }
-        Initialize-AvmWorkflow -Version $env:AVM_AUTHORING_VERSION -Profile $env:OPERATION -Confirm:$false
+        $modulePath = Resolve-AvmWorkflowPath -Root $env:GITHUB_WORKSPACE -RelativePath $env:MODULE_PATH
+        Initialize-AvmWorkflow -Version $env:AVM_AUTHORING_VERSION -Profile $env:OPERATION -Path $modulePath -Confirm:$false
         $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes("$env:MODULE_PATH|$env:EXAMPLE|$env:BASELINE"))).ToLowerInvariant()
         Write-AvmWorkflowOutput -Name artifactKey -Value "$env:OPERATION-$key"
     - name: Run package validation

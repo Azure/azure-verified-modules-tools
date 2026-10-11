@@ -5,7 +5,11 @@ inputs:
     description: Exact qualified Avm.Authoring release.
     required: true
   modulePath:
-    description: Caller-relative module path.
+    description: >-
+      Exact caller-relative module path. The qualified native package reads root
+      .required-features.json and .required-resource-providers.json for this exact
+      path, registers features then provider namespaces in the selected context
+      before token replacement, validation and deployment, and never during completion or cleanup.
     required: true
   workflowInput:
     description: Validation and location inputs as JSON.

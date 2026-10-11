@@ -15,9 +15,14 @@ BeforeAll {
         throw 'Repository lookup must be mocked.'
     }
     function Install-AvmTool {
-        [CmdletBinding()]
-        param([string] $Name, [switch] $SkipModuleVersionCheck)
+        [CmdletBinding(SupportsShouldProcess)]
+        param([string[]] $Name, [string] $Path, [switch] $SkipModuleVersionCheck)
         throw 'Tool installation must be mocked.'
+    }
+    function Get-AvmTool {
+        [CmdletBinding()]
+        param([string[]] $Name, [string] $Path, [switch] $SkipModuleVersionCheck)
+        throw 'Tool inspection must be mocked.'
     }
 }
 
@@ -60,6 +65,7 @@ Describe 'Bicep workflow bounded Git reads' {
 Describe 'Bicep workflow packaged-compliance qualification' {
     BeforeEach {
         $script:capability = 1
+        $script:providerCapability = 1
         Mock Install-AvmWorkflowModule {}
         Mock Import-AvmWorkflowPackage {}
         Mock Install-AvmTool {}
@@ -68,9 +74,18 @@ Describe 'Bicep workflow packaged-compliance qualification' {
         Mock Get-Module {
             [pscustomobject]@{
                 Version = [version]'1.2.3'
-                PrivateData = @{ AvmCapabilities = @{ BicepPackagedCompliance = $script:capability } }
+                PrivateData = @{
+                    AvmCapabilities = @{
+                        BicepPackagedCompliance = $script:capability
+                        BicepRequiredResourceProviders = $script:providerCapability
+                    }
+                }
             }
         } -ParameterFilter { $Name -eq 'Avm.Authoring' }
+        Mock Get-Command { Microsoft.PowerShell.Core\Get-Command @PesterBoundParameters }
+        Mock Get-Command {
+            [pscustomobject]@{ Parameters = @{ Phase = $null; CleanupStatePath = $null; UseCiInputs = $null; Recurse = $null } }
+        } -ParameterFilter { $Name -eq 'Invoke-AvmTestE2e' -and $Module -eq 'Avm.Authoring' }
     }
 
     It 'requires the qualified manifest marker before preparing the Static route' {
@@ -100,6 +115,43 @@ Describe 'Bicep workflow packaged-compliance qualification' {
         } -ParameterFilter { $Name -eq 'Avm.Authoring' }
         { Initialize-AvmWorkflow -Version 1.2.3 -Profile Static -Confirm:$false } | Should -Throw '*BicepPackagedCompliance capability 1*'
         Should -Invoke Install-AvmTool -Exactly 0
+    }
+
+    It 'requires native provider capability before preparing deployment dependencies' {
+        Initialize-AvmWorkflow -Version 1.2.3 -Profile Deployment -Confirm:$false
+        Should -Invoke Install-AvmWorkflowModule -Exactly 1 -ParameterFilter { $Name -eq 'Pester' -and $Version -eq [version]'5.7.1' }
+        Should -Invoke Install-AvmWorkflowModule -Exactly 1 -ParameterFilter { $Name -eq 'Az' -and $Minimum }
+        Should -Invoke Install-AvmTool -Exactly 1 -ParameterFilter { $Name -eq 'bicep' }
+    }
+
+    It 'rejects <Label> native provider capability before deployment preparation' -ForEach @(
+        @{ Label = 'missing'; Value = $null }
+        @{ Label = 'zero'; Value = 0 }
+        @{ Label = 'unsupported'; Value = 2 }
+        @{ Label = 'string'; Value = '1' }
+        @{ Label = 'boolean'; Value = $true }
+    ) {
+        $script:providerCapability = $Value
+        { Initialize-AvmWorkflow -Version 1.2.3 -Profile Deployment -Confirm:$false } |
+            Should -Throw '*BicepRequiredResourceProviders capability 1*'
+        Should -Invoke Install-AvmWorkflowModule -Exactly 0 -ParameterFilter { $Name -ne 'Avm.Authoring' }
+        Should -Invoke Install-AvmTool -Exactly 0
+        Should -Invoke Write-AvmWorkflowOutput -Exactly 0
+    }
+
+    It 'does not require provider support for credential-free discovery and publication preparation' {
+        $script:providerCapability = $null
+        Initialize-AvmWorkflow -Version 1.2.3 -Profile Package -Confirm:$false
+        Should -Invoke Get-Command -Exactly 0 -ParameterFilter { $Name -eq 'Invoke-AvmTestE2e' }
+        Should -Invoke Install-AvmWorkflowModule -Exactly 0 -ParameterFilter { $Name -in @('Az', 'Az.Subscription') }
+    }
+
+    It 'performs no package, tool or environment operations under WhatIf' {
+        Initialize-AvmWorkflow -Version 1.2.3 -Profile Deployment -WhatIf
+        Should -Invoke Install-AvmWorkflowModule -Exactly 0
+        Should -Invoke Import-AvmWorkflowPackage -Exactly 0
+        Should -Invoke Install-AvmTool -Exactly 0
+        Should -Invoke Write-AvmWorkflowOutput -Exactly 0
     }
 }
 
@@ -175,5 +227,118 @@ Describe 'Bicep workflow exact-version installation' {
     ) {
         { Initialize-AvmWorkflow -Version $Value -Profile Static -Confirm:$false } | Should -Throw '*exact qualified release*'
         Should -Invoke Install-PSResource -Exactly 0
+    }
+}
+
+Describe 'Bicep workflow managed policy dependencies' {
+    BeforeEach {
+        $script:archiveCapability = 1
+        $script:policyStatuses = @{ PSRule = 'installed'; 'PSRule.Rules.Azure' = 'installed-on-module-path' }
+        $script:policyPath = Join-Path $TestDrive 'caller-module'
+        Mock Install-AvmWorkflowModule {}
+        Mock Import-AvmWorkflowPackage {}
+        Mock Write-AvmWorkflowOutput {}
+        Mock Get-Module { Microsoft.PowerShell.Core\Get-Module @PesterBoundParameters }
+        Mock Get-Module {
+            [pscustomobject]@{
+                Version = [version]'1.2.3'
+                PrivateData = @{ AvmCapabilities = @{ PowerShellModuleArchiveRecovery = $script:archiveCapability } }
+            }
+        } -ParameterFilter { $Name -eq 'Avm.Authoring' }
+        Mock Get-Command { Microsoft.PowerShell.Core\Get-Command @PesterBoundParameters }
+        Mock Get-Command {
+            [pscustomobject]@{ Parameters = @{ Example = $null; Baseline = $null } }
+        } -ParameterFilter { $Name -eq 'Invoke-AvmCheckPolicy' -and $Module -eq 'Avm.Authoring' }
+        Mock Get-AvmTool {
+            foreach ($toolName in $Name) {
+                [pscustomobject]@{ Name = $toolName; Status = $script:policyStatuses[$toolName] }
+            }
+        }
+        Mock Install-AvmTool {
+            foreach ($toolName in $Name) { $script:policyStatuses[$toolName] = 'installed' }
+        }
+    }
+
+    It 'reuses both exact managed or module-path versions without another policy download' {
+        Initialize-AvmWorkflow -Version 1.2.3 -Profile Policy -Path $script:policyPath -Confirm:$false
+        Should -Invoke Get-AvmTool -Exactly 1 -ParameterFilter {
+            $Name.Count -eq 2 -and $Name[0] -ceq 'PSRule' -and $Name[1] -ceq 'PSRule.Rules.Azure' -and
+            $Path -ceq $script:policyPath -and $SkipModuleVersionCheck
+        }
+        Should -Invoke Install-AvmTool -Exactly 0 -ParameterFilter { $Name -contains 'PSRule' -or $Name -contains 'PSRule.Rules.Azure' }
+        Should -Invoke Install-AvmWorkflowModule -Exactly 0 -ParameterFilter { $Name -ne 'Avm.Authoring' }
+    }
+
+    It 'installs only missing managed packages for <Selection>, then confirms readiness' -ForEach @(
+        @{ Selection = 'engine'; Missing = @('PSRule') }
+        @{ Selection = 'rules'; Missing = @('PSRule.Rules.Azure') }
+        @{ Selection = 'both'; Missing = @('PSRule', 'PSRule.Rules.Azure') }
+    ) {
+        foreach ($toolName in $Missing) { $script:policyStatuses[$toolName] = 'not-installed' }
+        Initialize-AvmWorkflow -Version 1.2.3 -Profile Policy -Path $script:policyPath -Confirm:$false
+        Should -Invoke Install-AvmTool -Exactly 1 -ParameterFilter {
+            ($Name -join ',') -ceq ($Missing -join ',') -and $Path -ceq $script:policyPath -and $SkipModuleVersionCheck
+        }
+        Should -Invoke Get-AvmTool -Exactly 2
+    }
+
+    It 'rejects <Label> archive capability before policy preparation' -ForEach @(
+        @{ Label = 'missing'; Value = $null }
+        @{ Label = 'zero'; Value = 0 }
+        @{ Label = 'unsupported'; Value = 2 }
+        @{ Label = 'string'; Value = '1' }
+        @{ Label = 'boolean'; Value = $true }
+    ) {
+        $script:archiveCapability = $Value
+        { Initialize-AvmWorkflow -Version 1.2.3 -Profile Policy -Path $script:policyPath -Confirm:$false } |
+            Should -Throw '*PowerShellModuleArchiveRecovery capability 1*'
+        Should -Invoke Get-AvmTool -Exactly 0
+        Should -Invoke Install-AvmTool -Exactly 0
+        Should -Invoke Write-AvmWorkflowOutput -Exactly 0
+    }
+
+    It 'does not retry a managed package failure or report preparation success' {
+        $script:policyStatuses.PSRule = 'not-installed'
+        Mock Install-AvmTool { throw [IO.InvalidDataException]::new('Managed archive recovery exhausted.') }
+        { Initialize-AvmWorkflow -Version 1.2.3 -Profile Policy -Path $script:policyPath -Confirm:$false } |
+            Should -Throw '*Managed archive recovery exhausted*'
+        Should -Invoke Install-AvmTool -Exactly 1
+        Should -Invoke Write-AvmWorkflowOutput -Exactly 0
+    }
+
+    It 'rejects incomplete installation without replaying it' {
+        $script:policyStatuses.PSRule = 'not-installed'
+        Mock Install-AvmTool {}
+        { Initialize-AvmWorkflow -Version 1.2.3 -Profile Policy -Path $script:policyPath -Confirm:$false } |
+            Should -Throw '*did not provide every selected package*'
+        Should -Invoke Install-AvmTool -Exactly 1
+        Should -Invoke Write-AvmWorkflowOutput -Exactly 0
+    }
+
+    It 'rejects missing or duplicate package inspection results for <Shape>' -ForEach @(
+        @{ Shape = 'empty' }
+        @{ Shape = 'partial' }
+        @{ Shape = 'duplicate' }
+    ) {
+        $script:policyShape = $Shape
+        Mock Get-AvmTool {
+            if ($script:policyShape -ne 'empty') { [pscustomobject]@{ Name = 'PSRule'; Status = 'installed' } }
+            if ($script:policyShape -eq 'duplicate') { [pscustomobject]@{ Name = 'PSRule'; Status = 'installed' } }
+        }
+        { Initialize-AvmWorkflow -Version 1.2.3 -Profile Policy -Path $script:policyPath -Confirm:$false } | Should -Throw
+        Should -Invoke Install-AvmTool -Exactly 0
+        Should -Invoke Write-AvmWorkflowOutput -Exactly 0
+    }
+
+    It 'does not override a disabled or unsupported managed status: <Status>' -ForEach @(
+        @{ Status = 'auto-install-disabled' }
+        @{ Status = 'installed-on-path' }
+        @{ Status = 'unknown' }
+    ) {
+        $script:policyStatuses.PSRule = $Status
+        { Initialize-AvmWorkflow -Version 1.2.3 -Profile Policy -Path $script:policyPath -Confirm:$false } |
+            Should -Throw '*managed status*'
+        Should -Invoke Install-AvmTool -Exactly 0
+        Should -Invoke Write-AvmWorkflowOutput -Exactly 0
     }
 }

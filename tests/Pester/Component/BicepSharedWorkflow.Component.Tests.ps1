@@ -41,6 +41,9 @@ Describe 'Component: Bicep shared workflow discovery and defaults' -Tag Componen
             if ($Arguments[0] -eq 'rev-parse') {
                 return [pscustomobject]@{ ExitCode = 0; StdOut = 'a' * 40; StdErr = '' }
             }
+            if ($Arguments[0] -eq 'rev-list') {
+                return [pscustomobject]@{ ExitCode = 0; StdOut = ('a' * 40), ('b' * 40), ('c' * 40) -join ' '; StdErr = '' }
+            }
             throw "Unexpected Git read: $($Arguments[0])"
         }
     }
@@ -142,8 +145,8 @@ on:
         $output.baseCommit | Should -BeNullOrEmpty
     }
 
-    It 'fails a pull request with no base and invalid manual publication combinations' {
-        { Initialize-AvmWorkflowMatrix -Root $script:root -EventName pull_request -TargetCommit ('a' * 40) } | Should -Throw '*base commit*'
+    It 'fails a pull request with no head and invalid manual publication combinations' {
+        { Initialize-AvmWorkflowMatrix -Root $script:root -EventName pull_request -TargetCommit ('a' * 40) } | Should -Throw '*pull request head*'
         { Initialize-AvmWorkflowMatrix -Root $script:root -EventName workflow_dispatch -TargetCommit ('a' * 40) `
                 -ModulePaths $script:modulePath -PublishOnly $true } | Should -Throw '*requires createReleaseTag*'
         { Initialize-AvmWorkflowMatrix -Root $script:root -EventName workflow_dispatch -TargetCommit ('a' * 40) `
@@ -162,7 +165,8 @@ on:
         Mock Invoke-AvmWorkflowGitRead {
             [pscustomobject]@{ ExitCode = 0; StdOut = "$script:modulePath/main.bicep`n"; StdErr = '' }
         } -ParameterFilter { $Arguments[0] -eq 'diff' }
-        $result = Initialize-AvmWorkflowMatrix -Root $script:root -EventName pull_request -TargetCommit ('a' * 40) -BaseCommit ('b' * 40)
+        $result = Initialize-AvmWorkflowMatrix -Root $script:root -EventName pull_request -TargetCommit ('a' * 40) `
+            -BaseCommit ('d' * 40) -PullRequestHeadCommit ('c' * 40)
         $result.baseCommit | Should -BeExactly ('b' * 40)
         $result.hasModules | Should -BeExactly 'true'
         $result.includeAllVersionedModules | Should -BeExactly 'false'
@@ -183,7 +187,7 @@ on:
             [pscustomobject]@{ ExitCode = 0; StdOut = "$script:modulePath/metadata.json`n"; StdErr = '' }
         } -ParameterFilter { $Arguments[0] -eq 'diff' }
         $result = Initialize-AvmWorkflowMatrix -Root $script:root -EventName $EventName -TargetCommit ('a' * 40) `
-            -BaseCommit ('b' * 40) -DeploymentValidation $Enabled
+            -BaseCommit ('b' * 40) -PullRequestHeadCommit ('c' * 40) -DeploymentValidation $Enabled
         ($result.moduleMatrix | ConvertFrom-Json).include.Count | Should -Be $Expected
         ($result.workflowInput | ConvertFrom-Json).deploymentValidation | Should -BeExactly $Enabled.ToString().ToLowerInvariant()
     }
@@ -192,7 +196,8 @@ on:
         Mock Invoke-AvmWorkflowGitRead {
             [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'fixture unavailable' }
         } -ParameterFilter { $Arguments[0] -in @('cat-file', 'fetch') }
-        { Initialize-AvmWorkflowMatrix -Root $script:root -EventName pull_request -TargetCommit ('a' * 40) -BaseCommit ('b' * 40) } |
+        { Initialize-AvmWorkflowMatrix -Root $script:root -EventName pull_request -TargetCommit ('a' * 40) `
+                -BaseCommit ('b' * 40) -PullRequestHeadCommit ('c' * 40) } |
             Should -Throw '*base commit is unavailable*'
         Mock Invoke-AvmWorkflowGitRead {
             [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
@@ -519,6 +524,7 @@ Describe 'Component: Bicep shared workflow native phase forwarding' -Tag Compone
         Invoke-AvmWorkflowRecovery -StatePath $script:state -SubscriptionId $script:subscription -TenantId $script:tenant -ClientId $script:client -Confirm:$false
         Should -Invoke Invoke-AvmTestE2e -Exactly 0
         Should -Invoke Invoke-AvmTestCleanup -Exactly 0
+        Should -Invoke Get-AzContext -Exactly 0
     }
 
     It 'uses state-only recovery without rerunning deployment or authored hooks' {

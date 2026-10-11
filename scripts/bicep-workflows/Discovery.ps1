@@ -117,6 +117,7 @@ function Initialize-AvmWorkflowMatrix {
         [Parameter(Mandatory)] [ValidateSet('push', 'pull_request', 'workflow_dispatch')] [string] $EventName,
         [Parameter(Mandatory)] [string] $TargetCommit,
         [string] $BaseCommit,
+        [string] $PullRequestHeadCommit,
         [string] $ModulePaths,
         [bool] $CreateReleaseTag = $false,
         [bool] $PublishOnly = $false,
@@ -127,8 +128,11 @@ function Initialize-AvmWorkflowMatrix {
     )
 
     if ($TargetCommit -cnotmatch '^[0-9a-f]{40}$' -or
-        (-not [string]::IsNullOrEmpty($BaseCommit) -and $BaseCommit -cnotmatch '^[0-9a-f]{40}$')) {
+        ($EventName -eq 'push' -and -not [string]::IsNullOrEmpty($BaseCommit) -and $BaseCommit -cnotmatch '^[0-9a-f]{40}$')) {
         throw [ArgumentException]::new('Workflow commits must be full SHA-1 commit identifiers.')
+    }
+    if ($EventName -eq 'pull_request' -and $PullRequestHeadCommit -cnotmatch '^[0-9a-f]{40}$') {
+        throw [ArgumentException]::new('The pull request head must be a full SHA-1 commit identifier.')
     }
     if ($PublishOnly -and -not $CreateReleaseTag) {
         throw [ArgumentException]::new('publishOnly requires createReleaseTag.')
@@ -146,6 +150,25 @@ function Initialize-AvmWorkflowMatrix {
         $BaseCommit = ''
     }
     else {
+        if ($EventName -eq 'pull_request') {
+            $history = Invoke-AvmWorkflowGitRead -Root $Root -Arguments @('rev-list', '--parents', '-n', '1', $TargetCommit, '--') -AllowFailure
+            $records = @($history.StdOut -split '\r?\n' | Where-Object { $_ -cne '' })
+            if ($history.ExitCode -ne 0 -or $records.Count -ne 1) {
+                throw [InvalidOperationException]::new('The tested pull request merge commit is unavailable.')
+            }
+            $parents = $records[0].Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+            if ($parents.Count -ne 3) {
+                throw [InvalidOperationException]::new('The tested pull request merge commit must have exactly two parents.')
+            }
+            if ($parents[0] -cne $TargetCommit -or $parents[1] -cnotmatch '^[0-9a-f]{40}$' -or
+                $parents[2] -cnotmatch '^[0-9a-f]{40}$') {
+                throw [InvalidOperationException]::new('The tested pull request merge history is malformed.')
+            }
+            if ($parents[2] -cne $PullRequestHeadCommit) {
+                throw [InvalidOperationException]::new('The tested merge second parent does not match the pull request head.')
+            }
+            $BaseCommit = $parents[1]
+        }
         $available = -not [string]::IsNullOrEmpty($BaseCommit) -and $BaseCommit -notmatch '^0+$'
         if ($available) {
             $available = (Invoke-AvmWorkflowGitRead -Root $Root -Arguments @('cat-file', '-e', "${BaseCommit}^{commit}") -AllowFailure).ExitCode -eq 0
