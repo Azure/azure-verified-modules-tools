@@ -426,6 +426,12 @@ severity overrides. The root and submodule configurations are strict; examples
 retain only the deliberate interface and module-only exemptions. The standard
 Terraform rules remain explicitly curated under their unchanged names.
 
+The submodule configuration sets `module_scope = "submodule"` on
+`avm_terraform_module_source_required`, permitting direct sibling sources such
+as `../part-component`. Root modules retain the default root scope and use
+`./modules/part`. Nested local paths and traversal are rejected; examples keep
+their existing source-rule exemption.
+
 Three rule families stay enabled with native `severity = "notice"` configuration,
 so TFLint reports them on every run with file and line while the default warning
 threshold still passes: the TFFR6/7/8 rules

@@ -81,6 +81,11 @@ rule "terraform_workspace_remote" {
   enabled = true
 }
 
+rule "avm_terraform_module_source_required" {
+  enabled      = true
+  module_scope = "submodule"
+}
+
 rule "avm_provider_modtm_version_constraint" {
   enabled = false
 }
