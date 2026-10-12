@@ -74,7 +74,7 @@ Describe 'Bicep reserved subscription contract' {
 
     It 'accepts an empty map and the exact 64-KiB byte limit' {
         [IO.File]::WriteAllText($script:path, '{}' + (' ' * (64KB - 2)))
-        (Get-Item -LiteralPath $script:path).Length | Should -Be 64KB
+        (Get-Item -LiteralPath $script:path -Force).Length | Should -Be 64KB
         InModuleScope Avm.Authoring -Parameters @{ Root = $script:root; ModulePath = $script:modulePath } {
             param($Root, $ModulePath)
             Get-AvmBicepTestSubscriptionTag -RepositoryRoot $Root -ModulePath $ModulePath | Should -BeExactly 'General'
@@ -126,7 +126,7 @@ Describe 'Bicep reserved subscription contract' {
         @{ Case = 'directory' }
         @{ Case = 'oversized' }
     ) {
-        Remove-Item -LiteralPath $script:path
+        Remove-Item -LiteralPath $script:path -Force
         switch ($Case) {
             'miscased' { [IO.File]::WriteAllText((Join-Path $script:root '.Reserved-test-subscriptions.json'), '{}') }
             'directory' { $null = New-Item -ItemType Directory -Path $script:path }

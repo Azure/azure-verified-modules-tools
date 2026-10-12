@@ -239,7 +239,7 @@ Describe 'Component: Bicep native reserved execution boundary' -Tag Component {
     }
 
     It 'requires the exact root reservation map even for an ordinary registry module' {
-        Remove-Item -LiteralPath $script:mapPath
+        Remove-Item -LiteralPath $script:mapPath -Force
         { Invoke-AvmTestE2e @script:options } | Should -Throw '*root .reserved-test-subscriptions.json*'
         $script:fixture.Calls | Should -HaveCount 0
     }
