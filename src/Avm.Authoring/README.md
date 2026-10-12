@@ -416,7 +416,7 @@ It warns if the checkout's root module or a direct `modules/` configuration is
 not reached by an example. Registry/Git copies and test-only helper modules do
 not count. Coverage gaps are non-failing; no examples returns `skipped`.
 
-The Terraform lint bundle pins TFLint 0.64.0 and `tflint-ruleset-avm` 1.0.0.
+The Terraform lint bundle pins TFLint 0.64.0 and `tflint-ruleset-avm` 1.3.1.
 All three packaged configurations require GitHub Artifact Attestation; there is
 no PGP signing-key fallback.
 
@@ -449,7 +449,7 @@ For `azapi_resource`, omit `replace_triggers_refs` when no immutable body
 property requires replacement. When it is declared, it must be a static,
 non-empty list of unique, nonblank JMESPath expressions that resolve against the
 resource body; do not include the redundant `name` or `location` paths. The
-1.0.0 ruleset is installed with GitHub Artifact Attestation.
+1.3.1 ruleset is installed with GitHub Artifact Attestation.
 
 ### Terraform TFLint overrides
 
