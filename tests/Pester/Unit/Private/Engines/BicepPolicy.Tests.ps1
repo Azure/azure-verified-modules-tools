@@ -78,7 +78,8 @@ Describe 'Bicep PSRule token replacement' {
         BeforeEach {
             $script:savedTokenEnvironment = @{}
             foreach ($name in @('TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_IDS',
-                    'AVM_CI_VARIABLES', 'AVM_CI_SECRETS', 'VALIDATE_SUBSCRIPTION_ID', 'localToken_subscriptionId')) {
+                    'AVM_CI_VARIABLES', 'AVM_CI_SECRETS', 'VALIDATE_SUBSCRIPTION_ID', 'localToken_subscriptionId',
+                    'VALIDATE_MANAGEMENT_GROUP_ID', 'ARM_MGMTGROUP_ID', 'localToken_managementGroupId')) {
                 $script:savedTokenEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
                 [Environment]::SetEnvironmentVariable($name, [NullString]::Value)
             }
@@ -129,6 +130,19 @@ Describe 'Bicep PSRule token replacement' {
             $env:TEST_SUBSCRIPTION_IDS = 'invalid-unused-legacy-pool'
             InModuleScope Avm.Authoring { (Get-AvmBicepPolicyToken)['subscriptionId'] } |
                 Should -BeExactly '22222222-2222-4222-8222-222222222222'
+        }
+
+        It 'uses a customer management-group variable alias ahead of a canonical secret' {
+            $env:AVM_CI_VARIABLES = '{"ARM_MGMTGROUP_ID":"customer-root"}'
+            $env:AVM_CI_SECRETS = '{"VALIDATE_MANAGEMENT_GROUP_ID":"unused-secret-group"}'
+            InModuleScope Avm.Authoring { (Get-AvmBicepPolicyToken)['managementGroupId'] } |
+                Should -BeExactly 'customer-root'
+        }
+
+        It 'retains the direct legacy management-group environment fallback' {
+            $env:ARM_MGMTGROUP_ID = 'legacy-environment-group'
+            InModuleScope Avm.Authoring { (Get-AvmBicepPolicyToken)['managementGroupId'] } |
+                Should -BeExactly 'legacy-environment-group'
         }
 
         It 'uses the mapped reserved pool for static policy checks without treating a child as reserved' {

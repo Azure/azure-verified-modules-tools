@@ -808,8 +808,9 @@ round-robin case assignment within the selected tag, rather than the registry's
 ambient CI pools. Pool input precedence is Variables `VALIDATE_SUBSCRIPTION_IDS`,
 Variables `TEST_SUBSCRIPTION_IDS`, Secrets `VALIDATE_SUBSCRIPTION_IDS`, then
 Secrets `TEST_SUBSCRIPTION_IDS`; directly supplied environment aliases follow
-the same canonical-before-legacy order. Authentication remains `VALIDATE_*`,
-not legacy `ARM_*`.
+the same canonical-before-legacy order. Management-group metadata uses the
+same source order, with `VALIDATE_MANAGEMENT_GROUP_ID` before `ARM_MGMTGROUP_ID`
+within each source. Authentication remains `VALIDATE_*`, not legacy `ARM_*`.
 
 Registry-layout native execution and PSRule require the exact root
 `.reserved-test-subscriptions.json` file: an object mapping canonical module

@@ -46,7 +46,7 @@ function Get-AvmBicepWorkflowEnvironment {
             @{ Name = 'PoolJson'; Names = @('VALIDATE_SUBSCRIPTION_IDS', 'TEST_SUBSCRIPTION_IDS') }
             @{ Name = 'SubscriptionId'; Names = @('VALIDATE_SUBSCRIPTION_ID') }
             @{ Name = 'TenantId'; Names = @('VALIDATE_TENANT_ID') }
-            @{ Name = 'ManagementGroupId'; Names = @('VALIDATE_MANAGEMENT_GROUP_ID') }
+            @{ Name = 'ManagementGroupId'; Names = @('VALIDATE_MANAGEMENT_GROUP_ID', 'ARM_MGMTGROUP_ID') }
         )) {
         $found = $false
         foreach ($source in @($result.Variables, $result.Secrets, $environment)) {
