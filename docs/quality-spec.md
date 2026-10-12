@@ -177,6 +177,17 @@ Rules:
   must never return an ancestor as context. It deliberately can false-positive
   when a higher checkout path happens to use a reserved name.
 
+### Terraform lint scopes
+
+TFLint evaluates the repository root and each direct `modules/*` and
+`examples/*` directory separately. The root configuration leaves
+`avm_terraform_module_source_required` in its default root scope; the submodule
+configuration explicitly sets `module_scope = "submodule"`. Root local sources
+must use `./modules/<name>`, and submodules may use `../<name>` for a direct
+sibling. Traversal and nested local module roots remain invalid. Examples
+retain their existing source-rule exemption. Shared and per-scope overrides
+merge attributes without dropping this scope context.
+
 ---
 
 ## 5. PowerShell coding standards
