@@ -4,9 +4,14 @@ locals {
     client_id             = ""
     test_subscription_ids = []
     } : {
-    tenant_id             = var.bami_test_settings.tenant_id
-    client_id             = module.bami[0].client_id
-    test_subscription_ids = var.bami_test_settings.test_subscription_ids
+    tenant_id = var.bami_test_settings.tenant_id
+    client_id = module.bami[0].client_id
+    test_subscription_ids = [
+      for subscription in var.bami_test_settings.test_subscription_ids : {
+        name = subscription.name
+        id   = subscription.id
+      } if try(subscription.tag, "General") == "General"
+    ]
   }
 
   label_list = jsondecode(file(var.github_labels_source_path)).labels

@@ -16,7 +16,7 @@ Describe 'Component: Bicep native workflow CI and parameter inputs' -Tag Compone
         $script:environment = @{}
         foreach ($name in @('AVM_CI_VARIABLES', 'AVM_CI_SECRETS', 'CI_KEY_VAULT_NAME',
                 'TOKEN_NAMEPREFIX', 'localToken_workflowExample', 'VALIDATE_SUBSCRIPTION_ID',
-                'VALIDATE_TENANT_ID', 'TEST_SUBSCRIPTION_IDS')) {
+                'VALIDATE_TENANT_ID', 'VALIDATE_SUBSCRIPTION_IDS', 'TEST_SUBSCRIPTION_IDS')) {
             $script:environment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
             [Environment]::SetEnvironmentVariable($name, [NullString]::Value, 'Process')
         }
@@ -181,5 +181,99 @@ Describe 'Component: Bicep native workflow CI and parameter inputs' -Tag Compone
     It 'rejects a whitespace-only subscription pool before tool or Azure activity' {
         { Invoke-AvmTestE2e @script:options -TestSubscriptionIds ' ' } | Should -Throw -ExpectedMessage '*subscription pool*'
         $script:fixture.Calls.Count | Should -Be 0
+    }
+
+    It 'uses the canonical variable bundle and only General entries ahead of legacy pool aliases' {
+        $script:options.Remove('SubscriptionId')
+        $script:options.Remove('TenantId')
+        $pool = @(
+            @{ id = '00000000-0000-0000-0000-000000000001'; name = 'reserved'; tag = 'Azure Local' }
+            @{ id = '00000000-0000-0000-0000-000000000003'; name = 'ordinary'; tag = 'General' }
+        )
+        $env:AVM_CI_VARIABLES = @{
+            VALIDATE_SUBSCRIPTION_IDS = (ConvertTo-Json -InputObject $pool -Compress)
+            VALIDATE_TENANT_ID = '00000000-0000-0000-0000-000000000002'
+            TEST_SUBSCRIPTION_IDS = 'invalid-unused-legacy-pool'
+        } | ConvertTo-Json -Compress
+        $env:AVM_CI_SECRETS = '{"VALIDATE_SUBSCRIPTION_IDS":"invalid-unused-secret-pool","VALIDATE_TENANT_ID":"unused-old-tenant"}'
+        $env:TEST_SUBSCRIPTION_IDS = 'invalid-unused-environment-pool'
+        (Invoke-AvmTestE2e @script:options -UseCiInputs).Status | Should -Be 'pass'
+        @($script:fixture.NativeInputs | ForEach-Object SubscriptionId | Select-Object -Unique) |
+            Should -Be @('00000000-0000-0000-0000-000000000003')
+    }
+
+    It 'rejects an entirely reserved canonical pool without using the legacy singleton' {
+        $script:options.Remove('SubscriptionId')
+        $env:VALIDATE_SUBSCRIPTION_IDS = '[{"id":"00000000-0000-0000-0000-000000000001","name":"reserved","tag":"Azure Local"}]'
+        $env:VALIDATE_SUBSCRIPTION_ID = '00000000-0000-0000-0000-000000000001'
+        { Invoke-AvmTestE2e @script:options -UseCiInputs } | Should -Throw "*no 'General'*"
+        $script:fixture.Calls.Count | Should -Be 0
+    }
+}
+
+Describe 'Component: Bicep native reserved execution boundary' -Tag Component {
+    BeforeEach {
+        $script:registry = Join-Path $TestDrive ('registry-' + [guid]::NewGuid().ToString('N'))
+        $parent = Join-Path $script:registry 'avm' 'res' 'test'
+        $null = New-Item -ItemType Directory -Path $parent -Force
+        [IO.File]::WriteAllText((Join-Path $script:registry 'bicepconfig.json'), '{}')
+        $script:fixture = New-NativeBicepWorkflowFixture -TestRoot $parent
+        $script:options = Get-NativeBicepWorkflowOptions -Fixture $script:fixture
+        $script:modulePath = 'avm/res/test/' + (Split-Path -Leaf $script:fixture.Root)
+        $script:mapPath = Join-Path $script:registry '.reserved-test-subscriptions.json'
+        [IO.File]::WriteAllText($script:mapPath, '{}')
+    }
+    AfterEach { Remove-NativeBicepWorkflowFixture -Fixture $script:fixture }
+
+    It 'rejects a reserved <Phase> before compilation, features, preparation or deployment' -ForEach @(
+        @{ Phase = 'All' }
+        @{ Phase = 'Deploy' }
+    ) {
+        [IO.File]::WriteAllText($script:mapPath, (ConvertTo-Json -InputObject @{ $script:modulePath = 'Azure Local' } -Compress))
+        { Invoke-AvmTestE2e @script:options -Phase $Phase } | Should -Throw '*protected registry workflow*environment lock*'
+        $script:fixture.Calls | Should -HaveCount 0
+        InModuleScope Avm.Authoring {
+            Should -Invoke Resolve-AvmTool -Exactly 0
+            Should -Invoke Assert-AvmBicepAzureDependency -Exactly 0
+        }
+    }
+
+    It 'requires the exact root reservation map even for an ordinary registry module' {
+        Remove-Item -LiteralPath $script:mapPath
+        { Invoke-AvmTestE2e @script:options } | Should -Throw '*root .reserved-test-subscriptions.json*'
+        $script:fixture.Calls | Should -HaveCount 0
+    }
+
+    It 'permits a separately invoked unmapped child rather than inheriting its parent reservation' {
+        [IO.File]::WriteAllText($script:mapPath, (ConvertTo-Json -InputObject @{ $script:modulePath = 'Azure Local' } -Compress))
+        $child = Join-Path $script:fixture.Root 'child'
+        $directory = Join-Path $child 'tests' 'e2e' 'defaults'
+        $null = New-Item -ItemType Directory -Path $directory -Force
+        [IO.File]::WriteAllText((Join-Path $child 'main.bicep'), 'param name string')
+        [IO.File]::WriteAllText((Join-Path $directory 'main.test.bicep'), 'param name string')
+        $script:options.Path = $child
+        (Invoke-AvmTestE2e @script:options).Status | Should -Be 'pass'
+    }
+
+    It 'checks all recursively selected modules before deploying any ordinary case' {
+        [IO.File]::WriteAllText($script:mapPath, (ConvertTo-Json -InputObject @{ ($script:modulePath + '/child') = 'Azure Local' } -Compress))
+        $child = Join-Path $script:fixture.Root 'child'
+        $directory = Join-Path $child 'tests' 'e2e' 'defaults'
+        $null = New-Item -ItemType Directory -Path $directory -Force
+        [IO.File]::WriteAllText((Join-Path $child 'main.bicep'), 'param name string')
+        [IO.File]::WriteAllText((Join-Path $directory 'main.test.bicep'), 'param name string')
+        $script:options.Remove('CleanupStatePath')
+        { Invoke-AvmTestE2e @script:options -Recurse } | Should -Throw '*protected registry workflow*'
+        $script:fixture.Calls | Should -HaveCount 0
+    }
+
+    It 'does not resume reserved case completion through an unprotected native route' {
+        (Invoke-AvmTestE2e @script:options -Phase Deploy).Status | Should -Be 'pass'
+        [IO.File]::WriteAllText($script:mapPath, (ConvertTo-Json -InputObject @{ $script:modulePath = 'Azure Local' } -Compress))
+        $script:fixture.Calls.Clear()
+        $script:options.Remove('ResourceLocation')
+        $script:options.Remove('ResourceGroupPrefix')
+        { Invoke-AvmTestE2e @script:options -Phase Complete } | Should -Throw '*protected registry workflow*'
+        $script:fixture.Calls | Should -HaveCount 0
     }
 }

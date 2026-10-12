@@ -12,7 +12,8 @@ Describe 'Bicep native workflow environment opt-in' {
     BeforeEach {
         $script:savedEnvironment = @{}
         $names = @('AVM_CI_VARIABLES', 'AVM_CI_SECRETS', 'TOKEN_NAMEPREFIX',
-            'TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_ID', 'VALIDATE_TENANT_ID', 'CI_KEY_VAULT_NAME',
+            'TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_ID',
+            'VALIDATE_TENANT_ID', 'VALIDATE_MANAGEMENT_GROUP_ID', 'ARM_TENANT_ID', 'CI_KEY_VAULT_NAME',
             'localToken_AvmInputFixture', 'localToken_namePrefix')
         foreach ($name in $names) {
             $script:savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
@@ -67,6 +68,67 @@ Describe 'Bicep native workflow environment opt-in' {
         $env:TOKEN_NAMEPREFIX = 'fallback-prefix'
         InModuleScope Avm.Authoring {
             (Get-AvmBicepWorkflowEnvironment -Enabled).Tokens['namePrefix'] | Should -BeExactly 'local-prefix'
+        }
+    }
+
+    It 'matches registry pool precedence at position <Position>' -ForEach @(
+        @{ Position = 0 }
+        @{ Position = 1 }
+        @{ Position = 2 }
+        @{ Position = 3 }
+    ) {
+        $variables = [ordered]@{ VALIDATE_SUBSCRIPTION_IDS = 'canonical-variable'; TEST_SUBSCRIPTION_IDS = 'legacy-variable' }
+        $secrets = [ordered]@{ VALIDATE_SUBSCRIPTION_IDS = 'canonical-secret'; TEST_SUBSCRIPTION_IDS = 'legacy-secret' }
+        $expected = @('canonical-variable', 'legacy-variable', 'canonical-secret', 'legacy-secret')[$Position]
+        if ($Position -gt 0) { $variables['VALIDATE_SUBSCRIPTION_IDS'] = '' }
+        if ($Position -gt 1) { $variables['TEST_SUBSCRIPTION_IDS'] = '' }
+        if ($Position -gt 2) { $secrets['VALIDATE_SUBSCRIPTION_IDS'] = '' }
+        $env:AVM_CI_VARIABLES = ConvertTo-Json -InputObject $variables -Compress
+        $env:AVM_CI_SECRETS = ConvertTo-Json -InputObject $secrets -Compress
+        $env:VALIDATE_SUBSCRIPTION_IDS = 'resolved-environment-fallback'
+        InModuleScope Avm.Authoring -Parameters @{ Expected = $expected } {
+            param($Expected)
+            (Get-AvmBicepWorkflowEnvironment -Enabled).PoolJson | Should -BeExactly $Expected
+        }
+    }
+
+    It 'prefers the canonical environment pool to its historical alias' {
+        $env:VALIDATE_SUBSCRIPTION_IDS = 'canonical'
+        $env:TEST_SUBSCRIPTION_IDS = 'legacy'
+        InModuleScope Avm.Authoring {
+            (Get-AvmBicepWorkflowEnvironment -Enabled).PoolJson | Should -BeExactly 'canonical'
+        }
+    }
+
+    It 'uses VALIDATE identity variables before secrets and never substitutes an ARM tenant' {
+        $env:AVM_CI_VARIABLES = '{"VALIDATE_TENANT_ID":"variable-tenant","VALIDATE_MANAGEMENT_GROUP_ID":"variable-group"}'
+        $env:AVM_CI_SECRETS = '{"VALIDATE_TENANT_ID":"secret-tenant"}'
+        $env:ARM_TENANT_ID = 'legacy-arm-tenant'
+        InModuleScope Avm.Authoring {
+            $ci = Get-AvmBicepWorkflowEnvironment -Enabled
+            $ci.TenantId | Should -BeExactly 'variable-tenant'
+            $ci.ManagementGroupId | Should -BeExactly 'variable-group'
+        }
+        $env:AVM_CI_VARIABLES = '{}'
+        $env:AVM_CI_SECRETS = '{}'
+        InModuleScope Avm.Authoring {
+            (Get-AvmBicepWorkflowEnvironment -Enabled).TenantId | Should -BeExactly ''
+        }
+    }
+
+    It 'retains a malformed configured canonical pool instead of falling back to a legacy pool' {
+        $env:AVM_CI_VARIABLES = '{"VALIDATE_SUBSCRIPTION_IDS":" ","TEST_SUBSCRIPTION_IDS":"legacy"}'
+        InModuleScope Avm.Authoring {
+            (Get-AvmBicepWorkflowEnvironment -Enabled).PoolJson | Should -BeExactly ' '
+        }
+    }
+
+    It 'does not change the legacy vault selector while resolving validation fields' {
+        $env:AVM_CI_VARIABLES = '{"CI_KEY_VAULT_NAME":"variable-value"}'
+        $env:AVM_CI_SECRETS = '{"CI_KEY_VAULT_NAME":"secret-value"}'
+        $env:CI_KEY_VAULT_NAME = 'explicit-environment-vault'
+        InModuleScope Avm.Authoring {
+            (Get-AvmBicepWorkflowEnvironment -Enabled).KeyVaultName | Should -BeExactly 'explicit-environment-vault'
         }
     }
 

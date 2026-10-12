@@ -55,6 +55,7 @@ Describe 'Independent CI workflows' {
     It 'includes source, tests and shared dependencies in the static filters for <File>' -ForEach @(
         @{ File = 'ci-authoring.yml'; Required = @(
             'src/Avm.Authoring/**', 'build/**', 'build.ps1', 'scripts/**', 'tests/**', 'docs/reference/**',
+            'repository-management/shared/TestTenant.ps1', 'repository-management/shared/GroupSettings.ps1',
             '.github/workflows/ci-authoring.yml', '.github/workflows/terraform-module.yml', '.github/workflows/release.yml'
         ) }
         @{ File = 'ci-workflows.yml'; Required = @(

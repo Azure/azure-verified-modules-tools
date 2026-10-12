@@ -131,8 +131,11 @@ external work. Repository creation remains independent of test identities.
 
 Tools publishes BAMI execution settings for `Azure/bicep-registry-modules`
 using generic `VALIDATE_*` Variables, without per-module canary selectors.
-Consumer bindings use generic Variables first, then Secrets, without a
-repository or provider mode check. External contributors retain configurable
+Pool bindings resolve Variables `VALIDATE_SUBSCRIPTION_IDS`, Variables
+`TEST_SUBSCRIPTION_IDS`, Secrets `VALIDATE_SUBSCRIPTION_IDS`, then Secrets
+`TEST_SUBSCRIPTION_IDS`. Authentication uses `VALIDATE_CLIENT_ID` and
+`VALIDATE_TENANT_ID`, Variables before Secrets, without a repository or provider
+mode check. External contributors retain configurable
 credentials, subscription pools, and Key Vault paths, including the existing
 Key Vault capability and deprecation warning. The legacy consumer aliases
 `TEST_SUBSCRIPTION_IDS`, `VALIDATE_SUBSCRIPTION_ID`, and `ARM_MGMTGROUP_ID`
@@ -148,7 +151,7 @@ environment. There is one current BAMI tenant, not a profile catalog.
 | `TEST_BAMI_TENANT_ID` | Candidate tenant |
 | `TEST_BAMI_CONTROLLER_CLIENT_ID` | Repository-identity provisioning only |
 | `TEST_BAMI_ADMIN_SUBSCRIPTION_ID` | Subscription holding repository identities |
-| `TEST_BAMI_SUBSCRIPTION_IDS` | Exactly 28 unique `{name,id}` objects, encoded as JSON |
+| `TEST_BAMI_SUBSCRIPTION_IDS` | Exactly 28 unique `{name,id}` objects with optional `tag`, encoded as JSON |
 | `TEST_BAMI_MANAGEMENT_GROUP_ID` | Test management-group name |
 | `TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME` | Existing repository-identity resource group |
 | `TEST_BAMI_BICEP_CLIENT_ID` | Separate Bicep execution identity |
@@ -157,6 +160,22 @@ environment. There is one current BAMI tenant, not a profile catalog.
 Admin and Persistent must be different subscriptions, and neither may appear
 in the disposable test pool. The shared Bicep-only guard also rejects
 Persistent overlap without copying Admin into the Bicep projection.
+Tags are case-sensitive strings of at most 64 alphanumeric characters separated
+by single spaces or hyphens. Missing tags mean `General`; explicit null, blank,
+malformed or miscased `Tag` fields fail validation. Bicep receives the complete
+ordered tagged pool. Terraform receives only `General` entries, including
+untagged entries, projected to `{name,id}`. Its default is the first eligible
+entry, never index zero of the unfiltered inventory. An empty General projection
+fails before Terraform publication; runtime selection and overrides cannot use a
+reserved entry. This does not remove Azure permissions.
+
+Deploy compatible Tools and registry consumers before NEW tagged BAMI publication:
+older Tools rejects the extra field. The registry owns the exact root
+`.reserved-test-subscriptions.json` map and protected reserved-environment
+workflow. Native Tools e2e fails before deployment for mapped non-General cases;
+it does not prepare HCI resources or bypass that workflow's locks. No new pool
+variable is introduced, and protected legacy values are not rewritten.
+
 Group names come from flat `repositoryGroups[].entraGroups` arrays in the
 [central configuration](repository-config/config.json), not environment IDs
 or capability flags. Matching lists accumulate and deduplicate; they do not
@@ -237,12 +256,19 @@ is write-free. The script uses eight named environment variables, plus
 `GH_TOKEN`; it accepts no target or configuration override.
 The optional `-ModuleClientIdPath` reads the compact JSON produced by the
 identity job. Existing mappings may gain modules but cannot lose paths or
-change existing client IDs. The five execution values remain immutable.
+change existing client IDs, except through the separately verified naming
+transition. Existing execution identities remain immutable; only the narrow
+subscription-tag update below is allowed.
 
 All eight source values are required even for plans. The publisher treats
-upstream BAMI execution as always active: any present generic target value that
-differs from the validated projection stops publication, including plans,
-before any write. Missing variables may be
+upstream BAMI execution as always active: a changed present execution identity
+stops publication, including plans, before any write. Pool metadata may change
+only after both complete inventories validate, with the same ordered IDs and
+exact names and all other execution fields present and unchanged. Added, removed,
+reordered, renamed or retargeted subscriptions fail. A historical untagged source
+cannot erase an existing non-General reservation; resolve that maintenance
+conflict explicitly. Unchanged effective tags preserve the existing JSON bytes.
+Missing variables may be
 initialized only when every present value matches. Retargeting requires
 coordinated maintenance outside this routine publisher; there is no selector
 deactivation route. Each write has a snapshot preflight and readback, followed
@@ -253,7 +279,7 @@ publish the generic-variable publisher first to stage and verify the complete
 five-variable bundle, then switch consumers, then drain old code before
 separately authorized cleanup of obsolete names. Old aliases and maintenance
 inputs remain untouched while staging. If a generic target already contains a
-different value, publication fails closed; there is no migration flag or
+different identity or inventory, publication fails closed; there is no migration flag or
 retarget bypass.
 
 Do not run other variable writers alongside the serialized workflow. GitHub

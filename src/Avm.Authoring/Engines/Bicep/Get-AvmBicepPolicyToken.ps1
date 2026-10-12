@@ -1,21 +1,37 @@
 function Get-AvmBicepPolicyToken {
     [CmdletBinding()]
     [OutputType([hashtable])]
-    param()
+    param(
+        [string] $RepositoryRoot,
+        [string] $ModulePath
+    )
 
     Set-StrictMode -Version 3.0
-    $subscriptionId = $env:VALIDATE_SUBSCRIPTION_ID
-    if (-not [string]::IsNullOrEmpty($env:TEST_SUBSCRIPTION_IDS)) {
-        # Validate with the shared pool rules, then use the first authored entry rather than the e2e seeded order.
-        $null = Select-AvmBicepWorkflowSubscription -PoolJson $env:TEST_SUBSCRIPTION_IDS
-        $pool = ConvertFrom-Json -InputObject $env:TEST_SUBSCRIPTION_IDS -AsHashtable -NoEnumerate -ErrorAction Stop
-        $subscriptionId = ([guid]$pool[0]['id']).ToString('D')
+    $ci = Get-AvmBicepWorkflowEnvironment -Enabled
+    $tag = 'General'
+    if ($RepositoryRoot -or $ModulePath) {
+        if (-not $RepositoryRoot -or -not $ModulePath) {
+            throw [AvmConfigurationException]::new('Reservation selection requires both RepositoryRoot and ModulePath.')
+        }
+        $tag = Get-AvmBicepTestSubscriptionTag -RepositoryRoot $RepositoryRoot -ModulePath $ModulePath
+    }
+    $subscriptionId = $ci.SubscriptionId
+    if (-not [string]::IsNullOrEmpty($ci.PoolJson)) {
+        $pool = @(ConvertFrom-AvmBicepTestSubscriptionPool -PoolJson $ci.PoolJson |
+                Where-Object { $_.Tag -ceq $tag })
+        if ($pool.Count -eq 0) {
+            throw [AvmConfigurationException]::new("The test subscription pool has no '$tag' subscriptions; PSRule cannot use another tag or singleton fallback.")
+        }
+        $subscriptionId = $pool[0].SubscriptionId
+    }
+    elseif ($tag -cne 'General') {
+        throw [AvmConfigurationException]::new("Reserved subscription tag '$tag' requires a tagged pool; singleton fallback is not permitted.")
     }
     $tokens = @{
         subscriptionId    = $subscriptionId
-        tenantId          = $env:VALIDATE_TENANT_ID
-        managementGroupId = if ($env:VALIDATE_MANAGEMENT_GROUP_ID) {
-            $env:VALIDATE_MANAGEMENT_GROUP_ID
+        tenantId          = $ci.TenantId
+        managementGroupId = if ($ci.ManagementGroupId) {
+            $ci.ManagementGroupId
         }
         else { $env:ARM_MGMTGROUP_ID }
         namePrefix        = $env:TOKEN_NAMEPREFIX

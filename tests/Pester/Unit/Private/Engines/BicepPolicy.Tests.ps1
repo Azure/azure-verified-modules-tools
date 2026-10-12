@@ -77,7 +77,8 @@ Describe 'Bicep PSRule token replacement' {
     Context 'subscription token source' {
         BeforeEach {
             $script:savedTokenEnvironment = @{}
-            foreach ($name in @('TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_ID', 'localToken_subscriptionId')) {
+            foreach ($name in @('TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_IDS',
+                    'AVM_CI_VARIABLES', 'AVM_CI_SECRETS', 'VALIDATE_SUBSCRIPTION_ID', 'localToken_subscriptionId')) {
                 $script:savedTokenEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
                 [Environment]::SetEnvironmentVariable($name, [NullString]::Value)
             }
@@ -121,6 +122,36 @@ Describe 'Bicep PSRule token replacement' {
             $env:localToken_subscriptionId = '44444444-4444-4444-8444-444444444444'
             InModuleScope 'Avm.Authoring' { (Get-AvmBicepPolicyToken)['subscriptionId'] } |
                 Should -BeExactly '44444444-4444-4444-8444-444444444444'
+        }
+
+        It 'uses the first General entry from the canonical pool ahead of a legacy alias' {
+            $env:VALIDATE_SUBSCRIPTION_IDS = '[{"id":"11111111-1111-4111-8111-111111111111","name":"reserved","tag":"Azure Local"},{"id":"22222222-2222-4222-8222-222222222222","name":"general"}]'
+            $env:TEST_SUBSCRIPTION_IDS = 'invalid-unused-legacy-pool'
+            InModuleScope Avm.Authoring { (Get-AvmBicepPolicyToken)['subscriptionId'] } |
+                Should -BeExactly '22222222-2222-4222-8222-222222222222'
+        }
+
+        It 'uses the mapped reserved pool for static policy checks without treating a child as reserved' {
+            $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            $null = New-Item -ItemType Directory -Path $root
+            [IO.File]::WriteAllText((Join-Path $root '.reserved-test-subscriptions.json'),
+                '{"avm/res/azure-stack-hci/cluster":"Azure Local"}')
+            $env:VALIDATE_SUBSCRIPTION_IDS = '[{"id":"11111111-1111-4111-8111-111111111111","name":"reserved","tag":"Azure Local"},{"id":"22222222-2222-4222-8222-222222222222","name":"general"}]'
+            InModuleScope Avm.Authoring -Parameters @{ Root = $root } {
+                param($Root)
+                (Get-AvmBicepPolicyToken -RepositoryRoot $Root -ModulePath 'avm/res/azure-stack-hci/cluster')['subscriptionId'] |
+                    Should -BeExactly '11111111-1111-4111-8111-111111111111'
+                (Get-AvmBicepPolicyToken -RepositoryRoot $Root -ModulePath 'avm/res/azure-stack-hci/cluster/child')['subscriptionId'] |
+                    Should -BeExactly '22222222-2222-4222-8222-222222222222'
+            }
+        }
+
+        It 'does not substitute a legacy singleton for a configured pool without General subscriptions' {
+            $env:VALIDATE_SUBSCRIPTION_IDS = '[{"id":"11111111-1111-4111-8111-111111111111","name":"reserved","tag":"Azure Local"}]'
+            $env:VALIDATE_SUBSCRIPTION_ID = '33333333-3333-4333-8333-333333333333'
+            InModuleScope Avm.Authoring {
+                { Get-AvmBicepPolicyToken } | Should -Throw "*no 'General'*"
+            }
         }
     }
 }

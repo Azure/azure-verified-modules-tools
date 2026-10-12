@@ -100,8 +100,28 @@ function Invoke-AvmBicepTestE2e {
     if (-not [guid]::TryParseExact($TenantId, 'D', [ref]$tenant) -or $tenant -eq [guid]::Empty) {
         throw [AvmConfigurationException]::new('Bicep e2e requires an explicit, nonempty GUID -TenantId.')
     }
-    $selection = Select-AvmBicepWorkflowSubscription -PoolJson $TestSubscriptionIds `
-        -FallbackSubscriptionId $SubscriptionId -RandomSeed $SubscriptionSelectionSeed -CaseIndex $SubscriptionJobIndex
+    $repoRoot = Get-AvmBicepTestRepositoryRoot -Context $Context
+    $registryLayout = $Context.Kind -eq 'bicep-monorepo' -or $repoRoot -cne $Context.Root
+    $selections = @(
+        for ($index = 0; $index -lt $cases.Count; $index++) {
+            $selectionOptions = @{
+                PoolJson = $TestSubscriptionIds; FallbackSubscriptionId = $SubscriptionId
+                RandomSeed = $SubscriptionSelectionSeed; CaseIndex = $SubscriptionJobIndex + $index
+            }
+            if ($registryLayout) {
+                $modulePath = [System.IO.Path]::GetRelativePath(
+                    $repoRoot, $cases[$index].ModuleRoot).Replace('\', '/')
+                $requiredTag = Get-AvmBicepTestSubscriptionTag -RepositoryRoot $repoRoot `
+                    -ModulePath $modulePath
+                if ($requiredTag -cne 'General') {
+                    throw [AvmConfigurationException]::new(
+                        "Native Bicep e2e cannot run reserved tag '$requiredTag'. Use the protected registry workflow, which holds the subscription environment lock across preparation, tests, and confirmed cleanup.")
+                }
+            }
+            Select-AvmBicepWorkflowSubscription @selectionOptions
+        }
+    )
+    $selection = $selections[0]
     if ($null -ne $state -and ($state['subscriptionId'] -ine $selection.SubscriptionId -or $state['tenantId'] -ine $TenantId)) {
         throw [AvmConfigurationException]::new('Completion state does not match the explicitly selected subscription and tenant.')
     }
@@ -124,7 +144,6 @@ function Invoke-AvmBicepTestE2e {
     }
     Assert-AvmBicepAzureDependency
     $az = Get-Command -Name az -CommandType Application -ErrorAction Stop | Select-Object -First 1
-    $repoRoot = Get-AvmBicepTestRepositoryRoot -Context $Context
     if ($Phase -eq 'Complete') {
         $item = [pscustomobject]@{
             Case = $cases[0]; Scope = $state['case']['scope']
@@ -148,9 +167,7 @@ function Invoke-AvmBicepTestE2e {
         try {
             for ($index = 0; $index -lt $cases.Count; $index++) {
                 $case = $cases[$index]
-                $subscription = Select-AvmBicepWorkflowSubscription -PoolJson $TestSubscriptionIds `
-                    -FallbackSubscriptionId $SubscriptionId -RandomSeed $SubscriptionSelectionSeed `
-                    -CaseIndex ($SubscriptionJobIndex + $index)
+                $subscription = $selections[$index]
                 $runId = [guid]::NewGuid().ToString('N')
                 $tokenMap = Get-AvmBicepTestTokenMap -Root $Context.Root -SubscriptionId $subscription.SubscriptionId `
                     -TenantId $TenantId -ManagementGroupId $ManagementGroupId -RunId $runId `

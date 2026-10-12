@@ -187,6 +187,34 @@ Describe 'Bicep test tenant entry point with a synthetic bundle and mocked GitHu
         $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value | Should -BeExactly '[]'
     }
 
+    It 'propagates tags from the real source environment through the workflow publication command' {
+        $null = & $script:entryPath -Apply
+        $script:entryState.WriteNames.Clear()
+        $pool = ConvertFrom-Json -InputObject $env:TEST_BAMI_SUBSCRIPTION_IDS -AsHashtable -NoEnumerate
+        $pool[0].tag = 'Azure Local'
+        $pool[1].tag = 'General'
+        $env:TEST_BAMI_SUBSCRIPTION_IDS = ConvertTo-Json -InputObject $pool -Depth 5 -Compress
+        $env:BICEP_SYNC_PLAN_ONLY = 'true'
+        $planned = & $script:workflowRun | ConvertFrom-Json -AsHashtable
+        $planned.Status | Should -BeExactly 'Planned'
+        $script:entryState.WriteNames | Should -HaveCount 0
+        $env:BICEP_SYNC_PLAN_ONLY = 'false'
+        $applied = & $script:workflowRun | ConvertFrom-Json -AsHashtable
+        $applied.Status | Should -BeExactly 'Published'
+        $applied.ChangedNames | Should -Be $planned.ChangedNames
+        $applied.ChangedNames | Should -Be @('VALIDATE_SUBSCRIPTION_IDS')
+        $script:entryState.WriteNames | Should -HaveCount 1
+        $published = ConvertFrom-Json -InputObject $script:entryState.Variables.VALIDATE_SUBSCRIPTION_IDS.value -AsHashtable -NoEnumerate
+        $published | Should -HaveCount 28
+        $published.id | Should -Be $pool.id
+        $published[0].tag | Should -BeExactly 'Azure Local'
+        $published[1].tag | Should -BeExactly 'General'
+        $published[2].Contains('tag') | Should -BeFalse
+        $script:entryState.WriteNames.Clear()
+        (& $script:workflowRun | ConvertFrom-Json -AsHashtable).Status | Should -BeExactly 'NoChange'
+        $script:entryState.WriteNames | Should -HaveCount 0
+    }
+
     It 'fills a missing execution field but refuses a conflicting present value without partial initialization' {
         $script:entryState.Variables.VALIDATE_TENANT_ID = New-BicepEntryVariable `
             -Name 'VALIDATE_TENANT_ID' -Value $script:sourceValues.TEST_BAMI_TENANT_ID

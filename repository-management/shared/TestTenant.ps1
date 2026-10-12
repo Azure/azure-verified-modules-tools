@@ -122,21 +122,30 @@ function Get-AvmBamiSettings {
         $subscriptions = ConvertFrom-AvmTestTenantJson -Json $subscriptions
     }
     if ($subscriptions -isnot [System.Collections.IList] -or $subscriptions.Count -ne 28) {
-        throw [System.ArgumentException]::new('TEST_BAMI_SUBSCRIPTION_IDS must contain exactly 28 {name,id} objects.')
+        throw [System.ArgumentException]::new('TEST_BAMI_SUBSCRIPTION_IDS must contain exactly 28 {name,id} objects with an optional tag.')
     }
     $seenIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $seenNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $normalized = foreach ($subscription in $subscriptions) {
         $entry = ConvertTo-AvmSettingDictionary -Value $subscription
+        $hasTag = @($entry.psbase.Keys) -ccontains 'tag'
         $id = [guid]::Empty
-        if ($entry.Count -ne 2 -or $entry['name'] -isnot [string] -or
+        if ($entry.psbase.Count -ne (2 + [int]$hasTag) -or $entry['name'] -isnot [string] -or
             [string]::IsNullOrWhiteSpace($entry['name']) -or $entry['name'] -match '[\x00-\x1f\x7f]' -or
             $entry['name'] -cne $entry['name'].Trim() -or $entry['id'] -isnot [string] -or
             -not [guid]::TryParseExact($entry['id'], 'D', [ref] $id) -or $id -eq [guid]::Empty -or
             -not $seenIds.Add($id.ToString()) -or -not $seenNames.Add($entry['name'])) {
-            throw [System.ArgumentException]::new('BAMI subscriptions must have unique nonempty names and GUID IDs, with no additional fields.')
+            throw [System.ArgumentException]::new('BAMI subscriptions must have unique nonempty names and GUID IDs, with only an optional tag field.')
         }
-        [ordered]@{ name = $entry['name']; id = $id.ToString() }
+        $normalizedSubscription = [ordered]@{ name = $entry['name']; id = $id.ToString() }
+        if ($hasTag) {
+            if ($entry['tag'] -isnot [string] -or $entry['tag'].Length -gt 64 -or
+                $entry['tag'] -cnotmatch '\A[A-Za-z0-9]+(?:[ -][A-Za-z0-9]+)*\z') {
+                throw [System.ArgumentException]::new('A BAMI subscription tag must be a string of at most 64 alphanumeric characters separated by single spaces or hyphens.')
+            }
+            $normalizedSubscription['tag'] = $entry['tag']
+        }
+        $normalizedSubscription
     }
     if ($seenIds.Contains($result['TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID'])) {
         throw [System.ArgumentException]::new('The BAMI Persistent subscription must not be in the disposable test pool.')
@@ -154,4 +163,23 @@ function Get-AvmBamiSettings {
         throw [System.ArgumentException]::new('BAMI controller and Bicep execution client IDs must be separate identities.')
     }
     return $result
+}
+
+function Get-AvmGeneralTestSubscription {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [System.Collections.IDictionary] $Settings)
+
+    $settings = Get-AvmBamiSettings -Values $Settings
+    $subscriptions = ConvertFrom-AvmTestTenantJson -Json $settings['TEST_BAMI_SUBSCRIPTION_IDS']
+    $general = @(
+        foreach ($subscription in $subscriptions) {
+            if (-not $subscription.Contains('tag') -or $subscription['tag'] -ceq 'General') {
+                [ordered]@{ name = $subscription['name']; id = $subscription['id'] }
+            }
+        }
+    )
+    if ($general.Count -eq 0) {
+        throw [System.ArgumentException]::new('The BAMI test pool must contain at least one General subscription for ordinary Terraform tests.')
+    }
+    return $general
 }

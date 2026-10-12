@@ -35,7 +35,7 @@ Describe 'terraform-module reusable workflow' {
         $script:workflow | Should -Not -Match '::add-mask::'
     }
 
-    It 'publishes the full shuffled subscription list for the e2e fan-out' {
+    It 'publishes the shuffled General subscription list for the e2e fan-out' {
         $script:workflow | Should -Match 'subscriptionIds:\s*\$\{\{ steps\.pick\.outputs\.subscriptionIds \}\}'
         $script:workflow | Should -Match '"subscriptionIds=\$ordered"'
     }
@@ -90,6 +90,251 @@ Describe 'terraform-module reusable workflow' {
 
     It 'no longer lists per-example e2e targeting as a divergence' {
         $script:workflow | Should -Not -Match 'has no per-example targeting'
+    }
+}
+
+Describe 'Terraform General subscription selection' {
+    BeforeAll {
+        $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..')).Path
+        . (Join-Path $script:root 'tests' 'fixtures' 'TestTenant.ps1')
+        $workflow = Get-Content -LiteralPath (Join-Path $script:root '.github' 'workflows' 'terraform-module.yml') -Raw
+        $script:reservationScripts = @{}
+        foreach ($job in @('subscriptions', 'pr-check', 'integration-test', 'e2e-test')) {
+            $block = [regex]::Match($workflow, '(?ms)^  ' + [regex]::Escape($job) + ':\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)').Value
+            $step = if ($job -ceq 'subscriptions') { 'Shuffle and select a test subscription' } else { 'Prepare test environment' }
+            $run = [regex]::Match($block, '(?ms)^      - name: ' + [regex]::Escape($step) +
+                '\r?\n.*?^        run: \|\r?\n(?<body>(?: {10}[^\r\n]*\r?\n|\r?\n)*)')
+            $run.Success | Should -BeTrue
+            $script:reservationScripts[$job] = [scriptblock]::Create(($run.Groups['body'].Value -replace '(?m)^ {10}', ''))
+        }
+        $ci = Get-Content -LiteralPath (Join-Path $script:root '.github' 'workflows' 'ci-authoring.yml') -Raw
+        $run = [regex]::Match($ci, '(?ms)^      - name: Select a General test subscription\r?\n.*?^        run: \|\r?\n(?<body>(?: {10}[^\r\n]*\r?\n|\r?\n)*)')
+        $run.Success | Should -BeTrue
+        $script:reservationScripts['authoring'] = [scriptblock]::Create(($run.Groups['body'].Value -replace '(?m)^ {10}', ''))
+        $script:authoringWorkflow = $ci
+    }
+
+    BeforeEach {
+        $script:previousEnvironment = @{}
+        $script:bundle = New-AvmTestBamiSettings
+        foreach ($name in @($script:bundle.Keys) + @(
+            'TEST_SUBSCRIPTION_IDS', 'FALLBACK_SUBSCRIPTION_ID_SECRET', 'FALLBACK_SUBSCRIPTION_ID_VAR',
+            'GITHUB_OUTPUT', 'GITHUB_ENV', 'GITHUB_WORKSPACE', 'SUBSCRIPTION_IDS', 'SELECTED_SUBSCRIPTION_ID',
+            'SECRETS_CONTEXT', 'VARS_CONTEXT', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL',
+            'ARM_TENANT_ID'
+        )) {
+            $script:previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+            [Environment]::SetEnvironmentVariable($name, [NullString]::Value, 'Process')
+        }
+        $env:GITHUB_OUTPUT = 'fixture-output'
+        $env:GITHUB_ENV = 'fixture-environment'
+        $env:GITHUB_WORKSPACE = $script:root
+        $env:ARM_TENANT_ID = $script:bundle.TEST_BAMI_TENANT_ID
+        $script:written = @{
+            'fixture-output' = [System.Collections.Generic.List[string]]::new()
+            'fixture-environment' = [System.Collections.Generic.List[string]]::new()
+        }
+        Mock Out-File {
+            param($InputObject, $FilePath)
+            $script:written[$FilePath].Add([string]$InputObject)
+        } -RemoveParameterType Encoding
+        Mock Write-Host {}
+        $script:reserved = $script:bundle.TEST_BAMI_SUBSCRIPTION_IDS[0]
+        $script:general = $script:bundle.TEST_BAMI_SUBSCRIPTION_IDS[1]
+        $script:untagged = $script:bundle.TEST_BAMI_SUBSCRIPTION_IDS[2]
+        $script:reserved.tag = 'Azure Local'
+        $script:general.tag = 'General'
+    }
+
+    AfterEach {
+        foreach ($name in $script:previousEnvironment.Keys) {
+            $value = $script:previousEnvironment[$name]
+            [Environment]::SetEnvironmentVariable($name, ($null -eq $value ? [NullString]::Value : $value), 'Process')
+        }
+    }
+
+    It 'filters reserved subscriptions before shuffling, choosing a default, and publishing the matrix pool' {
+        $env:TEST_SUBSCRIPTION_IDS = ConvertTo-Json -InputObject @($script:reserved, $script:general, $script:untagged) -Compress
+        & $script:reservationScripts.subscriptions
+        $lines = $script:written['fixture-output']
+        $selected = @($lines | Where-Object { $_.StartsWith('subscriptionId=') })[0].Substring('subscriptionId='.Length)
+        $json = @($lines | Where-Object { $_.StartsWith('subscriptionIds=') })[0].Substring('subscriptionIds='.Length)
+        $pool = ConvertFrom-Json -InputObject $json -AsHashtable -NoEnumerate
+        $pool | Should -HaveCount 2
+        $pool.id | Should -Not -Contain $script:reserved.id
+        $selected | Should -BeIn @($script:general.id, $script:untagged.id)
+        @($pool.id | Sort-Object) | Should -Be @(@($script:general.id, $script:untagged.id) | Sort-Object)
+        foreach ($entry in $pool) { $entry.Count | Should -Be 2 }
+    }
+
+    It 'keeps an entirely untagged historical pool usable' {
+        $script:general.Remove('tag')
+        $env:TEST_SUBSCRIPTION_IDS = ConvertTo-Json -InputObject @($script:general, $script:untagged) -Compress
+        & $script:reservationScripts.subscriptions
+        $json = @($script:written['fixture-output'] | Where-Object { $_.StartsWith('subscriptionIds=') })[0].Substring('subscriptionIds='.Length)
+        @((ConvertFrom-Json -InputObject $json).id | Sort-Object) |
+            Should -Be @(@($script:general.id, $script:untagged.id) | Sort-Object)
+    }
+
+    It 'does not use a legacy fallback for a configured pool without General subscriptions: <Tag>' -ForEach @(
+        @{ Tag = 'Azure Local' }
+        @{ Tag = 'Another reservation' }
+        @{ Tag = 'general' }
+    ) {
+        $script:reserved.tag = $Tag
+        $env:TEST_SUBSCRIPTION_IDS = ConvertTo-Json -InputObject @($script:reserved) -Compress
+        $env:FALLBACK_SUBSCRIPTION_ID_SECRET = $script:reserved.id
+        $env:FALLBACK_SUBSCRIPTION_ID_VAR = $script:general.id
+        { & $script:reservationScripts.subscriptions } | Should -Throw '*at least one General*falls back*'
+        Should -Invoke Out-File -Exactly 0
+    }
+
+    It 'rejects an explicitly malformed tag before producing any selection: <Case>' -ForEach @(
+        @{ Case = 'null'; Value = $null }
+        @{ Case = 'empty'; Value = '' }
+        @{ Case = 'whitespace'; Value = ' ' }
+        @{ Case = 'leading whitespace'; Value = ' General' }
+        @{ Case = 'trailing whitespace'; Value = 'General ' }
+        @{ Case = 'control character'; Value = "Azure`nLocal" }
+        @{ Case = 'underscore'; Value = 'Azure_Local' }
+        @{ Case = 'repeated separators'; Value = 'Azure--Local' }
+        @{ Case = 'too long'; Value = ('A' * 65) }
+        @{ Case = 'boolean'; Value = $true }
+        @{ Case = 'number'; Value = 1 }
+        @{ Case = 'array'; Value = @('General') }
+        @{ Case = 'object'; Value = @{ name = 'General' } }
+    ) {
+        $script:reserved.tag = $Value
+        $env:TEST_SUBSCRIPTION_IDS = ConvertTo-Json -InputObject @($script:reserved, $script:general) -Depth 5 -Compress
+        { & $script:reservationScripts.subscriptions } | Should -Throw '*subscription tag must be*'
+        Should -Invoke Out-File -Exactly 0
+    }
+
+    It 'rejects ambiguous properties and malformed or empty pools: <Case>' -ForEach @(
+        @{ Case = 'duplicate tag'; Json = '[{"id":"10000000-0000-4000-8000-000000000001","name":"test","tag":"Azure Local","tag":"General"}]' }
+        @{ Case = 'case-colliding tags'; Json = '[{"id":"10000000-0000-4000-8000-000000000001","name":"test","tag":"Azure Local","Tag":"General"}]' }
+        @{ Case = 'wrongly cased tag'; Json = '[{"id":"10000000-0000-4000-8000-000000000001","name":"test","Tag":"Azure Local"}]' }
+        @{ Case = 'object instead of array'; Json = '{"id":"10000000-0000-4000-8000-000000000001","name":"test"}' }
+        @{ Case = 'empty array'; Json = '[]' }
+        @{ Case = 'non-object entry'; Json = '[null]' }
+        @{ Case = 'whitespace JSON'; Json = ' ' }
+        @{ Case = 'unknown property'; Json = '[{"id":"10000000-0000-4000-8000-000000000001","name":"test","extra":"value"}]' }
+        @{ Case = 'duplicate across tags'; Json = '[{"id":"ABCDEF01-ABCD-4ABC-8ABC-ABCDEF012345","name":"reserved","tag":"Azure Local"},{"id":"abcdef01-abcd-4abc-8abc-abcdef012345","name":"general"}]' }
+    ) {
+        $env:TEST_SUBSCRIPTION_IDS = $Json
+        $env:FALLBACK_SUBSCRIPTION_ID_SECRET = $script:reserved.id
+        { & $script:reservationScripts.subscriptions } | Should -Throw
+        Should -Invoke Out-File -Exactly 0
+    }
+
+    It 'preserves secret-before-variable fallback only when no pool is configured' -ForEach @($false, $true) {
+        $env:FALLBACK_SUBSCRIPTION_ID_VAR = $script:untagged.id
+        if ($_) { $env:FALLBACK_SUBSCRIPTION_ID_SECRET = $script:general.id }
+        & $script:reservationScripts.subscriptions
+        $expected = if ($_) { $script:general.id } else { $script:untagged.id }
+        $script:written['fixture-output'] | Should -Contain "subscriptionId=$expected"
+    }
+
+    It 'rejects an override outside the General pool before <Job> can publish its environment' -ForEach @(
+        @{ Job = 'pr-check' }
+        @{ Job = 'integration-test' }
+        @{ Job = 'e2e-test' }
+    ) {
+        $env:SUBSCRIPTION_IDS = ConvertTo-Json -InputObject @($script:general, $script:untagged) -Compress
+        $env:SELECTED_SUBSCRIPTION_ID = $script:general.id
+        $env:SECRETS_CONTEXT = ConvertTo-Json -InputObject @{ ARM_SUBSCRIPTION_ID_OVERRIDE = $script:reserved.id } -Compress
+        $env:VARS_CONTEXT = '{}'
+        { & $script:reservationScripts[$Job] } | Should -Throw '*OVERRIDE must belong*General*'
+        Should -Invoke Out-File -Exactly 0
+    }
+
+    It 'keeps General overrides and replaces an unfiltered ambient pool for <Job>' -ForEach @(
+        @{ Job = 'pr-check' }
+        @{ Job = 'integration-test' }
+        @{ Job = 'e2e-test' }
+    ) {
+        $env:SUBSCRIPTION_IDS = ConvertTo-Json -InputObject @($script:general, $script:untagged) -Compress
+        $env:SELECTED_SUBSCRIPTION_ID = $script:general.id
+        $env:VARS_CONTEXT = ConvertTo-Json -InputObject @{ ARM_SUBSCRIPTION_ID = $script:reserved.id } -Compress
+        $env:SECRETS_CONTEXT = ConvertTo-Json -InputObject @{
+            ARM_SUBSCRIPTION_ID_OVERRIDE = $script:untagged.id
+            TEST_SUBSCRIPTION_IDS = (ConvertTo-Json -InputObject @($script:reserved, $script:general, $script:untagged) -Compress)
+        } -Compress
+        & $script:reservationScripts[$Job]
+        $writes = $script:written['fixture-environment']
+        $writes | Should -Contain "ARM_SUBSCRIPTION_ID=$($script:untagged.id)"
+        $poolWrite = @($writes | Where-Object { $_.StartsWith('TEST_SUBSCRIPTION_IDS<<') })
+        $poolWrite | Should -HaveCount 1
+        $poolWrite[0] | Should -Match ([regex]::Escape($env:SUBSCRIPTION_IDS))
+        $poolWrite[0] | Should -Not -Match ([regex]::Escape($script:reserved.id))
+    }
+
+    It 'rejects a missing or inconsistent selected pool before <Job> can fall back to ambient ARM settings' -ForEach @(
+        @{ Job = 'pr-check' }
+        @{ Job = 'integration-test' }
+        @{ Job = 'e2e-test' }
+    ) {
+        $env:SUBSCRIPTION_IDS = '[]'
+        $env:SELECTED_SUBSCRIPTION_ID = $script:reserved.id
+        $env:SECRETS_CONTEXT = ConvertTo-Json -InputObject @{ ARM_SUBSCRIPTION_ID = $script:reserved.id } -Compress
+        $env:VARS_CONTEXT = '{}'
+        { & $script:reservationScripts[$Job] } | Should -Throw '*published General test pool*'
+        Should -Invoke Out-File -Exactly 0
+    }
+
+    It 'replaces a stale ambient default with the selected General subscription in <Job>' -ForEach @(
+        @{ Job = 'pr-check' }
+        @{ Job = 'integration-test' }
+        @{ Job = 'e2e-test' }
+    ) {
+        $env:SUBSCRIPTION_IDS = ConvertTo-Json -InputObject @($script:general, $script:untagged) -Compress
+        $env:SELECTED_SUBSCRIPTION_ID = $script:general.id
+        $env:SECRETS_CONTEXT = ConvertTo-Json -InputObject @{ ARM_SUBSCRIPTION_ID = $script:reserved.id } -Compress
+        $env:VARS_CONTEXT = '{}'
+        & $script:reservationScripts[$Job]
+        $script:written['fixture-environment'] | Should -Contain "ARM_SUBSCRIPTION_ID=$($script:general.id)"
+        $script:written['fixture-environment'] | Should -Not -Contain "ARM_SUBSCRIPTION_ID=$($script:reserved.id)"
+    }
+
+    It 'selects the first General entry from the full BAMI bundle for Tools integration login' {
+        foreach ($name in $script:bundle.Keys) {
+            $value = if ($name -ceq 'TEST_BAMI_SUBSCRIPTION_IDS') {
+                ConvertTo-Json -InputObject $script:bundle[$name] -Compress
+            }
+            else { $script:bundle[$name] }
+            [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+        }
+        & $script:reservationScripts.authoring
+        $script:written['fixture-output'] | Should -Contain "subscriptionId=$($script:general.id)"
+        $script:written['fixture-environment'] | Should -Contain "ARM_SUBSCRIPTION_ID=$($script:general.id)"
+        $script:authoringWorkflow | Should -Not -Match 'vars\.ARM_SUBSCRIPTION_ID'
+        $script:authoringWorkflow | Should -Match 'subscription-id: \$\{\{ steps.test-subscription.outputs.subscriptionId \}\}'
+    }
+
+    It 'fails Tools integration selection before emitting login settings when every subscription is reserved' {
+        foreach ($entry in $script:bundle.TEST_BAMI_SUBSCRIPTION_IDS) { $entry.tag = 'Azure Local' }
+        foreach ($name in $script:bundle.Keys) {
+            $value = if ($name -ceq 'TEST_BAMI_SUBSCRIPTION_IDS') {
+                ConvertTo-Json -InputObject $script:bundle[$name] -Compress
+            }
+            else { $script:bundle[$name] }
+            [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+        }
+        { & $script:reservationScripts.authoring } | Should -Throw '*at least one General*'
+        Should -Invoke Out-File -Exactly 0
+    }
+
+    It 'does not combine a General BAMI subscription with a legacy tenant identity' {
+        foreach ($name in $script:bundle.Keys) {
+            $value = if ($name -ceq 'TEST_BAMI_SUBSCRIPTION_IDS') {
+                ConvertTo-Json -InputObject $script:bundle[$name] -Compress
+            }
+            else { $script:bundle[$name] }
+            [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+        }
+        $env:ARM_TENANT_ID = '77777777-7777-4777-8777-777777777777'
+        { & $script:reservationScripts.authoring } | Should -Throw '*legacy credentials cannot be combined*'
+        Should -Invoke Out-File -Exactly 0
     }
 }
 

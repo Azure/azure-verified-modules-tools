@@ -47,6 +47,36 @@ Describe 'Bicep BAMI test subscription pool selection' {
         }
     }
 
+    It 'retains strict BAMI validation while balancing only General subscriptions' {
+        foreach ($entry in $script:pool[0..25]) { $entry['tag'] = 'Azure Local' }
+        $script:pool[27]['tag'] = 'General'
+        InModuleScope Avm.Authoring -Parameters @{
+            Json = (ConvertTo-Json -InputObject $script:pool -Compress)
+            T = $script:tenant; A = $script:admin; P = $script:persistent; Seed = $script:seed
+        } {
+            param($Json, $T, $A, $P, $Seed)
+            $selected = @(0..3 | ForEach-Object {
+                    Select-AvmBicepTestPoolSubscription -PoolJson $Json `
+                        -TenantId $T -AdminSubscriptionId $A -PersistentSubscriptionId $P -RunSeed $Seed -CaseIndex $_
+                })
+            @($selected.Name | Sort-Object -Unique) | Should -Be @('test-27', 'test-28')
+            $selected[0].SubscriptionId | Should -Be $selected[2].SubscriptionId
+        }
+    }
+
+    It 'rejects a full valid inventory without any General subscription' {
+        foreach ($entry in $script:pool) { $entry['tag'] = 'Azure Local' }
+        InModuleScope Avm.Authoring -Parameters @{
+            Json = (ConvertTo-Json -InputObject $script:pool -Compress)
+            T = $script:tenant; A = $script:admin; P = $script:persistent; Seed = $script:seed
+        } {
+            param($Json, $T, $A, $P, $Seed)
+            { Select-AvmBicepTestPoolSubscription -PoolJson $Json `
+                    -TenantId $T -AdminSubscriptionId $A -PersistentSubscriptionId $P -RunSeed $Seed -CaseIndex 0 } |
+                Should -Throw '*at least one General*'
+        }
+    }
+
     It 'generates a cryptographically random seed for one entire run' {
         InModuleScope 'Avm.Authoring' {
             Get-AvmBicepTestPoolSeed | Should -Match '^[0-9a-f]{32}$'
