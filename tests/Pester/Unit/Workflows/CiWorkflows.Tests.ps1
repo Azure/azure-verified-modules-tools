@@ -149,26 +149,32 @@ Describe 'Independent CI workflows' {
         $jobs.lint['runs-on'] | Should -BeExactly 'ubuntu-latest'
     }
 
-    It 'keeps the configured authoring <Name> in both provider and login settings' -ForEach @(
-        @{ Name = 'ARM_CLIENT_ID'; LoginInput = 'client-id' }
-        @{ Name = 'ARM_TENANT_ID'; LoginInput = 'tenant-id' }
-        @{ Name = 'ARM_SUBSCRIPTION_ID'; LoginInput = 'subscription-id' }
+    It 'uses the repository-sync executor <Variable> in both provider and login settings' -ForEach @(
+        @{ Name = 'ARM_CLIENT_ID'; LoginInput = 'client-id'; Variable = 'TEST_BAMI_CONTROLLER_CLIENT_ID' }
+        @{ Name = 'ARM_TENANT_ID'; LoginInput = 'tenant-id'; Variable = 'TEST_BAMI_TENANT_ID' }
+        @{ Name = 'ARM_SUBSCRIPTION_ID'; LoginInput = 'subscription-id'; Variable = 'TEST_BAMI_ADMIN_SUBSCRIPTION_ID' }
     ) {
         $job = $script:definitions['ci-authoring.yml'].jobs.integration
         $login = @($job.steps | Where-Object { $_.Contains('uses') -and $_.uses -clike 'azure/login@*' })
         $login | Should -HaveCount 1
-        $expected = '${{ vars.' + $Name + ' }}'
+        $expected = '${{ vars.' + $Variable + ' }}'
         $job.env[$Name] | Should -BeExactly $expected
         $login[0].with[$LoginInput] | Should -BeExactly $expected
     }
 
-    It 'keeps standalone authoring authentication separate from BAMI provisioning and module deployment pools' {
+    It 'requires authoring OIDC without backend, module identity or test-pool substitutions' {
         $job = $script:definitions['ci-authoring.yml'].jobs.integration
         $job.environment | Should -BeExactly 'avm'
         $job.permissions['id-token'] | Should -BeExactly 'write'
         $job.env.ARM_USE_OIDC | Should -BeExactly 'true'
+        $job.env.ARM_USE_CLI | Should -BeExactly 'false'
+        $job.env.ARM_USE_MSI | Should -BeExactly 'false'
+        $login = @($job.steps | Where-Object { $_.Contains('uses') -and $_.uses -clike 'azure/login@*' })
+        $login | Should -HaveCount 1
+        $login[0].Contains('if') | Should -BeFalse
+        $job.strategy['fail-fast'] | Should -BeFalse
         $job | ConvertTo-Json -Depth 30 |
-            Should -Not -Match 'TEST_BAMI_|ARM_BACKEND_|Get-AvmGeneralTestSubscription|test-subscription'
+            Should -Not -Match 'vars\.ARM_(CLIENT|TENANT|SUBSCRIPTION)_ID|ARM_BACKEND_|TEST_BAMI_(BICEP_CLIENT_ID|SUBSCRIPTION_IDS|PERSISTENT_SUBSCRIPTION_ID|AUTHORING_)|Get-AvmGeneralTestSubscription|test-subscription'
         @($job.steps | Where-Object { $_.Contains('run') } | ForEach-Object { $_.run }) |
             Should -Contain './build.ps1 integration -IntegrationGroup Terraform'
     }

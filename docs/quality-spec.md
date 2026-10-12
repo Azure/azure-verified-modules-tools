@@ -1321,10 +1321,16 @@ This section is the implementation-level expression of the **Security stance** p
   consumer shape. Filter before defaults, shuffling and round-robin assignment.
   A missing General pool fails before Terraform publication or deployment;
   explicit workflow overrides must belong to the filtered pool. Standalone Tools
-  authoring CI instead retains its complete configured `ARM_CLIENT_ID`,
-  `ARM_TENANT_ID`, and `ARM_SUBSCRIPTION_ID` tuple for real policy plans and mocked
-  unit tests. It does not deploy module examples or substitute a test-pool
-  subscription into that separate execution identity.
+  authoring CI reuses the repository-sync Terraform executor:
+  `TEST_BAMI_CONTROLLER_CLIENT_ID`, `TEST_BAMI_TENANT_ID`, and
+  `TEST_BAMI_ADMIN_SUBSCRIPTION_ID` from the `avm` environment supply both process
+  `ARM_CLIENT_ID`, `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID` and `azure/login`.
+  Require OIDC without CLI or managed-identity fallback. Both Terraform fixtures
+  on all three CI operating systems retain real authenticated plan/show and
+  positive Conftest policy evaluation; no module apply is performed.
+  Do not substitute a test-pool subscription, backend identity, Bicep executor
+  or generated module identity. This reuse does not enroll Tools into module
+  sync or change module repository `ARM_*` Secrets.
 - Existing Bicep pool Variables may change only tag metadata on the same ordered
   subscription IDs and exact names, with a complete unchanged execution identity
   bundle. Validate both pools and reject additions, removals, renames, reordering,

@@ -190,7 +190,6 @@ jobs:
           - terraform-azure-avm-res-mock
           - terraform-azurerm-avm-res-mock
     runs-on: ${{ matrix.os }}
-    # Resolve the complete existing authoring tuple from the avm environment.
     environment: avm
     timeout-minutes: 30
     permissions:
@@ -208,11 +207,12 @@ jobs:
       # intermittently failed with `403 API rate limit exceeded`. tflint reads
       # GITHUB_TOKEN for authenticated downloads (5000/hour).
       GITHUB_TOKEN: ${{ github.token }}
-      # Real policy plans use the complete configured authoring identity.
       ARM_USE_OIDC: 'true'
-      ARM_CLIENT_ID: ${{ vars.ARM_CLIENT_ID }}
-      ARM_TENANT_ID: ${{ vars.ARM_TENANT_ID }}
-      ARM_SUBSCRIPTION_ID: ${{ vars.ARM_SUBSCRIPTION_ID }}
+      ARM_USE_CLI: 'false'
+      ARM_USE_MSI: 'false'
+      ARM_CLIENT_ID: ${{ vars.TEST_BAMI_CONTROLLER_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.TEST_BAMI_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_ADMIN_SUBSCRIPTION_ID }}
 
     steps:
       - name: Checkout
@@ -244,12 +244,11 @@ jobs:
           Add-MpPreference -ExclusionProcess 'mapotf.exe' -ErrorAction SilentlyContinue
 
       - name: Azure login (OIDC)
-        if: ${{ vars.ARM_CLIENT_ID != '' }}
         uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
         with:
-          client-id: ${{ vars.ARM_CLIENT_ID }}
-          tenant-id: ${{ vars.ARM_TENANT_ID }}
-          subscription-id: ${{ vars.ARM_SUBSCRIPTION_ID }}
+          client-id: ${{ vars.TEST_BAMI_CONTROLLER_CLIENT_ID }}
+          tenant-id: ${{ vars.TEST_BAMI_TENANT_ID }}
+          subscription-id: ${{ vars.TEST_BAMI_ADMIN_SUBSCRIPTION_ID }}
 
       - name: Install build prerequisites
         shell: pwsh

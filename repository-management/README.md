@@ -145,9 +145,15 @@ of tenant selection. Consumer changes are maintained separately.
 
 The Tools `avm` environment has separate authentication scopes: `ARM_BACKEND_*`
 is the TME state-only identity, `TEST_BAMI_*` supplies test provisioning and
-downstream execution settings, and the existing `ARM_CLIENT_ID`, `ARM_TENANT_ID`,
-`ARM_SUBSCRIPTION_ID` tuple serves standalone authoring CI policy plans. These
-identities are not interchangeable; authoring does not select from the BAMI pool.
+downstream execution settings. Standalone authoring CI reuses the repository-sync
+Terraform executor: `TEST_BAMI_CONTROLLER_CLIENT_ID`, `TEST_BAMI_TENANT_ID` and
+`TEST_BAMI_ADMIN_SUBSCRIPTION_ID` supply both `azure/login` and the process
+`ARM_CLIENT_ID`, `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID` tuple. OIDC is required;
+CLI and managed-identity fallback are disabled. Both fixture modules run real
+Terraform plan/show and Conftest on Windows, Linux and macOS, without applying
+module examples or selecting from the BAMI test pool. The old same-named Tools
+`ARM_*` environment Variables are not consumed; process names and module
+repository Secrets remain unchanged. Tools is not enrolled into module sync.
 
 The BAMI publisher stages this complete nonsecret bundle in the Tools `avm`
 environment. There is one current BAMI tenant, not a profile catalog.
@@ -155,8 +161,8 @@ environment. There is one current BAMI tenant, not a profile catalog.
 | Variable | Purpose |
 | --- | --- |
 | `TEST_BAMI_TENANT_ID` | Candidate tenant |
-| `TEST_BAMI_CONTROLLER_CLIENT_ID` | Repository-identity provisioning only |
-| `TEST_BAMI_ADMIN_SUBSCRIPTION_ID` | Subscription holding repository identities |
+| `TEST_BAMI_CONTROLLER_CLIENT_ID` | Repository-sync Terraform and standalone authoring policy plans |
+| `TEST_BAMI_ADMIN_SUBSCRIPTION_ID` | Repository-identity and standalone authoring execution subscription |
 | `TEST_BAMI_SUBSCRIPTION_IDS` | Exactly 28 unique `{name,id}` objects with optional `tag`, encoded as JSON |
 | `TEST_BAMI_MANAGEMENT_GROUP_ID` | Test management-group name |
 | `TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME` | Existing repository-identity resource group |
