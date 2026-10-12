@@ -25,17 +25,19 @@ Describe 'Integration: MAPOTF Terraform deployment telemetry' -Tag 'Integration'
         }
 
         function Invoke-TelemetryProcess {
-            param([string] $FilePath, [string[]] $ArgumentList, [string] $Root)
+            param([string] $FilePath, [string[]] $ArgumentList, [string] $Root, [switch] $IgnoreExitCode)
 
             InModuleScope 'Avm.Authoring' -Parameters @{
                 ToolPath = $FilePath
                 Arguments = $ArgumentList
                 Root = $Root
                 Environment = $script:processEnvironment
+                IgnoreExitCode = [bool]$IgnoreExitCode
             } {
-                param($ToolPath, $Arguments, $Root, $Environment)
+                param($ToolPath, $Arguments, $Root, $Environment, $IgnoreExitCode)
                 Invoke-AvmProcess -FilePath $ToolPath -ArgumentList $Arguments `
                     -WorkingDirectory $Root -EnvVars $Environment `
+                    -IgnoreExitCode:$IgnoreExitCode `
                     -RetryNetworkFailure:($Arguments[0] -eq 'init')
             }
         }
@@ -906,6 +908,90 @@ module "azure_helper" {
         Get-Content -LiteralPath (Join-Path $root 'main.tf') -Raw |
             Should -Match '(?ms)^module "azure_helper" \{[^}]*location\s*=\s*var\.location'
         (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'pass'
+        Assert-TelemetryTerraformValid -Root $root
+    }
+
+    It 'keeps required location for global-resource helpers without hiding other unused inputs' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $child = Join-Path $root 'modules' 'global-helper'
+        New-TelemetryModule -Root $root -WithLocation
+        New-AzureResourceHelper -Root $child
+        Set-Content -LiteralPath (Join-Path $child 'main.tf') -Encoding utf8NoBOM -Value @'
+resource "azapi_resource" "example" {
+  type                   = "Microsoft.Authorization/roleAssignments@2022-04-01"
+  name                   = "11111111-1111-1111-1111-111111111111"
+  parent_id              = "/subscriptions/00000000-0000-0000-0000-000000000000"
+  response_export_values = []
+  body = {
+    properties = {
+      principalId      = "22222222-2222-2222-2222-222222222222"
+      principalType    = "ServicePrincipal"
+      roleDefinitionId = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7"
+    }
+  }
+}
+'@
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+module "global_helper" {
+  source = "./modules/global-helper"
+}
+'@
+        $variables = Join-Path $child 'variables.tf'
+        Set-Content -LiteralPath $variables -Encoding utf8NoBOM -Value @'
+variable "unrelated" {
+  type    = string
+  default = "keep"
+}
+'@
+        $originalChild = Get-Content -LiteralPath $variables -Raw
+        $originalRoot = Get-Content -LiteralPath (Join-Path $root 'variables.tf') -Raw
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'fail'
+        Get-Content -LiteralPath $variables -Raw | Should -BeExactly $originalChild
+        Get-Content -LiteralPath (Join-Path $root 'variables.tf') -Raw | Should -BeExactly $originalRoot
+
+        (Invoke-TelemetryEngine -Root $root).Status | Should -Be 'pass'
+        $generated = Get-Content -LiteralPath $variables -Raw
+        $generated | Should -Match '(?m)^# tflint-ignore: terraform_unused_declarations\r?\nvariable "location" \{'
+        $generated | Should -Not -Match '(?s)variable "location" \{[^}]*\bdefault\s*='
+        (Join-Path $child 'main.telemetry.tf') | Should -Not -Exist
+        Get-Content -LiteralPath (Join-Path $root 'main.tf') -Raw |
+            Should -Match '(?ms)^module "global_helper" \{[^}]*location\s*=\s*var\.location'
+
+        $tflint = InModuleScope 'Avm.Authoring' { (Resolve-AvmTool -Name tflint).Path }
+        $config = Join-Path $root 'unused.tflint.hcl'
+        Set-Content -LiteralPath $config -Encoding utf8NoBOM -Value @'
+config {
+  disabled_by_default = true
+}
+plugin "terraform" {
+  enabled = true
+}
+rule "terraform_unused_declarations" {
+  enabled = true
+}
+'@
+        $arguments = @("--chdir=$child", "--config=$config", '--format=json', '--call-module-type=none')
+        $lint = Invoke-TelemetryProcess -FilePath $tflint -ArgumentList $arguments -Root $child -IgnoreExitCode
+        $lint.ExitCode | Should -Be 2 -Because $lint.StdOut
+        $issues = @(($lint.StdOut | ConvertFrom-Json).issues)
+        $issues | Should -HaveCount 1
+        $issues[0].rule.name | Should -Be 'terraform_unused_declarations'
+        $issues[0].message | Should -Match 'unrelated'
+
+        $stable = Get-Content -LiteralPath $variables -Raw
+        $drift = Invoke-TelemetryEngine -Root $root -CheckDrift
+        $drift.Status | Should -Be 'pass'
+        $drift.Changed | Should -BeNullOrEmpty
+        Get-Content -LiteralPath $variables -Raw | Should -BeExactly $stable
+        $repeat = Invoke-TelemetryEngine -Root $root
+        $repeat.Status | Should -Be 'pass'
+        $repeat.Changed | Should -BeNullOrEmpty
+        Get-Content -LiteralPath $variables -Raw | Should -BeExactly $stable
+        $lint = Invoke-TelemetryProcess -FilePath $tflint -ArgumentList $arguments -Root $child -IgnoreExitCode
+        $lint.ExitCode | Should -Be 2
+        $issues = @(($lint.StdOut | ConvertFrom-Json).issues)
+        $issues | Should -HaveCount 1
+        $issues[0].message | Should -Match 'unrelated'
         Assert-TelemetryTerraformValid -Root $root
     }
 

@@ -351,6 +351,36 @@ function Test-AvmGeneratedTelemetryTflintIgnore {
     return $false
 }
 
+function Test-AvmGeneratedLocationTflintIgnore {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][string] $RelativePath,
+        [Parameter(Mandatory)][AllowEmptyString()][string[]] $Lines,
+        [Parameter(Mandatory)][int] $LineIndex
+    )
+
+    if ($RelativePath -cnotmatch '^(?:modules/.+/)?variables\.tf$' -or
+        $RelativePath -cmatch '(?:^|/)(?:examples|tests)/' -or
+        $Lines[$LineIndex] -cne '# tflint-ignore: terraform_unused_declarations' -or
+        $LineIndex + 5 -ge $Lines.Count -or
+        $Lines[$LineIndex + 1] -cne 'variable "location" {' -or
+        $Lines[$LineIndex + 5] -cne '}') {
+        return $false
+    }
+    $body = $Lines[($LineIndex + 2)..($LineIndex + 4)]
+    foreach ($attribute in @(
+            '^  type\s*=\s*string$',
+            '^  nullable\s*=\s*false$',
+            '^  description\s*=\s*"The Azure region for this module''s resources or telemetry deployment\."$'
+        )) {
+        if (@($body | Where-Object { $_ -cmatch $attribute }).Count -ne 1) {
+            return $false
+        }
+    }
+    return $true
+}
+
 function Get-AvmTflintInlineIgnoreWarning {
     [CmdletBinding()]
     [OutputType([object[]])]
@@ -469,6 +499,10 @@ function Get-AvmTflintInlineIgnoreWarning {
                     continue
                 }
                 if (Test-AvmGeneratedTelemetryTflintIgnore `
+                        -RelativePath $relativePath -Lines $lines -LineIndex $index) {
+                    continue
+                }
+                if (Test-AvmGeneratedLocationTflintIgnore `
                         -RelativePath $relativePath -Lines $lines -LineIndex $index) {
                     continue
                 }

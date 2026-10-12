@@ -22,7 +22,7 @@ function Resolve-AvmMapotfConfigDir {
 
     .PARAMETER Profile
         Config profile to resolve: common, module, root, module-call, variable-order, example,
-        provider-cleanup, unit-test-inspect, unit-test, or an optional test override.
+        provider-cleanup, location-inspect, unit-test-inspect, unit-test, or an optional test override.
 
     .PARAMETER Optional
         Return $null instead of throwing when the profile does not exist.
@@ -37,7 +37,7 @@ function Resolve-AvmMapotfConfigDir {
         [string] $Root,
 
         [Parameter(Mandatory)]
-        [ValidateSet('common', 'module', 'root', 'module-call', 'variable-order', 'example', 'provider-cleanup', 'test', 'unit-test-inspect', 'unit-test')]
+        [ValidateSet('common', 'module', 'root', 'module-call', 'variable-order', 'example', 'provider-cleanup', 'test', 'location-inspect', 'unit-test-inspect', 'unit-test')]
         [string] $ProfileName,
 
         [switch] $Optional
@@ -455,6 +455,88 @@ mock_provider "azapi" {
     }
 }
 
+function Get-AvmTerraformLocationInspection {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][object] $Options
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    $result = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList @(
+        'debug', '--tf-dir', $Path,
+        '--mptf-dir', $Options.ProfileDirs['location-inspect'],
+        '--eval', 'data.variable.location.result'
+    ) -WorkingDirectory $Path -EnvVars $Options.EnvVars
+    try {
+        $inspection = ConvertFrom-Json -InputObject $result.StdOut -AsHashtable -ErrorAction Stop
+    }
+    catch {
+        throw [AvmConfigurationException]::new(
+            "Cannot inspect the location input in '$Path': invalid MaPoTF JSON. $($_.Exception.Message)")
+    }
+    if ($inspection -isnot [System.Collections.IDictionary] -or
+        $inspection.Count -gt 1 -or ($inspection.Count -eq 1 -and -not $inspection.Contains('location'))) {
+        throw [AvmConfigurationException]::new("Cannot inspect the location input in '$Path': invalid variable inspection.")
+    }
+    if ($inspection.Count -eq 0) {
+        return $null
+    }
+    $declaration = $inspection['location']
+    if ($declaration -isnot [System.Collections.IDictionary] -or
+        $declaration['mptf'] -isnot [System.Collections.IDictionary] -or
+        $declaration.mptf['block_address'] -cne 'variable.location' -or
+        $declaration.mptf['range'] -isnot [System.Collections.IDictionary]) {
+        throw [AvmConfigurationException]::new("Cannot inspect the location input in '$Path': missing native source metadata.")
+    }
+    return $declaration
+}
+
+function Set-AvmRequiredLocationLintDirective {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][object[]] $Targets,
+        [Parameter(Mandatory)][object] $Options
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    $directive = '# tflint-ignore: terraform_unused_declarations'
+    foreach ($target in $Targets) {
+        $declaration = Get-AvmTerraformLocationInspection -Path $target.Path -Options $Options
+        if ($null -eq $declaration -or $declaration.Count -ne 4 -or
+            $declaration['type'] -cne 'string' -or $declaration['nullable'] -isnot [bool] -or
+            $declaration.nullable -or
+            $declaration['description'] -cne "The Azure region for this module's resources or telemetry deployment." -or
+            $declaration.mptf.range['file_name'] -cne 'variables.tf') {
+            continue
+        }
+
+        $path = Join-Path $target.Path 'variables.tf'
+        $content = [System.IO.File]::ReadAllText($path)
+        $lines = @($content -split '\r?\n')
+        $startLine = $declaration.mptf.range['start_line']
+        if (($startLine -isnot [int] -and $startLine -isnot [long]) -or
+            $startLine -lt 1 -or $startLine -gt $lines.Count -or
+            $lines[$startLine - 1] -cne 'variable "location" {') {
+            throw [AvmConfigurationException]::new("Cannot annotate the generated location input in '$path': invalid native source range.")
+        }
+        if ($startLine -gt 1 -and $lines[$startLine - 2] -ceq $directive) {
+            continue
+        }
+        $offset = [regex]::Matches($content, '(?m)^')[$startLine - 1].Index
+        $lineEnding = if ($content.Contains("`r`n")) { "`r`n" } else { "`n" }
+        if ($PSCmdlet.ShouldProcess($path, 'exempt the newly generated mandatory location input from the unused-declaration rule')) {
+            [System.IO.File]::WriteAllText(
+                $path, $content.Insert($offset, $directive + $lineEnding), [System.Text.UTF8Encoding]::new($false))
+        }
+    }
+}
+
 function Set-AvmTelemetryTagLintDirective {
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)][object[]] $Targets)
@@ -718,6 +800,7 @@ function Invoke-AvmTerraformTransform {
         'variable-order'    = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'variable-order'
         example             = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'example'
         'provider-cleanup'  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'provider-cleanup'
+        'location-inspect'  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'location-inspect'
         'unit-test-inspect' = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'unit-test-inspect'
         'unit-test'         = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'unit-test'
         test                = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'test' -Optional
@@ -789,6 +872,13 @@ function Invoke-AvmTerraformTransform {
         $testTargets = @($targets | Where-Object { $_.Scope -eq 'test' })
         $exampleTargets = @($targets | Where-Object { $_.Scope -eq 'example' })
         $unitTestTargets = @($moduleTargets + $testTargets + $exampleTargets)
+        $newLocationTargets = @(
+            foreach ($target in $moduleTargets | Where-Object { $_.Profiles -notcontains 'root' }) {
+                if ($null -eq (Get-AvmTerraformLocationInspection -Path $target.Path -Options $transformOptions)) {
+                    $target
+                }
+            }
+        )
         $unitSnapshots = @(Get-AvmTerraformUnitTestSnapshot -Root $Context.Root `
                 -ModuleTargets $unitTestTargets -Options $transformOptions)
 
@@ -837,6 +927,9 @@ function Invoke-AvmTerraformTransform {
         Invoke-AvmTerraformUnitTestMigration -Root $Context.Root -ModuleTargets $unitTestTargets `
             -Snapshots $unitSnapshots -Options $transformOptions
         Set-AvmTelemetryTagLintDirective -Targets $moduleTargets
+        if ($newLocationTargets.Count -gt 0) {
+            Set-AvmRequiredLocationLintDirective -Targets $newLocationTargets -Options $transformOptions
+        }
         Write-AvmLog 'transform: mapotf scoped transforms completed' -Level Verbose | Out-Null
 
         foreach ($target in $targets) {

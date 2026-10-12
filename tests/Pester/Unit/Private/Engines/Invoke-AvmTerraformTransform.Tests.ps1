@@ -27,6 +27,7 @@ Describe 'Invoke-AvmTerraformTransform' {
             Source    = 'path-heuristic'
         }
         Mock Set-AvmTelemetryTagLintDirective -ModuleName 'Avm.Authoring'
+        Mock Get-AvmTerraformLocationInspection -ModuleName 'Avm.Authoring' { $null }
         Mock Get-AvmTerraformUnitTestSnapshot -ModuleName 'Avm.Authoring' { @() }
     }
 
@@ -93,6 +94,38 @@ Describe 'Invoke-AvmTerraformTransform' {
             }
             Should -Invoke Set-AvmTelemetryTagLintDirective -Exactly 1
         }
+    }
+
+    It 'does not annotate a location that already exists in a prefix-free module' {
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'metadata.json') `
+            -Value '{"canonicalType":"helper"}' -Encoding utf8NoBOM
+        $variables = Join-Path $script:moduleDir 'variables.tf'
+        Set-Content -LiteralPath $variables -Encoding utf8NoBOM -Value @'
+variable "location" {
+  type        = string
+  description = "The Azure region for this module's resources or telemetry deployment."
+  nullable    = false
+}
+'@
+        $before = Get-Content -LiteralPath $variables -Raw
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Resolve-AvmMapotfConfigDir { "/fake/$ProfileName" }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Mock Get-AvmTerraformLocationInspection {
+                @{ type = 'string'; nullable = $false; mptf = @{ block_address = 'variable.location' } }
+            }
+            Mock Set-AvmRequiredLocationLintDirective
+
+            $null = Invoke-AvmTerraformTransform -Context $C
+
+            Should -Invoke Get-AvmTerraformLocationInspection -Exactly 1
+            Should -Invoke Set-AvmRequiredLocationLintDirective -Exactly 0
+        }
+        Get-Content -LiteralPath $variables -Raw | Should -BeExactly $before
     }
 
     It 'runs example rules before common rules without applying them to modules' {
@@ -1454,6 +1487,130 @@ run "telemetry" {
         InModuleScope 'Avm.Authoring' {
             Should -Invoke Invoke-AvmProcess -Exactly 0
         }
+    }
+}
+
+Describe 'Get-AvmTerraformLocationInspection' {
+    It 'returns an absent input without running a transform' {
+        InModuleScope 'Avm.Authoring' -Parameters @{ Root = $TestDrive } {
+            param($Root)
+            Mock Invoke-AvmProcess { [pscustomobject]@{ StdOut = '{}' } }
+            $options = [pscustomobject]@{
+                ToolPath = '/fake/mapotf'
+                ProfileDirs = @{ 'location-inspect' = '/fake/location-inspect' }
+                EnvVars = @{}
+            }
+
+            Get-AvmTerraformLocationInspection -Path $Root -Options $options | Should -BeNullOrEmpty
+
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList[0] -eq 'debug' -and
+                $ArgumentList -contains '/fake/location-inspect' -and
+                $ArgumentList -contains 'data.variable.location.result'
+            }
+        }
+    }
+
+    It 'rejects incomplete native inspection <Json>' -TestCases @(
+        @{ Json = 'not-json' }
+        @{ Json = '[]' }
+        @{ Json = '{"another":{}}' }
+        @{ Json = '{"location":{}}' }
+    ) {
+        param($Json)
+        InModuleScope 'Avm.Authoring' -Parameters @{ Root = $TestDrive; Json = $Json } {
+            param($Root, $Json)
+            Mock Invoke-AvmProcess { [pscustomobject]@{ StdOut = $Json } }
+            $options = [pscustomobject]@{
+                ToolPath = '/fake/mapotf'
+                ProfileDirs = @{ 'location-inspect' = '/fake/location-inspect' }
+                EnvVars = @{}
+            }
+
+            { Get-AvmTerraformLocationInspection -Path $Root -Options $options } |
+                Should -Throw -ExceptionType ([AvmConfigurationException])
+        }
+    }
+}
+
+Describe 'Set-AvmRequiredLocationLintDirective' {
+    BeforeEach {
+        $script:locationRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $script:locationRoot
+        $script:locationFile = Join-Path $script:locationRoot 'variables.tf'
+        $script:locationSource = @'
+# Preserve this text.
+
+variable "location" {
+  type        = string
+  description = "The Azure region for this module's resources or telemetry deployment."
+  nullable    = false
+}
+
+variable "unrelated" {
+  type = string
+}
+'@
+        $script:locationDeclaration = @{
+            type = 'string'
+            description = "The Azure region for this module's resources or telemetry deployment."
+            nullable = $false
+            mptf = @{
+                block_address = 'variable.location'
+                range = @{ file_name = 'variables.tf'; start_line = 3 }
+            }
+        }
+    }
+
+    It 'annotates only the native source range and preserves <Ending> line endings' -TestCases @(
+        @{ Ending = 'LF'; Separator = "`n" }
+        @{ Ending = 'CRLF'; Separator = "`r`n" }
+    ) {
+        param($Ending, $Separator)
+        $source = ($script:locationSource -replace '\r?\n', $Separator)
+        [IO.File]::WriteAllText($script:locationFile, $source, [Text.UTF8Encoding]::new($false))
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            Root = $script:locationRoot; Declaration = $script:locationDeclaration; Source = $source
+        } {
+            param($Root, $Declaration, $Source)
+            Mock Get-AvmTerraformLocationInspection { $Declaration }
+            $target = [pscustomobject]@{ Path = $Root }
+            Set-AvmRequiredLocationLintDirective -Targets @($target) -Options @{} -WhatIf
+            [IO.File]::ReadAllText((Join-Path $Root 'variables.tf')) | Should -BeExactly $Source
+            Set-AvmRequiredLocationLintDirective -Targets @($target) -Options @{}
+        }
+        $expected = $source.Replace('variable "location" {',
+            "# tflint-ignore: terraform_unused_declarations${Separator}variable `"location`" {")
+        [IO.File]::ReadAllText($script:locationFile) | Should -BeExactly $expected
+    }
+
+    It 'preserves a non-canonical generated declaration' {
+        Set-Content -LiteralPath $script:locationFile -Value $script:locationSource -Encoding utf8NoBOM
+        $before = Get-Content -LiteralPath $script:locationFile -Raw
+        $script:locationDeclaration.default = 'westus2'
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            Root = $script:locationRoot; Declaration = $script:locationDeclaration
+        } {
+            param($Root, $Declaration)
+            Mock Get-AvmTerraformLocationInspection { $Declaration }
+            Set-AvmRequiredLocationLintDirective -Targets @([pscustomobject]@{ Path = $Root }) -Options @{}
+        }
+        Get-Content -LiteralPath $script:locationFile -Raw | Should -BeExactly $before
+    }
+
+    It 'rejects a stale source range without changing the file' {
+        Set-Content -LiteralPath $script:locationFile -Value $script:locationSource -Encoding utf8NoBOM
+        $before = Get-Content -LiteralPath $script:locationFile -Raw
+        $script:locationDeclaration.mptf.range.start_line = 1
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            Root = $script:locationRoot; Declaration = $script:locationDeclaration
+        } {
+            param($Root, $Declaration)
+            Mock Get-AvmTerraformLocationInspection { $Declaration }
+            { Set-AvmRequiredLocationLintDirective -Targets @([pscustomobject]@{ Path = $Root }) -Options @{} } |
+                Should -Throw -ExceptionType ([AvmConfigurationException])
+        }
+        Get-Content -LiteralPath $script:locationFile -Raw | Should -BeExactly $before
     }
 }
 

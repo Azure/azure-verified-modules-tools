@@ -637,6 +637,14 @@ example value when another region or cloud is required.
 Variable blocks are sorted after missing location inputs are
 created, so the first transform already satisfies drift checks.
 
+For modules without their own telemetry, a newly generated canonical `location`
+input receives a scoped `terraform_unused_declarations` exemption: the required
+interface also applies to global resources that do not consume a region.
+Native MaPoTF inspection identifies missing inputs and their generated source
+ranges; authored declarations are not annotated. Other unused declarations
+remain lint findings. The inline-ignore audit exempts only the exact directive
+on the canonical required declaration in a module's `variables.tf`.
+
 Instrumented roots and children run the `root,module,common` profiles; other
 module scopes run `module,common`. Profiles execute sequentially so module
 provider rules see the generated telemetry. A second `module-call,variable-order,common`

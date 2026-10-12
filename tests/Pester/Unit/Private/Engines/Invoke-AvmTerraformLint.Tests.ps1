@@ -677,6 +677,66 @@ output "name" { value = "test" }
         }
     }
 
+    It 'recognizes only the canonical required location exemption in <Path>' -TestCases @(
+        @{ Path = 'variables.tf'; Warnings = 0 }
+        @{ Path = 'modules\group\helper\variables.tf'; Warnings = 0 }
+        @{ Path = 'main.tf'; Warnings = 1 }
+        @{ Path = 'examples\default\variables.tf'; Warnings = 1 }
+        @{ Path = 'modules\helper\tests\wrapper\variables.tf'; Warnings = 1 }
+    ) {
+        param($Path, $Warnings)
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $file = Join-Path $root $Path
+        $null = New-Item -ItemType Directory -Path (Split-Path -Parent $file) -Force
+        Set-Content -LiteralPath $file -Encoding utf8NoBOM -Value @'
+# tflint-ignore: terraform_unused_declarations
+variable "location" {
+  description = "The Azure region for this module's resources or telemetry deployment."
+  type        = string
+  nullable    = false
+}
+# tflint-ignore: terraform_unused_declarations
+variable "unrelated" {
+  type = string
+}
+'@
+        $actual = @(InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
+                param($Root)
+                Get-AvmTflintInlineIgnoreWarning -Root $Root
+            })
+        $actual | Should -HaveCount ($Warnings + 1)
+        $actual[-1].Line | Should -Be 7
+    }
+
+    It 'still warns for a location declaration with <Scenario>' -TestCases @(
+        @{ Scenario = 'a default'; Attribute = 'default = "eastus"' }
+        @{ Scenario = 'nullable values'; Attribute = 'nullable = true' }
+        @{ Scenario = 'a different type'; Attribute = 'type = any' }
+        @{ Scenario = 'a custom description'; Attribute = 'description = "Custom location"' }
+    ) {
+        param($Scenario, $Attribute)
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $root
+        $attributes = [ordered]@{
+            type = 'string'
+            description = '"The Azure region for this module''s resources or telemetry deployment."'
+            nullable = 'false'
+        }
+        $name, $value = $Attribute -split '=', 2
+        $attributes[$name.Trim()] = $value.Trim()
+        $body = ($attributes.GetEnumerator() | ForEach-Object { "  $($_.Key) = $($_.Value)" }) -join "`n"
+        Set-Content -LiteralPath (Join-Path $root 'variables.tf') -Encoding utf8NoBOM -Value @"
+# tflint-ignore: terraform_unused_declarations
+variable "location" {
+$body
+}
+"@
+        @(InModuleScope 'Avm.Authoring' -Parameters @{ Root = $root } {
+                param($Root)
+                Get-AvmTflintInlineIgnoreWarning -Root $Root
+            }) | Should -HaveCount 1
+    }
+
     It 'still warns for <Scenario> in the telemetry ignore audit' -TestCases @(
         @{
             Scenario = 'the same directive in another file'
