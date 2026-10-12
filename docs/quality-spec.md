@@ -1320,8 +1320,11 @@ This section is the implementation-level expression of the **Security stance** p
   `General` entries, including untagged entries, with the historical `{name,id}`
   consumer shape. Filter before defaults, shuffling and round-robin assignment.
   A missing General pool fails before Terraform publication or deployment;
-  explicit workflow overrides must belong to the filtered pool. Tools integration
-  login also selects General and rejects a mismatched execution-identity tenant.
+  explicit workflow overrides must belong to the filtered pool. Standalone Tools
+  authoring CI instead retains its complete configured `ARM_CLIENT_ID`,
+  `ARM_TENANT_ID`, and `ARM_SUBSCRIPTION_ID` tuple for real policy plans and mocked
+  unit tests. It does not deploy module examples or substitute a test-pool
+  subscription into that separate execution identity.
 - Existing Bicep pool Variables may change only tag metadata on the same ordered
   subscription IDs and exact names, with a complete unchanged execution identity
   bundle. Validate both pools and reject additions, removals, renames, reordering,

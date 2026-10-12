@@ -55,7 +55,6 @@ Describe 'Independent CI workflows' {
     It 'includes source, tests and shared dependencies in the static filters for <File>' -ForEach @(
         @{ File = 'ci-authoring.yml'; Required = @(
             'src/Avm.Authoring/**', 'build/**', 'build.ps1', 'scripts/**', 'tests/**', 'docs/reference/**',
-            'repository-management/shared/TestTenant.ps1', 'repository-management/shared/GroupSettings.ps1',
             '.github/workflows/ci-authoring.yml', '.github/workflows/terraform-module.yml', '.github/workflows/release.yml'
         ) }
         @{ File = 'ci-workflows.yml'; Required = @(
@@ -101,6 +100,8 @@ Describe 'Independent CI workflows' {
             $paths.IndexOf("!$excluded") | Should -BeGreaterThan $paths.IndexOf('tests/**')
         }
         $paths | Should -Not -Contain 'repository-management/**'
+        $paths | Should -Not -Contain 'repository-management/shared/TestTenant.ps1'
+        $paths | Should -Not -Contain 'repository-management/shared/GroupSettings.ps1'
         $paths | Should -Not -Contain 'infra/**'
         foreach ($file in @('ci-workflows.yml', 'repository-management-config-test.yml')) {
             $script:definitions[$file]['on'].push.paths | Should -Not -Contain 'tests/**'
@@ -146,6 +147,30 @@ Describe 'Independent CI workflows' {
         $jobs.integration.strategy.matrix.fixture |
             Should -Be @('terraform-azure-avm-res-mock', 'terraform-azurerm-avm-res-mock')
         $jobs.lint['runs-on'] | Should -BeExactly 'ubuntu-latest'
+    }
+
+    It 'keeps the configured authoring <Name> in both provider and login settings' -ForEach @(
+        @{ Name = 'ARM_CLIENT_ID'; LoginInput = 'client-id' }
+        @{ Name = 'ARM_TENANT_ID'; LoginInput = 'tenant-id' }
+        @{ Name = 'ARM_SUBSCRIPTION_ID'; LoginInput = 'subscription-id' }
+    ) {
+        $job = $script:definitions['ci-authoring.yml'].jobs.integration
+        $login = @($job.steps | Where-Object { $_.Contains('uses') -and $_.uses -clike 'azure/login@*' })
+        $login | Should -HaveCount 1
+        $expected = '${{ vars.' + $Name + ' }}'
+        $job.env[$Name] | Should -BeExactly $expected
+        $login[0].with[$LoginInput] | Should -BeExactly $expected
+    }
+
+    It 'keeps standalone authoring authentication separate from BAMI provisioning and module deployment pools' {
+        $job = $script:definitions['ci-authoring.yml'].jobs.integration
+        $job.environment | Should -BeExactly 'avm'
+        $job.permissions['id-token'] | Should -BeExactly 'write'
+        $job.env.ARM_USE_OIDC | Should -BeExactly 'true'
+        $job | ConvertTo-Json -Depth 30 |
+            Should -Not -Match 'TEST_BAMI_|ARM_BACKEND_|Get-AvmGeneralTestSubscription|test-subscription'
+        @($job.steps | Where-Object { $_.Contains('run') } | ForEach-Object { $_.run }) |
+            Should -Contain './build.ps1 integration -IntegrationGroup Terraform'
     }
 
     It 'keeps reports and artifacts inside their own independent workflow' {

@@ -5,8 +5,6 @@ on:
     branches: [main]
     paths:
       - 'src/Avm.Authoring/**'
-      - 'repository-management/shared/TestTenant.ps1'
-      - 'repository-management/shared/GroupSettings.ps1'
       - 'build/**'
       - 'build.ps1'
       - 'scripts/**'
@@ -34,8 +32,6 @@ on:
     branches: [main]
     paths:
       - 'src/Avm.Authoring/**'
-      - 'repository-management/shared/TestTenant.ps1'
-      - 'repository-management/shared/GroupSettings.ps1'
       - 'build/**'
       - 'build.ps1'
       - 'scripts/**'
@@ -194,9 +190,7 @@ jobs:
           - terraform-azure-avm-res-mock
           - terraform-azurerm-avm-res-mock
     runs-on: ${{ matrix.os }}
-    # Run in the `avm` GitHub Environment so the job resolves its environment-scoped
-    # OIDC federated credential and ARM_* variables. The Entra federated credential
-    # is configured against this environment's subject (see the Azure login step).
+    # Resolve the complete existing authoring tuple from the avm environment.
     environment: avm
     timeout-minutes: 30
     permissions:
@@ -214,52 +208,17 @@ jobs:
       # intermittently failed with `403 API rate limit exceeded`. tflint reads
       # GITHUB_TOKEN for authenticated downloads (5000/hour).
       GITHUB_TOKEN: ${{ github.token }}
-      # OIDC plumbing for `azure/login`. The `test` step today is validate-only
-      # (`terraform init -backend=false` + `terraform validate -json`) so it does
-      # not actually need Azure auth, but we wire login per the same pattern as
-      # the legacy Terraform governance workflow so the chain is ready when test grows to plan.
+      # Real policy plans use the complete configured authoring identity.
       ARM_USE_OIDC: 'true'
       ARM_CLIENT_ID: ${{ vars.ARM_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.ARM_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.ARM_SUBSCRIPTION_ID }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Select a General test subscription
-        id: test-subscription
-        if: ${{ vars.ARM_CLIENT_ID != '' }}
-        shell: pwsh
-        env:
-          TEST_BAMI_TENANT_ID: ${{ vars.TEST_BAMI_TENANT_ID }}
-          TEST_BAMI_CONTROLLER_CLIENT_ID: ${{ vars.TEST_BAMI_CONTROLLER_CLIENT_ID }}
-          TEST_BAMI_ADMIN_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_ADMIN_SUBSCRIPTION_ID }}
-          TEST_BAMI_SUBSCRIPTION_IDS: ${{ vars.TEST_BAMI_SUBSCRIPTION_IDS }}
-          TEST_BAMI_MANAGEMENT_GROUP_ID: ${{ vars.TEST_BAMI_MANAGEMENT_GROUP_ID }}
-          TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME: ${{ vars.TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME }}
-          TEST_BAMI_BICEP_CLIENT_ID: ${{ vars.TEST_BAMI_BICEP_CLIENT_ID }}
-          TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          . (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'shared' 'TestTenant.ps1')
-          $settings = @{}
-          foreach ($name in @(
-              'TEST_BAMI_TENANT_ID', 'TEST_BAMI_CONTROLLER_CLIENT_ID', 'TEST_BAMI_ADMIN_SUBSCRIPTION_ID',
-              'TEST_BAMI_SUBSCRIPTION_IDS', 'TEST_BAMI_MANAGEMENT_GROUP_ID',
-              'TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME', 'TEST_BAMI_BICEP_CLIENT_ID',
-              'TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID'
-          )) {
-              $settings[$name] = [Environment]::GetEnvironmentVariable($name)
-          }
-          $subscriptions = @(Get-AvmGeneralTestSubscription -Settings $settings)
-          if ($env:ARM_TENANT_ID -ine $settings['TEST_BAMI_TENANT_ID']) {
-              throw [System.InvalidOperationException]::new('The integration execution identity must use the BAMI test-pool tenant; legacy credentials cannot be combined with a different tenant pool.')
-          }
-          $subscriptionId = $subscriptions[0].id
-          "ARM_SUBSCRIPTION_ID=$subscriptionId" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "subscriptionId=$subscriptionId" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Configure AVM tool + provider cache
         shell: pwsh
@@ -285,18 +244,12 @@ jobs:
           Add-MpPreference -ExclusionProcess 'mapotf.exe' -ErrorAction SilentlyContinue
 
       - name: Azure login (OIDC)
-        # Only when the federated-identity vars are provisioned (skips cleanly on
-        # forks). Because this job runs in the `avm` GitHub Environment, the OIDC
-        # token subject is `repo:Azure/azure-verified-modules-tools:environment:avm`
-        # -- the Entra federated credential must be configured against that
-        # environment subject (not a branch ref), so it covers the pull_request
-        # and workflow_dispatch runs regardless of the selected ref.
         if: ${{ vars.ARM_CLIENT_ID != '' }}
         uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
         with:
           client-id: ${{ vars.ARM_CLIENT_ID }}
           tenant-id: ${{ vars.ARM_TENANT_ID }}
-          subscription-id: ${{ steps.test-subscription.outputs.subscriptionId }}
+          subscription-id: ${{ vars.ARM_SUBSCRIPTION_ID }}
 
       - name: Install build prerequisites
         shell: pwsh

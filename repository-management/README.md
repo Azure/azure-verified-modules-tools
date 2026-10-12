@@ -125,7 +125,7 @@ the existing cleanup policy.
 for all repositories discovered by the existing Terraform sync, including new
 and otherwise unlisted repositories. Configuration is the source of truth;
 tenant selection is independent of managed-file promotion. Higher `order`
-wins; later declaration wins a tie. The legacy tenant no longer exists:
+wins; later declaration wins a tie. Legacy module-test identities are retired:
 normal Terraform sync rejects a legacy or missing selection before cleanup or
 external work. Repository creation remains independent of test identities.
 
@@ -142,6 +142,12 @@ Key Vault capability and deprecation warning. The legacy consumer aliases
 remain supported. The independent `CI_` configuration still resolves Secrets
 before Variables before Key Vault. Manual test-scope inputs remain independent
 of tenant selection. Consumer changes are maintained separately.
+
+The Tools `avm` environment has separate authentication scopes: `ARM_BACKEND_*`
+is the TME state-only identity, `TEST_BAMI_*` supplies test provisioning and
+downstream execution settings, and the existing `ARM_CLIENT_ID`, `ARM_TENANT_ID`,
+`ARM_SUBSCRIPTION_ID` tuple serves standalone authoring CI policy plans. These
+identities are not interchangeable; authoring does not select from the BAMI pool.
 
 The BAMI publisher stages this complete nonsecret bundle in the Tools `avm`
 environment. There is one current BAMI tenant, not a profile catalog.

@@ -107,11 +107,6 @@ Describe 'Terraform General subscription selection' {
             $run.Success | Should -BeTrue
             $script:reservationScripts[$job] = [scriptblock]::Create(($run.Groups['body'].Value -replace '(?m)^ {10}', ''))
         }
-        $ci = Get-Content -LiteralPath (Join-Path $script:root '.github' 'workflows' 'ci-authoring.yml') -Raw
-        $run = [regex]::Match($ci, '(?ms)^      - name: Select a General test subscription\r?\n.*?^        run: \|\r?\n(?<body>(?: {10}[^\r\n]*\r?\n|\r?\n)*)')
-        $run.Success | Should -BeTrue
-        $script:reservationScripts['authoring'] = [scriptblock]::Create(($run.Groups['body'].Value -replace '(?m)^ {10}', ''))
-        $script:authoringWorkflow = $ci
     }
 
     BeforeEach {
@@ -120,8 +115,7 @@ Describe 'Terraform General subscription selection' {
         foreach ($name in @($script:bundle.Keys) + @(
             'TEST_SUBSCRIPTION_IDS', 'FALLBACK_SUBSCRIPTION_ID_SECRET', 'FALLBACK_SUBSCRIPTION_ID_VAR',
             'GITHUB_OUTPUT', 'GITHUB_ENV', 'GITHUB_WORKSPACE', 'SUBSCRIPTION_IDS', 'SELECTED_SUBSCRIPTION_ID',
-            'SECRETS_CONTEXT', 'VARS_CONTEXT', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL',
-            'ARM_TENANT_ID'
+            'SECRETS_CONTEXT', 'VARS_CONTEXT', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL'
         )) {
             $script:previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
             [Environment]::SetEnvironmentVariable($name, [NullString]::Value, 'Process')
@@ -129,7 +123,6 @@ Describe 'Terraform General subscription selection' {
         $env:GITHUB_OUTPUT = 'fixture-output'
         $env:GITHUB_ENV = 'fixture-environment'
         $env:GITHUB_WORKSPACE = $script:root
-        $env:ARM_TENANT_ID = $script:bundle.TEST_BAMI_TENANT_ID
         $script:written = @{
             'fixture-output' = [System.Collections.Generic.List[string]]::new()
             'fixture-environment' = [System.Collections.Generic.List[string]]::new()
@@ -294,47 +287,6 @@ Describe 'Terraform General subscription selection' {
         & $script:reservationScripts[$Job]
         $script:written['fixture-environment'] | Should -Contain "ARM_SUBSCRIPTION_ID=$($script:general.id)"
         $script:written['fixture-environment'] | Should -Not -Contain "ARM_SUBSCRIPTION_ID=$($script:reserved.id)"
-    }
-
-    It 'selects the first General entry from the full BAMI bundle for Tools integration login' {
-        foreach ($name in $script:bundle.Keys) {
-            $value = if ($name -ceq 'TEST_BAMI_SUBSCRIPTION_IDS') {
-                ConvertTo-Json -InputObject $script:bundle[$name] -Compress
-            }
-            else { $script:bundle[$name] }
-            [Environment]::SetEnvironmentVariable($name, $value, 'Process')
-        }
-        & $script:reservationScripts.authoring
-        $script:written['fixture-output'] | Should -Contain "subscriptionId=$($script:general.id)"
-        $script:written['fixture-environment'] | Should -Contain "ARM_SUBSCRIPTION_ID=$($script:general.id)"
-        $script:authoringWorkflow | Should -Not -Match 'vars\.ARM_SUBSCRIPTION_ID'
-        $script:authoringWorkflow | Should -Match 'subscription-id: \$\{\{ steps.test-subscription.outputs.subscriptionId \}\}'
-    }
-
-    It 'fails Tools integration selection before emitting login settings when every subscription is reserved' {
-        foreach ($entry in $script:bundle.TEST_BAMI_SUBSCRIPTION_IDS) { $entry.tag = 'Azure Local' }
-        foreach ($name in $script:bundle.Keys) {
-            $value = if ($name -ceq 'TEST_BAMI_SUBSCRIPTION_IDS') {
-                ConvertTo-Json -InputObject $script:bundle[$name] -Compress
-            }
-            else { $script:bundle[$name] }
-            [Environment]::SetEnvironmentVariable($name, $value, 'Process')
-        }
-        { & $script:reservationScripts.authoring } | Should -Throw '*at least one General*'
-        Should -Invoke Out-File -Exactly 0
-    }
-
-    It 'does not combine a General BAMI subscription with a legacy tenant identity' {
-        foreach ($name in $script:bundle.Keys) {
-            $value = if ($name -ceq 'TEST_BAMI_SUBSCRIPTION_IDS') {
-                ConvertTo-Json -InputObject $script:bundle[$name] -Compress
-            }
-            else { $script:bundle[$name] }
-            [Environment]::SetEnvironmentVariable($name, $value, 'Process')
-        }
-        $env:ARM_TENANT_ID = '77777777-7777-4777-8777-777777777777'
-        { & $script:reservationScripts.authoring } | Should -Throw '*legacy credentials cannot be combined*'
-        Should -Invoke Out-File -Exactly 0
     }
 }
 
