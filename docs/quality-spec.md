@@ -814,9 +814,39 @@ parameters, never in authored source. Scope tokens belong to explicit
 target inputs. `keys` and `count` remain valid authored names.
 
 Subscription pools use a seeded, order-independent permutation and
-round-robin case assignment, rather than the registry's `Get-Random`
-permutation. Explicit subscription selection takes precedence over ambient
-CI pools. Resource placement uses the owning module's canonical resource
+round-robin case assignment within the selected tag, rather than the registry's
+`Get-Random` permutation. Explicit subscription selection takes precedence over
+ambient CI pools. Pool input precedence is Variables `VALIDATE_SUBSCRIPTION_IDS`,
+Variables `TEST_SUBSCRIPTION_IDS`, Secrets `VALIDATE_SUBSCRIPTION_IDS`, then
+Secrets `TEST_SUBSCRIPTION_IDS`; directly supplied environment aliases follow
+the same canonical-before-legacy order. Management-group metadata uses the
+same source order, with `VALIDATE_MANAGEMENT_GROUP_ID` before `ARM_MGMTGROUP_ID`
+within each source. Authentication remains `VALIDATE_*`, not legacy `ARM_*`.
+
+Registry-layout native execution and PSRule require the exact root
+`.reserved-test-subscriptions.json` file: an object mapping canonical module
+paths to subscription tags. Validate the entire regular, exact-case UTF-8 file,
+at most 64 KiB, including unrelated entries and duplicate keys. Keys and lookup
+paths match case-sensitive
+`\Aavm/(res|ptn|utl)/[a-z0-9]+(?:-[a-z0-9]+)*(?:/[a-z0-9]+(?:-[a-z0-9]+)*)+\z`.
+Match exactly, without trimming, case folding, path normalization or parent/child
+inheritance; unmapped modules use `General`. Validate every pool entry before
+filtering, reject canonical duplicate GUIDs across tags, and retain each record's
+original zero-based index and ID spelling. Its key is lowercase SHA-256 hex over
+UTF-8 lowercase canonical GUID `D` text. PSRule uses the first matching entry.
+A configured pool without the required tag never uses another tag or the legacy
+singleton.
+
+Native e2e cannot orchestrate reserved preparation or its full environment lock:
+reject non-General mapped cases before compilation, features, hooks or deployment,
+including recursive selections and split-phase completion. Direct them to the
+protected registry workflow. That workflow must hold `avm-hci-<subscription key>`
+with `queue: max` across preparation, tests and confirmed cleanup, separately
+from module locks; unfinished or uncertain owned environment state blocks reuse.
+Tools does not prepare HCI infrastructure or assert that these external safeguards
+have run. Standalone General tests retain their existing explicit-target behavior.
+
+Resource placement uses the owning module's canonical resource
 type when available; pattern/helper or absent metadata uses the generic
 allowed-region list. Explicit parameter, token and resource-location pins
 must agree. Only wholly regional validation failures can relocate an
@@ -1276,7 +1306,8 @@ This section is the implementation-level expression of the **Security stance** p
   job-local record produced from the verified saved plan and validated applied
   outputs. Bind it to the Tools repository ID, workflow ref and commit; accept
   only the verified old client or the already-published new client for each
-  existing module. Preserve the other five execution values, drift/readback
+  existing module. Preserve the other execution values except for the separately
+  guarded subscription-tag updates below; preserve drift/readback
   checks and no-write-retry rule. No receipt is emitted for a plan-only run or
   failed apply/output validation. Lost evidence or partial migration requires
   separately approved recovery, never synthesized ownership or a general
@@ -1285,6 +1316,43 @@ This section is the implementation-level expression of the **Security stance** p
   authorize live execution, change conditional Owner permissions, rename
   backend/controller/shared identities, or cut over Bicep validation consumers
   or their OIDC subject template.
+
+### Reserved test subscription propagation
+
+- The complete BAMI inventory remains 28 unique `{name,id}` objects with an
+  optional lowercase `tag` field. A tag is a case-sensitive string of at most
+  64 characters matching `\A[A-Za-z0-9]+(?:[ -][A-Za-z0-9]+)*\z`. Omission means
+  `General`; explicit null, malformed or miscased tags are errors. Preserve
+  existing GUID, name, duplicate, Admin and Persistent protections and optional
+  tag absence in historical source artifacts.
+- Bicep receives the complete ordered tagged inventory in
+  `VALIDATE_SUBSCRIPTION_IDS`, with the matching `VALIDATE_*` identity bundle.
+  Terraform Actions/Dependabot publication and ordinary selection use only
+  `General` entries, including untagged entries, with the historical `{name,id}`
+  consumer shape. Filter before defaults, shuffling and round-robin assignment.
+  A missing General pool fails before Terraform publication or deployment;
+  explicit workflow overrides must belong to the filtered pool. Standalone Tools
+  authoring CI reuses the repository-sync Terraform executor:
+  `TEST_BAMI_CONTROLLER_CLIENT_ID`, `TEST_BAMI_TENANT_ID`, and
+  `TEST_BAMI_ADMIN_SUBSCRIPTION_ID` from the `avm` environment supply both process
+  `ARM_CLIENT_ID`, `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID` and `azure/login`.
+  Require OIDC without CLI or managed-identity fallback. Both Terraform fixtures
+  on all three CI operating systems retain real authenticated plan/show and
+  positive Conftest policy evaluation; no module apply is performed.
+  Do not substitute a test-pool subscription, backend identity, Bicep executor
+  or generated module identity. This reuse does not enroll Tools into module
+  sync or change module repository `ARM_*` Secrets.
+- Existing Bicep pool Variables may change only tag metadata on the same ordered
+  subscription IDs and exact names, with a complete unchanged execution identity
+  bundle. Validate both pools and reject additions, removals, renames, reordering,
+  retargeting and malformed fields. An untagged historical source cannot erase
+  an existing non-General reservation. Preserve existing bytes when effective
+  tags are unchanged. Plans and applies retain snapshot freshness, pre-write,
+  complete readback and final verification; no write retry or rollback is added.
+- Deploy compatible Tools and registry consumers before publishing a new tagged
+  source bundle. Earlier Tools rejects the additional field. No new pool or
+  rollout variable is introduced, and protected legacy settings remain untouched.
+  This isolates scheduling and defaults; it does not revoke Azure permissions.
 
 ### Repository-sync state-lock recovery
 

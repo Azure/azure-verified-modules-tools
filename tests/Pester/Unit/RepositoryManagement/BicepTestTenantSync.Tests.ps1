@@ -171,6 +171,150 @@ Describe 'Guarded nonsecret Bicep variable publication' {
         Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
     }
 
+    It 'publishes the complete tagged pool without filtering, sorting, or adding absent tags' {
+        $script:values.TEST_BAMI_SUBSCRIPTION_IDS[0].tag = 'Azure Local'
+        $script:values.TEST_BAMI_SUBSCRIPTION_IDS[1].tag = 'General'
+        $script:values.TEST_BAMI_SUBSCRIPTION_IDS = @($script:values.TEST_BAMI_SUBSCRIPTION_IDS[27..0])
+        $planned = Invoke-AvmBicepTestTenantSync -Values $script:values
+        $script:attempts | Should -HaveCount 0
+        $result = Invoke-AvmBicepTestTenantSync -Values $script:values -Apply
+        $result.ChangedNames | Should -Be $planned.ChangedNames
+        $result.Status | Should -BeExactly 'Published'
+        $pool = ConvertFrom-AvmTestTenantJson -Json $script:consumer['VALIDATE_SUBSCRIPTION_IDS'].Value
+        $pool | Should -HaveCount 28
+        $pool.id | Should -Be $script:values.TEST_BAMI_SUBSCRIPTION_IDS.id
+        $pool[27].tag | Should -BeExactly 'Azure Local'
+        $pool[26].tag | Should -BeExactly 'General'
+        $pool[0].Contains('tag') | Should -BeFalse
+        $script:attempts.Clear()
+        (Invoke-AvmBicepTestTenantSync -Values $script:values -Apply).Status | Should -BeExactly 'NoChange'
+        $script:attempts | Should -HaveCount 0
+    }
+
+    It 'plans and applies only tag metadata on the same complete execution bundle' {
+        Initialize-BicepSyncTestCandidate
+        $script:values.TEST_BAMI_SUBSCRIPTION_IDS[0].tag = 'Azure Local'
+        $script:values.TEST_BAMI_SUBSCRIPTION_IDS[1].tag = 'General'
+        $planned = Invoke-AvmBicepTestTenantSync -Values $script:values
+        $planned.ChangedNames | Should -Be @('VALIDATE_SUBSCRIPTION_IDS')
+        $planned.Status | Should -BeExactly 'Planned'
+        Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
+        $applied = Invoke-AvmBicepTestTenantSync -Values $script:values -Apply
+        $applied.ChangedNames | Should -Be $planned.ChangedNames
+        $applied.Status | Should -BeExactly 'Published'
+        $script:attempts | Should -HaveCount 1
+        $script:attempts[0].Method | Should -BeExactly 'PATCH'
+        $script:attempts[0].Name | Should -BeExactly 'VALIDATE_SUBSCRIPTION_IDS'
+        $pool = ConvertFrom-AvmTestTenantJson -Json $script:consumer['VALIDATE_SUBSCRIPTION_IDS'].Value
+        $pool[0].tag | Should -BeExactly 'Azure Local'
+        $pool[1].tag | Should -BeExactly 'General'
+        $pool.id | Should -Be $script:values.TEST_BAMI_SUBSCRIPTION_IDS.id
+        foreach ($name in $script:executionNames | Where-Object { $_ -cne 'VALIDATE_SUBSCRIPTION_IDS' }) {
+            $script:consumer[$name].Value | Should -BeExactly $script:projection[$name]
+        }
+    }
+
+    It 'does not rewrite an untagged or differently formatted pool when the effective tags are unchanged' {
+        Initialize-BicepSyncTestCandidate
+        $historicalJson = ConvertTo-Json -InputObject $script:values.TEST_BAMI_SUBSCRIPTION_IDS -Depth 5
+        Set-BicepSyncTestValue -Name 'VALIDATE_SUBSCRIPTION_IDS' -Value $historicalJson
+        foreach ($entry in $script:values.TEST_BAMI_SUBSCRIPTION_IDS) { $entry.tag = 'General' }
+        $result = Invoke-AvmBicepTestTenantSync -Values $script:values -Apply
+        $result.Status | Should -BeExactly 'NoChange'
+        $script:consumer['VALIDATE_SUBSCRIPTION_IDS'].Value | Should -BeExactly $historicalJson
+        Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
+    }
+
+    It 'does not let a historical untagged bundle erase an existing reservation' -ForEach @($false, $true) {
+        Initialize-BicepSyncTestCandidate
+        $existing = ConvertFrom-AvmTestTenantJson -Json $script:projection['VALIDATE_SUBSCRIPTION_IDS']
+        $existing[0]['tag'] = 'Azure Local'
+        Set-BicepSyncTestValue -Name 'VALIDATE_SUBSCRIPTION_IDS' -Value (ConvertTo-Json -InputObject $existing -Compress)
+        { Invoke-AvmBicepTestTenantSync -Values $script:values -Apply:$_ } |
+            Should -Throw '*untagged source cannot erase*maintenance conflict*'
+        Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
+    }
+
+    It 'rejects a tag update combined with an identity or ordering change: <Case>' -ForEach @(
+        @{ Case = 'new ID'; Change = { param($v) $v.TEST_BAMI_SUBSCRIPTION_IDS[1].id = '77777777-7777-4777-8777-777777777777' } }
+        @{ Case = 'rename'; Change = { param($v) $v.TEST_BAMI_SUBSCRIPTION_IDS[1].name = 'renamed' } }
+        @{ Case = 'reorder'; Change = { param($v) $v.TEST_BAMI_SUBSCRIPTION_IDS = @($v.TEST_BAMI_SUBSCRIPTION_IDS[27..0]) } }
+        @{ Case = 'tenant'; Change = { param($v) $v.TEST_BAMI_TENANT_ID = '77777777-7777-4777-8777-777777777777' } }
+        @{ Case = 'client'; Change = { param($v) $v.TEST_BAMI_BICEP_CLIENT_ID = '77777777-7777-4777-8777-777777777777' } }
+        @{ Case = 'management group'; Change = { param($v) $v.TEST_BAMI_MANAGEMENT_GROUP_ID = 'other-group' } }
+        @{ Case = 'Persistent'; Change = { param($v) $v.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID = '77777777-7777-4777-8777-777777777777' } }
+    ) {
+        Initialize-BicepSyncTestCandidate
+        $script:values.TEST_BAMI_SUBSCRIPTION_IDS[0].tag = 'Azure Local'
+        & $Change $script:values
+        { Invoke-AvmBicepTestTenantSync -Values $script:values -Apply } |
+            Should -Throw '*Existing BAMI execution values cannot change*coordinated maintenance*'
+        Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
+    }
+
+    It 'rejects a tag update when the existing execution bundle is incomplete' {
+        Initialize-BicepSyncTestCandidate
+        $script:consumer['VALIDATE_CLIENT_ID'] = $null
+        $script:values.TEST_BAMI_SUBSCRIPTION_IDS[0].tag = 'Azure Local'
+        { Invoke-AvmBicepTestTenantSync -Values $script:values -Apply } |
+            Should -Throw '*complete matching Bicep execution bundle*'
+        Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
+    }
+
+    It 'validates the existing pool schema before permitting a tag update: <Case>' -ForEach @(
+        @{ Case = 'missing entry'; Change = { param($p) ,@($p[0..26]) } }
+        @{ Case = 'additional entry'; Change = { param($p) ,@($p + @{ name = 'extra'; id = '77777777-7777-4777-8777-777777777777' }) } }
+        @{ Case = 'duplicate ID'; Change = { param($p) $p[1].id = $p[0].id; ,$p } }
+        @{ Case = 'unsupported field'; Change = { param($p) $p[0].extra = 'unsupported'; ,$p } }
+        @{ Case = 'shadowed property count'; Change = { param($p) $p[0]['Count'] = 2; ,$p } }
+        @{ Case = 'null tag'; Change = { param($p) $p[0].tag = $null; ,$p } }
+    ) {
+        Initialize-BicepSyncTestCandidate
+        $existing = ConvertFrom-AvmTestTenantJson -Json $script:projection['VALIDATE_SUBSCRIPTION_IDS']
+        $existing = & $Change $existing
+        Set-BicepSyncTestValue -Name 'VALIDATE_SUBSCRIPTION_IDS' -Value (ConvertTo-Json -InputObject $existing -Compress)
+        $script:values.TEST_BAMI_SUBSCRIPTION_IDS[0].tag = 'Azure Local'
+        { Invoke-AvmBicepTestTenantSync -Values $script:values -Apply } | Should -Throw
+        Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
+    }
+
+    It 'rejects duplicate JSON properties in the existing pool before permitting a tag update' {
+        Initialize-BicepSyncTestCandidate
+        $json = $script:projection['VALIDATE_SUBSCRIPTION_IDS'].Replace(
+            '"name":', '"tag":"General","tag":"General","name":')
+        Set-BicepSyncTestValue -Name 'VALIDATE_SUBSCRIPTION_IDS' -Value $json
+        $script:values.TEST_BAMI_SUBSCRIPTION_IDS[0].tag = 'Azure Local'
+        { Invoke-AvmBicepTestTenantSync -Values $script:values -Apply } |
+            Should -Throw '*Invalid test tenant JSON*'
+        Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
+    }
+
+    It 'rechecks freshness before a tag-only PATCH and refuses an outside edit' {
+        Initialize-BicepSyncTestCandidate
+        $script:values.TEST_BAMI_SUBSCRIPTION_IDS[0].tag = 'Azure Local'
+        $script:onRead = {
+            param($Read)
+            if ($Read -eq 2) {
+                Set-BicepSyncTestValue -Name 'VALIDATE_SUBSCRIPTION_IDS' -Value $script:projection['VALIDATE_SUBSCRIPTION_IDS'] -Revision 'outside'
+            }
+        }
+        { Invoke-AvmBicepTestTenantSync -Values $script:values -Apply } |
+            Should -Throw '*changed outside this sync*pre-write VALIDATE_SUBSCRIPTION_IDS*'
+        Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
+    }
+
+    It 'does not reuse a stale read-only plan after the consumer subscription identities change' {
+        Initialize-BicepSyncTestCandidate
+        $script:values.TEST_BAMI_SUBSCRIPTION_IDS[0].tag = 'Azure Local'
+        (Invoke-AvmBicepTestTenantSync -Values $script:values).Status | Should -BeExactly 'Planned'
+        $existing = ConvertFrom-AvmTestTenantJson -Json $script:projection['VALIDATE_SUBSCRIPTION_IDS']
+        $existing[1].id = '77777777-7777-4777-8777-777777777777'
+        Set-BicepSyncTestValue -Name 'VALIDATE_SUBSCRIPTION_IDS' -Value (ConvertTo-Json -InputObject $existing -Compress) -Revision 'outside'
+        { Invoke-AvmBicepTestTenantSync -Values $script:values -Apply } |
+            Should -Throw '*same ordered subscription identities*coordinated maintenance*'
+        Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
+    }
+
     It 'rejects a missing full-bundle setting before even reading the consumer' -ForEach @(
         'TEST_BAMI_TENANT_ID', 'TEST_BAMI_CONTROLLER_CLIENT_ID', 'TEST_BAMI_ADMIN_SUBSCRIPTION_ID',
         'TEST_BAMI_SUBSCRIPTION_IDS', 'TEST_BAMI_MANAGEMENT_GROUP_ID', 'TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME',
@@ -200,6 +344,9 @@ Describe 'Guarded nonsecret Bicep variable publication' {
         @{ Case = 'non-array subscription JSON'; Change = { param($v) $v.TEST_BAMI_SUBSCRIPTION_IDS = '{"name":"not-a-pool"}' } }
         @{ Case = 'duplicate subscription property'; Change = { param($v) $v.TEST_BAMI_SUBSCRIPTION_IDS = '[{"name":"first","Name":"second","id":"66666666-6666-4666-8666-000000000001"}]' } }
         @{ Case = 'additional subscription property'; Change = { param($v) $v.TEST_BAMI_SUBSCRIPTION_IDS[0].extra = 'invalid' } }
+        @{ Case = 'null subscription tag'; Change = { param($v) $v.TEST_BAMI_SUBSCRIPTION_IDS[0].tag = $null } }
+        @{ Case = 'blank subscription tag'; Change = { param($v) $v.TEST_BAMI_SUBSCRIPTION_IDS[0].tag = '' } }
+        @{ Case = 'non-string subscription tag'; Change = { param($v) $v.TEST_BAMI_SUBSCRIPTION_IDS[0].tag = $true } }
         @{ Case = 'management group'; Change = { param($v) $v.TEST_BAMI_MANAGEMENT_GROUP_ID = 'not/a/group' } }
         @{ Case = 'identity resource group'; Change = { param($v) $v.TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME = 'invalid?group' } }
     ) {

@@ -82,11 +82,56 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           $raw = $env:TEST_SUBSCRIPTION_IDS
+          if (-not [string]::IsNullOrEmpty($raw) -and [string]::IsNullOrWhiteSpace($raw)) {
+              throw [System.ArgumentException]::new('TEST_SUBSCRIPTION_IDS must not contain only whitespace.')
+          }
           if (-not [string]::IsNullOrWhiteSpace($raw)) {
-              # TEST_SUBSCRIPTION_IDS is a JSON array of { id, name } objects.
-              $subs = @($raw | ConvertFrom-Json)
+              $document = [System.Text.Json.JsonDocument]::Parse($raw)
+              try {
+                  if ($document.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Array) {
+                      throw [System.ArgumentException]::new('TEST_SUBSCRIPTION_IDS must be a JSON array.')
+                  }
+                  foreach ($entry in $document.RootElement.EnumerateArray()) {
+                      if ($entry.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+                          throw [System.ArgumentException]::new('Test subscription entries must be objects.')
+                      }
+                      $names = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+                      foreach ($property in $entry.EnumerateObject()) {
+                          if (-not $names.Add($property.Name)) {
+                              throw [System.ArgumentException]::new('Test subscription entries must not contain duplicate properties.')
+                          }
+                          if ($property.Name -ieq 'tag' -and $property.Name -cne 'tag') {
+                              throw [System.ArgumentException]::new('The optional test subscription tag field must use lowercase tag.')
+                          }
+                          if ($property.Name -cnotin @('id', 'name', 'tag')) {
+                              throw [System.ArgumentException]::new('Test subscription entries support only id, name, and optional tag properties.')
+                          }
+                      }
+                  }
+              }
+              finally {
+                  $document.Dispose()
+              }
+              $subs = ConvertFrom-Json -InputObject $raw -AsHashtable -NoEnumerate
+              $identifiers = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+              foreach ($entry in $subs) {
+                  $identifier = [guid]::Empty
+                  if ($entry['id'] -isnot [string] -or
+                      -not [guid]::TryParseExact($entry['id'], 'D', [ref]$identifier) -or
+                      $identifier -eq [guid]::Empty -or -not $identifiers.Add($identifier.ToString('D')) -or
+                      $entry['name'] -isnot [string] -or [string]::IsNullOrWhiteSpace($entry['name']) -or
+                      $entry['name'] -match '[\x00-\x1f\x7f]') {
+                      throw [System.ArgumentException]::new('Test subscriptions must have distinct nonempty GUIDs and nonempty names without control characters.')
+                  }
+                  if ($entry.Contains('tag') -and (
+                      $entry['tag'] -isnot [string] -or $entry['tag'].Length -gt 64 -or
+                      $entry['tag'] -cnotmatch '\A[A-Za-z0-9]+(?:[ -][A-Za-z0-9]+)*\z')) {
+                      throw [System.ArgumentException]::new('A test subscription tag must be a string of at most 64 alphanumeric characters separated by single spaces or hyphens.')
+                  }
+              }
+              $subs = @($subs | Where-Object { -not $_.Contains('tag') -or $_['tag'] -ceq 'General' })
               if ($subs.Count -eq 0) {
-                  throw 'TEST_SUBSCRIPTION_IDS parsed to an empty array.'
+                  throw [System.ArgumentException]::new('TEST_SUBSCRIPTION_IDS must contain at least one General subscription; a configured pool never falls back to ARM_SUBSCRIPTION_ID.')
               }
               $subs = @($subs | Get-Random -Shuffle)
           }
@@ -304,6 +349,7 @@ jobs:
         shell: pwsh
         env:
           SELECTED_SUBSCRIPTION_ID: ${{ needs.subscriptions.outputs.subscriptionId }}
+          SUBSCRIPTION_IDS: ${{ needs.subscriptions.outputs.subscriptionIds }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -330,6 +376,18 @@ jobs:
           $combined = @{}
           foreach ($k in $varsMap.Keys) { $combined[$k] = $varsMap[$k] }
           foreach ($k in $secretsMap.Keys) { $combined[$k] = $secretsMap[$k] }
+
+          $allowedSubscriptions = @($env:SUBSCRIPTION_IDS | ConvertFrom-Json)
+          if ($allowedSubscriptions.Count -eq 0 -or
+              $env:SELECTED_SUBSCRIPTION_ID -notin @($allowedSubscriptions.id)) {
+              throw [System.InvalidOperationException]::new('The selected subscription must belong to the published General test pool.')
+          }
+          $subOverride = [string] $combined['ARM_SUBSCRIPTION_ID_OVERRIDE']
+          if (-not [string]::IsNullOrWhiteSpace($subOverride) -and
+              $subOverride -notin @($allowedSubscriptions.id)) {
+              throw [System.ArgumentException]::new('ARM_SUBSCRIPTION_ID_OVERRIDE must belong to the selected General test pool.')
+          }
+          $combined['TEST_SUBSCRIPTION_IDS'] = $env:SUBSCRIPTION_IDS
 
           foreach ($key in $combined.Keys) {
               if ($key -eq 'github_token') { continue }
@@ -406,6 +464,7 @@ jobs:
         shell: pwsh
         env:
           SELECTED_SUBSCRIPTION_ID: ${{ needs.subscriptions.outputs.subscriptionId }}
+          SUBSCRIPTION_IDS: ${{ needs.subscriptions.outputs.subscriptionIds }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -432,6 +491,18 @@ jobs:
           $combined = @{}
           foreach ($k in $varsMap.Keys) { $combined[$k] = $varsMap[$k] }
           foreach ($k in $secretsMap.Keys) { $combined[$k] = $secretsMap[$k] }
+
+          $allowedSubscriptions = @($env:SUBSCRIPTION_IDS | ConvertFrom-Json)
+          if ($allowedSubscriptions.Count -eq 0 -or
+              $env:SELECTED_SUBSCRIPTION_ID -notin @($allowedSubscriptions.id)) {
+              throw [System.InvalidOperationException]::new('The selected subscription must belong to the published General test pool.')
+          }
+          $subOverride = [string] $combined['ARM_SUBSCRIPTION_ID_OVERRIDE']
+          if (-not [string]::IsNullOrWhiteSpace($subOverride) -and
+              $subOverride -notin @($allowedSubscriptions.id)) {
+              throw [System.ArgumentException]::new('ARM_SUBSCRIPTION_ID_OVERRIDE must belong to the selected General test pool.')
+          }
+          $combined['TEST_SUBSCRIPTION_IDS'] = $env:SUBSCRIPTION_IDS
 
           foreach ($key in $combined.Keys) {
               if ($key -eq 'github_token') { continue }
@@ -645,6 +716,7 @@ jobs:
         shell: pwsh
         env:
           SELECTED_SUBSCRIPTION_ID: ${{ steps.leg.outputs.subscriptionId }}
+          SUBSCRIPTION_IDS: ${{ needs.subscriptions.outputs.subscriptionIds }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -671,6 +743,18 @@ jobs:
           $combined = @{}
           foreach ($k in $varsMap.Keys) { $combined[$k] = $varsMap[$k] }
           foreach ($k in $secretsMap.Keys) { $combined[$k] = $secretsMap[$k] }
+
+          $allowedSubscriptions = @($env:SUBSCRIPTION_IDS | ConvertFrom-Json)
+          if ($allowedSubscriptions.Count -eq 0 -or
+              $env:SELECTED_SUBSCRIPTION_ID -notin @($allowedSubscriptions.id)) {
+              throw [System.InvalidOperationException]::new('The selected subscription must belong to the published General test pool.')
+          }
+          $subOverride = [string] $combined['ARM_SUBSCRIPTION_ID_OVERRIDE']
+          if (-not [string]::IsNullOrWhiteSpace($subOverride) -and
+              $subOverride -notin @($allowedSubscriptions.id)) {
+              throw [System.ArgumentException]::new('ARM_SUBSCRIPTION_ID_OVERRIDE must belong to the selected General test pool.')
+          }
+          $combined['TEST_SUBSCRIPTION_IDS'] = $env:SUBSCRIPTION_IDS
 
           foreach ($key in $combined.Keys) {
               if ($key -eq 'github_token') { continue }

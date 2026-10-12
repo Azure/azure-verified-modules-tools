@@ -6,6 +6,10 @@ function Select-AvmBicepWorkflowSubscription {
 
         [string] $FallbackSubscriptionId,
 
+        [string] $RepositoryRoot,
+
+        [string] $ModulePath,
+
         [ValidateRange(0, [int]::MaxValue)]
         [int] $RandomSeed = 0,
 
@@ -16,44 +20,30 @@ function Select-AvmBicepWorkflowSubscription {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    if (-not [string]::IsNullOrEmpty($PoolJson) -and [string]::IsNullOrWhiteSpace($PoolJson)) {
-        throw [AvmConfigurationException]::new('The test subscription pool must not contain only whitespace.')
+    $tag = 'General'
+    if ($RepositoryRoot -or $ModulePath) {
+        if (-not $RepositoryRoot -or -not $ModulePath) {
+            throw [AvmConfigurationException]::new('Reservation selection requires both RepositoryRoot and ModulePath.')
+        }
+        $tag = Get-AvmBicepTestSubscriptionTag -RepositoryRoot $RepositoryRoot -ModulePath $ModulePath
     }
     if ([string]::IsNullOrEmpty($PoolJson)) {
-        $subscriptions = @(@{ id = $FallbackSubscriptionId; name = $FallbackSubscriptionId })
-    }
-    else {
-        try {
-            $subscriptions = ConvertFrom-Json -InputObject $PoolJson -AsHashtable -NoEnumerate -ErrorAction Stop
+        if ($tag -cne 'General') {
+            throw [AvmConfigurationException]::new("Reserved subscription tag '$tag' requires a tagged pool; singleton fallback is not permitted.")
         }
-        catch [System.ArgumentException] {
-            throw [AvmConfigurationException]::new('The test subscription pool must be a JSON array of id and name objects.')
-        }
+        $PoolJson = ConvertTo-Json -InputObject @(@{ id = $FallbackSubscriptionId; name = $FallbackSubscriptionId }) -Compress
     }
-    if ($subscriptions -isnot [array] -or $subscriptions.Count -eq 0) {
-        throw [AvmConfigurationException]::new('The test subscription pool must be a nonempty JSON array.')
+    $subscriptions = @(ConvertFrom-AvmBicepTestSubscriptionPool -PoolJson $PoolJson |
+            Where-Object { $_.Tag -ceq $tag })
+    if ($subscriptions.Count -eq 0) {
+        throw [AvmConfigurationException]::new("The test subscription pool has no '$tag' subscriptions; a configured pool never uses another tag or singleton fallback.")
     }
-    $identifiers = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $ordered = [System.Collections.Generic.SortedDictionary[string, object]]::new([System.StringComparer]::Ordinal)
     $seed = [System.Text.Encoding]::UTF8.GetBytes($RandomSeed.ToString([cultureinfo]::InvariantCulture))
     foreach ($entry in $subscriptions) {
-        $identifier = [guid]::Empty
-        if ($entry -isnot [System.Collections.IDictionary] -or
-            $entry['id'] -isnot [string] -or
-            -not [guid]::TryParseExact($entry['id'], 'D', [ref]$identifier) -or
-            $identifier -eq [guid]::Empty -or -not $identifiers.Add($identifier.ToString('D'))) {
-            throw [AvmConfigurationException]::new('Test subscriptions must contain distinct, nonempty subscription GUIDs.')
-        }
-        if ($entry['name'] -isnot [string] -or [string]::IsNullOrWhiteSpace($entry['name']) -or
-            $entry['name'] -match '[\x00-\x1f\x7f]') {
-            throw [AvmConfigurationException]::new('Test subscription names must be nonempty and free of control characters.')
-        }
-        $id = $identifier.ToString('D')
+        $id = ([guid]$entry.SubscriptionId).ToString('D')
         $digest = [System.Security.Cryptography.HMACSHA256]::HashData($seed, [System.Text.Encoding]::UTF8.GetBytes($id))
-        $ordered.Add(('{0}:{1}' -f [Convert]::ToHexString($digest), $id), [pscustomobject]@{
-                SubscriptionId = $id
-                Name           = $entry['name']
-            })
+        $ordered.Add(('{0}:{1}' -f [Convert]::ToHexString($digest), $id), $entry)
     }
     $position = $CaseIndex % $subscriptions.Count
     foreach ($entry in $ordered.Values) {
