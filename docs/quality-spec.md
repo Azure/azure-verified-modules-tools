@@ -884,6 +884,17 @@ UTF-8 lowercase canonical GUID `D` text. PSRule uses the first matching entry.
 A configured pool without the required tag never uses another tag or the legacy
 singleton.
 
+`Select-AvmTestSubscription` exposes this shared read-only selection to workflow
+callers. Require an explicit repository `Path`, exact `ModulePath` and complete
+`TestSubscriptionIds` pool; do not read ambient aliases or synthesize a fallback.
+Optional `Example` matches an exact runnable directory or test-file path through
+native recursive discovery and selects the actual owning module's reservation.
+Return that canonical `ModulePath` with the original pool `Index`, `Key`,
+`SubscriptionId`, `Name` and `Tag`. Callers retain `RandomSeed` and `CaseIndex`,
+repeat selection before authentication and verify the original binding.
+`PrivateData.AvmCapabilities.BicepTestSubscriptionSelection = 1` identifies this
+package API, not a released version or permission to run reserved infrastructure.
+
 Native e2e cannot orchestrate reserved preparation or its full environment lock:
 reject non-General mapped cases before compilation, features, hooks or deployment,
 including recursive selections and split-phase completion. Direct them to the
