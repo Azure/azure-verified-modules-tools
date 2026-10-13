@@ -440,7 +440,7 @@ exception contains rules if {
             Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
                 $Level -eq 'Warning' -and
                 $File -like '*examples*default*post.ps1' -and
-                $Message -match 'post hook failed' -and
+                $Message -match 'AvmConfigurationException' -and
                 $Message -match 'preserving the primary error'
             }
         }
@@ -497,6 +497,138 @@ exception contains rules if {
 
         $probe.ErrorName | Should -Be 'AvmConfigurationException'
         $probe.Message | Should -Match 'post hook failed'
+    }
+
+    It 'preserves recovery artifacts for incomplete cleanup: <FailurePoint>, post failure <PostFails>, removal failure <RemovalFails>' -TestCases @(
+        @{ FailurePoint = 'none'; PostFails = $false; RemovalFails = $false }
+        @{ FailurePoint = 'plan'; PostFails = $false; RemovalFails = $false }
+        @{ FailurePoint = 'none'; PostFails = $true; RemovalFails = $false }
+        @{ FailurePoint = 'plan'; PostFails = $true; RemovalFails = $false }
+        @{ FailurePoint = 'pre'; PostFails = $true; RemovalFails = $false }
+        @{ FailurePoint = 'none'; PostFails = $false; RemovalFails = $true }
+        @{ FailurePoint = 'plan'; PostFails = $false; RemovalFails = $true }
+    ) {
+        param($FailurePoint, $PostFails, $RemovalFails)
+
+        if ($FailurePoint -eq 'plan') {
+            $secondary = Join-Path $script:moduleDir 'examples' 'secondary'
+            $null = New-Item -ItemType Directory -Path $secondary
+            Set-Content -LiteralPath (Join-Path $secondary 'main.tf') -Value 'locals {}'
+        }
+
+        $probe = InModuleScope 'Avm.Authoring' -Parameters @{
+            C = $script:context
+            Cache = $script:cacheDir
+            Aprl = $script:aprlDir
+            Avmsec = $script:avmsecDir
+            FailurePoint = $FailurePoint
+            PostFails = $PostFails
+            RemovalFails = $RemovalFails
+        } {
+            param($C, $Cache, $Aprl, $Avmsec, $FailurePoint, $PostFails, $RemovalFails)
+            $primary = [AvmProcessException]::new('synthetic primary failure')
+            $post = [AvmConfigurationException]::new('SYNTHETIC-SECRET-POST-DIAGNOSTIC')
+            $removal = [System.IO.IOException]::new('SYNTHETIC-SECRET-REMOVAL-DIAGNOSTIC')
+            $removeItem = Get-Command Remove-Item -CommandType Cmdlet
+            $paths = @{}
+            $messages = [System.Collections.Generic.List[string]]::new()
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Resolve-AvmPolicyBundle {
+                [pscustomobject]@{ Name = $Name; Path = $(if ($Name -eq 'avm-policy-aprl') { $Aprl } else { $Avmsec }) }
+            }
+            Mock Get-AvmFolder { $Cache }
+            Mock Write-AvmLog { $messages.Add($Message) }
+            Mock Remove-Item { & $removeItem @PesterBoundParameters }
+            Mock Remove-Item { throw $removal } -ParameterFilter {
+                $RemovalFails -and $LiteralPath -like '*policy-stage*avm-policy-*'
+            }
+            Mock Lock-AvmTerraformPluginCache { $null }
+            Mock Initialize-AvmTerraformPolicyStage
+            Mock Invoke-AvmScriptHook {
+                $paths.WorkingDirectory = $WorkingDirectory
+                if ($HookPath -like '*pre.ps1') {
+                    [System.IO.File]::WriteAllText((Join-Path $WorkingDirectory 'terraform.tfstate'), 'SYNTHETIC-STATE-ONLY')
+                    [System.IO.File]::WriteAllText((Join-Path $WorkingDirectory '.env'), 'SYNTHETIC_VALUE=SYNTHETIC-ENV-ONLY')
+                    if ($FailurePoint -eq 'pre') { throw $primary }
+                }
+                else {
+                    if ($PostFails) { throw $post }
+                }
+            }
+            Mock Invoke-AvmProcess {
+                if ($ArgumentList[0] -eq 'plan') {
+                    [System.IO.File]::WriteAllText((Join-Path $WorkingDirectory 'tfplan'), 'SYNTHETIC-PLAN-ONLY')
+                    if ($FailurePoint -eq 'plan') { throw $primary }
+                }
+                if ($ArgumentList[0] -eq 'show') {
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = '{}'; StdErr = '' }
+                }
+                if ($ArgumentList[0] -eq 'test') {
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = '[]'; StdErr = '' }
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            $caught = $null
+            $result = $null
+            try {
+                $result = Invoke-AvmTerraformCheckPolicy -Context $C
+            }
+            catch {
+                $caught = $_
+            }
+            Should -Invoke Invoke-AvmScriptHook -Exactly 2
+            $stages = @(Get-ChildItem -LiteralPath (Join-Path $Cache 'policy-stage') -Directory)
+            if ($PostFails -or $RemovalFails) {
+                $stages.Count | Should -Be 1
+                $caught.Exception.Data['AvmPolicyStagePath'] | Should -Be $stages[0].FullName
+                [System.IO.File]::ReadAllText((Join-Path $paths.WorkingDirectory 'terraform.tfstate')) |
+                    Should -Be 'SYNTHETIC-STATE-ONLY'
+                [System.IO.File]::ReadAllText((Join-Path $paths.WorkingDirectory '.env')) |
+                    Should -Be 'SYNTHETIC_VALUE=SYNTHETIC-ENV-ONLY'
+                Test-Path -LiteralPath (Join-Path $stages[0].FullName '0' 'data' 'modules' 'cached' 'main.tf') |
+                    Should -BeTrue
+                if ($FailurePoint -ne 'pre') {
+                    [System.IO.File]::ReadAllText((Join-Path $paths.WorkingDirectory 'tfplan')) |
+                        Should -Be 'SYNTHETIC-PLAN-ONLY'
+                }
+                if ($PostFails) {
+                    ($messages -join "`n") | Should -Match 'Recovery staging is retained'
+                }
+                elseif ($FailurePoint -ne 'none') {
+                    ($messages -join "`n") | Should -Match 'staging removal also failed'
+                    [object]::ReferenceEquals($caught.Exception.Data['AvmPolicyStageCleanupError'].Exception, $removal) |
+                        Should -BeTrue
+                }
+            }
+            else {
+                $stages.Count | Should -Be 0
+            }
+            if ($FailurePoint -ne 'none') {
+                [object]::ReferenceEquals($caught.Exception, $primary) | Should -BeTrue
+                if ($PostFails) {
+                    [object]::ReferenceEquals($caught.Exception.Data['AvmPolicyPostError'].Exception, $post) |
+                        Should -BeTrue
+                }
+            }
+            elseif ($PostFails) {
+                [object]::ReferenceEquals($caught.Exception, $post) | Should -BeTrue
+            }
+            elseif ($RemovalFails) {
+                [object]::ReferenceEquals($caught.Exception, $removal) | Should -BeTrue
+            }
+            else {
+                $result.Status | Should -Be 'pass'
+                $caught | Should -BeNullOrEmpty
+            }
+            ($messages -join "`n") | Should -Not -Match 'SYNTHETIC-(SECRET|STATE|ENV|PLAN)'
+            [pscustomobject]@{ Error = $caught; Result = $result }
+        }
+        if ($PostFails -or $RemovalFails -or $FailurePoint -ne 'none') {
+            $probe.Error | Should -Not -BeNullOrEmpty
+            $probe.Result | Should -BeNullOrEmpty
+        }
     }
 
     It 'rejects all shell hooks before process execution' {

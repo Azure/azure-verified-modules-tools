@@ -344,6 +344,28 @@ This is the integration point for `mise` / `asdf` / `tenv` users who centralise 
 
 ## 8. Hidden folder and repo-local conventions
 
+### Terraform policy recovery staging
+
+Terraform policy checks stage examples under `Get-AvmFolder -Kind Cache` in
+`policy-stage/avm-policy-<unique-id>`. Immediately before its pre hook, each
+example marks cleanup required and confirms it only after its post hook returns
+successfully. Examples that never start hooks do not require fixture cleanup.
+The parent checks every example after workers finish; failed, interrupted, or
+unconfirmed cleanup retains the entire staging tree in place, preserving local
+state, Terraform data, plans, hooks, and environment files without relocation.
+Successful post cleanup still removes staging even after a primary check error.
+Retention is not a successful check or permission to retry cleanup automatically.
+
+Retained staging inherits the standard user-cache protection and is never
+uploaded as a public artifact. Diagnostics report the recovery path and error
+types, not state, plans, environment values, or secondary hook-error contents.
+Keep the original typed terminating error; attach a simultaneous post ErrorRecord
+in `Exception.Data['AvmPolicyPostError']` and the retained path in
+`Exception.Data['AvmPolicyStagePath']`. A staging-removal failure must also remain
+explicit, preserving a prior error and attaching its secondary ErrorRecord in
+`Exception.Data['AvmPolicyStageCleanupError']`. Recovery and manual deletion
+require operator action; checks do not inspect or operate on retained state.
+
 ### Per-repo files
 
 The CLI does not require any per-repo state. Persistent state (tool cache,
