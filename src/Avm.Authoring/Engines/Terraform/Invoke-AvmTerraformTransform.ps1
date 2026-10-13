@@ -400,12 +400,13 @@ function Remove-AvmLegacyTelemetryTestMock {
         else { 0 }
         if ($identifierReferences -ne $validatedIdentifierReferences) {
             throw [AvmConfigurationException]::new(
-                "Test file '$($file.FullName)' still references retired random_uuid.telemetry; only complete length(random_uuid.telemetry) == 0 or == 1 assertions on instrumented unit-test targets can be migrated automatically. Review other references manually.")
+                "Test file '$($file.FullName)' still references retired random_uuid.telemetry; only complete zero-or-one count assertions, optionally prefixed by a ModTM or AzAPI telemetry-count assertion joined with &&, on instrumented unit-test targets can be migrated automatically. Review other references manually.")
         }
         $isUnitTest = $scope.IsUnitTest
         $retiredMock = [regex]::Match($original, $emptyMock)
         $withoutModtmMocks = [regex]::Replace($original, $emptyMock, '')
-        if ([regex]::IsMatch($withoutModtmMocks, $customMock)) {
+        if ([regex]::IsMatch($withoutModtmMocks, $customMock) -and
+            -not ($validatedMocks -and $null -ne $unitPlan.PSObject.Properties['RetainModtmMock'] -and $unitPlan.RetainModtmMock)) {
             throw [AvmConfigurationException]::new(
                 "Test file '$($file.FullName)' contains a non-empty modtm mock; remove or rewrite it manually before telemetry migration.")
         }
@@ -426,8 +427,8 @@ function Remove-AvmLegacyTelemetryTestMock {
         else { 0 }
         $emptyAzapi = [regex]::Match($updated, $emptyAzapiMock)
         $hasAzapiMock = [regex]::IsMatch($updated, $azapiMock)
-        $needsAzapiMock = $retiredMock.Success -and
-        (-not $hasAzapiMock -or ($validatedMocks -and $unitPlan.AddDefaultAzapiMock))
+        $needsAzapiMock = ($retiredMock.Success -and -not $hasAzapiMock) -or
+        ($validatedMocks -and $unitPlan.AddDefaultAzapiMock)
         if ($isUnitTest -and ($retiredMock.Success -or $emptyAzapi.Success -or $validatedMocks)) {
             $modtmReferences = Get-AvmTerraformRetiredTestProviderReferenceCount -Text $updated -Provider modtm
             if ($updated -match '(?m)^[ \t]*provider[ \t]+"azapi"[ \t]*\{' -or
@@ -454,7 +455,8 @@ mock_provider "azapi" {
                 $updated = $updated.Remove($emptyAzapi.Index, $emptyAzapi.Length).Insert($emptyAzapi.Index, $replacementMock)
             }
             else {
-                $updated = $updated.Insert($retiredMock.Index, $replacementMock)
+                $index = if ($retiredMock.Success) { $retiredMock.Index } else { 0 }
+                $updated = $updated.Insert($index, $replacementMock)
             }
         }
         $updated = [regex]::Replace($updated, $legacyReference, 'azapi_resource.telemetry')
@@ -744,7 +746,9 @@ function Invoke-AvmTerraformTransform {
         Empty modtm test mocks are retired only when selected targets no
         longer require their provider. Unchanged dependencies retain the
         mock, its proven source requirement and same-provider module bindings,
-        without restoring unrelated unused requirements.
+        including known local callers and example wrappers, without restoring
+        unrelated unused requirements. Proven same-provider aliases and local
+        literal source client defaults retain their authored values.
         Telemetry references and empty random mocks in direct unit tests
         with no remaining random provider usage are migrated. Custom mocks
         that cannot be removed safely fail with an actionable error. The

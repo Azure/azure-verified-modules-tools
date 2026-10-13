@@ -117,7 +117,21 @@ BeforeAll {
                         attributes   = @{ defaults = @{ output = @{ value = @() } } }
                     }
                 }
+
             )
+        }
+    }
+
+    function New-UnitProviderAlias {
+        param([string] $Provider, [string] $Alias = 'unit')
+        @{
+            mptf = @{
+                is_empty = $false
+                attributes = @{ alias = $Alias }
+                block_type = 'mock_provider'
+                block_labels = @($Provider)
+                block_address = "mock_provider.$Provider.$Alias"
+            }
         }
     }
 }
@@ -652,6 +666,153 @@ Providers required by state:
             }
         }
 
+        It 'retires only proven unused same-provider alias bindings' {
+            InModuleScope Avm.Authoring {
+                $expression = '{ azapi = azapi.unit, modtm = modtm.unit, random = random.unit }'
+                $mapping = ConvertFrom-AvmTerraformUnitTestProviderMapping -Expression $expression `
+                    -ProviderNames @('azapi') -MockProviderNames @('azapi.unit', 'modtm.unit', 'random.unit') `
+                    -RetiredProviderNames @('modtm', 'random')
+                $mapping.Expression | Should -BeExactly '{ azapi = azapi.unit,       }'
+                $mapping.RetiredReferences.modtm | Should -Be 1
+                $mapping.RetiredReferences.random | Should -Be 1
+                $mapping.Bindings['azapi'] | Should -BeExactly 'azapi.unit'
+                $invalid = ConvertFrom-AvmTerraformUnitTestProviderMapping -Expression '{ azapi = azapi.unit, modtm = azapi.unit }' `
+                    -ProviderNames @('azapi') -MockProviderNames @('azapi.unit') -RetiredProviderNames @('modtm')
+                $invalid | Should -BeNullOrEmpty
+            }
+        }
+
+        Context 'literal mock alias metadata' {
+            It 'recognizes alias-only mocks without treating them as unaliased defaults: <Provider>' -TestCases @(
+                @{ Provider = 'azapi' }
+                @{ Provider = 'azurerm' }
+                @{ Provider = 'modtm' }
+                @{ Provider = 'random' }
+            ) {
+                param($Provider)
+                $mock = New-UnitProviderAlias -Provider $Provider
+                InModuleScope Avm.Authoring -Parameters @{ Provider = $Provider; MockData = $mock } {
+                    param($Provider, $MockData)
+                    $aliases = Get-AvmTerraformUnitTestMockAlias -Test @{ mock_providers = @{ "$Provider.unit" = $MockData } } -Path fixture
+                    $aliases["$Provider.unit"] | Should -BeTrue
+                    $aliases.ContainsKey($Provider) | Should -BeFalse
+                }
+            }
+
+            It 'does not classify a customized or source-backed alias as removable' -TestCases @(
+                @{ Shape = 'source' }
+                @{ Shape = 'defaults' }
+            ) {
+                param($Shape)
+                $mock = New-UnitProviderAlias -Provider random
+                if ($Shape -eq 'source') { $mock.mptf.attributes.source = 'tests/mocks' }
+                else { $mock.mock_resource = @(@{ mptf = @{ block_labels = @('random_string') } }) }
+                InModuleScope Avm.Authoring -Parameters @{ MockData = $mock } {
+                    param($MockData)
+                    (Get-AvmTerraformUnitTestMockAlias -Test @{ mock_providers = @{ 'random.unit' = $MockData } } -Path fixture)['random.unit'] |
+                        Should -BeFalse
+                }
+            }
+
+            It 'rejects inconsistent or computed alias identity: <Invalid>' -TestCases @(
+                @{ Invalid = 'address' }
+                @{ Invalid = 'alias' }
+                @{ Invalid = 'labels' }
+                @{ Invalid = 'type' }
+                @{ Invalid = 'source' }
+            ) {
+                param($Invalid)
+                $mock = New-UnitProviderAlias -Provider azurerm
+                switch ($Invalid) {
+                    address { $mock.mptf.block_address = 'mock_provider.azurerm' }
+                    alias { $mock.mptf.attributes.alias = '${var.alias}' }
+                    labels { $mock.mptf.block_labels = @('azapi') }
+                    type { $mock.mptf.block_type = 'provider' }
+                    source { $mock.mptf.attributes.source = '${var.source}' }
+                }
+                {
+                    InModuleScope Avm.Authoring -Parameters @{ MockData = $mock } {
+                        param($MockData)
+                        Get-AvmTerraformUnitTestMockAlias -Test @{ mock_providers = @{ 'azurerm.unit' = $MockData } } -Path fixture
+                    }
+                } | Should -Throw '*Cannot automatically migrate unit test*'
+            }
+        }
+
+        Context 'literal source-backed client defaults' {
+            BeforeEach {
+                $script:sourceRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+                $script:sourceDir = Join-Path $script:sourceRoot 'tests' 'mocks'
+                $null = New-Item -ItemType Directory -Path $script:sourceDir -Force
+                Set-Content -LiteralPath (Join-Path $script:sourceDir 'client.tfmock.hcl') -Encoding utf8NoBOM `
+                    -Value 'mock_data "azapi_client_config" { defaults = { subscription_id = "11111111-1111-1111-1111-111111111111" } }'
+                $script:fixture.Options.EnvVars['AVM_TEST_INSPECTION_JSON'] =
+                    '{"mptf":{"attributes":{}},"mock_data":[{"mptf":{"block_labels":["azapi_client_config"],"attributes":{"defaults":{"subscription_id":"11111111-1111-1111-1111-111111111111","tenant_id":"22222222-2222-2222-2222-222222222222"}}}}]}'
+                Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
+                    $json = $EnvVars.AVM_TEST_INSPECTION_JSON
+                    if ($json -ne 'not JSON') {
+                        $metadata = ConvertFrom-Json -InputObject $json -AsHashtable
+                        $content = [System.IO.File]::ReadAllText((Join-Path $WorkingDirectory 'source.tftest.hcl'))
+                        $metadata.mptf.range = @{
+                            start_line = 1
+                            end_line = @($content.TrimEnd() -split '\r?\n').Count
+                        }
+                        $json = ConvertTo-Json -InputObject $metadata -Depth 30 -Compress
+                    }
+                    [pscustomobject]@{ ExitCode = 0; StdOut = $json; StdErr = '' }
+                }
+            }
+
+            It 'reflects local source defaults natively without changing their original bytes' {
+                $file = Join-Path $script:sourceDir 'client.tfmock.hcl'
+                $bytes = [System.IO.File]::ReadAllBytes($file)
+                InModuleScope Avm.Authoring -Parameters @{ Root = $script:sourceRoot; Options = $script:fixture.Options } {
+                    param($Root, $Options)
+                    $defaults = Get-AvmTerraformSourceMockClientDefault -Source 'tests/mocks' -ModuleRoot $Root -Path fixture -Options $Options
+                    $defaults.subscription_id | Should -BeExactly '11111111-1111-1111-1111-111111111111'
+                    $defaults.tenant_id | Should -BeExactly '22222222-2222-2222-2222-222222222222'
+                    Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                        $ArgumentList[0] -ceq 'debug' -and $ArgumentList -ccontains 'source.tftest.hcl' -and
+                        $ArgumentList[-1] -ceq 'data.test_file.this.result.mock_providers.azapi'
+                    }
+                }
+                [System.IO.File]::ReadAllBytes($file) | Should -Be $bytes
+            }
+
+            It 'rejects unsafe or missing source paths before invoking the parser: <Source>' -TestCases @(
+                @{ Source = '../outside' }
+                @{ Source = 'missing' }
+                @{ Source = '${var.source}' }
+                @{ Source = 'https://example.com/mocks' }
+            ) {
+                param($Source)
+                {
+                    InModuleScope Avm.Authoring -Parameters @{ Root = $script:sourceRoot; Options = $script:fixture.Options; Source = $Source } {
+                        param($Root, $Options, $Source)
+                        Get-AvmTerraformSourceMockClientDefault -Source $Source -ModuleRoot $Root -Path fixture -Options $Options
+                    }
+                } | Should -Throw '*Cannot automatically migrate unit test*'
+                Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+            }
+
+            It 'retains explicit rejection for ambiguous source metadata: <Shape>' -TestCases @(
+                @{ Shape = 'computed'; Json = '{"mptf":{"attributes":{}},"mock_data":[{"mptf":{"block_labels":["azapi_client_config"],"attributes":{"defaults":"${var.defaults}"}}}]}' }
+                @{ Shape = 'duplicate'; Json = '{"mptf":{"attributes":{}},"mock_data":[{"mptf":{"block_labels":["azapi_client_config"],"attributes":{"defaults":{}}}},{"mptf":{"block_labels":["azapi_client_config"],"attributes":{"defaults":{}}}}]}' }
+                @{ Shape = 'override'; Json = '{"mptf":{"attributes":{}},"override_data":[]}' }
+                @{ Shape = 'malformed'; Json = '{"mptf":{"attributes":{}},"mock_data":[{}]}' }
+                @{ Shape = 'invalid JSON'; Json = 'not JSON' }
+            ) {
+                param($Json)
+                $script:fixture.Options.EnvVars['AVM_TEST_INSPECTION_JSON'] = $Json
+                {
+                    InModuleScope Avm.Authoring -Parameters @{ Root = $script:sourceRoot; Options = $script:fixture.Options } {
+                        param($Root, $Options)
+                        Get-AvmTerraformSourceMockClientDefault -Source 'tests/mocks' -ModuleRoot $Root -Path fixture -Options $Options
+                    }
+                } | Should -Throw '*source-based mock*'
+            }
+        }
+
         It 'removes only proven retired bindings while retaining every comment and remaining expression' {
             InModuleScope Avm.Authoring {
                 $expression = @'
@@ -775,12 +936,21 @@ Providers required by state:
     }
 
     Context 'telemetry identifier assertions' {
-        It 'recognizes only complete count comparisons: <Condition>' -TestCases @(
+        It 'recognizes only supported telemetry count assertions: <Condition>' -TestCases @(
             @{ Condition = 'length(random_uuid.telemetry) == 0'; Count = 1 }
             @{ Condition = 'length(random_uuid.telemetry) == 1'; Count = 1 }
             @{ Condition = "length (`n random_uuid.telemetry `n) == 1"; Count = 1 }
+            @{ Condition = 'length(modtm_telemetry.telemetry) == 0 && length(random_uuid.telemetry) == 0'; Count = 1 }
+            @{ Condition = 'length(modtm_telemetry.telemetry)==1&&length(random_uuid.telemetry)==1'; Count = 1 }
+            @{ Condition = "length(azapi_resource.telemetry) == 1 &&`n length (`n random_uuid.telemetry `n) == 1"; Count = 1 }
+            @{ Condition = 'length(modtm_telemetry.telemetry) == 0 && length(random_uuid.telemetry) == 1'; Count = 1 }
             @{ Condition = 'length(random_uuid.telemetry) == 10'; Count = 0 }
             @{ Condition = 'length(random_uuid.telemetry) == 1 && var.enabled'; Count = 0 }
+            @{ Condition = 'length(modtm_telemetry.telemetry) == 0 || length(random_uuid.telemetry) == 0'; Count = 0 }
+            @{ Condition = 'length(random_uuid.telemetry) == 0 && length(modtm_telemetry.telemetry) == 0'; Count = 0 }
+            @{ Condition = 'length(modtm_telemetry.other) == 0 && length(random_uuid.telemetry) == 0'; Count = 0 }
+            @{ Condition = 'length(modtm_telemetry.telemetry) == 0 && length(random_uuid.telemetry) == 0 && var.enabled'; Count = 0 }
+            @{ Condition = '"length(modtm_telemetry.telemetry) == 0 && length(random_uuid.telemetry) == 0"'; Count = 0 }
             @{ Condition = 'length(random_uuid.telemetry[0].result) == 36'; Count = 0 }
             @{ Condition = 'one(random_uuid.telemetry).result != ""'; Count = 0 }
             @{ Condition = 'length(random_uuid.telemetry_other) == 1'; Count = 0 }
@@ -794,12 +964,18 @@ Providers required by state:
             }
             $result.ReferenceCount | Should -Be $Count
             $result.Replacement | Should -BeExactly '${1}terraform_data.telemetry${2}'
+            if ($Count -eq 1) {
+                [regex]::Replace($Condition.Trim(), $result.Pattern, $result.Replacement) |
+                    Should -BeExactly $Condition.Trim().Replace('random_uuid.telemetry', 'terraform_data.telemetry')
+            }
         }
 
         It 'does not migrate assertions belonging to an uninstrumented selected target' {
             $script:fixture.Targets[1].Profiles = @('module', 'common')
             foreach ($run in $script:fixture.After.test.runs.Values) {
-                $run.assert = @(@{ mptf = @{ attributes = @{ condition = 'length(random_uuid.telemetry) == 0' } } })
+                $run.assert = @(@{ mptf = @{ attributes = @{
+                                condition = 'length(modtm_telemetry.telemetry) == 0 && length(random_uuid.telemetry) == 0'
+                            } } })
             }
             $result = InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {
                 param($Fixture)
@@ -855,7 +1031,9 @@ Providers required by state:
 
         It 'accounts for retired identifier assertions and verifies their exact native rule' {
             foreach ($run in $script:fixture.After.test.runs.Values) {
-                $run.assert = @(@{ mptf = @{ attributes = @{ condition = 'length(random_uuid.telemetry) == 0' } } })
+                $run.assert = @(@{ mptf = @{ attributes = @{
+                                condition = 'length(modtm_telemetry.telemetry) == 0 && length(random_uuid.telemetry) == 0'
+                            } } })
             }
             Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
                 [pscustomobject]@{ ExitCode = 0; StdOut = 'true'; StdErr = '' }
@@ -1475,10 +1653,10 @@ Providers required by state:
                 @{ Invalid = 'alias' }
                 @{ Invalid = 'labels' }
                 @{ Invalid = 'type' }
-                @{ Invalid = 'source' }
+                @{ Invalid = 'source'; Expected = '*mock source must be an existing local directory*' }
                 @{ Invalid = 'empty' }
             ) {
-                param($Invalid)
+                param($Invalid, $Expected = '*AzAPI alias*requires literal*')
                 $mock = $script:fixture.After.test.mock_providers['azapi.alternate']
                 switch ($Invalid) {
                     address { $mock.mptf.block_address = 'mock_provider.azapi' }
@@ -1488,7 +1666,7 @@ Providers required by state:
                     source { $mock.mptf.attributes.source = './mocks' }
                     empty { $mock.mptf.is_empty = $true }
                 }
-                { Invoke-UnitMigrationFixture -Fixture $script:fixture } | Should -Throw '*AzAPI alias*requires literal*'
+                { Invoke-UnitMigrationFixture -Fixture $script:fixture } | Should -Throw $Expected
                 Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
                 Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 0
             }
@@ -1565,6 +1743,46 @@ Providers required by state:
             { Invoke-UnitMigrationFixture -Fixture $script:fixture } | Should -Throw '*Cannot automatically migrate unit test*'
             Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 0
             Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+        }
+
+        It 'requires complete original mock coverage before adding an introduced binding: <UnmockedSource>' -TestCases @(
+            @{ UnmockedSource = $false }
+            @{ UnmockedSource = $true }
+        ) {
+            param($UnmockedSource)
+            $script:fixture.After.test.mock_providers.azurerm = @{ mptf = @{ is_empty = $true } }
+            $script:fixture.Before.test.mock_providers.azurerm = @{ mptf = @{ is_empty = $true } }
+            $script:fixture.After.test.runs.child.mptf.attributes.providers = '{ azurerm = azurerm /* retain */ }'
+            $script:fixture.Before.test.runs.child.mptf.attributes.providers = '{ azurerm = azurerm /* retain */ }'
+            $script:fixture.Snapshots[0] | Add-Member -NotePropertyName ProviderRequirements -NotePropertyValue @{
+                $script:fixture.Child = @{ azurerm = @{ source = 'hashicorp/azurerm' } }
+            }
+            $script:fixture.Snapshots[0] | Add-Member -NotePropertyName ProviderSources -NotePropertyValue @{
+                $script:fixture.Child = @('registry.terraform.io/hashicorp/azurerm')
+            }
+            if ($UnmockedSource) {
+                $script:fixture.Snapshots[0].ProviderSources[$script:fixture.Child] += 'registry.terraform.io/hashicorp/time'
+            }
+            Mock Get-AvmTerraformUnitTestRequiredProvider -ModuleName Avm.Authoring {
+                @{ azapi = @{ source = 'Azure/azapi' }; azurerm = @{ source = 'hashicorp/azurerm' } }
+            }
+            Mock Get-AvmTerraformUnitTestProviderSource -ModuleName Avm.Authoring {
+                @('registry.terraform.io/azure/azapi', 'registry.terraform.io/hashicorp/azurerm')
+            }
+            Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
+                [pscustomobject]@{ ExitCode = 0; StdOut = 'true'; StdErr = '' }
+            }
+            if ($UnmockedSource) {
+                { Invoke-UnitMigrationFixture -Fixture $script:fixture } | Should -Throw '*Cannot automatically migrate unit test*'
+                Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 0
+            }
+            else {
+                Invoke-UnitMigrationFixture -Fixture $script:fixture
+                Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                    $UnitTestPlans[0].ProviderMockBindings.child -ceq "{ azurerm = azurerm /* retain */ `n  azapi = azapi`n}" -and
+                    $UnitTestPlans[0].MockMigrationValidated
+                }
+            }
         }
 
         It 'allows an empty modtm mock to be replaced before adding the input' {

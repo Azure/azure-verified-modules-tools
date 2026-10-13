@@ -479,7 +479,7 @@ mock_provider "azapi" {
 run "root" {
   command = plan
   assert {
-    condition     = length(random_uuid.telemetry) == 0
+    condition     = length(modtm_telemetry.telemetry) == 0 && length(random_uuid.telemetry) == 0
     error_message = "Keep the identifier assertion."
   }
 }
