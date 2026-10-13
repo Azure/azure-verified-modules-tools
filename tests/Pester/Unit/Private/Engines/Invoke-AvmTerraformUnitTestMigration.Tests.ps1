@@ -460,6 +460,99 @@ Providers required by state:
             }
         }
 
+        It 'carries fresh ModTM records while restoring stale manifest bytes: <Failure>' -TestCases @(
+            @{ Failure = 'none' }
+            @{ Failure = 'init'; ExpectedError = '*module installation failed*' }
+            @{ Failure = 'providers'; ExpectedError = '*missing Terraform configuration tree*' }
+            @{ Failure = 'manifest'; ExpectedError = '*not valid JSON*' }
+        ) {
+            param($Failure, $ExpectedError)
+            $manifestPath = Join-Path -Path $script:fixture.Child -ChildPath '.terraform' -AdditionalChildPath 'modules', 'modules.json'
+            $dependency = Join-Path -Path $script:fixture.Child -ChildPath '.terraform' -AdditionalChildPath 'modules', 'published'
+            $null = New-Item -ItemType Directory -Path $dependency -Force
+            Set-Content -LiteralPath (Join-Path $script:fixture.Child 'main.tf') -Encoding utf8NoBOM `
+                -Value 'module "published" { source = "Azure/example/azurerm" }'
+            [byte[]]$manifestBytes = [System.Text.Encoding]::UTF8.GetBytes(
+                "{`r`n  `"Modules`": [{`"Key`":`"`",`"Dir`":`".`"},{`"Key`":`"existing`",`"Dir`":`".terraform/modules/existing`",`"Version`":`"0.1.0`"}]`r`n}`r`n")
+            [System.IO.File]::WriteAllBytes($manifestPath, $manifestBytes)
+            $lockPath = Join-Path $script:fixture.Child '.terraform.lock.hcl'
+            [byte[]]$lockBytes = @(1, 2, 3, 13, 10)
+            [System.IO.File]::WriteAllBytes($lockPath, $lockBytes)
+            $script:fixture.Options.EnvVars['AVM_TEST_FRESH_MANIFEST'] =
+                '{"Modules":[{"Key":"","Dir":"."},{"Key":"existing","Dir":".terraform/modules/existing","Version":"0.1.0"},{"Key":"published","Dir":".terraform/modules/published","Source":"registry.terraform.io/Azure/example/azurerm","Version":"0.1.0"}]}'
+            $script:fixture.Options.EnvVars['AVM_TEST_FAILURE'] = $Failure
+            Mock Invoke-AvmTerraformInit -ModuleName Avm.Authoring {
+                $payload = if ($EnvVars.AVM_TEST_FAILURE -ceq 'manifest') { 'invalid JSON' } else { $EnvVars.AVM_TEST_FRESH_MANIFEST }
+                Set-Content -LiteralPath (Join-Path -Path $WorkingDirectory -ChildPath '.terraform' `
+                        -AdditionalChildPath 'modules', 'modules.json') -Value $payload -Encoding utf8NoBOM -NoNewline
+                Set-Content -LiteralPath (Join-Path $WorkingDirectory '.terraform.lock.hcl') -Value 'updated lock'
+                if ($EnvVars.AVM_TEST_FAILURE -ceq 'init') {
+                    throw [System.InvalidOperationException]::new('module installation failed')
+                }
+            }
+            Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
+                $text = if ($ArgumentList[0] -ceq 'providers') {
+                    if ($EnvVars.AVM_TEST_FAILURE -ceq 'providers') { 'invalid tree' }
+                    else {
+                        "Providers required by configuration:`n.`n" +
+                        "`u{2514}`u{2500}`u{2500} module.published`n" +
+                        "    `u{2514}`u{2500}`u{2500} provider[registry.terraform.io/azure/modtm] 0.3.5`n"
+                    }
+                }
+                else { '{"published":{"source":"Azure/example/azurerm","mptf":{}}}' }
+                [pscustomobject]@{ ExitCode = 0; StdOut = $text; StdErr = '' }
+            }
+            Mock Get-AvmTerraformUnitTestRequiredProvider -ModuleName Avm.Authoring {
+                @{ modtm = @{ source = 'Azure/modtm'; version = '= 0.3.5' } }
+            }
+            InModuleScope Avm.Authoring -Parameters @{
+                Fixture = $script:fixture; Failure = $Failure; ExpectedError = $ExpectedError
+                ManifestPath = $manifestPath; OriginalManifest = $manifestBytes
+            } {
+                param($Fixture, $Failure, $ExpectedError, $ManifestPath, $OriginalManifest)
+                $modules = @{ $Fixture.Child = @{} }
+                $manifests = @{}
+                $inspect = {
+                    @(Get-AvmTerraformUnitTestProviderSource -Path $Fixture.Child -ModuleTargets $Fixture.Targets `
+                            -Options $Fixture.Options -ModuleProviderSources $modules[$Fixture.Child] -ModuleManifests $manifests)
+                }
+                if ($Failure -cne 'none') {
+                    $inspect | Should -Throw $ExpectedError
+                    $manifests.Count | Should -Be 0
+                }
+                else {
+                    $sources = & $inspect
+                    $manifests[$Fixture.Child] | Should -BeOfType ([string])
+                    $manifests[$Fixture.Child] | Should -BeExactly $Fixture.Options.EnvVars.AVM_TEST_FRESH_MANIFEST
+                    [System.IO.File]::ReadAllBytes($ManifestPath) | Should -Be $OriginalManifest
+                    (Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json).Modules.Key | Should -Not -Contain 'published'
+                    $parameters = @{
+                        Path                  = $Fixture.Child
+                        ModuleTargets         = $Fixture.Targets
+                        Options               = $Fixture.Options
+                        RequiredProviders     = @{ $Fixture.Child = @{} }
+                        ProviderSources       = @{ $Fixture.Child = $sources }
+                        ModuleProviderSources = $modules
+                        OriginalRequirements  = @{ $Fixture.Child = @{ modtm = @{ source = 'Azure/modtm'; version = '~> 0.3' } } }
+                        Plans                 = @{}
+                        PlanningPaths         = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+                    }
+                    { Get-AvmTerraformUnitTestModtmRequirementPlan @parameters -ModuleManifests @{} } |
+                        Should -Throw '*freshly inspected dependency manifest is missing*'
+                    $plan = Get-AvmTerraformUnitTestModtmRequirementPlan @parameters -ModuleManifests $manifests
+                    $plan.Arguments | Should -Contain 'unit_test_modtm_bindings={"published":"{ modtm = modtm }"}'
+                    $parameters.RequiredProviders[$Fixture.Child].modtm.source | Should -BeExactly 'Azure/modtm'
+                    $parameters.RequiredProviders[$Fixture.Child].modtm.version | Should -BeExactly '~> 0.3'
+                    $manifests[$Fixture.Child] | Should -BeExactly $Fixture.Options.EnvVars.AVM_TEST_FRESH_MANIFEST
+                }
+                Should -Invoke Invoke-AvmTerraformInit -Exactly 1 -ParameterFilter {
+                    [bool]$BackendFalse -and [bool]$PreserveDependencySelections -and $WorkingDirectory -ceq $Fixture.Child
+                }
+            }
+            [System.IO.File]::ReadAllBytes($manifestPath) | Should -Be $manifestBytes
+            [System.IO.File]::ReadAllBytes($lockPath) | Should -Be $lockBytes
+        }
+
         It 'rejects incomplete or unfamiliar tree output: <Shape>' -TestCases @(
             @{ Shape = 'no configuration header'; Text = '.' }
             @{ Shape = 'no root'; Text = 'Providers required by configuration:' }

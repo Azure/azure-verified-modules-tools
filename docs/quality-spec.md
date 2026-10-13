@@ -826,7 +826,9 @@ targets; passing an unrelated mock to a run is invalid in Terraform. Initialize
 missing dependencies with the shared backend-disabled Terraform helper,
 preserving compatible dependency selections. Restore the exact original
 provider-lock bytes, or its absence, and any existing module-manifest bytes
-even when inspection fails.
+even when inspection fails. Requirement planning uses the validated immutable
+manifest snapshot captured with the fresh provider tree, not the restored
+on-disk manifest; newly added dependencies need no prior manual initialization.
 Validate root/default-directory test targets before initialization can fetch
 them. JSON configurations/tests, possible backend/cloud declarations and
 initialized backend metadata require review before dependency inspection;

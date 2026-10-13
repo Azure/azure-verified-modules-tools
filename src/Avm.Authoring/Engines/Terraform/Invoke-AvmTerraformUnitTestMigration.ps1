@@ -438,7 +438,8 @@ function Get-AvmTerraformUnitTestProviderSource {
         [Parameter(Mandatory)] [string] $Path,
         [Parameter(Mandatory)] [object[]] $ModuleTargets,
         [Parameter(Mandatory)] [object] $Options,
-        [hashtable] $ModuleProviderSources
+        [hashtable] $ModuleProviderSources,
+        [hashtable] $ModuleManifests
     )
 
     Set-StrictMode -Version 3.0
@@ -501,7 +502,13 @@ function Get-AvmTerraformUnitTestProviderSource {
         $result = Invoke-AvmProcess -FilePath $Options.TerraformPath `
             -ArgumentList @('providers', '-no-color', '-test-directory=tests') `
             -WorkingDirectory $Path -EnvVars $environment
-        ConvertFrom-AvmTerraformProviderTree -Text $result.StdOut -Path $Path -ModuleProviderSources $ModuleProviderSources
+        $sources = @(ConvertFrom-AvmTerraformProviderTree -Text $result.StdOut -Path $Path -ModuleProviderSources $ModuleProviderSources)
+        if ($null -ne $ModuleManifests -and (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+            $payload = [System.IO.File]::ReadAllText($manifestPath)
+            $null = ConvertFrom-AvmTerraformModuleManifest -Payload $payload -WorkingDirectory $Path
+            $ModuleManifests[$Path] = $payload
+        }
+        return $sources
     }
     finally {
         try {
@@ -562,6 +569,7 @@ function Get-AvmTerraformUnitTestModtmRequirementPlan {
         [Parameter(Mandatory)] [hashtable] $RequiredProviders,
         [Parameter(Mandatory)] [hashtable] $ProviderSources,
         [Parameter(Mandatory)] [hashtable] $ModuleProviderSources,
+        [Parameter(Mandatory)] [hashtable] $ModuleManifests,
         [Parameter(Mandatory)] [hashtable] $OriginalRequirements,
         [Parameter(Mandatory)] [hashtable] $Plans,
         [Parameter(Mandatory)] [AllowEmptyCollection()] [System.Collections.Generic.HashSet[string]] $PlanningPaths
@@ -583,11 +591,10 @@ function Get-AvmTerraformUnitTestModtmRequirementPlan {
         throw [AvmConfigurationException]::new("Cannot preserve ModTM mocks for '$Path': cyclic local provider dependencies require review.")
     }
     try {
-        $manifestPath = Join-Path -Path $Path -ChildPath '.terraform' -AdditionalChildPath 'modules', 'modules.json'
-        if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
-            throw [AvmConfigurationException]::new("Cannot preserve ModTM mocks for '$Path': the installed dependency manifest is missing.")
+        if (-not $ModuleManifests.ContainsKey($Path) -or $ModuleManifests[$Path] -isnot [string]) {
+            throw [AvmConfigurationException]::new("Cannot preserve ModTM mocks for '$Path': the freshly inspected dependency manifest is missing.")
         }
-        $payload = [System.IO.File]::ReadAllText($manifestPath)
+        $payload = $ModuleManifests[$Path]
         $null = ConvertFrom-AvmTerraformModuleManifest -Payload $payload -WorkingDirectory $Path
         $manifest = ConvertFrom-Json -InputObject $payload -AsHashtable
         $result = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList @(
@@ -631,11 +638,12 @@ function Get-AvmTerraformUnitTestModtmRequirementPlan {
                 if (-not $ModuleProviderSources.ContainsKey($dependency)) {
                     $ModuleProviderSources[$dependency] = @{}
                     $ProviderSources[$dependency] = @(Get-AvmTerraformUnitTestProviderSource -Path $dependency `
-                            -ModuleTargets $ModuleTargets -Options $Options -ModuleProviderSources $ModuleProviderSources[$dependency])
+                            -ModuleTargets $ModuleTargets -Options $Options -ModuleProviderSources $ModuleProviderSources[$dependency] `
+                            -ModuleManifests $ModuleManifests)
                 }
                 $null = Get-AvmTerraformUnitTestModtmRequirementPlan -Path $dependency -ModuleTargets $ModuleTargets `
                     -Options $Options -RequiredProviders $RequiredProviders -ProviderSources $ProviderSources `
-                    -ModuleProviderSources $ModuleProviderSources -OriginalRequirements $OriginalRequirements `
+                    -ModuleProviderSources $ModuleProviderSources -ModuleManifests $ModuleManifests -OriginalRequirements $OriginalRequirements `
                     -Plans $Plans -PlanningPaths $PlanningPaths
             }
             if ($RequiredProviders[$dependency].modtm['source'] -notin @('Azure/modtm', $source)) {
@@ -769,6 +777,7 @@ function Invoke-AvmTerraformUnitTestMigration {
     $requiredProviders = @{}
     $providerSources = @{}
     $moduleProviderSources = @{}
+    $moduleManifests = @{}
     $modtmRequirementPlans = @{}
     $planningPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($snapshot in $Snapshots) {
@@ -837,7 +846,8 @@ function Invoke-AvmTerraformUnitTestMigration {
                 if (-not $moduleProviderSources.ContainsKey($targetPath)) {
                     $moduleProviderSources[$targetPath] = @{}
                     $providerSources[$targetPath] = @(Get-AvmTerraformUnitTestProviderSource -Path $targetPath `
-                            -ModuleTargets $ModuleTargets -Options $Options -ModuleProviderSources $moduleProviderSources[$targetPath])
+                            -ModuleTargets $ModuleTargets -Options $Options -ModuleProviderSources $moduleProviderSources[$targetPath] `
+                            -ModuleManifests $moduleManifests)
                 }
                 if (@($providerSources[$targetPath] | Where-Object {
                             $_ -match '/modtm$' -and $_ -ine 'registry.terraform.io/azure/modtm'
@@ -852,7 +862,7 @@ function Invoke-AvmTerraformUnitTestMigration {
                 }
                 $null = Get-AvmTerraformUnitTestModtmRequirementPlan -Path $targetPath -ModuleTargets $ModuleTargets `
                     -Options $Options -RequiredProviders $requiredProviders -ProviderSources $providerSources `
-                    -ModuleProviderSources $moduleProviderSources -OriginalRequirements $originalRequirements `
+                    -ModuleProviderSources $moduleProviderSources -ModuleManifests $moduleManifests -OriginalRequirements $originalRequirements `
                     -Plans $modtmRequirementPlans -PlanningPaths $planningPaths
             }
         }

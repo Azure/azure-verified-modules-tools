@@ -1739,9 +1739,11 @@ run "clock" {
     It 'preserves transitive ModTM mocks and exact selections for <Scope> runs' -TestCases @(
         @{ Scope = 'root'; Wrapper = $false }
         @{ Scope = 'selected wrapper'; Wrapper = $true }
-        @{ Scope = 'unsupported module profile'; Wrapper = $false; RejectProfile = $true }
+        @{ Scope = 'stale root manifest'; Wrapper = $false; StaleManifest = $true }
+        @{ Scope = 'stale selected wrapper manifest'; Wrapper = $true; StaleManifest = $true }
+        @{ Scope = 'unsupported module profile'; Wrapper = $false; RejectProfile = $true; StaleManifest = $true }
     ) {
-        param($Wrapper, $RejectProfile = $false)
+        param($Wrapper, $RejectProfile = $false, $StaleManifest = $false)
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $child = Join-Path $root 'modules' 'child'
         $dependency = Join-Path $root '.published' 'dependency'
@@ -1768,7 +1770,7 @@ output "id" {
 }
 '@
         $publishedHash = (Get-FileHash -LiteralPath $published).Hash
-        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+        $currentSource = @'
 module "published" {
   source = "./.published/dependency"
 }
@@ -1776,6 +1778,16 @@ output "published_id" {
   value = module.published.id
 }
 '@
+        $mainPath = Join-Path $root 'main.tf'
+        $initialSource = if ($StaleManifest) { 'output "published_id" { value = "not-installed" }' } else { $currentSource }
+        Set-Content -LiteralPath $mainPath -Encoding utf8NoBOM -Value $initialSource
+        if ($StaleManifest) {
+            foreach ($path in @($root, $child)) {
+                $providerPath = Join-Path $path 'terraform.tf'
+                $content = [System.IO.File]::ReadAllText($providerPath).Replace('version = "~> 0.3"', 'version = "= 0.3.5"')
+                [System.IO.File]::WriteAllText($providerPath, $content, [System.Text.UTF8Encoding]::new($false))
+            }
+        }
         $target = ''
         $initializedPaths = @($root, $child)
         if ($Wrapper) {
@@ -1862,9 +1874,16 @@ run "unused_child" {
                 $manifestPath = Join-Path -Path $path -ChildPath '.terraform' -AdditionalChildPath 'modules', 'modules.json'
                 if (Test-Path -LiteralPath $manifestPath) {
                     $manifests[$path] = [System.IO.File]::ReadAllBytes($manifestPath)
+                    if ($StaleManifest) {
+                        @((Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json).Modules |
+                                Where-Object { $_.Key -cmatch '(^|\.)published$' }) | Should -HaveCount 0
+                    }
                 }
                 $version = Invoke-TelemetryProcess -FilePath $script:terraformPath -ArgumentList @('version', '-json') -Root $path
                 $selections[$path] = (($version.StdOut | ConvertFrom-Json).provider_selections | ConvertTo-Json -Compress)
+            }
+            if ($StaleManifest) {
+                Set-Content -LiteralPath $mainPath -Encoding utf8NoBOM -Value $currentSource
             }
             $snapshot = InModuleScope Avm.Authoring -Parameters @{ Root = $root } {
                 param($Root)
@@ -1939,8 +1958,21 @@ run "unused_child" {
                     [System.IO.File]::ReadAllBytes($manifestPath) | Should -Be $manifests[$path]
                 }
             }
-            $result = Invoke-TelemetryProcess -FilePath $script:terraformPath `
-                -ArgumentList @('test', '-no-color', '-test-directory=tests/unit') -Root $root
+            try {
+                if ($StaleManifest) {
+                    $null = Invoke-TelemetryProcess -FilePath $script:terraformPath `
+                        -ArgumentList @('init', '-backend=false', '-input=false', '-no-color', '-test-directory=tests/unit') -Root $root
+                }
+                $result = Invoke-TelemetryProcess -FilePath $script:terraformPath `
+                    -ArgumentList @('test', '-no-color', '-test-directory=tests/unit') -Root $root
+            }
+            finally {
+                if ($StaleManifest) {
+                    [System.IO.File]::WriteAllBytes((Join-Path $root '.terraform.lock.hcl'), $locks[$root])
+                    $manifestPath = Join-Path -Path $root -ChildPath '.terraform' -AdditionalChildPath 'modules', 'modules.json'
+                    [System.IO.File]::WriteAllBytes($manifestPath, $manifests[$root])
+                }
+            }
             $result.StdOut | Should -Match 'Success! 3 passed, 0 failed'
             $result.StdOut | Should -Not -Match 'Warning:'
             $result.StdErr | Should -BeNullOrEmpty
@@ -1960,6 +1992,10 @@ rule "terraform_unused_required_providers" {
                     -ArgumentList @('--config', $lintConfig, '--only=terraform_unused_required_providers', '--format=json')
                 $lint.ExitCode | Should -Be 0 -Because $lint.StdOut
                 [System.IO.File]::ReadAllBytes((Join-Path $path '.terraform.lock.hcl')) | Should -Be $locks[$path]
+                if ($manifests.ContainsKey($path)) {
+                    $manifestPath = Join-Path -Path $path -ChildPath '.terraform' -AdditionalChildPath 'modules', 'modules.json'
+                    [System.IO.File]::ReadAllBytes($manifestPath) | Should -Be $manifests[$path]
+                }
             }
         }
         finally {
