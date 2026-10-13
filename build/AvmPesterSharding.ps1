@@ -34,6 +34,20 @@ function script:Resolve-AvmPowerShellPath {
     throw 'Unable to resolve the current PowerShell executable path.'
 }
 
+function script:Initialize-AvmPesterRegistryRoot {
+    param(
+        [ValidateNotNullOrEmpty()] [string] $SubKey = 'Software\Pester'
+    )
+
+    if (-not $IsWindows) { return }
+
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($SubKey)
+    if ($null -eq $key) {
+        throw [System.InvalidOperationException]::new("Unable to prepare the Pester registry root '$SubKey'.")
+    }
+    $key.Dispose()
+}
+
 function script:Start-AvmPesterLogIsolation {
     if ([string]::IsNullOrWhiteSpace($env:GITHUB_ACTIONS)) {
         return
@@ -197,6 +211,7 @@ function script:Invoke-AvmPesterShardedTier {
     $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('avm' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     $running = @()
     $pwshPath = script:Resolve-AvmPowerShellPath
+    script:Initialize-AvmPesterRegistryRoot
     try {
         for ($i = 0; $i -lt $plan.Count; $i++) {
             $index = $i + 1

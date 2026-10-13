@@ -444,6 +444,14 @@ checks (`avm pr-check`) never write the pin, because they run against a clean
 working tree that they must leave clean; a superseded major surfaces there as a
 drift finding rather than a rewrite.
 
+### Managed-file cache recovery
+
+If fetching or checking out a cached managed-files or configuration repository
+exits with code 128 and Git's `fatal: not a git repository` diagnostic, warn,
+remove only the affected repository/ref cache entry, and retry with one shallow
+clone at the same ref. Preserve unrelated Git failures and propagate a failed
+replacement clone; existing transient-network retries remain unchanged.
+
 ### Managed-file source layout
 
 Managed-file sources stack `<base>/root/` followed by configured overlay
@@ -1394,6 +1402,11 @@ This section is the implementation-level expression of the **Security stance** p
 ### Test framework
 
 - Pester 5.5+.
+- Before Windows Pester execution or concurrent shards start, open or create
+  `HKCU\Software\Pester` with `RegistryKey.CreateSubKey` and dispose the handle.
+  Preserve existing values and children; Pester creates and removes only its
+  per-run subkeys. Never force-recreate the shared parent, suppress access
+  failures or disable TestRegistry. Unix bootstrap remains unchanged.
 - All tests use `Describe` / `Context` / `It` blocks; no Pester 4 syntax.
 - Reserve `<name>` placeholders in test titles for actual `-TestCases`
   parameters; use another notation for illustrative paths.
