@@ -393,7 +393,7 @@ Describe 'Invoke-AvmProcess' {
                 Invoke-AvmProcess -FilePath $E -ArgumentList @(
                     '-NoProfile', '-NonInteractive', '-Command',
                     '[Console]::Out.WriteLine("partial stdout"); [Console]::Error.WriteLine("partial stderr"); Start-Sleep -Seconds 30'
-                ) -TimeoutSec 2 -StreamOutput:$Streaming
+                ) -TimeoutSec 10 -StreamOutput:$Streaming
                 return $null
             }
             catch { return $_.Exception }

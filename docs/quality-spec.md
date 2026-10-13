@@ -444,6 +444,14 @@ checks (`avm pr-check`) never write the pin, because they run against a clean
 working tree that they must leave clean; a superseded major surfaces there as a
 drift finding rather than a rewrite.
 
+### Managed-file cache recovery
+
+If fetching or checking out a cached managed-files or configuration repository
+exits with code 128 and Git's `fatal: not a git repository` diagnostic, warn,
+remove only the affected repository/ref cache entry, and retry with one shallow
+clone at the same ref. Preserve unrelated Git failures and propagate a failed
+replacement clone; existing transient-network retries remain unchanged.
+
 ### Managed-file source layout
 
 Managed-file sources stack `<base>/root/` followed by configured overlay

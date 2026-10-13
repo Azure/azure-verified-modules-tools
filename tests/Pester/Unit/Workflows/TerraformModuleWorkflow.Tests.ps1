@@ -355,25 +355,37 @@ Describe 'terraform-module fork isolation' {
                 $Name | Should -Be 'Avm.Authoring'
             }
             function Invoke-AvmPrCheck { param([string] $Path) }
-            function avm { throw 'Checks must not execute with an older module.' }
+            function Invoke-ForkCheckTestCommand { throw 'Checks must not execute with an older module.' }
+            Set-Alias -Name avm -Value Invoke-ForkCheckTestCommand -Scope Local
 
             { & $script:forkCheckScript } | Should -Throw '*Fork checks require an Avm.Authoring release with -ExcludeSteps*'
         }
     }
 
-    It 'runs the composite command excluding only policy with a compatible module' {
+    It 'runs the composite command excluding only policy with a compatible module and <AliasState>' -ForEach @(
+        @{ AliasState = 'no inherited alias'; InheritedAlias = $false }
+        @{ AliasState = 'an inherited alias'; InheritedAlias = $true }
+    ) {
+        param($InheritedAlias)
         $result = & {
-            function Import-Module {
-                param([string] $Name)
-                $Name | Should -Be 'Avm.Authoring'
+            if ($InheritedAlias) {
+                function Invoke-UnexpectedForkCheck { throw 'The inherited avm alias must not execute.' }
+                Set-Alias -Name avm -Value Invoke-UnexpectedForkCheck -Scope Local
             }
-            function Invoke-AvmPrCheck { param([string[]] $ExcludeSteps) }
-            function avm {
-                param([string] $Verb, [string[]] $ExcludeSteps)
-                [pscustomobject]@{ Verb = $Verb; Exclusions = $ExcludeSteps }
-            }
+            & {
+                function Import-Module {
+                    param([string] $Name)
+                    $Name | Should -Be 'Avm.Authoring'
+                }
+                function Invoke-AvmPrCheck { param([string[]] $ExcludeSteps) }
+                function Invoke-ForkCheckTestCommand {
+                    param([string] $Verb, [string[]] $ExcludeSteps)
+                    [pscustomobject]@{ Verb = $Verb; Exclusions = $ExcludeSteps }
+                }
+                Set-Alias -Name avm -Value Invoke-ForkCheckTestCommand -Scope Local
 
-            & $script:forkCheckScript
+                & $script:forkCheckScript
+            }
         }
         $result.Verb | Should -Be 'pr-check'
         $result.Exclusions | Should -Be @('check policy')
