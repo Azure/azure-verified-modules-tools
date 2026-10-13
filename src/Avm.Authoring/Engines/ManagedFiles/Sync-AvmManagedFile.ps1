@@ -870,6 +870,11 @@ function Get-AvmManagedFilesCheckout {
     .SYNOPSIS
         Shallow clone (or fetch, when already cached) a git repo at a ref into
         the AVM cache and return the checkout root.
+
+    .DESCRIPTION
+        If a cached fetch or checkout reports Git's not-a-repository error,
+        warn, clear only that ref's cache entry, and retry with one clone.
+        Other errors and a failed replacement clone propagate unchanged.
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
@@ -892,23 +897,36 @@ function Get-AvmManagedFilesCheckout {
     $cacheRoot = Join-Path (Join-Path (Join-Path (Join-Path $homeDir 'cache') 'managed-files') $slug) $Ref
 
     if (Test-Path -LiteralPath (Join-Path $cacheRoot '.git') -PathType Container) {
-        Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('-C', $cacheRoot, 'fetch', '--depth', '1', 'origin', $Ref) -RetryNetworkFailure | Out-Null
-        Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('-C', $cacheRoot, 'checkout', '-q', 'FETCH_HEAD') | Out-Null
-    }
-    else {
-        $parent = Split-Path -Parent $cacheRoot
-        if ($parent -and -not (Test-Path -LiteralPath $parent)) {
-            New-Item -ItemType Directory -Path $parent -Force | Out-Null
+        try {
+            Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('-C', $cacheRoot, 'fetch', '--depth', '1', 'origin', $Ref) -RetryNetworkFailure | Out-Null
+            Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('-C', $cacheRoot, 'checkout', '-q', 'FETCH_HEAD') | Out-Null
+            return $cacheRoot
         }
-        if (Test-Path -LiteralPath $cacheRoot) {
-            Remove-Item `
-                -LiteralPath $cacheRoot `
-                -Recurse `
-                -Force `
-                -ProgressAction SilentlyContinue
+        catch [AvmProcessException] {
+            $isInvalidRepository = $_.Exception.ExitCode -eq 128 -and
+            $_.Exception.StdErr -match '(?im)^\s*fatal:\s+not a git repository\b'
+            if (-not $isInvalidRepository) {
+                throw
+            }
+
+            Write-AvmLog (
+                "sync: cached checkout '$cacheRoot' is not a valid Git repository; clearing it and retrying once."
+            ) -Level Warning | Out-Null
         }
-        Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('clone', '--depth', '1', '--branch', $Ref, "https://github.com/$Repo.git", $cacheRoot) -RetryNetworkFailure | Out-Null
     }
+
+    $parent = Split-Path -Parent $cacheRoot
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    if (Test-Path -LiteralPath $cacheRoot) {
+        Remove-Item `
+            -LiteralPath $cacheRoot `
+            -Recurse `
+            -Force `
+            -ProgressAction SilentlyContinue
+    }
+    Invoke-AvmProcess -FilePath $GitPath -ArgumentList @('clone', '--depth', '1', '--branch', $Ref, "https://github.com/$Repo.git", $cacheRoot) -RetryNetworkFailure | Out-Null
 
     return $cacheRoot
 }

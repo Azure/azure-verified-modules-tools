@@ -43,7 +43,7 @@ function script:Initialize-AvmPesterRegistryRoot {
 
     $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($SubKey)
     if ($null -eq $key) {
-        throw [InvalidOperationException]::new("Unable to prepare the Pester registry root '$SubKey'.")
+        throw [System.InvalidOperationException]::new("Unable to prepare the Pester registry root '$SubKey'.")
     }
     $key.Dispose()
 }

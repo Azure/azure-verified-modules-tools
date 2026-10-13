@@ -208,10 +208,46 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $tflint = Get-Command tflint -CommandType Application -ErrorAction Stop |
             Select-Object -First 1
 
-        $pins.tflintPlugins.avm | Should -Be '1.0.0'
-        $config | Should -Match 'version\s*=\s*"1\.0\.0"'
+        $expectedRulesetVersion = [string]$pins.tflintPlugins.avm
+        $config | Should -Match (
+            '(?s)plugin\s+"avm"\s*\{[^}]*version\s*=\s*"' + [regex]::Escape($expectedRulesetVersion) + '"')
         $config | Should -Not -Match 'replace_triggers_refs\s*='
-        (& $tflint.Source --version) | Should -Contain 'ruleset.avm (1.0.0)'
+        (& $tflint.Source --version) | Should -Contain "ruleset.avm ($expectedRulesetVersion)"
+    }
+
+    It 'answers <ToolName> version probes without starting PowerShell on Windows' -Skip:(-not $IsWindows) -ForEach @(
+        @{ ToolName = 'conftest' }
+        @{ ToolName = 'mapotf' }
+        @{ ToolName = 'terraform' }
+        @{ ToolName = 'terraform-docs' }
+        @{ ToolName = 'tflint' }
+    ) {
+        param($ToolName)
+        $pins = Get-Content -LiteralPath (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Resources' 'avm.pins.jsonc') -Raw |
+            ConvertFrom-Json -AsHashtable
+        $version = [string]@($pins.tools | Where-Object name -CEQ $ToolName)[0].version
+        $expected = InModuleScope 'Avm.Authoring' -Parameters @{
+            Pwsh = (Get-Process -Id $PID).Path
+            Stub = Join-Path $script:repoRoot 'tests' 'fixtures' 'bin' "$ToolName.ps1"
+            Environment = @{
+                AVM_STUB_TOOL_VERSION = $version
+                AVM_STUB_TFLINT_AVM_PLUGIN_VERSION = [string]$pins.tflintPlugins.avm
+            }
+        } {
+            param($Pwsh, $Stub, $Environment)
+            Invoke-AvmProcess -FilePath $Pwsh -ArgumentList @('-NoProfile', '-File', $Stub, '--version') -EnvVars $Environment
+        }
+
+        $originalPath = [Environment]::GetEnvironmentVariable('PATH')
+        try {
+            [Environment]::SetEnvironmentVariable('PATH', '')
+            $actual = & (Join-Path $script:launcherDir "$ToolName.cmd") --version 2>&1
+            $LASTEXITCODE | Should -Be 0
+            (@($actual) -join [Environment]::NewLine) | Should -BeExactly ($expected.StdOut.TrimEnd("`r", "`n"))
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('PATH', $(if ($null -eq $originalPath) { [NullString]::Value } else { $originalPath }))
+        }
     }
 
     It 'pre-commit composes the seven-step terraform chain end-to-end (metadata first) via launcher-resolved stubs and built-in checks' {

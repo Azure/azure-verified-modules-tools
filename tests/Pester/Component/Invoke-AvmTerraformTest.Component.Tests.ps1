@@ -207,7 +207,11 @@ run "fixture" {
         $result.Status | Should -Be 'skipped'
         $result.FilesProcessed | Should -Be 0
         @($result.Issues | Where-Object Severity -eq 'warning').Count | Should -Be 3
-        $trace = @(Get-Content -LiteralPath $env:AVM_STUB_TERRAFORM_TRACE | ConvertFrom-Json)
+        $trace = @(
+            if (Test-Path -LiteralPath $env:AVM_STUB_TERRAFORM_TRACE -PathType Leaf) {
+                Get-Content -LiteralPath $env:AVM_STUB_TERRAFORM_TRACE | ConvertFrom-Json
+            }
+        )
         @($trace | Where-Object Command -in @('init', 'validate')).Count | Should -Be 0
     }
 }

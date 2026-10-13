@@ -175,8 +175,8 @@ Describe 'Invoke-AvmPesterShardedTier' {
     }
 
     It 'propagates <Kind> bootstrap failures without starting a shard' -ForEach @(
-        @{ Kind = 'access'; Failure = [UnauthorizedAccessException]::new('Registry access denied.') }
-        @{ Kind = 'I/O'; Failure = [IO.IOException]::new('Registry storage unavailable.') }
+        @{ Kind = 'access'; Failure = [System.UnauthorizedAccessException]::new('Registry access denied.') }
+        @{ Kind = 'I/O'; Failure = [System.IO.IOException]::new('Registry storage unavailable.') }
     ) {
         $script:bootstrapFailure = $Failure
         $script:bootstrapCalls = 0

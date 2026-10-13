@@ -122,11 +122,17 @@ function Invoke-AvmTestE2e {
         Opt into AVM_CI_VARIABLES and AVM_CI_SECRETS JSON, localToken_*,
         TOKEN_NAMEPREFIX and deprecated CI_KEY_VAULT_NAME inputs. CI secrets
         beat variables; CI_ aliases beat CI__ aliases within a source.
-        Missing explicit IDs may use VALIDATE_SUBSCRIPTION_ID,
-        VALIDATE_TENANT_ID and TEST_SUBSCRIPTION_IDS. Nothing logs in.
+        Missing explicit IDs may use VALIDATE_SUBSCRIPTION_ID and
+        VALIDATE_TENANT_ID. Pools resolve VALIDATE_SUBSCRIPTION_IDS then
+        TEST_SUBSCRIPTION_IDS from variables, then secrets, then environment.
+        Nothing logs in.
     .PARAMETER TestSubscriptionIds
-        Optional Bicep JSON array of id/name subscription objects. Cases are
-        balanced over a stable seeded ordering, independent of JSON ordering.
+        Optional Bicep JSON array of id/name objects with an optional tag.
+        Missing tags mean General. Cases use only General subscriptions in a
+        stable seeded ordering, independent of JSON ordering. Registry-layout
+        modules require the exact root .reserved-test-subscriptions.json map.
+        Non-General reservations require the protected registry workflow, not
+        native e2e, so its environment lock covers preparation through cleanup.
     .PARAMETER SubscriptionSelectionSeed
         Shared nonnegative seed for deterministic subscription ordering.
     .PARAMETER SubscriptionJobIndex

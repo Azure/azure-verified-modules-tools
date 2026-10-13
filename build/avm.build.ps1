@@ -107,6 +107,7 @@ function script:Import-AvmBuildPester {
     finally {
         Remove-Module -ModuleInfo $module -Force
     }
+    script:Initialize-AvmPesterRegistryRoot
 }
 
 function script:Invoke-AvmPester {

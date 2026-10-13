@@ -252,6 +252,43 @@ rule "avm_interface_managed_identities" {
         Get-Content -LiteralPath $script:destinationPath -Raw | Should -Match 'rule "required_output_rmfr7"'
     }
 
+    It 'preserves legacy exemptions when the packaged ruleset version changes' {
+        @'
+plugin "avm" {
+  enabled = true
+  version = "9.8.7"
+  source = "github.com/Azure/tflint-ruleset-avm"
+  signature = "attestation"
+}
+'@ | Set-Content -LiteralPath $script:basePath -Encoding utf8NoBOM
+        @'
+rule "required_output_rmfr7" {
+  enabled = false
+}
+rule "terraform_output_separate" {
+  enabled = false
+}
+'@ | Set-Content -LiteralPath $script:overridePath -Encoding utf8NoBOM
+
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            B = $script:basePath; O = $script:overridePath; D = $script:destinationPath
+        } {
+            param($B, $O, $D)
+            Mock Read-AvmPins { [pscustomobject]@{ tflintPlugins = [pscustomobject]@{ avm = '9.8.7' } } }
+            Mock Write-AvmLog
+            Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
+            Should -Invoke Write-AvmLog -Exactly 2 -ParameterFilter {
+                $Level -eq 'Warning' -and $Message -like '*AVM ruleset 9.8.7*'
+            }
+        }
+
+        $merged = Get-Content -LiteralPath $script:destinationPath -Raw
+        $merged | Should -Not -Match 'required_output_rmfr7|terraform_output_separate'
+        $merged | Should -Match '(?s)rule "avm_output_resource_id_required"\s*\{\s*enabled = false\s*\}'
+        $merged | Should -Match 'version = "9.8.7"'
+        $merged | Should -Match 'signature = "attestation"'
+    }
+
     It 'does not discard disabled rules for a different or overridden plugin' -ForEach @(
         @{ Label = 'different version'; Plugin = 'version = "0.17.0"' }
         @{ Label = 'different source'; Plugin = 'source = "example.invalid/custom"' }

@@ -61,6 +61,9 @@ finally {
     Remove-Module -ModuleInfo $module -Force
 }
 
+. (Join-Path $PSScriptRoot 'AvmPesterSharding.ps1')
+script:Initialize-AvmPesterRegistryRoot
+
 if ($Path.Count -eq 1 -and $Path[0].Contains([System.IO.Path]::PathSeparator)) {
     $Path = $Path[0].Split([System.IO.Path]::PathSeparator, [System.StringSplitOptions]::RemoveEmptyEntries)
 }

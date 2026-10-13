@@ -179,7 +179,7 @@ run "unified_plan_binds_the_expected_tenant" {
     condition = (
       local.test_settings.client_id == module.bami[0].client_id &&
       local.test_settings.tenant_id == var.bami_test_settings.tenant_id &&
-      local.test_settings.test_subscription_ids == var.bami_test_settings.test_subscription_ids
+      jsonencode(local.test_settings.test_subscription_ids) == jsonencode(var.bami_test_settings.test_subscription_ids)
     )
     error_message = "BAMI must replace all three effective settings together."
   }
@@ -189,7 +189,7 @@ run "unified_plan_binds_the_expected_tenant" {
       output.test_settings.client_id == "10000000-0000-4000-8000-000000000006" &&
       output.test_settings.client_id != var.bami_test_settings.controller_client_id &&
       output.test_settings.tenant_id == var.bami_test_settings.tenant_id &&
-      output.test_settings.test_subscription_ids == var.bami_test_settings.test_subscription_ids &&
+      jsonencode(output.test_settings.test_subscription_ids) == jsonencode(var.bami_test_settings.test_subscription_ids) &&
       length(output.test_settings.test_subscription_ids) == 28 &&
       alltrue([for subscription in output.test_settings.test_subscription_ids :
         subscription.id != var.bami_test_settings.admin_subscription_id &&
@@ -322,4 +322,219 @@ run "single_apply_populates_identity_and_consumer_settings" {
     )
     error_message = "A single apply must resolve the identity and GitHub consumer dependencies."
   }
+}
+
+run "tagged_pool_publishes_only_general" {
+  command = apply
+
+  variables {
+    bami_test_settings = merge(var.bami_test_settings, {
+      test_subscription_ids = [
+        for index, subscription in var.bami_test_settings.test_subscription_ids :
+        index == 0 ? merge(subscription, { tag = "Azure Local" }) :
+        index == 1 ? merge(subscription, { tag = "General" }) : subscription
+      ]
+    })
+  }
+
+  assert {
+    condition = (
+      length(var.bami_test_settings.test_subscription_ids) == 28 &&
+      length(output.test_settings.test_subscription_ids) == 27 &&
+      output.test_settings.test_subscription_ids[0].id == var.bami_test_settings.test_subscription_ids[1].id &&
+      [for subscription in output.test_settings.test_subscription_ids : subscription.id] ==
+      slice([for subscription in var.bami_test_settings.test_subscription_ids : subscription.id], 1, 28) &&
+      alltrue([for subscription in output.test_settings.test_subscription_ids : length(keys(subscription)) == 2])
+    )
+    error_message = "Actions and Dependabot consumers must receive only the ordered General projection with the historical name/id shape."
+  }
+}
+
+run "one_general_subscription_is_sufficient" {
+  command = plan
+
+  variables {
+    bami_test_settings = merge(var.bami_test_settings, {
+      test_subscription_ids = [for index, subscription in var.bami_test_settings.test_subscription_ids :
+        merge(subscription, { tag = index == 27 ? "General" : "Azure Local" })
+      ]
+    })
+  }
+
+  assert {
+    condition = (
+      length(output.test_settings.test_subscription_ids) == 1 &&
+      output.test_settings.test_subscription_ids[0].id == var.bami_test_settings.test_subscription_ids[27].id
+    )
+    error_message = "The default must be the first General entry, never the first unfiltered entry."
+  }
+}
+
+run "fully_reserved_pool_is_rejected" {
+  command = plan
+
+  variables {
+    bami_test_settings = merge(var.bami_test_settings, {
+      test_subscription_ids = [for subscription in var.bami_test_settings.test_subscription_ids :
+        merge(subscription, { tag = "Azure Local" })
+      ]
+    })
+  }
+  expect_failures = [var.bami_test_settings]
+}
+
+run "general_tag_is_case_sensitive" {
+  command = plan
+
+  variables {
+    bami_test_settings = merge(var.bami_test_settings, {
+      test_subscription_ids = [for subscription in var.bami_test_settings.test_subscription_ids :
+        merge(subscription, { tag = "general" })
+      ]
+    })
+  }
+  expect_failures = [var.bami_test_settings]
+}
+
+run "null_tag_is_not_general" {
+  command = plan
+
+  variables {
+    bami_test_settings = merge(var.bami_test_settings, {
+      test_subscription_ids = [for subscription in var.bami_test_settings.test_subscription_ids :
+        merge(subscription, { tag = null })
+      ]
+    })
+  }
+  expect_failures = [var.bami_test_settings]
+}
+
+run "blank_tag_is_rejected" {
+  command = plan
+
+  variables {
+    bami_test_settings = merge(var.bami_test_settings, {
+      test_subscription_ids = concat(
+        [merge(var.bami_test_settings.test_subscription_ids[0], { tag = "" })],
+        slice(var.bami_test_settings.test_subscription_ids, 1, 28)
+      )
+    })
+  }
+  expect_failures = [var.bami_test_settings]
+}
+
+run "untrimmed_tag_is_rejected" {
+  command = plan
+
+  variables {
+    bami_test_settings = merge(var.bami_test_settings, {
+      test_subscription_ids = concat(
+        [merge(var.bami_test_settings.test_subscription_ids[0], { tag = "General " })],
+        slice(var.bami_test_settings.test_subscription_ids, 1, 28)
+      )
+    })
+  }
+  expect_failures = [var.bami_test_settings]
+}
+
+run "control_character_tag_is_rejected" {
+  command = plan
+
+  variables {
+    bami_test_settings = merge(var.bami_test_settings, {
+      test_subscription_ids = concat(
+        [merge(var.bami_test_settings.test_subscription_ids[0], { tag = "Azure\nLocal" })],
+        slice(var.bami_test_settings.test_subscription_ids, 1, 28)
+      )
+    })
+  }
+  expect_failures = [var.bami_test_settings]
+}
+
+run "non_string_tag_is_rejected" {
+  command = plan
+
+  variables {
+    bami_test_settings = merge(var.bami_test_settings, {
+      test_subscription_ids = concat(
+        [merge(var.bami_test_settings.test_subscription_ids[0], { tag = true })],
+        slice(var.bami_test_settings.test_subscription_ids, 1, 28)
+      )
+    })
+  }
+  expect_failures = [var.bami_test_settings]
+}
+
+run "additional_pool_properties_are_rejected" {
+  command = plan
+
+  variables {
+    bami_test_settings = merge(var.bami_test_settings, {
+      test_subscription_ids = concat(
+        [merge(var.bami_test_settings.test_subscription_ids[0], { tag = "Azure Local", extra = "unsupported" })],
+        slice(var.bami_test_settings.test_subscription_ids, 1, 28)
+      )
+    })
+  }
+  expect_failures = [var.bami_test_settings]
+}
+
+run "tag_at_64_character_limit_is_accepted" {
+  command = plan
+
+  variables {
+    bami_test_settings = merge(var.bami_test_settings, {
+      test_subscription_ids = concat(
+        [merge(var.bami_test_settings.test_subscription_ids[0], { tag = join("", [for i in range(64) : "A"]) })],
+        slice(var.bami_test_settings.test_subscription_ids, 1, 28)
+      )
+    })
+  }
+
+  assert {
+    condition     = length(output.test_settings.test_subscription_ids) == 27
+    error_message = "A valid 64-character reserved tag must be accepted and excluded from the General projection."
+  }
+}
+
+run "tag_over_64_characters_is_rejected" {
+  command = plan
+
+  variables {
+    bami_test_settings = merge(var.bami_test_settings, {
+      test_subscription_ids = concat(
+        [merge(var.bami_test_settings.test_subscription_ids[0], { tag = join("", [for i in range(65) : "A"]) })],
+        slice(var.bami_test_settings.test_subscription_ids, 1, 28)
+      )
+    })
+  }
+  expect_failures = [var.bami_test_settings]
+}
+
+run "invalid_tag_separators_are_rejected" {
+  command = plan
+
+  variables {
+    bami_test_settings = merge(var.bami_test_settings, {
+      test_subscription_ids = concat(
+        [merge(var.bami_test_settings.test_subscription_ids[0], { tag = "Azure--Local" })],
+        slice(var.bami_test_settings.test_subscription_ids, 1, 28)
+      )
+    })
+  }
+  expect_failures = [var.bami_test_settings]
+}
+
+run "miscased_tag_property_is_rejected" {
+  command = plan
+
+  variables {
+    bami_test_settings = merge(var.bami_test_settings, {
+      test_subscription_ids = concat(
+        [merge(var.bami_test_settings.test_subscription_ids[0], { Tag = "Azure Local" })],
+        slice(var.bami_test_settings.test_subscription_ids, 1, 28)
+      )
+    })
+  }
+  expect_failures = [var.bami_test_settings]
 }

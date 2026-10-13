@@ -24,7 +24,7 @@ Describe 'Component: Pester registry bootstrap' -Tag Component {
         if ($IsWindows) {
             $script:registryRoot = (Get-PSDrive TestRegistry).Root
             $script:subKey = $script:registryRoot.Substring('HKEY_CURRENT_USER\'.Length) +
-                '\bootstrap-' + [guid]::NewGuid().ToString('N')
+            '\bootstrap-' + [guid]::NewGuid().ToString('N')
         }
     }
 

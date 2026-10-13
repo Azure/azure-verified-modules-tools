@@ -33,7 +33,7 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
 
     BeforeEach {
         $script:consumer = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
-        Copy-Item -LiteralPath $script:fixture -Destination $script:consumer -Recurse
+        Copy-Item -LiteralPath $script:fixture -Destination $script:consumer -Recurse -Force
         $script:modulePath = Join-Path $script:consumer 'avm' 'res' 'storage' 'storage-account'
         InModuleScope Avm.Authoring -Parameters @{ ModulePath = $script:modulePath } {
             param($ModulePath)
@@ -61,6 +61,17 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
         $result.BaselinesExecuted | Should -Be 8
         @($result.Evaluations | Where-Object { $_.ProcessedRules -gt 0 }).Count | Should -Be 8
         $result.Evaluations.Baseline | Should -Contain 'CB.AVM.WAF.Security'
+    }
+
+    It 'rejects an independent canonical repository without a root reservation map' {
+        Remove-Item -LiteralPath (Join-Path $script:consumer '.reserved-test-subscriptions.json') -Force
+        $result = Invoke-AvmCheckPolicy -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'fail'
+        $result.BaselinesExecuted | Should -Be 0
+        @($result.Issues | Where-Object {
+                $_.Code -eq 'avm.bicep.psrule-source' -and
+                $_.Message -eq 'The root .reserved-test-subscriptions.json must be a regular file with exact casing.'
+            }).Count | Should -Be 2
     }
 
     It 'rejects insecure storage with the actual packaged security baseline' {
