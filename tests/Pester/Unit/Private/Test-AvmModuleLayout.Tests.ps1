@@ -181,6 +181,7 @@ Describe 'Module Resources packaging' {
                 'ensure_location_variable.mptf.hcl'
                 'move_misplaced_blocks.mptf.hcl'
                 'required_provider_versions.mptf.hcl'
+                'retain_modtm_test_provider.mptf.hcl'
                 'sort_outputs.mptf.hcl'
             )
             'module-call' = @(

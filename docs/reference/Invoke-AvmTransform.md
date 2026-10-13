@@ -28,8 +28,11 @@ and per-item regions are preserved.
 Generated removed blocks let Terraform forget legacy modtm telemetry
 state without destroying its resources. Existing state may require
 the old providers for one final initialization. Test-module provider
-requirements and standard empty modtm test mocks are migrated;
-custom mocks require review. Mocked
+requirements and standard empty modtm test mocks are retired only
+when selected test targets no longer require ModTM. Unchanged
+dependencies retain correctly typed mocks, source requirements and
+explicit provider bindings; unrelated targets do not regain unused
+requirements. Custom mocks require review. Mocked
 unit tests receive location values only for newly required inputs,
 preserving their assertions, targets and telemetry opt-outs.
 Published dependencies and unprefixed legacy telemetry are not migrated.

@@ -742,12 +742,15 @@ unrelated request headers. Commented-out resources are not active header
 usages.
 Terraform must still install their former
 providers once when an existing state references them; after the state
-forgets those addresses, new installations do not require `modtm`. The
+forgets those addresses, migrated source does not require `modtm` unless an
+unchanged dependency still needs it. The
 random provider requirement is removed only if no other random resources
 or data sources remain in the module. The transform also removes obsolete
 `modtm` provider declarations in examples and standalone test modules when
-they have no remaining `modtm` resources or data sources, empty `modtm` test
-mocks, and standard references to the old telemetry resource. Direct unit
+they have no remaining `modtm` resources, data sources or explicit module
+provider bindings. Empty `modtm` test mocks are retired only when the selected
+targets' configuration dependency trees prove the provider is unused.
+Standard references to the old telemetry resource are migrated. Direct unit
 assertions whose complete condition is `length(random_uuid.telemetry) == 0`
 or `== 1` are migrated to `terraform_data.telemetry` only when their selected
 target is instrumented. The count, comparison, error message and surrounding
@@ -792,8 +795,8 @@ mock alone cannot cover new AzAPI telemetry. AzAPI aliases must have consistent
 literal native names, labels and addresses and no external mock source.
 Complete mappings may bind an unaliased target name to its known default mock
 or a known alias of the same provider. Aliased target keys still require review.
-Preserve safe authored bindings; remove only bindings to a retired empty ModTM
-mock or an empty random mock whose provider is absent from that target's
+Preserve safe authored bindings; remove only bindings to an empty ModTM or
+random mock whose provider is absent from that target's
 configuration dependency tree. Preserve all remaining expression text and
 comments. Before cleanup, account for every retired provider reference in
 validated mappings; unexplained references still fail. A default AzAPI
@@ -822,7 +825,8 @@ configuration dependency tree. Exclude state-only providers and other test
 targets; passing an unrelated mock to a run is invalid in Terraform. Initialize
 missing dependencies with the shared backend-disabled Terraform helper,
 preserving compatible dependency selections. Restore the exact original
-provider-lock bytes, or its absence, even when inspection fails.
+provider-lock bytes, or its absence, and any existing module-manifest bytes
+even when inspection fails.
 Validate root/default-directory test targets before initialization can fetch
 them. JSON configurations/tests, possible backend/cloud declarations and
 initialized backend metadata require review before dependency inspection;
@@ -832,6 +836,19 @@ Preserve assertions and mock defaults without restoring unused provider
 requirements or exempting them from lint. Verify native profile support for
 the complete mapping before changing any test file, and keep repeated
 transforms and non-writing drift checks stable.
+For unchanged ModTM dependencies, preserve the mock and every required run
+binding. A removed non-default provider source must not become an inferred
+`hashicorp/modtm` source. Restore only a selected target's proven
+`Azure/modtm` requirement, retaining its original source and version when
+available, and bind the same provider explicitly to the actual dependencies
+that declare it. Known local intermediates may receive the same repair;
+published dependencies remain untouched. Computed or aliased module bindings,
+JSON dependencies and unproven source inheritance require review. Verify the
+exact native source update and object-merging capabilities before writes.
+Unrelated selected targets still retire their unused bindings and requirements.
+Native regression fixtures use loopback-only ModTM endpoints and verify mocked
+resource values, full original locks, installed selections, repeat stability
+and failure-path drift restoration without production collector access.
 
 `avm pre-commit` and `avm pr-check` resolve their required tools before the
 first step, which validates metadata for the selected root and its module

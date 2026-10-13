@@ -5,9 +5,12 @@ Describe 'Integration: MAPOTF native Terraform test migration' -Tag 'Integration
         $moduleRoot = Join-Path $PSScriptRoot '..' '..' '..' 'src' 'Avm.Authoring'
         Import-Module (Join-Path $moduleRoot 'Avm.Authoring.psd1') -Force
         $script:mapotf = InModuleScope Avm.Authoring { (Resolve-AvmTool -Name mapotf).Path }
+        $script:terraform = InModuleScope Avm.Authoring { (Resolve-AvmTool -Name terraform).Path }
         $script:options = [pscustomobject]@{
-            ToolPath    = $script:mapotf
+            ToolPath      = $script:mapotf
+            TerraformPath = $script:terraform
             ProfileDirs = @{
+                module              = Join-Path $moduleRoot 'Resources' 'mapotf' 'module'
                 'unit-test-inspect' = Join-Path $moduleRoot 'Resources' 'mapotf' 'unit-test-inspect'
                 'unit-test'         = Join-Path $moduleRoot 'Resources' 'mapotf' 'unit-test'
             }
@@ -522,7 +525,9 @@ run "root" {
         [System.IO.File]::WriteAllText($rule, $content, $script:utf8)
         $options = [pscustomobject]@{
             ToolPath = $script:options.ToolPath
+            TerraformPath = $script:options.TerraformPath
             ProfileDirs = @{
+                module = $script:options.ProfileDirs.module
                 'unit-test-inspect' = $script:options.ProfileDirs['unit-test-inspect']
                 'unit-test' = $profile
             }

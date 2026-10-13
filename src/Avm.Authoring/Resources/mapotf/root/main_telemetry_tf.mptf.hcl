@@ -372,8 +372,17 @@ transform "new_block" "forget_legacy_random_id" {
   depends_on = [transform.remove_block.legacy_random_id]
 }
 
+data "module" "modtm_provider_calls" {}
+
+locals {
+  modtm_provider_call_used = anytrue([
+    for name, call in data.module.modtm_provider_calls.result :
+    try(length(regexall("(^|[\\s{,])\"?modtm\"?(?:\\s|#[^\\r\\n]*|//[^\\r\\n]*|/\\*[\\s\\S]*?\\*/)*=", call.providers)) > 0, false)
+  ])
+}
+
 transform "remove_block_element" "drop_modtm_provider" {
-  for_each             = local.modtm_provider_exists && length(local.other_modtm_resources) == 0 && length(local.other_modtm_data) == 0 ? toset([1]) : toset([])
+  for_each             = local.modtm_provider_exists && length(local.other_modtm_resources) == 0 && length(local.other_modtm_data) == 0 && !local.modtm_provider_call_used ? toset([1]) : toset([])
   target_block_address = "terraform"
   paths                = ["required_providers.modtm"]
   depends_on = [

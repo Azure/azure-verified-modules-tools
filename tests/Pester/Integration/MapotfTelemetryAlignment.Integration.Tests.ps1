@@ -1736,6 +1736,237 @@ run "clock" {
         $result.StdErr | Should -BeNullOrEmpty
     }
 
+    It 'preserves transitive ModTM mocks and exact selections for <Scope> runs' -TestCases @(
+        @{ Scope = 'root'; Wrapper = $false }
+        @{ Scope = 'selected wrapper'; Wrapper = $true }
+        @{ Scope = 'unsupported module profile'; Wrapper = $false; RejectProfile = $true }
+    ) {
+        param($Wrapper, $RejectProfile = $false)
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $child = Join-Path $root 'modules' 'child'
+        $dependency = Join-Path $root '.published' 'dependency'
+        $unit = Join-Path $root 'tests' 'unit'
+        New-TelemetryModule -Root $root -WithLegacy -WithLocation
+        New-TelemetryModule -Root $child -WithLegacy -WithLocation -Child
+        $null = New-Item -ItemType Directory -Path $dependency, $unit -Force
+        $published = Join-Path $dependency 'main.tf'
+        Set-Content -LiteralPath $published -Encoding utf8NoBOM -Value @'
+terraform {
+  required_providers {
+    modtm = {
+      source  = "Azure/modtm"
+      version = "= 0.3.5"
+    }
+  }
+}
+resource "modtm_telemetry" "published" {
+  endpoint = "http://127.0.0.1:1/never-production"
+  tags     = { fixture = "mock-only" }
+}
+output "id" {
+  value = modtm_telemetry.published.id
+}
+'@
+        $publishedHash = (Get-FileHash -LiteralPath $published).Hash
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+module "published" {
+  source = "./.published/dependency"
+}
+output "published_id" {
+  value = module.published.id
+}
+'@
+        $target = ''
+        $initializedPaths = @($root, $child)
+        if ($Wrapper) {
+            $wrapperPath = Join-Path $root 'tests' 'wrapper'
+            $null = New-Item -ItemType Directory -Path $wrapperPath
+            Set-Content -LiteralPath (Join-Path $wrapperPath 'main.tf') -Encoding utf8NoBOM -Value @'
+terraform {
+  required_providers {
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.12"
+    }
+    modtm = {
+      source  = "Azure/modtm"
+      version = "~> 0.3"
+    }
+  }
+}
+module "test" {
+  source    = "../.."
+  providers = { azapi = azapi }
+}
+output "published_id" {
+  value = module.test.published_id
+}
+'@
+            $target = '  module { source = "./tests/wrapper" }'
+            $initializedPaths += $wrapperPath
+        }
+        $source = @'
+mock_provider "modtm" {}
+mock_provider "azapi" {
+  mock_data "azapi_client_config" {
+    defaults = {
+      subscription_resource_id = "/subscriptions/11111111-1111-1111-1111-111111111111"
+    }
+  }
+}
+variables {
+  location = "eastus"
+}
+run "implicit" {
+  command = apply
+__TARGET__
+  assert {
+    condition     = can(regex("^[A-Za-z0-9]{8}$", output.published_id))
+    error_message = "The published dependency must use the native mock's generated ID."
+  }
+}
+run "explicit" {
+  command = apply
+__TARGET__
+  providers = {
+    azapi = azapi
+    modtm = modtm # Retain the required binding and its comment.
+  }
+  assert {
+    condition     = can(regex("^[A-Za-z0-9]{8}$", output.published_id))
+    error_message = "An authored mapping must retain the correctly typed ModTM mock."
+  }
+}
+run "unused_child" {
+  command = apply
+  module { source = "./modules/child" }
+  providers = { azapi = azapi, modtm = modtm }
+  assert {
+    condition     = length(azapi_resource.telemetry) == 1
+    error_message = "The unrelated selected child must retire ModTM and keep mocked AzAPI telemetry."
+  }
+}
+'@
+        $testPath = Join-Path $unit 'inherited.tftest.hcl'
+        [System.IO.File]::WriteAllText($testPath, $source.Replace('__TARGET__', $target), [System.Text.UTF8Encoding]::new($false))
+        $script:processEnvironment.MODTM_ENDPOINT = 'http://127.0.0.1:1/never-production'
+        try {
+            $locks = @{}
+            $manifests = @{}
+            $selections = @{}
+            foreach ($path in $initializedPaths) {
+                $arguments = @('init', '-backend=false', '-input=false', '-no-color')
+                if ($path -ceq $root) { $arguments += '-test-directory=tests/unit' }
+                $null = Invoke-TelemetryProcess -FilePath $script:terraformPath -ArgumentList $arguments -Root $path
+                $locks[$path] = [System.IO.File]::ReadAllBytes((Join-Path $path '.terraform.lock.hcl'))
+                $manifestPath = Join-Path -Path $path -ChildPath '.terraform' -AdditionalChildPath 'modules', 'modules.json'
+                if (Test-Path -LiteralPath $manifestPath) {
+                    $manifests[$path] = [System.IO.File]::ReadAllBytes($manifestPath)
+                }
+                $version = Invoke-TelemetryProcess -FilePath $script:terraformPath -ArgumentList @('version', '-json') -Root $path
+                $selections[$path] = (($version.StdOut | ConvertFrom-Json).provider_selections | ConvertTo-Json -Compress)
+            }
+            $snapshot = InModuleScope Avm.Authoring -Parameters @{ Root = $root } {
+                param($Root)
+                Get-AvmFileSnapshot -Path @((Get-AvmTerraformFile -Root $Root).FullName)
+            }
+            if ($RejectProfile) {
+                $profile = Join-Path $root 'config' 'mapotf' 'module'
+                $null = New-Item -ItemType Directory -Path $profile -Force
+                foreach ($file in Get-ChildItem -LiteralPath (Join-Path $script:profilesRoot 'module') -File) {
+                    Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $profile $file.Name)
+                }
+                $rule = Join-Path $profile 'retain_modtm_test_provider.mptf.hcl'
+                $content = [System.IO.File]::ReadAllText($rule) -replace '(merge_object_attributes\s*=\s*)true', '${1}false'
+                [System.IO.File]::WriteAllText($rule, $content, [System.Text.UTF8Encoding]::new($false))
+                { Invoke-TelemetryEngine -Root $root -CheckDrift } |
+                    Should -Throw '*exact source requirements and lossless dependency provider bindings*'
+                foreach ($path in $snapshot.Keys) {
+                    [System.IO.File]::ReadAllBytes($path) | Should -Be $snapshot[$path]
+                }
+                foreach ($path in $initializedPaths) {
+                    [System.IO.File]::ReadAllBytes((Join-Path $path '.terraform.lock.hcl')) | Should -Be $locks[$path]
+                    $version = Invoke-TelemetryProcess -FilePath $script:terraformPath -ArgumentList @('version', '-json') -Root $path
+                    (($version.StdOut | ConvertFrom-Json).provider_selections | ConvertTo-Json -Compress) |
+                        Should -BeExactly $selections[$path]
+                    if ($manifests.ContainsKey($path)) {
+                        $manifestPath = Join-Path -Path $path -ChildPath '.terraform' -AdditionalChildPath 'modules', 'modules.json'
+                        [System.IO.File]::ReadAllBytes($manifestPath) | Should -Be $manifests[$path]
+                    }
+                }
+                (Get-FileHash -LiteralPath $published).Hash | Should -BeExactly $publishedHash
+                return
+            }
+            (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'fail'
+            foreach ($path in $snapshot.Keys) {
+                [System.IO.File]::ReadAllBytes($path) | Should -Be $snapshot[$path]
+            }
+            (Invoke-TelemetryEngine -Root $root).Status | Should -Be 'pass'
+            $content = [System.IO.File]::ReadAllText($testPath)
+            $content | Should -Match 'mock_provider "modtm" \{\}'
+            $content | Should -Match 'modtm = modtm # Retain the required binding and its comment\.'
+            $content | Should -Not -Match '(?m)^\s*provider\s+"'
+            Get-Content -LiteralPath (Join-Path $child 'terraform.tf') -Raw | Should -Not -Match '\bmodtm\s*='
+            $inspection = InModuleScope Avm.Authoring -Parameters @{
+                Root = $root; Tool = $script:mapotfPath; Profiles = $script:profilesRoot
+            } {
+                param($Root, $Tool, $Profiles)
+                $targets = @(Get-AvmTerraformTransformTarget -Root $Root)
+                @(Get-AvmTerraformUnitTestSnapshot -Root $Root -ModuleTargets $targets -Options ([pscustomobject]@{
+                        ToolPath = $Tool
+                        ProfileDirs = @{
+                            module = Join-Path $Profiles 'module'
+                            'unit-test-inspect' = Join-Path $Profiles 'unit-test-inspect'
+                        }
+                        EnvVars = @{}
+                    }))[0].Before.test
+            }
+            foreach ($name in @('implicit', 'explicit')) {
+                $inspection.runs[$name].mptf.attributes.providers | Should -Match '\bmodtm\s*=\s*modtm\b'
+            }
+            $inspection.runs.unused_child.mptf.attributes.providers | Should -Not -Match '\bmodtm\b'
+            (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'pass'
+            (Invoke-TelemetryEngine -Root $root).Changed | Should -BeNullOrEmpty
+            [System.IO.File]::ReadAllText($testPath) | Should -BeExactly $content
+            (Get-FileHash -LiteralPath $published).Hash | Should -BeExactly $publishedHash
+            foreach ($path in $initializedPaths) {
+                [System.IO.File]::ReadAllBytes((Join-Path $path '.terraform.lock.hcl')) | Should -Be $locks[$path]
+                $version = Invoke-TelemetryProcess -FilePath $script:terraformPath -ArgumentList @('version', '-json') -Root $path
+                (($version.StdOut | ConvertFrom-Json).provider_selections | ConvertTo-Json -Compress) |
+                    Should -BeExactly $selections[$path]
+                if ($manifests.ContainsKey($path)) {
+                    $manifestPath = Join-Path -Path $path -ChildPath '.terraform' -AdditionalChildPath 'modules', 'modules.json'
+                    [System.IO.File]::ReadAllBytes($manifestPath) | Should -Be $manifests[$path]
+                }
+            }
+            $result = Invoke-TelemetryProcess -FilePath $script:terraformPath `
+                -ArgumentList @('test', '-no-color', '-test-directory=tests/unit') -Root $root
+            $result.StdOut | Should -Match 'Success! 3 passed, 0 failed'
+            $result.StdOut | Should -Not -Match 'Warning:'
+            $result.StdErr | Should -BeNullOrEmpty
+            $lintConfig = Join-Path $root 'tflint.hcl'
+            Set-Content -LiteralPath $lintConfig -Encoding utf8NoBOM -Value @'
+plugin "terraform" {
+  enabled = true
+  preset  = "recommended"
+}
+rule "terraform_unused_required_providers" {
+  enabled = true
+}
+'@
+            $tflint = InModuleScope Avm.Authoring { (Resolve-AvmTool -Name tflint).Path }
+            foreach ($path in $initializedPaths) {
+                $lint = Invoke-TelemetryProcess -FilePath $tflint -Root $path -IgnoreExitCode `
+                    -ArgumentList @('--config', $lintConfig, '--only=terraform_unused_required_providers', '--format=json')
+                $lint.ExitCode | Should -Be 0 -Because $lint.StdOut
+                [System.IO.File]::ReadAllBytes((Join-Path $path '.terraform.lock.hcl')) | Should -Be $locks[$path]
+            }
+        }
+        finally {
+            $script:processEnvironment.Remove('MODTM_ENDPOINT')
+        }
+    }
+
     It 'preserves aliased telemetry mocks through the full pipeline for <Shape>' -TestCases @(
         @{ Shape = 'default and aliased root runs'; AliasOnly = $false }
         @{ Shape = 'an alias-only selected wrapper'; AliasOnly = $true }
@@ -1888,7 +2119,10 @@ __TARGET__
                 $targets = @(Get-AvmTerraformTransformTarget -Root $Root)
                 Get-AvmTerraformUnitTestSnapshot -Root $Root -ModuleTargets $targets -Options ([pscustomobject]@{
                         ToolPath = $Tool
-                        ProfileDirs = @{ 'unit-test-inspect' = Join-Path $Profiles 'unit-test-inspect' }
+                        ProfileDirs = @{
+                            module = Join-Path $Profiles 'module'
+                            'unit-test-inspect' = Join-Path $Profiles 'unit-test-inspect'
+                        }
                         EnvVars = @{}
                     })
             }
