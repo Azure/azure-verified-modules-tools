@@ -111,7 +111,10 @@ the Tools repository ID, workflow ref, commit, run ID and attempt. The publisher
 accepts only matching evidence from that same trusted run. Existing module
 bindings must equal either the verified old client or the already-published
 new client; third values, removed modules, stale evidence and reused clients
-are rejected. The other five execution values remain immutable.
+are rejected. Other execution values remain unchanged except for the separate
+[same-inventory subscription-tag update](../README.md#bicep-variable-publication):
+the complete identity bundle must match, subscription order/IDs/names cannot
+change, and an untagged historical source cannot erase a reservation.
 
 This file relies on the trusted job's local-file boundary, like the mapping
 output; it is not a signed artifact or an operator-supplied rebinding override.

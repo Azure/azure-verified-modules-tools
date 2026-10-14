@@ -103,6 +103,8 @@ Describe 'Independent CI workflows' {
             $paths.IndexOf("!$excluded") | Should -BeGreaterThan $paths.IndexOf('tests/**')
         }
         $paths | Should -Not -Contain 'repository-management/**'
+        @($paths | Where-Object { $_ -like 'repository-management/*' } | Sort-Object) |
+            Should -Be @('repository-management/shared/GroupSettings.ps1', 'repository-management/shared/TestTenant.ps1')
         $paths | Should -Not -Contain 'infra/**'
         foreach ($file in @('ci-workflows.yml', 'repository-management-config-test.yml')) {
             $script:definitions[$file]['on'].push.paths | Should -Not -Contain 'tests/**'
@@ -148,6 +150,36 @@ Describe 'Independent CI workflows' {
         $jobs.integration.strategy.matrix.fixture |
             Should -Be @('terraform-azure-avm-res-mock', 'terraform-azurerm-avm-res-mock')
         $jobs.lint['runs-on'] | Should -BeExactly 'ubuntu-latest'
+    }
+
+    It 'uses the repository-sync executor <Variable> in both provider and login settings' -ForEach @(
+        @{ Name = 'ARM_CLIENT_ID'; LoginInput = 'client-id'; Variable = 'TEST_BAMI_CONTROLLER_CLIENT_ID' }
+        @{ Name = 'ARM_TENANT_ID'; LoginInput = 'tenant-id'; Variable = 'TEST_BAMI_TENANT_ID' }
+        @{ Name = 'ARM_SUBSCRIPTION_ID'; LoginInput = 'subscription-id'; Variable = 'TEST_BAMI_ADMIN_SUBSCRIPTION_ID' }
+    ) {
+        $job = $script:definitions['ci-authoring.yml'].jobs.integration
+        $login = @($job.steps | Where-Object { $_.Contains('uses') -and $_.uses -clike 'azure/login@*' })
+        $login | Should -HaveCount 1
+        $expected = '${{ vars.' + $Variable + ' }}'
+        $job.env[$Name] | Should -BeExactly $expected
+        $login[0].with[$LoginInput] | Should -BeExactly $expected
+    }
+
+    It 'requires authoring OIDC without backend, module identity or test-pool substitutions' {
+        $job = $script:definitions['ci-authoring.yml'].jobs.integration
+        $job.environment | Should -BeExactly 'avm'
+        $job.permissions['id-token'] | Should -BeExactly 'write'
+        $job.env.ARM_USE_OIDC | Should -BeExactly 'true'
+        $job.env.ARM_USE_CLI | Should -BeExactly 'false'
+        $job.env.ARM_USE_MSI | Should -BeExactly 'false'
+        $login = @($job.steps | Where-Object { $_.Contains('uses') -and $_.uses -clike 'azure/login@*' })
+        $login | Should -HaveCount 1
+        $login[0].Contains('if') | Should -BeFalse
+        $job.strategy['fail-fast'] | Should -BeFalse
+        $job | ConvertTo-Json -Depth 30 |
+            Should -Not -Match 'vars\.ARM_(CLIENT|TENANT|SUBSCRIPTION)_ID|ARM_BACKEND_|TEST_BAMI_(BICEP_CLIENT_ID|SUBSCRIPTION_IDS|PERSISTENT_SUBSCRIPTION_ID|AUTHORING_)|Get-AvmGeneralTestSubscription|test-subscription'
+        @($job.steps | Where-Object { $_.Contains('run') } | ForEach-Object { $_.run }) |
+            Should -Contain './build.ps1 integration -IntegrationGroup Terraform'
     }
 
     It 'keeps reports and artifacts inside their own independent workflow' {

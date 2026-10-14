@@ -13,9 +13,12 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
         $null = New-Item -ItemType Directory -Path (Split-Path $script:package) -Force
         Copy-Item -LiteralPath (Split-Path $manifest) -Destination $script:package -Recurse
         Import-Module (Join-Path $script:package 'Avm.Authoring.psd1') -Force
+        . (Join-Path $repoRoot 'scripts' 'bicep-workflows' 'Validation.ps1')
         $script:fixture = Join-Path $repoRoot 'tests' 'fixtures' 'modules' 'bicep-storage'
-        foreach ($name in @('TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_ID', 'VALIDATE_TENANT_ID', 'TOKEN_NAMEPREFIX')) {
+        foreach ($name in @('TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_ID',
+                'VALIDATE_TENANT_ID', 'TOKEN_NAMEPREFIX', 'AVM_CI_VARIABLES', 'AVM_CI_SECRETS', 'GITHUB_STEP_SUMMARY')) {
             $script:savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+            [Environment]::SetEnvironmentVariable($name, [NullString]::Value)
         }
         $env:TEST_SUBSCRIPTION_IDS = '[{"id":"11111111-1111-4111-8111-111111111111","name":"compile-only"}]'
         $env:VALIDATE_SUBSCRIPTION_ID = '11111111-1111-4111-8111-111111111111'
@@ -33,7 +36,7 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
 
     BeforeEach {
         $script:consumer = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
-        Copy-Item -LiteralPath $script:fixture -Destination $script:consumer -Recurse
+        Copy-Item -LiteralPath $script:fixture -Destination $script:consumer -Recurse -Force
         $script:modulePath = Join-Path $script:consumer 'avm' 'res' 'storage' 'storage-account'
         InModuleScope Avm.Authoring -Parameters @{ ModulePath = $script:modulePath } {
             param($ModulePath)
@@ -61,6 +64,50 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
         $result.BaselinesExecuted | Should -Be 8
         @($result.Evaluations | Where-Object { $_.ProcessedRules -gt 0 }).Count | Should -Be 8
         $result.Evaluations.Baseline | Should -Contain 'CB.AVM.WAF.Security'
+    }
+
+    It 'rejects an independent canonical repository without a root reservation map' {
+        Remove-Item -LiteralPath (Join-Path $script:consumer '.reserved-test-subscriptions.json') -Force
+        $result = Invoke-AvmCheckPolicy -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'fail'
+        $result.BaselinesExecuted | Should -Be 0
+        @($result.Issues | Where-Object {
+                $_.Code -eq 'avm.bicep.psrule-source' -and
+                $_.Message -eq 'The root .reserved-test-subscriptions.json must be a regular file with exact casing.'
+            }).Count | Should -Be 2
+    }
+
+    It 'runs the workflow policy selectors against the independent package and General pool' {
+        $pool = $env:TEST_SUBSCRIPTION_IDS
+        try {
+            $env:TEST_SUBSCRIPTION_IDS = '[{"id":"33333333-3333-4333-8333-333333333333","name":"Reserved","tag":"Azure Local"},{"id":"11111111-1111-4111-8111-111111111111","name":"General"}]'
+            $results = Join-Path $TestDrive 'workflow-policy'
+            Invoke-AvmWorkflowPolicyValidation -Root $script:consumer -ModulePath 'avm/res/storage/storage-account' `
+                -Example 'tests/e2e/defaults/main.test.bicep' -Baseline Azure.Default -ResultDirectory $results
+            $result = Get-Content -LiteralPath (Join-Path $results 'policy.json') -Raw | ConvertFrom-Json
+            $result.Status | Should -BeExactly 'pass'
+            $result.TestsSelected | Should -Be 1
+            $result.BaselinesExecuted | Should -Be 1
+            $env:VALIDATE_SUBSCRIPTION_ID | Should -BeExactly '11111111-1111-4111-8111-111111111111'
+        }
+        finally { $env:TEST_SUBSCRIPTION_IDS = $pool }
+    }
+
+    It 'fails the workflow advisory policy leg when native General selection has no eligible subscription' {
+        $pool = $env:TEST_SUBSCRIPTION_IDS
+        try {
+            $env:TEST_SUBSCRIPTION_IDS = '[{"id":"33333333-3333-4333-8333-333333333333","name":"Reserved","tag":"Azure Local"}]'
+            $results = Join-Path $TestDrive 'rejected-workflow-policy'
+            { Invoke-AvmWorkflowPolicyValidation -Root $script:consumer -ModulePath 'avm/res/storage/storage-account' `
+                    -Example 'tests/e2e/defaults/main.test.bicep' -Baseline Azure.Default -ResultDirectory $results } |
+                Should -Throw '*did not pass*'
+            $result = Get-Content -LiteralPath (Join-Path $results 'policy.json') -Raw | ConvertFrom-Json
+            $result.Status | Should -BeExactly 'fail'
+            $result.BaselinesExecuted | Should -Be 0
+            @($result.Issues | Where-Object Message -Like "*no 'General' subscriptions*").Count | Should -Be 1
+            $env:VALIDATE_SUBSCRIPTION_ID | Should -BeExactly '11111111-1111-4111-8111-111111111111'
+        }
+        finally { $env:TEST_SUBSCRIPTION_IDS = $pool }
     }
 
     It 'rejects insecure storage with the actual packaged security baseline' {

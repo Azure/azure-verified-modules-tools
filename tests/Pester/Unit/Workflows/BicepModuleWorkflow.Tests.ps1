@@ -124,6 +124,27 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $setup.Contains('continue-on-error') | Should -BeFalse
     }
 
+    It 'exposes the shared mapped-identity resolver without package setup or Azure access' {
+        $action = $script:actions['bicep-module-identity']
+        @($action.inputs.Keys | Sort-Object) | Should -Be @('moduleClientIds', 'modulePath', 'tenantId')
+        foreach ($inputName in $action.inputs.Keys) {
+            $action.inputs[$inputName].required | Should -BeTrue
+            $action.inputs[$inputName].Contains('default') | Should -BeFalse
+        }
+        @($action.outputs.Keys | Sort-Object) | Should -Be @('clientId', 'identityKey', 'moduleRoot', 'tenantId')
+        $action.runs.steps.Count | Should -Be 1
+        $step = $action.runs.steps[0]
+        $step.env.AVM_ACTION_PATH | Should -BeExactly '${{ github.action_path }}'
+        $step.env.MODULE_PATH | Should -BeExactly '${{ inputs.modulePath }}'
+        $step.env.VALIDATE_MODULE_CLIENT_IDS | Should -BeExactly '${{ inputs.moduleClientIds }}'
+        $step.env.VALIDATE_TENANT_ID | Should -BeExactly '${{ inputs.tenantId }}'
+        $step.run | Should -Match 'Get-AvmWorkflowModuleIdentity -Root \$env:GITHUB_WORKSPACE'
+        $step.run | Should -Match "Join-Path .root 'scripts' 'bicep-workflows' 'Deployment.ps1'"
+        $step.run.IndexOf('Get-AvmWorkflowModuleIdentity') | Should -BeLessThan $step.run.IndexOf('Write-AvmWorkflowOutput')
+        ($action | ConvertTo-Json -Depth 20) |
+            Should -Not -Match 'VALIDATE_CLIENT_ID|AZURE_CREDENTIALS|azure/login|Initialize-AvmWorkflow|Import-AvmWorkflowPackage|ConvertFrom-Json'
+    }
+
     It 'parses every embedded PowerShell script without interpolated workflow expressions' {
         $steps = @(
             foreach ($workflow in $script:workflows.Values) {
@@ -292,8 +313,11 @@ Describe 'Bicep required checks and deployment guards' {
         $action.inputs.Contains('clientId') | Should -BeFalse
         $action.inputs.Contains('azureCredentials') | Should -BeFalse
         $auth = $action.runs.steps | Where-Object { $_['id'] -eq 'auth' }
+        $auth.env.AVM_AUTHORING_VERSION | Should -BeExactly '${{ inputs.avm-authoring-version }}'
         $auth.env.VALIDATE_MODULE_CLIENT_IDS | Should -BeExactly '${{ inputs.moduleClientIds }}'
         $auth.run | Should -Match 'ModuleClientIds = \$env:VALIDATE_MODULE_CLIENT_IDS'
+        $auth.run | Should -Match 'Initialize-AvmWorkflow .* -Profile Matrix '
+        $auth.run.IndexOf('Initialize-AvmWorkflow') | Should -BeLessThan $auth.run.IndexOf('Get-AvmWorkflowAuthentication')
         $logins = @($action.runs.steps | Where-Object { $_['uses'] -like 'azure/login@*' })
         $logins.Count | Should -Be 2
         foreach ($login in $logins) {
@@ -329,12 +353,28 @@ Describe 'Bicep required checks and deployment guards' {
         $login = $steps | Where-Object { $_['id'] -eq 'login_oidc' }
         [array]::IndexOf($steps, $setup) | Should -BeLessThan ([array]::IndexOf($steps, $login))
         $setup.run | Should -Match 'Initialize-AvmWorkflow.*-Profile Deployment'
+        $setup.env.MODULE_PATH | Should -BeExactly '${{ steps.auth.outputs.modulePath }}'
+        $setup.run | Should -Match 'Initialize-AvmWorkflow .* -Path \$modulePath '
         $setup.Contains('continue-on-error') | Should -BeFalse
         $login.Contains('if') | Should -BeFalse
         $action.inputs.modulePath.description | Should -Match '\.required-features\.json'
         $action.inputs.modulePath.description | Should -Match '\.required-resource-providers\.json'
         $action.inputs.modulePath.description | Should -Match 'exact.*path'
         ($steps | ConvertTo-Json -Depth 20) | Should -Not -Match 'Register-.*(Feature|Provider)|required-resource-providers'
+    }
+
+    It 'uses the authenticated owning module for exact native prerequisites and completion' {
+        $steps = $script:actions['bicep-deployment'].runs.steps
+        foreach ($step in $steps | Where-Object { $_['id'] -in @('deploy', 'complete') }) {
+            $step.env.MODULE_PATH | Should -BeExactly '${{ steps.auth.outputs.modulePath }}'
+            $step.run | Should -Match 'ModulePath = \$env:MODULE_PATH'
+        }
+        $deploy = $steps | Where-Object { $_['id'] -eq 'deploy' }
+        $deploy.env.SELECTED_EXAMPLE | Should -BeExactly '${{ steps.auth.outputs.example }}'
+        $deploy.env.Contains('TEST_CASE') | Should -BeFalse
+        $deploy.run | Should -Match 'Example = \$env:SELECTED_EXAMPLE'
+        $deploy.run | Should -Not -Match 'Example = \$case.path'
+        ($steps | Where-Object { $_['id'] -eq 'auth' }).env.MODULE_PATH | Should -BeExactly '${{ inputs.modulePath }}'
     }
 
     It 'selects completion for deploy <Deploy>, renewal <Renew> and cancellation <Cancelled>' -ForEach @(
@@ -433,18 +473,20 @@ Describe 'Bicep required checks and deployment guards' {
         $assignment.Count | Should -Be 1
         $workflowInput = @{ removeDeployment = 'true' }
         if ($Provided) { $workflowInput.customLocation = 'northeurope' }
-        $case = @{ path = 'tests/e2e/defaults/main.test.bicep' }
         $savedTemp = [Environment]::GetEnvironmentVariable('RUNNER_TEMP')
+        $savedExample = [Environment]::GetEnvironmentVariable('SELECTED_EXAMPLE')
         try {
             $env:RUNNER_TEMP = $TestDrive
+            $env:SELECTED_EXAMPLE = 'tests/e2e/defaults/main.test.bicep'
             $parameters = & ([scriptblock]::Create($assignment[0].Extent.Text + "`n" + '$parameters'))
             $parameters.RemoveDeployment | Should -BeTrue
-            $parameters.Example | Should -BeExactly $case.path
+            $parameters.Example | Should -BeExactly $env:SELECTED_EXAMPLE
             if ($Provided) { $parameters.CustomLocation | Should -BeExactly 'northeurope' }
             else { $parameters.CustomLocation | Should -BeNullOrEmpty }
         }
         finally {
             [Environment]::SetEnvironmentVariable('RUNNER_TEMP', $(if ($null -eq $savedTemp) { [NullString]::Value } else { $savedTemp }))
+            [Environment]::SetEnvironmentVariable('SELECTED_EXAMPLE', $(if ($null -eq $savedExample) { [NullString]::Value } else { $savedExample }))
         }
     }
 }

@@ -6,9 +6,10 @@ inputs:
     required: true
   modulePath:
     description: >-
-      Exact caller-relative module path. The qualified native package reads root
+      Caller-relative module or family path. Native selection resolves the exact
+      owning module path for each test. The qualified native package reads root
       .required-features.json and .required-resource-providers.json for this exact
-      path, registers features then provider namespaces in the selected context
+      owning path, registers features then provider namespaces in the selected context
       before token replacement, validation and deployment, and never during completion or cleanup.
     required: true
   workflowInput:
@@ -52,6 +53,7 @@ runs:
       shell: pwsh
       env:
         AVM_ACTION_PATH: ${{ github.action_path }}
+        AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
         MODULE_PATH: ${{ inputs.modulePath }}
         TEST_CASE: ${{ inputs.testCase }}
         POOL_JSON: ${{ inputs.subscriptionPool }}
@@ -63,6 +65,7 @@ runs:
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Deployment.ps1')
         $case = ConvertFrom-Json -InputObject $env:TEST_CASE -AsHashtable
         if (ConvertTo-AvmWorkflowBoolean $case.e2eIgnore) { throw 'Ignored tests must not enter deployment authentication.' }
+        Initialize-AvmWorkflow -Version $env:AVM_AUTHORING_VERSION -Profile Matrix -Confirm:$false
         $parameters = @{
           Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH; TestCase = $case
           PoolJson = $env:POOL_JSON; FallbackSubscriptionId = $env:FALLBACK_SUBSCRIPTION_ID
@@ -79,10 +82,12 @@ runs:
       env:
         AVM_ACTION_PATH: ${{ github.action_path }}
         AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
+        MODULE_PATH: ${{ steps.auth.outputs.modulePath }}
       run: |
         $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Common.ps1')
-        Initialize-AvmWorkflow -Version $env:AVM_AUTHORING_VERSION -Profile Deployment -Confirm:$false
+        $modulePath = Resolve-AvmWorkflowPath -Root $env:GITHUB_WORKSPACE -RelativePath $env:MODULE_PATH
+        Initialize-AvmWorkflow -Version $env:AVM_AUTHORING_VERSION -Profile Deployment -Path $modulePath -Confirm:$false
         $null = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'avm-bicep-state') -Force
     - name: Sign in with OIDC
       id: login_oidc
@@ -110,9 +115,9 @@ runs:
       shell: pwsh
       env:
         AVM_ACTION_PATH: ${{ github.action_path }}
-        MODULE_PATH: ${{ inputs.modulePath }}
+        MODULE_PATH: ${{ steps.auth.outputs.modulePath }}
         WORKFLOW_INPUT: ${{ inputs.workflowInput }}
-        TEST_CASE: ${{ inputs.testCase }}
+        SELECTED_EXAMPLE: ${{ steps.auth.outputs.example }}
         ARM_SUBSCRIPTION_ID: ${{ steps.auth.outputs.subscriptionId }}
         ARM_TENANT_ID: ${{ steps.context.outputs.tenantId }}
         ARM_CLIENT_ID: ${{ steps.auth.outputs.clientId }}
@@ -126,9 +131,8 @@ runs:
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Validation.ps1')
         Import-AvmWorkflowPackage
         $workflowInput = ConvertFrom-Json -InputObject $env:WORKFLOW_INPUT -AsHashtable
-        $case = ConvertFrom-Json -InputObject $env:TEST_CASE -AsHashtable
         $parameters = @{
-          Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH; Phase = 'Deploy'; Example = $case.path
+          Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH; Phase = 'Deploy'; Example = $env:SELECTED_EXAMPLE
           SubscriptionId = $env:ARM_SUBSCRIPTION_ID; TenantId = $env:ARM_TENANT_ID; ClientId = $env:ARM_CLIENT_ID
           ManagementGroupId = $env:ARM_MGMTGROUP_ID; CustomLocation = $workflowInput['customLocation']
           RemoveDeployment = ConvertTo-AvmWorkflowBoolean $workflowInput.removeDeployment
@@ -151,7 +155,7 @@ runs:
       shell: pwsh
       env:
         AVM_ACTION_PATH: ${{ github.action_path }}
-        MODULE_PATH: ${{ inputs.modulePath }}
+        MODULE_PATH: ${{ steps.auth.outputs.modulePath }}
         WORKFLOW_INPUT: ${{ inputs.workflowInput }}
         ARM_SUBSCRIPTION_ID: ${{ steps.auth.outputs.subscriptionId }}
         ARM_TENANT_ID: ${{ steps.context.outputs.tenantId }}

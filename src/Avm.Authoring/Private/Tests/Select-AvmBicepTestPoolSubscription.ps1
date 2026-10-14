@@ -55,113 +55,41 @@ function Select-AvmBicepTestPoolSubscription {
         }
     }
 
-    $document = $null
-    try {
-        $options = [System.Text.Json.JsonDocumentOptions]::new()
-        $options.MaxDepth = 3
-        $document = [System.Text.Json.JsonDocument]::Parse($PoolJson, $options)
-        if ($document.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Array -or
-            $document.RootElement.GetArrayLength() -ne 28) {
-            throw [AvmConfigurationException]::new(
-                'BAMI test subscription pool must be a JSON array of exactly 28 entries.')
-        }
-
-        $names = [System.Collections.Generic.HashSet[string]]::new(
-            [System.StringComparer]::OrdinalIgnoreCase)
-        $ids = [System.Collections.Generic.HashSet[string]]::new(
-            [System.StringComparer]::OrdinalIgnoreCase)
-        $subscriptions = [System.Collections.Generic.List[object]]::new()
-        foreach ($entry in $document.RootElement.EnumerateArray()) {
-            if ($entry.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
-                throw [AvmConfigurationException]::new(
-                    'Every BAMI test subscription entry must be an object with name and id.')
-            }
-            $nameValue = $null
-            $idValue = $null
-            $propertyCount = 0
-            foreach ($property in $entry.EnumerateObject()) {
-                $propertyCount++
-                switch -CaseSensitive ($property.Name) {
-                    'name' {
-                        if ($null -ne $nameValue) {
-                            throw [AvmConfigurationException]::new(
-                                'Duplicate BAMI test subscription name property.')
-                        }
-                        $nameValue = $property.Value
-                    }
-                    'id' {
-                        if ($null -ne $idValue) {
-                            throw [AvmConfigurationException]::new(
-                                'Duplicate BAMI test subscription id property.')
-                        }
-                        $idValue = $property.Value
-                    }
-                    default {
-                        throw [AvmConfigurationException]::new(
-                            "Unexpected BAMI test subscription property '$($property.Name)'.")
-                    }
-                }
-            }
-            if ($propertyCount -ne 2 -or $null -eq $nameValue -or $null -eq $idValue -or
-                $nameValue.ValueKind -ne [System.Text.Json.JsonValueKind]::String -or
-                $idValue.ValueKind -ne [System.Text.Json.JsonValueKind]::String) {
-                throw [AvmConfigurationException]::new(
-                    'Every BAMI test subscription entry must contain exactly string name and id properties.')
-            }
-
-            $name = $nameValue.GetString()
-            $id = $idValue.GetString()
-            $parsed = [guid]::Empty
-            if ([string]::IsNullOrWhiteSpace($name) -or $name -cne $name.Trim() -or
-                $name -match '[\x00-\x1f\x7f]' -or -not $names.Add($name)) {
-                throw [AvmConfigurationException]::new(
-                    'BAMI test subscription names must be unique, nonempty, trimmed and free of control characters.')
-            }
-            if (-not [guid]::TryParseExact($id, 'D', [ref]$parsed) -or
-                $parsed -eq [guid]::Empty) {
-                throw [AvmConfigurationException]::new(
-                    'BAMI test subscription IDs must be nonempty GUIDs in D format.')
-            }
-            $normalizedId = $parsed.ToString('D')
-            if (-not $ids.Add($normalizedId) -or $distinctIdentifiers.Contains($normalizedId)) {
-                throw [AvmConfigurationException]::new(
-                    'BAMI test subscription IDs must be unique and exclude the tenant, Admin and Persistent IDs.')
-            }
-            $subscriptions.Add([pscustomobject]@{
-                    Name           = $name
-                    SubscriptionId = $normalizedId
-                })
-        }
-
-        $ordered = [System.Collections.Generic.SortedDictionary[string, object]]::new(
-            [System.StringComparer]::Ordinal)
-        foreach ($subscription in $subscriptions) {
-            $digest = [System.Security.Cryptography.HMACSHA256]::HashData(
-                $seedBytes, [System.Text.Encoding]::UTF8.GetBytes($subscription.SubscriptionId))
-            $rank = '{0}:{1}' -f [Convert]::ToHexString($digest), $subscription.SubscriptionId
-            $ordered.Add($rank, $subscription)
-        }
-        $position = $CaseIndex % $subscriptions.Count
-        foreach ($subscription in $ordered.Values) {
-            if ($position -eq 0) {
-                return [pscustomobject]@{
-                    Name           = $subscription.Name
-                    SubscriptionId = $subscription.SubscriptionId
-                    TenantId       = $identifiers.TenantId
-                }
-            }
-            $position--
-        }
-        throw [System.InvalidOperationException]::new(
-            'BAMI test-pool permutation did not contain the selected case position.')
+    $subscriptions = @(ConvertFrom-AvmBicepTestSubscriptionPool -PoolJson $PoolJson)
+    if ($subscriptions.Count -ne 28) {
+        throw [AvmConfigurationException]::new('BAMI test subscription pool must be a JSON array of exactly 28 entries.')
     }
-    catch [System.Text.Json.JsonException] {
-        throw [AvmConfigurationException]::new(
-            "BAMI test subscription pool must be strict JSON: $($_.Exception.Message)")
-    }
-    finally {
-        if ($null -ne $document) {
-            $document.Dispose()
+    $names = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($subscription in $subscriptions) {
+        if ($subscription.Name -cne $subscription.Name.Trim() -or -not $names.Add($subscription.Name)) {
+            throw [AvmConfigurationException]::new('BAMI test subscription names must be unique and trimmed.')
+        }
+        if ($distinctIdentifiers.Contains($subscription.SubscriptionId)) {
+            throw [AvmConfigurationException]::new('BAMI test subscription IDs must exclude the tenant, Admin and Persistent IDs.')
         }
     }
+    $general = @($subscriptions | Where-Object { $_.Tag -ceq 'General' })
+    if ($general.Count -eq 0) {
+        throw [AvmConfigurationException]::new('The BAMI test subscription pool must contain at least one General subscription.')
+    }
+    $ordered = [System.Collections.Generic.SortedDictionary[string, object]]::new([System.StringComparer]::Ordinal)
+    foreach ($subscription in $general) {
+        $normalizedId = ([guid]$subscription.SubscriptionId).ToString('D')
+        $digest = [System.Security.Cryptography.HMACSHA256]::HashData(
+            $seedBytes, [System.Text.Encoding]::UTF8.GetBytes($normalizedId))
+        $rank = '{0}:{1}' -f [Convert]::ToHexString($digest), $normalizedId
+        $ordered.Add($rank, $subscription)
+    }
+    $position = $CaseIndex % $general.Count
+    foreach ($subscription in $ordered.Values) {
+        if ($position -eq 0) {
+            return [pscustomobject]@{
+                Name           = $subscription.Name
+                SubscriptionId = ([guid]$subscription.SubscriptionId).ToString('D')
+                TenantId       = $identifiers.TenantId
+            }
+        }
+        $position--
+    }
+    throw [System.InvalidOperationException]::new('BAMI test-pool permutation did not contain the selected case position.')
 }

@@ -17,10 +17,15 @@ Routes to the engine matching the module's ecosystem:
 The ecosystem is determined by Get-AvmModuleContext, which honours
 the .avm/context.psd1 override file and the -Ecosystem filter.
 Bicep policy checks use packaged ps-rule.yaml and .ps-rule/ assets
-under Resources/bicep/psrule. PSRule 2.9.0 and
-PSRule.Rules.Azure 1.47.0 must be installed separately. Set
-TEST_SUBSCRIPTION_IDS (the first entry is used) or
-VALIDATE_SUBSCRIPTION_ID, VALIDATE_TENANT_ID,
+under Resources/bicep/psrule. Exact PSRule and PSRule.Rules.Azure
+versions, including pinned dependencies and repository overrides,
+are resolved and prepared by the shared managed-tool installer. Set
+VALIDATE_SUBSCRIPTION_IDS or the TEST_SUBSCRIPTION_IDS alias. The first
+entry matching the exact module path in the required root
+.reserved-test-subscriptions.json map is used; unmapped modules use
+General, including untagged entries. Pool variables precede secrets.
+VALIDATE_SUBSCRIPTION_ID is a fallback only for General without a pool.
+Set VALIDATE_TENANT_ID,
 VALIDATE_MANAGEMENT_GROUP_ID (or ARM_MGMTGROUP_ID), TOKEN_NAMEPREFIX,
 and localToken_* variables for tokens used by the selected tests.
 Missing inputs or uninspectable results fail rather than skip.

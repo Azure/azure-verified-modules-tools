@@ -14,7 +14,9 @@ function Invoke-AvmBicepCheckPolicy {
         The PSRule and PSRule.Rules.Azure versions pinned in avm.pins.jsonc are
         exact-version dependencies resolved through the shared tool cache.
         Missing modules are acquired before evaluation. Tokens are read from
-        TEST_SUBSCRIPTION_IDS (first entry) or VALIDATE_SUBSCRIPTION_ID, VALIDATE_TENANT_ID,
+        VALIDATE_SUBSCRIPTION_IDS or its TEST_SUBSCRIPTION_IDS alias (first
+        entry matching the exact root reservation map), with
+        VALIDATE_SUBSCRIPTION_ID as a General-only fallback, VALIDATE_TENANT_ID,
         VALIDATE_MANAGEMENT_GROUP_ID (or ARM_MGMTGROUP_ID), TOKEN_NAMEPREFIX,
         and localToken_* environment variables.
 
@@ -76,6 +78,7 @@ function Invoke-AvmBicepCheckPolicy {
     $issues = [System.Collections.Generic.List[object]]::new()
     $evaluations = [System.Collections.Generic.List[object]]::new()
     $tests = [System.Collections.Generic.List[object]]::new()
+    $testModulePaths = @{}
     $seen = [System.Collections.Generic.HashSet[string]]::new(
         $(if ($IsWindows) { [System.StringComparer]::OrdinalIgnoreCase }
             else { [System.StringComparer]::Ordinal }))
@@ -128,6 +131,7 @@ function Invoke-AvmBicepCheckPolicy {
                         -IncludeAllExamples:($PSBoundParameters.ContainsKey('Example')))) {
                 if ($seen.Add($file.FullName)) {
                     $tests.Add($file)
+                    $testModulePaths[$file.FullName] = $scope.ModuleRelativePath
                 }
             }
         }
@@ -216,12 +220,13 @@ function Invoke-AvmBicepCheckPolicy {
     }
 
     if ($issues.Count -eq 0) {
-        $tokens = Get-AvmBicepPolicyToken
         $previousBicep = [Environment]::GetEnvironmentVariable('PSRULE_AZURE_BICEP_PATH')
         try {
             $env:PSRULE_AZURE_BICEP_PATH = $compiler.Path
             foreach ($test in @($tests | Sort-Object -Culture 'en-US' -Property FullName)) {
                 try {
+                    $tokens = Get-AvmBicepPolicyToken -RepositoryRoot $repositoryRoot `
+                        -ModulePath $testModulePaths[$test.FullName]
                     $files = @(Get-AvmBicepPolicySource -Path $test.FullName `
                             -RepositoryRoot $repositoryRoot -Tokens $tokens)
                 }

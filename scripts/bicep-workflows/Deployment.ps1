@@ -48,42 +48,30 @@ function Get-AvmWorkflowModuleIdentity {
     }
 }
 
-function Get-AvmWorkflowSubscriptions {
+function Select-AvmWorkflowSubscription {
     [CmdletBinding()]
     param(
+        [Parameter(Mandatory)] [string] $Root,
+        [Parameter(Mandatory)] [string] $ModulePath,
+        [Parameter(Mandatory)] [string] $Example,
         [AllowEmptyString()] [string] $PoolJson,
-        [AllowEmptyString()] [string] $FallbackSubscriptionId
+        [AllowEmptyString()] [string] $FallbackSubscriptionId,
+        [ValidateRange(0, 2147483647)] [int] $RandomSeed = 0,
+        [ValidateRange(0, 2147483647)] [int] $CaseIndex = 0
     )
 
     if ([string]::IsNullOrEmpty($PoolJson)) {
-        $subscriptions = @(@{ id = $FallbackSubscriptionId; name = 'Configured subscription 1' })
+        $PoolJson = ConvertTo-Json -InputObject @(@{ id = $FallbackSubscriptionId; name = 'Configured subscription 1' }) -Compress
     }
-    else {
-        try { $subscriptions = ConvertFrom-Json -InputObject $PoolJson -AsHashtable -NoEnumerate }
-        catch { throw [ArgumentException]::new('The configured subscription pool must be a JSON array of id/name objects.') }
-        if ($subscriptions -isnot [array] -or $subscriptions.Count -eq 0) {
-            throw [ArgumentException]::new('The configured subscription pool must be a nonempty JSON array.')
-        }
+    $selected = @(Select-AvmTestSubscription -Path $Root -ModulePath $ModulePath -Example $Example `
+            -TestSubscriptionIds $PoolJson -RandomSeed $RandomSeed -CaseIndex $CaseIndex -SkipModuleVersionCheck)
+    if ($selected.Count -ne 1) {
+        throw [InvalidOperationException]::new('Native subscription selection must return exactly one eligible target.')
     }
-    for ($index = 0; $index -lt $subscriptions.Count; $index++) {
-        $entry = $subscriptions[$index]
-        $id = [guid]::Empty
-        if ($entry -isnot [Collections.IDictionary] -or $entry['id'] -isnot [string] -or
-            -not [guid]::TryParseExact($entry.id, 'D', [ref]$id) -or $id -eq [guid]::Empty) {
-            throw [ArgumentException]::new('Each configured subscription must have a nonempty GUID id.')
-        }
-        if ($entry['name'] -isnot [string] -or [string]::IsNullOrWhiteSpace($entry.name) -or
-            $entry.name -match '[\x00-\x1f]') {
-            throw [ArgumentException]::new('Each configured subscription must have a nonempty, single-line name.')
-        }
-        [pscustomobject]@{
-            id = $id.ToString('D')
-            name = $entry.name
-            index = $index
-            key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
-                    [Text.Encoding]::UTF8.GetBytes($id.ToString('D')))).ToLowerInvariant()
-        }
+    if ($selected[0].Tag -cne 'General') {
+        throw [InvalidOperationException]::new('Reserved test subscriptions require the registry-local prepared environment lifecycle; shared native deployment cannot authenticate or execute this case.')
     }
+    return $selected[0]
 }
 
 function Test-AvmWorkflowSharedScope {
@@ -132,14 +120,24 @@ function Get-AvmWorkflowDeploymentMatrix {
 
     $active = @($TestFiles | Where-Object { -not (ConvertTo-AvmWorkflowBoolean -Value $_.e2eIgnore) })
     $shared = $false
-    $subscriptions = @()
+    $selections = @{}
     $identity = $null
     if ($active.Count -gt 0) {
         $identity = Get-AvmWorkflowModuleIdentity -Root $Root -ModulePath $ModulePath `
             -ModuleClientIds $ModuleClientIds -TenantId $TenantId
-        $subscriptions = @(Get-AvmWorkflowSubscriptions -PoolJson $PoolJson -FallbackSubscriptionId $FallbackSubscriptionId |
-                Get-Random -Shuffle -SetSeed $RandomSeed)
-        $tool = Get-AvmTool -Name bicep -SkipModuleVersionCheck
+        for ($index = 0; $index -lt $TestFiles.Count; $index++) {
+            $test = $TestFiles[$index]
+            if (ConvertTo-AvmWorkflowBoolean -Value $test.e2eIgnore) { continue }
+            $selections[$index] = Select-AvmWorkflowSubscription -Root $Root -ModulePath $ModulePath `
+                -Example $test.path -PoolJson $PoolJson -FallbackSubscriptionId $FallbackSubscriptionId `
+                -RandomSeed $RandomSeed -CaseIndex $index
+        }
+        $module = Resolve-AvmWorkflowPath -Root $Root -RelativePath $ModulePath
+        $tool = Get-AvmTool -Name bicep -Path $module -SkipModuleVersionCheck
+        if ($tool.Status -ceq 'not-installed') {
+            $null = Install-AvmTool -Name bicep -Path $module -SkipModuleVersionCheck -Confirm:$false
+            $tool = Get-AvmTool -Name bicep -Path $module -SkipModuleVersionCheck
+        }
         if ($tool.Status -ne 'installed') { throw [InvalidOperationException]::new('The managed Bicep compiler is not installed.') }
         foreach ($test in $active) {
             $path = Resolve-AvmWorkflowPath -Root $Root -RelativePath "$ModulePath/$($test.path)"
@@ -159,17 +157,21 @@ function Get-AvmWorkflowDeploymentMatrix {
             $entry = @{
                 path = $test.path; name = $test.name; e2eIgnore = $ignored
                 subscriptionIndex = ''; subscriptionKey = ''
+                selectionSeed = ''; caseIndex = ''; subscriptionModulePath = ''
                 identityKey = ''
                 subscriptionName = 'Deployment disabled'
                 concurrencyGroup = "avm-deploy-$moduleKey-ignored-$([guid]::NewGuid().ToString('N'))"
             }
             if (-not $ignored) {
-                $selected = $subscriptions[$index % $subscriptions.Count]
-                $entry.subscriptionIndex = $selected.index
-                $entry.subscriptionKey = $selected.key
+                $selected = $selections[$index]
+                $entry.subscriptionIndex = $selected.Index
+                $entry.subscriptionKey = $selected.Key
+                $entry.selectionSeed = $RandomSeed
+                $entry.caseIndex = $index
+                $entry.subscriptionModulePath = $selected.ModulePath
                 $entry.identityKey = $identity.identityKey
-                $entry.subscriptionName = if ($DisplaySubscriptionNames) { $selected.name } else { "Configured subscription $($selected.index + 1)" }
-                $entry.concurrencyGroup = "avm-deploy-$moduleKey-$($selected.key)"
+                $entry.subscriptionName = if ($DisplaySubscriptionNames) { $selected.Name } else { "Configured subscription $($selected.Index + 1)" }
+                $entry.concurrencyGroup = "avm-deploy-$moduleKey-$($selected.Key)"
             }
             $entry
         })
@@ -197,19 +199,32 @@ function Get-AvmWorkflowAuthentication {
         $TestCase['identityKey'] -cne $identity.identityKey) {
         throw [ArgumentException]::new('The selected module identity no longer matches its root, client and tenant. Rerun selection.')
     }
-    $pool = @(Get-AvmWorkflowSubscriptions -PoolJson $PoolJson -FallbackSubscriptionId $FallbackSubscriptionId)
+    $seed = 0
+    $caseIndex = 0
+    if (-not [int]::TryParse([string]$TestCase['selectionSeed'], [ref]$seed) -or $seed -lt 0 -or
+        -not [int]::TryParse([string]$TestCase['caseIndex'], [ref]$caseIndex) -or $caseIndex -lt 0) {
+        throw [ArgumentException]::new('The selected subscription is missing its nonnegative selection seed and case index. Rerun selection.')
+    }
+    $selected = Select-AvmWorkflowSubscription -Root $Root -ModulePath $ModulePath -Example $TestCase.path `
+        -PoolJson $PoolJson -FallbackSubscriptionId $FallbackSubscriptionId -RandomSeed $seed -CaseIndex $caseIndex
     $index = 0
     if (-not [int]::TryParse([string]$TestCase['subscriptionIndex'], [ref]$index) -or
-        $index -lt 0 -or $index -ge $pool.Count -or
+        $index -lt 0 -or $index -ne $selected.Index -or
         [string]$TestCase['subscriptionKey'] -cnotmatch '^[0-9a-f]{64}$' -or
-        $pool[$index].key -cne [string]$TestCase.subscriptionKey) {
+        $selected.Key -cne [string]$TestCase.subscriptionKey -or
+        $selected.ModulePath -cne [string]$TestCase['subscriptionModulePath']) {
         throw [ArgumentException]::new('The selected subscription no longer matches the original pool index and digest. Rerun selection.')
     }
-    $null = Resolve-AvmWorkflowPath -Root $Root -RelativePath "$ModulePath/$($TestCase.path)"
+    $testPath = Resolve-AvmWorkflowPath -Root $Root -RelativePath "$ModulePath/$($TestCase.path)"
+    $ownerPath = Resolve-AvmWorkflowPath -Root $Root -RelativePath $selected.ModulePath
+    $example = [IO.Path]::GetRelativePath($ownerPath, $testPath).Replace('\', '/')
+    $null = Resolve-AvmWorkflowPath -Root $ownerPath -RelativePath $example
     return @{
-        subscriptionId = $pool[$index].id
+        subscriptionId = $selected.SubscriptionId
         tenantId = $identity.tenantId
         clientId = $identity.clientId
+        modulePath = $selected.ModulePath
+        example = $example
     }
 }
 

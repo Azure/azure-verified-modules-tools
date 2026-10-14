@@ -66,6 +66,7 @@ Describe 'Bicep workflow packaged-compliance qualification' {
     BeforeEach {
         $script:capability = 1
         $script:providerCapability = 1
+        $script:selectionCapability = 1
         Mock Install-AvmWorkflowModule {}
         Mock Import-AvmWorkflowPackage {}
         Mock Install-AvmTool {}
@@ -78,6 +79,7 @@ Describe 'Bicep workflow packaged-compliance qualification' {
                     AvmCapabilities = @{
                         BicepPackagedCompliance = $script:capability
                         BicepRequiredResourceProviders = $script:providerCapability
+                        BicepTestSubscriptionSelection = $script:selectionCapability
                     }
                 }
             }
@@ -86,6 +88,12 @@ Describe 'Bicep workflow packaged-compliance qualification' {
         Mock Get-Command {
             [pscustomobject]@{ Parameters = @{ Phase = $null; CleanupStatePath = $null; UseCiInputs = $null; Recurse = $null } }
         } -ParameterFilter { $Name -eq 'Invoke-AvmTestE2e' -and $Module -eq 'Avm.Authoring' }
+        Mock Get-Command {
+            [pscustomobject]@{ Parameters = @{
+                    Path = $null; ModulePath = $null; Example = $null; TestSubscriptionIds = $null
+                    RandomSeed = $null; CaseIndex = $null; SkipModuleVersionCheck = $null
+                } }
+        } -ParameterFilter { $Name -eq 'Select-AvmTestSubscription' -and $Module -eq 'Avm.Authoring' }
     }
 
     It 'requires the qualified manifest marker before preparing the Static route' {
@@ -144,6 +152,40 @@ Describe 'Bicep workflow packaged-compliance qualification' {
         Initialize-AvmWorkflow -Version 1.2.3 -Profile Package -Confirm:$false
         Should -Invoke Get-Command -Exactly 0 -ParameterFilter { $Name -eq 'Invoke-AvmTestE2e' }
         Should -Invoke Install-AvmWorkflowModule -Exactly 0 -ParameterFilter { $Name -in @('Az', 'Az.Subscription') }
+    }
+
+    It 'prepares native matrix selection without the compiler or Azure dependencies' {
+        Initialize-AvmWorkflow -Version 1.2.3 -Profile Matrix -Confirm:$false
+        Should -Invoke Get-Command -Exactly 1 -ParameterFilter { $Name -eq 'Select-AvmTestSubscription' -and $Module -eq 'Avm.Authoring' }
+        Should -Invoke Install-AvmWorkflowModule -Exactly 0 -ParameterFilter { $Name -ne 'Avm.Authoring' }
+        Should -Invoke Install-AvmTool -Exactly 0
+    }
+
+    It 'rejects <Label> native selection capability before matrix preparation' -ForEach @(
+        @{ Label = 'missing'; Value = $null }
+        @{ Label = 'zero'; Value = 0 }
+        @{ Label = 'unsupported'; Value = 2 }
+        @{ Label = 'string'; Value = '1' }
+        @{ Label = 'boolean'; Value = $true }
+    ) {
+        $script:selectionCapability = $Value
+        foreach ($profile in @('Matrix', 'Deployment')) {
+            { Initialize-AvmWorkflow -Version 1.2.3 -Profile $profile -Confirm:$false } |
+                Should -Throw '*BicepTestSubscriptionSelection capability 1*'
+        }
+        Should -Invoke Install-AvmWorkflowModule -Exactly 0 -ParameterFilter { $Name -ne 'Avm.Authoring' }
+        Should -Invoke Install-AvmTool -Exactly 0
+        Should -Invoke Write-AvmWorkflowOutput -Exactly 0
+    }
+
+    It 'rejects native selection without the exact child-owner interface before compiler preparation' {
+        Mock Get-Command {
+            [pscustomobject]@{ Parameters = @{ Path = $null; ModulePath = $null } }
+        } -ParameterFilter { $Name -eq 'Select-AvmTestSubscription' -and $Module -eq 'Avm.Authoring' }
+        { Initialize-AvmWorkflow -Version 1.2.3 -Profile Matrix -Confirm:$false } |
+            Should -Throw '*subscription selection Example support*'
+        Should -Invoke Install-AvmTool -Exactly 0
+        Should -Invoke Write-AvmWorkflowOutput -Exactly 0
     }
 
     It 'performs no package, tool or environment operations under WhatIf' {
@@ -233,6 +275,7 @@ Describe 'Bicep workflow exact-version installation' {
 Describe 'Bicep workflow managed policy dependencies' {
     BeforeEach {
         $script:archiveCapability = 1
+        $script:selectionCapability = 1
         $script:policyStatuses = @{ PSRule = 'installed'; 'PSRule.Rules.Azure' = 'installed-on-module-path' }
         $script:policyPath = Join-Path $TestDrive 'caller-module'
         Mock Install-AvmWorkflowModule {}
@@ -242,7 +285,10 @@ Describe 'Bicep workflow managed policy dependencies' {
         Mock Get-Module {
             [pscustomobject]@{
                 Version = [version]'1.2.3'
-                PrivateData = @{ AvmCapabilities = @{ PowerShellModuleArchiveRecovery = $script:archiveCapability } }
+                PrivateData = @{ AvmCapabilities = @{
+                        PowerShellModuleArchiveRecovery = $script:archiveCapability
+                        BicepTestSubscriptionSelection = $script:selectionCapability
+                    } }
             }
         } -ParameterFilter { $Name -eq 'Avm.Authoring' }
         Mock Get-Command { Microsoft.PowerShell.Core\Get-Command @PesterBoundParameters }
@@ -292,6 +338,15 @@ Describe 'Bicep workflow managed policy dependencies' {
         $script:archiveCapability = $Value
         { Initialize-AvmWorkflow -Version 1.2.3 -Profile Policy -Path $script:policyPath -Confirm:$false } |
             Should -Throw '*PowerShellModuleArchiveRecovery capability 1*'
+        Should -Invoke Get-AvmTool -Exactly 0
+        Should -Invoke Install-AvmTool -Exactly 0
+        Should -Invoke Write-AvmWorkflowOutput -Exactly 0
+    }
+
+    It 'requires reservation-aware native policy before resolving policy dependencies' {
+        $script:selectionCapability = $null
+        { Initialize-AvmWorkflow -Version 1.2.3 -Profile Policy -Path $script:policyPath -Confirm:$false } |
+            Should -Throw '*BicepTestSubscriptionSelection capability 1*'
         Should -Invoke Get-AvmTool -Exactly 0
         Should -Invoke Install-AvmTool -Exactly 0
         Should -Invoke Write-AvmWorkflowOutput -Exactly 0

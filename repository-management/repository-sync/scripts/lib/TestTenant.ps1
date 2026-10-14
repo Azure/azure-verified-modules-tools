@@ -45,6 +45,7 @@ function Resolve-RepositoryTestTenantSettings {
         throw [System.InvalidOperationException]::new('The legacy test tenant is retired. Normal repository sync requires testTenant bami.')
     }
     $settings = Get-AvmBamiSettings -Values $BamiValues
+    $null = Get-AvmGeneralTestSubscription -Settings $settings
     return [pscustomobject]@{ SelectedTestTenant = $TestTenant; TestTenant = $TestTenant; Status = 'Ready'; Settings = $settings }
 }
 
@@ -516,7 +517,7 @@ function ConvertTo-AvmBamiConsumerSettings {
         bicep_client_id = $Settings['TEST_BAMI_BICEP_CLIENT_ID']
         admin_subscription_id = $Settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID']
         persistent_subscription_id = $Settings['TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID']
-        test_subscription_ids = ConvertFrom-AvmTestTenantJson -Json $Settings['TEST_BAMI_SUBSCRIPTION_IDS']
+        test_subscription_ids = @(Get-AvmGeneralTestSubscription -Settings $Settings)
     }
 }
 

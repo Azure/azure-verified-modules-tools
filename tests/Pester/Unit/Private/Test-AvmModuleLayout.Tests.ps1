@@ -85,10 +85,12 @@ Describe 'Module Resources packaging' {
 
     It 'ships attestation-only AVM plugin declarations in the vendored configs' {
         $tflintDir = Join-Path $script:moduleRoot (Join-Path 'Resources' 'tflint')
+        $pins = Get-Content -LiteralPath (Join-Path $script:moduleRoot 'Resources' 'avm.pins.jsonc') -Raw | ConvertFrom-Json
         foreach ($file in @('avm.tflint.hcl', 'avm.tflint_module.hcl', 'avm.tflint_example.hcl')) {
             $content = Get-Content -LiteralPath (Join-Path $tflintDir $file) -Raw
             $content | Should -Match 'plugin\s+"avm"'
-            $content | Should -Match 'version\s*=\s*"1\.0\.0"'
+            $content | Should -Match (
+                '(?s)plugin\s+"avm"\s*\{[^}]*version\s*=\s*"' + [regex]::Escape($pins.tflintPlugins.avm) + '"')
             $content | Should -Match 'signature\s*=\s*"attestation"'
             $content | Should -Not -Match 'signing_key\s*='
             $content | Should -Not -Match 'disabled_by_default\s*='
@@ -127,7 +129,6 @@ Describe 'Module Resources packaging' {
                 'avm_azapi_resource_tags_required',
                 'avm_azapi_replace_triggers_refs_valid',
                 'avm_terraform_configuration_file_required',
-                'avm_terraform_module_source_required',
                 'avm_output_resource_id_required'
             )) {
             $root | Should -Not -Match ('rule\s+"{0}"' -f $defaultEnabledRule)
@@ -152,6 +153,19 @@ Describe 'Module Resources packaging' {
         }
         $example | Should -Match '(?s)rule\s+"terraform_required_providers"\s*\{\s*enabled\s*=\s*true\s*\}'
         $example | Should -Match '(?s)rule\s+"terraform_required_version"\s*\{\s*enabled\s*=\s*true\s*\}'
+    }
+
+    It 'enables sibling source validation only in the direct submodule configuration' {
+        $tflintDir = Join-Path $script:moduleRoot 'Resources' 'tflint'
+        $root = Get-Content -LiteralPath (Join-Path $tflintDir 'avm.tflint.hcl') -Raw
+        $module = Get-Content -LiteralPath (Join-Path $tflintDir 'avm.tflint_module.hcl') -Raw
+        $example = Get-Content -LiteralPath (Join-Path $tflintDir 'avm.tflint_example.hcl') -Raw
+
+        $root | Should -Not -Match 'rule\s+"avm_terraform_module_source_required"|module_scope\s*='
+        $module | Should -Match (
+            '(?s)rule\s+"avm_terraform_module_source_required"\s*\{\s*enabled\s*=\s*true\s*module_scope\s*=\s*"submodule"\s*\}')
+        $example | Should -Match '(?s)rule\s+"avm_terraform_module_source_required"\s*\{\s*enabled\s*=\s*false\s*\}'
+        $example | Should -Not -Match 'module_scope\s*='
     }
 
     It 'omits empty AzAPI replacement triggers from the canonical fixture' {

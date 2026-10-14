@@ -13,10 +13,7 @@ variable "bami_test_settings" {
     persistent_subscription_id   = string
     management_group_id          = string
     identity_resource_group_name = string
-    test_subscription_ids = list(object({
-      name = string
-      id   = string
-    }))
+    test_subscription_ids        = any
   })
   description = "Complete BAMI configuration; the repository execution client ID is produced by this root, not supplied."
   default     = null
@@ -27,7 +24,7 @@ variable "bami_test_settings" {
   }
 
   validation {
-    condition = var.bami_test_settings == null ? true : (
+    condition = var.bami_test_settings == null ? true : try(
       alltrue([
         for id in [
           var.bami_test_settings.tenant_id,
@@ -42,17 +39,34 @@ variable "bami_test_settings" {
       lower(var.bami_test_settings.admin_subscription_id) != lower(var.bami_test_settings.persistent_subscription_id) &&
       !contains([for subscription in var.bami_test_settings.test_subscription_ids : lower(subscription.id)], lower(var.bami_test_settings.admin_subscription_id)) &&
       !contains([for subscription in var.bami_test_settings.test_subscription_ids : lower(subscription.id)], lower(var.bami_test_settings.persistent_subscription_id)) &&
+      can(tolist(var.bami_test_settings.test_subscription_ids)) &&
       length(var.bami_test_settings.test_subscription_ids) == 28 &&
       length(distinct([for subscription in var.bami_test_settings.test_subscription_ids : lower(subscription.id)])) == 28 &&
       length(distinct([for subscription in var.bami_test_settings.test_subscription_ids : lower(subscription.name)])) == 28 &&
       alltrue([
         for subscription in var.bami_test_settings.test_subscription_ids :
+        alltrue([for key in keys(subscription) : contains(["name", "id", "tag"], key)]) &&
         trimspace(subscription.name) != "" &&
         can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", subscription.id)) &&
-        lower(subscription.id) != "00000000-0000-0000-0000-000000000000"
-      ])
+        lower(subscription.id) != "00000000-0000-0000-0000-000000000000" &&
+        (!contains(keys(subscription), "tag") || try(
+          subscription.tag == tostring(subscription.tag) &&
+          length(subscription.tag) <= 64 &&
+          can(regex("\\A[A-Za-z0-9]+(?:[ -][A-Za-z0-9]+)*\\z", subscription.tag)),
+          false
+        ))
+      ]),
+      false
     )
-    error_message = "BAMI requires complete GUID settings, separate execution/controller identities, and 28 unique test subscriptions excluding the distinct administration and Persistent subscriptions."
+    error_message = "BAMI requires complete GUID settings, separate execution/controller identities, and 28 unique test subscriptions excluding the distinct administration and Persistent subscriptions. An optional string tag permits at most 64 alphanumeric characters separated by single spaces or hyphens."
+  }
+
+  validation {
+    condition = var.bami_test_settings == null ? true : try(
+      length([for subscription in var.bami_test_settings.test_subscription_ids : subscription if try(subscription.tag, "General") == "General"]) > 0,
+      false
+    )
+    error_message = "The BAMI test pool must contain at least one General subscription for ordinary Terraform tests."
   }
 }
 

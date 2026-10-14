@@ -24,11 +24,6 @@ function Invoke-AvmWorkflowPolicyValidation {
     )
 
     $path = Resolve-AvmWorkflowPath -Root $Root -RelativePath $ModulePath
-    if (-not [string]::IsNullOrEmpty($env:TEST_SUBSCRIPTION_IDS) -or
-        -not [string]::IsNullOrEmpty($env:VALIDATE_SUBSCRIPTION_ID)) {
-        $pool = @(Get-AvmWorkflowSubscriptions -PoolJson $env:TEST_SUBSCRIPTION_IDS -FallbackSubscriptionId $env:VALIDATE_SUBSCRIPTION_ID)
-        $env:VALIDATE_SUBSCRIPTION_ID = $pool[0].id
-    }
     $result = Invoke-AvmCheckPolicy -Path $path -Ecosystem bicep -Example $Example -Baseline $Baseline -SkipModuleVersionCheck
     Write-AvmWorkflowResult -Name policy -Result $result -Directory $ResultDirectory
 }

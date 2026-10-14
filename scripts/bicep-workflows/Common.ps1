@@ -136,19 +136,30 @@ function Initialize-AvmWorkflow {
     if (-not $PSCmdlet.ShouldProcess("Bicep $Profile workflow", 'Prepare package and dependencies')) { return }
     $null = Install-AvmWorkflowModule -Name Avm.Authoring -Version $Version -Confirm:$false
     Import-AvmWorkflowPackage -Version $Version
-    if ($Profile -in @('Static', 'Policy', 'Deployment')) {
-        $requiredCapability = switch ($Profile) {
+    if ($Profile -ne 'Package') {
+        $requiredCapabilities = switch ($Profile) {
             Static { 'BicepPackagedCompliance' }
-            Policy { 'PowerShellModuleArchiveRecovery' }
-            Deployment { 'BicepRequiredResourceProviders' }
+            Policy { 'PowerShellModuleArchiveRecovery'; 'BicepTestSubscriptionSelection' }
+            Matrix { 'BicepTestSubscriptionSelection' }
+            Deployment { 'BicepRequiredResourceProviders'; 'BicepTestSubscriptionSelection' }
         }
         $package = Get-Module Avm.Authoring | Where-Object { $_.Version -eq [version]$Version } | Select-Object -First 1
         $capabilities = if ($null -ne $package -and $package.PrivateData -is [Collections.IDictionary]) {
             $package.PrivateData['AvmCapabilities']
         }
-        if ($capabilities -isnot [Collections.IDictionary] -or
-            $capabilities[$requiredCapability] -isnot [int] -or $capabilities[$requiredCapability] -ne 1) {
-            throw [InvalidOperationException]::new("The selected package lacks $requiredCapability capability 1; a qualified migration release is required.")
+        foreach ($requiredCapability in $requiredCapabilities) {
+            if ($capabilities -isnot [Collections.IDictionary] -or
+                $capabilities[$requiredCapability] -isnot [int] -or $capabilities[$requiredCapability] -ne 1) {
+                throw [InvalidOperationException]::new("The selected package lacks $requiredCapability capability 1; a qualified migration release is required.")
+            }
+        }
+    }
+    if ($Profile -in @('Matrix', 'Deployment')) {
+        $selector = Get-Command Select-AvmTestSubscription -Module Avm.Authoring -ErrorAction Stop
+        foreach ($parameter in @('Path', 'ModulePath', 'Example', 'TestSubscriptionIds', 'RandomSeed', 'CaseIndex', 'SkipModuleVersionCheck')) {
+            if (-not $selector.Parameters.ContainsKey($parameter)) {
+                throw [InvalidOperationException]::new("The selected package lacks native subscription selection $parameter support.")
+            }
         }
     }
     if ($Profile -in @('Static', 'Deployment')) {
@@ -196,7 +207,7 @@ function Initialize-AvmWorkflow {
         $null = Install-AvmWorkflowModule -Name Az -Version 15.5.0 -Minimum -Confirm:$false
         $null = Install-AvmWorkflowModule -Name Az.Subscription -Version 0.12.0 -Minimum -Confirm:$false
     }
-    if ($Profile -ne 'Package') {
+    if ($Profile -notin @('Package', 'Matrix')) {
         $null = Install-AvmTool -Name bicep -Path $Path -SkipModuleVersionCheck
     }
     Write-AvmWorkflowOutput -Name AVM_AUTHORING_VERSION -Value $Version -FilePath $env:GITHUB_ENV
