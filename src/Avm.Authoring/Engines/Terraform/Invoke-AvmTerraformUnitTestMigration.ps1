@@ -795,6 +795,7 @@ function Get-AvmTerraformUnitTestModtmRequirementPlan {
                 "Cannot preserve ModTM mocks for '$Path': update the module profile to expose native ModTM module-call inspection.")
         }
         $bindings = @{}
+        $dependencyVersions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
         foreach ($name in $ModuleProviderSources[$Path].Keys) {
             if (-not $ModuleProviderSources[$Path][$name].Contains($source)) { continue }
             $record = @($manifest.Modules | Where-Object { $_.Key -ceq $name })
@@ -832,6 +833,16 @@ function Get-AvmTerraformUnitTestModtmRequirementPlan {
                 throw [AvmConfigurationException]::new(
                     "Cannot preserve ModTM mocks for '$Path': dependency '$name' has a different ModTM provider source.")
             }
+            $version = $RequiredProviders[$dependency].modtm['version']
+            if ($null -ne $version) {
+                if ($version -isnot [string] -or $version.Contains('${') -or $version.Contains('%{')) {
+                    throw [AvmConfigurationException]::new(
+                        "Cannot preserve ModTM mocks for '$Path': dependency '$name' has a nonliteral version constraint that requires review.")
+                }
+                if (-not [string]::IsNullOrWhiteSpace($version)) {
+                    $null = $dependencyVersions.Add($version)
+                }
+            }
             $call = $calls[$name]
             if ($call -isnot [System.Collections.IDictionary] -or
                 $call['mptf'] -isnot [System.Collections.IDictionary]) {
@@ -866,7 +877,16 @@ function Get-AvmTerraformUnitTestModtmRequirementPlan {
                     "Cannot preserve ModTM mocks for '$Path': the original provider source, version, or aliases require review.")
             }
             $requirement.source = $original.source
-            if ($original['version']) { $requirement.version = $original.version }
+            if (-not [string]::IsNullOrWhiteSpace($original['version'])) { $requirement.version = $original.version }
+        }
+        if (-not $existingRequirement -and -not $requirement.Contains('version')) {
+            if ($dependencyVersions.Count -eq 0) {
+                throw [AvmConfigurationException]::new(
+                    "Cannot preserve ModTM mocks for '$Path': no required dependency proves a version constraint; synthesizing the requirement requires review.")
+            }
+            $versions = [string[]]@($dependencyVersions)
+            [Array]::Sort($versions, [System.StringComparer]::Ordinal)
+            $requirement.version = $versions -join ', '
         }
         $requirementJson = ConvertTo-Json -InputObject $requirement -Compress -EscapeHandling EscapeHtml
         $bindingsJson = ConvertTo-Json -InputObject $bindings -Compress

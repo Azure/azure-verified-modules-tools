@@ -783,6 +783,98 @@ Providers required by state:
             }
         }
 
+        It 'synthesizes only proven ModTM version constraints: <Case>' -TestCases @(
+            @{ Case = 'unchanged published dependency'; Versions = @('= 0.3.5'); Expected = '= 0.3.5' }
+            @{ Case = 'known local target'; Versions = @('~> 0.3'); Expected = '~> 0.3'; LocalTarget = $true }
+            @{ Case = 'already complete module binding'; Versions = @('= 0.3.5'); Expected = '= 0.3.5'; Bound = $true }
+            @{ Case = 'duplicate constraints'; Versions = @('>= 0.3.5', '>= 0.3.5'); Expected = '>= 0.3.5' }
+            @{ Case = 'intersected constraints'; Versions = @('>= 0.3.5', '< 0.4.0'); Expected = '< 0.4.0, >= 0.3.5' }
+            @{ Case = 'original version precedence'; Versions = @('= 0.3.5'); Expected = '~> 0.3'; OriginalVersion = '~> 0.3' }
+            @{ Case = 'blank original version'; Versions = @('= 0.3.5'); Expected = '= 0.3.5'; OriginalVersion = ' ' }
+            @{ Case = 'unrelated provider exclusion'; Versions = @('= 0.3.5'); Expected = '= 0.3.5'; Unrelated = $true }
+            @{ Case = 'authored versionless requirement'; Versions = @('= 0.3.5'); Existing = $true }
+            @{ Case = 'missing version proof'; Versions = @($null); Reject = $true }
+            @{ Case = 'whitespace version'; Versions = @(' '); Reject = $true }
+            @{ Case = 'nonliteral version'; Versions = @(42); Reject = $true }
+            @{ Case = 'computed version'; Versions = @('${var.version}'); Reject = $true }
+        ) {
+            param($Versions, $Expected, $LocalTarget = $false, $Bound = $false, $OriginalVersion,
+                $Unrelated = $false, $Existing = $false, $Reject = $false)
+            $caller = $script:fixture.Child
+            $source = 'registry.terraform.io/azure/modtm'
+            $required = @{ $caller = @{} }
+            $modules = @{ $caller = @{} }
+            $calls = @{}
+            $records = [System.Collections.Generic.List[object]]::new()
+            $records.Add(@{ Key = ''; Dir = '.' })
+            for ($index = 0; $index -lt $Versions.Count; $index++) {
+                $name = "dependency$index"
+                $dependency = if ($LocalTarget) {
+                    $script:fixture.Root
+                }
+                else {
+                    Join-Path -Path $caller -ChildPath '.terraform' -AdditionalChildPath 'modules', $name
+                }
+                $null = New-Item -ItemType Directory -Path $dependency -Force
+                $required[$dependency] = @{ modtm = @{ source = 'Azure/modtm' } }
+                if ($null -ne $Versions[$index]) { $required[$dependency].modtm.version = $Versions[$index] }
+                $modules[$caller][$name] = @($source)
+                $calls[$name] = @{ source = 'Azure/example/azurerm'; mptf = @{} }
+                if ($Bound) { $calls[$name].providers = '{ modtm = modtm }' }
+                $records.Add(@{ Key = $name; Dir = $dependency; Version = '0.1.0' })
+            }
+            if ($Unrelated) {
+                $modules[$caller].unrelated = @('registry.terraform.io/hashicorp/random')
+                $calls.unrelated = @{ source = 'Azure/unrelated/azurerm'; mptf = @{} }
+            }
+            $original = @{}
+            if ($OriginalVersion) {
+                $original[$caller] = @{ modtm = @{ source = 'Azure/modtm'; version = $OriginalVersion } }
+            }
+            if ($Existing) {
+                $required[$caller].modtm = @{ source = 'Azure/modtm' }
+            }
+            $parameters = @{
+                Path = $caller
+                ModuleTargets = $script:fixture.Targets
+                Options = $script:fixture.Options
+                RequiredProviders = $required
+                ProviderSources = @{ $caller = @($source) }
+                ModuleProviderSources = $modules
+                ModuleManifests = @{ $caller = (ConvertTo-Json -InputObject @{ Modules = $records.ToArray() } -Depth 5 -Compress) }
+                OriginalRequirements = $original
+                Plans = @{}
+                PlanningPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+                BindDependencies = $true
+            }
+            $script:fixture.Options.EnvVars['AVM_TEST_MODTM_CALLS'] = ConvertTo-Json -InputObject $calls -Depth 5 -Compress
+            Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
+                [pscustomobject]@{ ExitCode = 0; StdOut = $EnvVars.AVM_TEST_MODTM_CALLS; StdErr = '' }
+            }
+            InModuleScope Avm.Authoring -Parameters @{
+                Parameters = $parameters; Expected = $Expected; Reject = $Reject; Caller = $caller
+            } {
+                param($Parameters, $Expected, $Reject, $Caller)
+                if ($Reject) {
+                    { Get-AvmTerraformUnitTestModtmRequirementPlan @Parameters } |
+                        Should -Throw '*version constraint*requires review*'
+                    $Parameters.Plans.Count | Should -Be 0
+                    $Parameters.RequiredProviders[$Caller].Contains('modtm') | Should -BeFalse
+                }
+                else {
+                    $plan = Get-AvmTerraformUnitTestModtmRequirementPlan @Parameters
+                    $encoded = @($plan.Arguments | Where-Object { $_ -like 'unit_test_modtm_requirement=*' })[0].
+                        Substring('unit_test_modtm_requirement='.Length)
+                    $requirement = ConvertFrom-Json -InputObject $encoded -AsHashtable
+                    $requirement['version'] | Should -BeExactly $Expected
+                    $Parameters.RequiredProviders[$Caller].modtm['version'] | Should -BeExactly $Expected
+                    $requirement.source | Should -BeIn @('Azure/modtm', 'registry.terraform.io/azure/modtm')
+                }
+                Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -ceq 'debug' }
+                Should -Invoke Invoke-AvmTerraformInit -Exactly 0
+            }
+        }
+
         It 'matches declared provider sources and inferred HashiCorp names without unrelated mocks' {
             InModuleScope Avm.Authoring {
                 $result = @(Get-AvmTerraformUnitTestMockProviderName `

@@ -2448,10 +2448,13 @@ output "tenant" {
   value = data.azurerm_client_config.authored.tenant_id
 }
 '@
+        $dependencyFile = $null
+        $dependencyBytes = $null
         if ($Dependencies) {
             $dependency = Join-Path $root '.published' 'dependency'
             $null = New-Item -ItemType Directory -Path $dependency -Force
-            Set-Content -LiteralPath (Join-Path $dependency 'main.tf') -Encoding utf8NoBOM -Value @'
+            $dependencyFile = Join-Path $dependency 'main.tf'
+            Set-Content -LiteralPath $dependencyFile -Encoding utf8NoBOM -Value @'
 terraform {
   required_providers {
     modtm = {
@@ -2465,6 +2468,7 @@ resource "modtm_telemetry" "published" {
   tags     = { fixture = "native-mock-only" }
 }
 '@
+            $dependencyBytes = [System.IO.File]::ReadAllBytes($dependencyFile)
             Add-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
 module "published" {
   source = "./.published/dependency"
@@ -2547,11 +2551,15 @@ __ASSERT__
             Replace('__ASSERT__', $assertion) + "`n", [System.Text.UTF8Encoding]::new($false))
         $exampleLocks = @{}
         $exampleManifests = @{}
+        $exampleSelections = @{}
         if ($Examples) {
             foreach ($name in @('default', 'complete')) {
                 $example = Join-Path $root 'examples' $name
                 $null = New-Item -ItemType Directory -Path $example -Force
-                Copy-Item -LiteralPath (Join-Path $root 'terraform.tf') -Destination (Join-Path $example 'terraform.tf')
+                $exampleProviders = [regex]::Replace([System.IO.File]::ReadAllText($providerPath),
+                    '(?m)^[ \t]*modtm[ \t]*=[ \t]*\{[^{}]*\}[ \t]*\r?\n', '')
+                $exampleProviders | Should -Not -Match '\bmodtm\s*='
+                [System.IO.File]::WriteAllText((Join-Path $example 'terraform.tf'), $exampleProviders, [System.Text.UTF8Encoding]::new($false))
                 Set-Content -LiteralPath (Join-Path $example 'main.tf') -Encoding utf8NoBOM -Value @'
 module "test" {
   source = "../.."
@@ -2567,6 +2575,8 @@ module "test" {
                 $exampleLocks[$example] = [System.IO.File]::ReadAllBytes((Join-Path $example '.terraform.lock.hcl'))
                 $path = Join-Path -Path $example -ChildPath '.terraform' -AdditionalChildPath 'modules', 'modules.json'
                 $exampleManifests[$example] = [System.IO.File]::ReadAllBytes($path)
+                $version = Invoke-TelemetryProcess -FilePath $script:terraformPath -ArgumentList @('version', '-json') -Root $example
+                $exampleSelections[$example] = (($version.StdOut | ConvertFrom-Json).provider_selections | ConvertTo-Json -Compress)
             }
         }
         $script:processEnvironment.MODTM_ENDPOINT = 'http://127.0.0.1:1/never-production'
@@ -2605,6 +2615,16 @@ module "test" {
         if ($SourceBacked) {
             [System.IO.File]::ReadAllBytes($sourceFile) | Should -Be $sourceBytes
         }
+        if ($Examples) {
+            $lintConfig = Join-Path $root 'tflint.hcl'
+            Set-Content -LiteralPath $lintConfig -Encoding utf8NoBOM -Value @'
+plugin "terraform" {
+  enabled = true
+  preset  = "recommended"
+}
+'@
+            $tflint = InModuleScope Avm.Authoring { (Resolve-AvmTool -Name tflint).Path }
+        }
         foreach ($example in $exampleLocks.Keys) {
             Get-Content -LiteralPath (Join-Path $example 'terraform.tf') -Raw | Should -Match 'modtm\s*=\s*\{'
             Get-Content -LiteralPath (Join-Path $example 'main.tf') -Raw | Should -Match 'modtm\s*=\s*modtm\b'
@@ -2613,6 +2633,27 @@ module "test" {
             [System.IO.File]::ReadAllBytes($path) | Should -Be $exampleManifests[$example]
             $validation = Invoke-TelemetryProcess -FilePath $script:terraformPath -ArgumentList @('validate', '-json') -Root $example
             ($validation.StdOut | ConvertFrom-Json).valid | Should -BeTrue
+            $lint = Invoke-TelemetryProcess -FilePath $tflint -Root $example -IgnoreExitCode `
+                -ArgumentList @('--config', $lintConfig, '--only=terraform_required_providers',
+                    '--only=terraform_unused_required_providers', '--format=json')
+            $lint.ExitCode | Should -Be 0 -Because "$example : $($lint.StdOut)"
+            @((ConvertFrom-Json -InputObject $lint.StdOut).issues) | Should -HaveCount 0
+            $requirement = InModuleScope Avm.Authoring -Parameters @{
+                Path = $example; Tool = $script:mapotfPath; Profiles = $script:profilesRoot
+            } {
+                param($Path, $Tool, $Profiles)
+                (Get-AvmTerraformUnitTestRequiredProvider -Path $Path -Options ([pscustomobject]@{
+                        ToolPath = $Tool
+                        ProfileDirs = @{ module = Join-Path $Profiles 'module' }
+                        EnvVars = @{}
+                    })).modtm
+            }
+            $requirement.version | Should -BeExactly '~> 0.3'
+            $version = Invoke-TelemetryProcess -FilePath $script:terraformPath -ArgumentList @('version', '-json') -Root $example
+            (($version.StdOut | ConvertFrom-Json).provider_selections | ConvertTo-Json -Compress) |
+                Should -BeExactly $exampleSelections[$example]
+            [System.IO.File]::ReadAllBytes((Join-Path $example '.terraform.lock.hcl')) | Should -Be $exampleLocks[$example]
+            [System.IO.File]::ReadAllBytes($path) | Should -Be $exampleManifests[$example]
         }
         $result = Invoke-TelemetryProcess -FilePath $script:terraformPath `
             -ArgumentList @('test', '-no-color', '-test-directory=tests/unit') -Root $root
@@ -2620,6 +2661,17 @@ module "test" {
         $result.StdOut | Should -Not -Match 'Warning:'
         $result.StdErr | Should -BeNullOrEmpty
         [System.IO.File]::ReadAllBytes($lockPath) | Should -Be $lockBytes
+        if ($null -ne $manifestBytes) {
+            [System.IO.File]::ReadAllBytes($manifestPath) | Should -Be $manifestBytes
+        }
+        if ($Dependencies) {
+            [System.IO.File]::ReadAllBytes($dependencyFile) | Should -Be $dependencyBytes
+        }
+        foreach ($example in $exampleLocks.Keys) {
+            [System.IO.File]::ReadAllBytes((Join-Path $example '.terraform.lock.hcl')) | Should -Be $exampleLocks[$example]
+            $path = Join-Path -Path $example -ChildPath '.terraform' -AdditionalChildPath 'modules', 'modules.json'
+            [System.IO.File]::ReadAllBytes($path) | Should -Be $exampleManifests[$example]
+        }
     }
 
     It 'preserves a proven original helper alias mapping when telemetry introduces AzAPI' {

@@ -904,7 +904,15 @@ binding. A removed non-default provider source must not become an inferred
 available, and bind the same provider explicitly to the actual dependencies
 that declare it. Known local intermediates may receive the same repair;
 known local callers and example wrappers also receive only their proven
-required source declaration and same-provider binding. Finish the normal
+required source declaration and same-provider binding. Newly synthesized
+requirements preserve an available original version constraint; otherwise
+inherit only literal constraints from their proven same-source required
+dependencies or local targets. Combine distinct inherited constraints by
+intersection, without inventing a pin from installed versions. Missing or
+nonliteral constraint proof requires review; existing authored requirements remain
+unchanged. Default and complete example-wrapper regressions must check both
+required-provider and unused-provider lint as well as independent validation,
+exact dependency selections and lock/manifest bytes. Finish the normal
 ordering profile on restored scopes so the first pass is already drift-free.
 Published dependencies remain untouched. Computed or aliased module bindings,
 JSON dependencies and unproven source inheritance require review. Verify the
