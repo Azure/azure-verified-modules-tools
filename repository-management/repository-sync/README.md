@@ -75,6 +75,10 @@ the created identity's client ID feeds GitHub test settings through Terraform
 references. PowerShell and managed-file generation do not need to provision an
 identity first. The eight-field producer and five-field Bicep projection remain
 unchanged. This is not a shared state for all repositories.
+The full BAMI input retains optional subscription tags. Actions and Dependabot
+test-pool secrets receive only the ordered `General` projection, including legacy
+untagged entries; no General subscriptions is an error before plan/apply or
+publication. This is default/test selection isolation, not a permission change.
 
 Manual `plan_only` defaults to `true`. Preview and apply both produce one complete native
 plan, even when a new identity's client ID is unknown. Apply validates that saved

@@ -186,8 +186,10 @@ function Merge-AvmTflintConfig {
     $currentPlugin = $false
     if ($plugins.Count -eq 1) {
         $body = $plugins[0].Groups['body'].Value
+        $pinnedVersion = [string](Read-AvmPins).tflintPlugins.avm
+        $versionPattern = '(?m)^\s*version\s*=\s*"' + [regex]::Escape($pinnedVersion) + '"\s*$'
         $currentPlugin = [regex]::Matches($body, '(?m)^\s*(?:version|source|enabled)\s*=').Count -eq 3 -and
-        $body -cmatch '(?m)^\s*version\s*=\s*"(?:1\.0\.0|1\.2\.0|1\.3\.0)"\s*$' -and
+        ($body -cmatch $versionPattern -or $body -cmatch '(?m)^\s*version\s*=\s*"(?:1\.0\.0|1\.2\.0|1\.3\.0)"\s*$') -and
         $body -cmatch '(?m)^\s*source\s*=\s*"github\.com/Azure/tflint-ruleset-avm"\s*$' -and
         $body -cmatch '(?m)^\s*enabled\s*=\s*true\s*$'
     }
@@ -231,10 +233,10 @@ function Merge-AvmTflintConfig {
                     Text       = $legacy[0].Text.Replace('"' + $legacyName + '"', '"' + $replacementName + '"')
                 }
                 $merged = Merge-AvmTflintBlock -Text $merged -Blocks @($replacement)
-                $message = "tflint: migrated disabled rule '$legacyName' to '$replacementName' from '$OverridePath'; rename the authored override for AVM ruleset 1.0.0."
+                $message = "tflint: migrated disabled rule '$legacyName' to '$replacementName' from '$OverridePath'; rename the authored override for AVM ruleset $pinnedVersion."
             }
             else {
-                $message = "tflint: omitted obsolete disabled rule '$legacyName' from '$OverridePath'; AVM ruleset 1.0.0 removed it without a replacement. Remove that override."
+                $message = "tflint: omitted obsolete disabled rule '$legacyName' from '$OverridePath'; AVM ruleset $pinnedVersion removed it without a replacement. Remove that override."
             }
             $merged = [regex]::Replace($merged, $legacyPattern, '')
             Write-AvmLog $message -Level Warning | Out-Null

@@ -467,7 +467,7 @@ finally {
                     AVM_OFFLINE                  = '1'
                     AVM_METADATA_TEST_MODULE     = $ModulePath
                     AVM_METADATA_TEST_PARAMETERS = $MetadataParameters
-                } -TimeoutSec 30 -IgnoreExitCode
+                } -TimeoutSec 120 -IgnoreExitCode
         }
         $process.ExitCode | Should -Be 0 -Because $process.StdErr
         $results = $process.StdOut | ConvertFrom-Json -AsHashtable

@@ -726,6 +726,34 @@ Describe 'Candidate plan and output safety' {
         { ConvertTo-AvmBamiConsumerSettings -Identity (New-AvmTestBamiIdentity) -Settings $invalid -Repository $script:repository } |
             Should -Throw '*Persistent*test pool*'
     }
+
+    It 'gives execution consumers only General subscriptions while preserving the full Terraform input inventory' {
+        $settings = New-AvmTestBamiSettings
+        $settings.TEST_BAMI_SUBSCRIPTION_IDS[0].tag = 'Azure Local'
+        $settings.TEST_BAMI_SUBSCRIPTION_IDS[1].tag = 'General'
+        $settings.TEST_BAMI_SUBSCRIPTION_IDS[2].tag = 'Another reservation'
+        $result = ConvertTo-AvmBamiConsumerSettings -Identity (New-AvmTestBamiIdentity) -Settings $settings -Repository $script:repository
+        $result.test_subscription_ids | Should -HaveCount 26
+        $result.test_subscription_ids[0].id | Should -BeExactly $settings.TEST_BAMI_SUBSCRIPTION_IDS[1].id
+        $result.test_subscription_ids.id | Should -Not -Contain $settings.TEST_BAMI_SUBSCRIPTION_IDS[0].id
+        $result.test_subscription_ids.id | Should -Not -Contain $settings.TEST_BAMI_SUBSCRIPTION_IDS[2].id
+
+        $inputSettings = ConvertTo-AvmRepositoryTerraformSettings -Settings $settings
+        $inputSettings.test_subscription_ids | Should -HaveCount 28
+        $inputSettings.test_subscription_ids.id | Should -Be $settings.TEST_BAMI_SUBSCRIPTION_IDS.id
+        $inputSettings.test_subscription_ids[0].tag | Should -BeExactly 'Azure Local'
+        $inputSettings.test_subscription_ids[1].tag | Should -BeExactly 'General'
+        $inputSettings.test_subscription_ids[3].Contains('tag') | Should -BeFalse
+    }
+
+    It 'rejects fully reserved execution settings before repository sync or consumer construction' {
+        $settings = New-AvmTestBamiSettings
+        foreach ($entry in $settings.TEST_BAMI_SUBSCRIPTION_IDS) { $entry.tag = 'Azure Local' }
+        { Resolve-RepositoryTestTenantSettings -TestTenant bami -BamiValues $settings } |
+            Should -Throw '*at least one General*'
+        { ConvertTo-AvmBamiConsumerSettings -Identity (New-AvmTestBamiIdentity) -Settings $settings -Repository $script:repository } |
+            Should -Throw '*at least one General*'
+    }
 }
 
 Describe 'Terraform effective contract and state wiring' {
@@ -829,9 +857,9 @@ Describe 'Terraform effective contract and state wiring' {
         $output | Should -Match '(?s)output "test_settings" \{\s*description\s*=\s*"[^"]+"\s*value\s*=\s*local.test_settings\s*\}'
         $locals = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'locals.tf')
         $locals | Should -Not -Match 'module.azure|var.test_subscription_ids'
-        foreach ($field in @('tenant_id', 'test_subscription_ids')) {
-            $locals | Should -Match ('\b' + $field + '\s*=\s*var.bami_test_settings\.' + $field + '\b')
-        }
+        $locals | Should -Match 'tenant_id\s*=\s*var.bami_test_settings.tenant_id\b'
+        $locals | Should -Match 'for subscription in var.bami_test_settings.test_subscription_ids'
+        $locals | Should -Match 'if try\(subscription.tag, "General"\) == "General"'
         $locals | Should -Match 'client_id\s*=\s*module.bami\[0\].client_id'
         $settings = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)
         $subscriptions = ConvertFrom-AvmTestTenantJson -Json $settings.TEST_BAMI_SUBSCRIPTION_IDS

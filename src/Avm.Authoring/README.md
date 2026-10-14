@@ -423,7 +423,7 @@ It warns if the checkout's root module or a direct `modules/` configuration is
 not reached by an example. Registry/Git copies and test-only helper modules do
 not count. Coverage gaps are non-failing; no examples returns `skipped`.
 
-The Terraform lint bundle pins TFLint 0.64.0 and `tflint-ruleset-avm` 1.3.0.
+The Terraform lint bundle pins TFLint 0.64.0 and `tflint-ruleset-avm` 1.3.1.
 All three packaged configurations require GitHub Artifact Attestation; there is
 no PGP signing-key fallback. AzureRM remains optional, but its version constraint
 must exclude 5.0.0 and later.
@@ -433,6 +433,12 @@ ruleset. The packaged configurations declare scope-specific disables plus native
 severity overrides. The root and submodule configurations are strict; examples
 retain only the deliberate interface and module-only exemptions. The standard
 Terraform rules remain explicitly curated under their unchanged names.
+
+The submodule configuration sets `module_scope = "submodule"` on
+`avm_terraform_module_source_required`, permitting direct sibling sources such
+as `../part-component`. Root modules retain the default root scope and use
+`./modules/part`. Nested local paths and traversal are rejected; examples keep
+their existing source-rule exemption.
 
 Three rule families stay enabled with native `severity = "notice"` configuration,
 so TFLint reports them on every run with file and line while the default warning
@@ -451,7 +457,7 @@ For `azapi_resource`, omit `replace_triggers_refs` when no immutable body
 property requires replacement. When it is declared, it must be a static,
 non-empty list of unique, nonblank JMESPath expressions that resolve against the
 resource body; do not include the redundant `name` or `location` paths. The
-1.0.0 ruleset is installed with GitHub Artifact Attestation.
+1.3.1 ruleset is installed with GitHub Artifact Attestation.
 
 ### Terraform TFLint overrides
 

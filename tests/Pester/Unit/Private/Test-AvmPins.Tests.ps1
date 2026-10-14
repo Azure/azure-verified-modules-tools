@@ -475,7 +475,7 @@ Describe 'Test-AvmPins' {
         It 'pins the released AVM ruleset version' {
             $pins = InModuleScope 'Avm.Authoring' { Read-AvmPins }
 
-            $pins.tflintPlugins.avm | Should -Be '1.3.0'
+            $pins.tflintPlugins.avm | Should -Be '1.3.1'
         }
 
         It 'keeps managed tool versions out of test stub source' {

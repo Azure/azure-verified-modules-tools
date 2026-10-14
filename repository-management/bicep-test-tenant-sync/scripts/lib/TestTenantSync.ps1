@@ -110,6 +110,41 @@ function Set-AvmBicepTestTenantVariable {
     }
 }
 
+function Resolve-AvmBicepSubscriptionPoolPublication {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [string] $ExistingJson,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Settings
+    )
+
+    $existingSettings = [ordered]@{}
+    foreach ($name in $Settings.Keys) { $existingSettings[$name] = $Settings[$name] }
+    $existingSettings['TEST_BAMI_SUBSCRIPTION_IDS'] = $ExistingJson
+    $existing = ConvertFrom-AvmTestTenantJson -Json (Get-AvmBamiSettings -Values $existingSettings).TEST_BAMI_SUBSCRIPTION_IDS
+    $requested = ConvertFrom-AvmTestTenantJson -Json $Settings['TEST_BAMI_SUBSCRIPTION_IDS']
+    $changed = $false
+    for ($index = 0; $index -lt $existing.Count; $index++) {
+        $before = $existing[$index]
+        $after = $requested[$index]
+        if ($before['id'] -cne $after['id'] -or $before['name'] -cne $after['name']) {
+            throw [System.InvalidOperationException]::new(
+                'Existing BAMI execution values cannot change: VALIDATE_SUBSCRIPTION_IDS. Only tags on the same ordered subscription identities and names may change; retargeting requires coordinated maintenance.'
+            )
+        }
+        $previousTag = if ($before.Contains('tag')) { $before['tag'] } else { 'General' }
+        if ($previousTag -cne 'General' -and -not $after.Contains('tag')) {
+            throw [System.InvalidOperationException]::new(
+                'An untagged source cannot erase an existing subscription reservation. Resolve this maintenance conflict with an explicit tag before publication.'
+            )
+        }
+        $requestedTag = if ($after.Contains('tag')) { $after['tag'] } else { 'General' }
+        if ($previousTag -cne $requestedTag) { $changed = $true }
+    }
+    if (-not $changed) { return $ExistingJson }
+    return $Settings['TEST_BAMI_SUBSCRIPTION_IDS']
+}
+
 function Invoke-AvmBicepTestTenantSync {
     [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Plan')]
     [OutputType([pscustomobject])]
@@ -152,10 +187,19 @@ function Invoke-AvmBicepTestTenantSync {
             if ($null -ne $snapshot[$name] -and $snapshot[$name].Value -cne $projection[$name]) { $name }
         }
     )
-    if ($retargetedNames.Count -gt 0) {
+    if (@($retargetedNames | Where-Object { $_ -cne 'VALIDATE_SUBSCRIPTION_IDS' }).Count -gt 0) {
         throw [System.InvalidOperationException]::new(
             "Existing BAMI execution values cannot change: $($retargetedNames -join ', '). Retargeting requires coordinated maintenance; routine publication cannot overwrite present values."
         )
+    }
+    if ($retargetedNames -ccontains 'VALIDATE_SUBSCRIPTION_IDS') {
+        if (@($projection.Keys | Where-Object {
+                    $_ -cne 'VALIDATE_MODULE_CLIENT_IDS' -and $null -eq $snapshot[$_]
+                }).Count -gt 0 -or [string]::IsNullOrEmpty($snapshot['VALIDATE_SUBSCRIPTION_IDS'].Value)) {
+            throw [System.InvalidOperationException]::new('Existing BAMI execution values cannot change: VALIDATE_SUBSCRIPTION_IDS. Tag updates require the complete matching Bicep execution bundle; missing or empty values require coordinated maintenance.')
+        }
+        $projection['VALIDATE_SUBSCRIPTION_IDS'] = Resolve-AvmBicepSubscriptionPoolPublication `
+            -ExistingJson $snapshot['VALIDATE_SUBSCRIPTION_IDS'].Value -Settings $bundle
     }
     if ($PSBoundParameters.ContainsKey('ModuleClientIds')) {
         $projection['VALIDATE_MODULE_CLIENT_IDS'] = $moduleJson
@@ -167,7 +211,8 @@ function Invoke-AvmBicepTestTenantSync {
     $changes = @(
         foreach ($name in $projection.Keys) {
             if ($null -eq $snapshot[$name] -or
-                ($name -ceq 'VALIDATE_MODULE_CLIENT_IDS' -and $snapshot[$name].Value -cne $projection[$name])) { $name }
+                ($name -cin @('VALIDATE_MODULE_CLIENT_IDS', 'VALIDATE_SUBSCRIPTION_IDS') -and
+                    $snapshot[$name].Value -cne $projection[$name])) { $name }
         }
     )
     $publishing = $PSCmdlet.ParameterSetName -ceq 'Apply' -and $Apply.IsPresent
@@ -179,7 +224,7 @@ function Invoke-AvmBicepTestTenantSync {
         ChangedNames = $changes
     }
     if (-not $publishing) { return [pscustomobject]$result }
-    if ($changes.Count -gt 0 -and -not $PSCmdlet.ShouldProcess($result.Target, 'Publish nonsecret Bicep variables with only verified module naming transitions')) {
+    if ($changes.Count -gt 0 -and -not $PSCmdlet.ShouldProcess($result.Target, 'Publish nonsecret Bicep variables with guarded subscription tags and verified module naming transitions')) {
         $result.Status = 'Preview'
         $result.PlanOnly = $true
         return [pscustomobject]$result

@@ -172,6 +172,46 @@ Describe 'Repository sync unified driver' -Tag Component {
         $variables.ContainsKey('state_layout') | Should -BeFalse
     }
 
+    It 'preserves the complete tagged input for Terraform filtering in plan-only <PlanOnly>' -ForEach @(
+        @{ PlanOnly = $true }
+        @{ PlanOnly = $false }
+    ) {
+        $script:arguments.planOnly = $PlanOnly
+        $script:arguments.bamiSettings.TEST_BAMI_SUBSCRIPTION_IDS[0].tag = 'Azure Local'
+        $script:arguments.bamiSettings.TEST_BAMI_SUBSCRIPTION_IDS[1].tag = 'General'
+        $null = & $script:driver @script:arguments
+        $variables = Get-Content -Raw -LiteralPath (Join-Path $script:terraformRoot 'terraform.tfvars.json') |
+            ConvertFrom-Json -AsHashtable
+        $pool = $variables.bami_test_settings.test_subscription_ids
+        $pool | Should -HaveCount 28
+        $pool.id | Should -Be $script:arguments.bamiSettings.TEST_BAMI_SUBSCRIPTION_IDS.id
+        $pool[0].tag | Should -BeExactly 'Azure Local'
+        $pool[1].tag | Should -BeExactly 'General'
+        $pool[2].Contains('tag') | Should -BeFalse
+        $expected = $PlanOnly
+        Should -Invoke Invoke-TerraformPlanAndApply -Exactly 1 -ParameterFilter { $planOnly -eq $expected }
+    }
+
+    It 'rejects a fully reserved pool before external work or local writes in <Mode>' -ForEach @(
+        @{ Mode = 'plan'; Options = @{ planOnly = $true } }
+        @{ Mode = 'apply'; Options = @{ planOnly = $false } }
+        @{ Mode = 'preview'; Options = @{ WhatIf = $true } }
+    ) {
+        foreach ($entry in $script:arguments.bamiSettings.TEST_BAMI_SUBSCRIPTION_IDS) { $entry.tag = 'Azure Local' }
+        { & $script:driver @script:arguments @Options } | Should -Throw '*at least one General*'
+        $script:fixture.Events | Should -HaveCount 0
+        Test-Path -LiteralPath (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeFalse
+        Should -Invoke Clear-TerraformWorkspace -Exactly 0
+        Should -Invoke Invoke-TerraformPlanAndApply -Exactly 0
+    }
+
+    It 'rejects an explicitly malformed tag before external work' {
+        $script:arguments.bamiSettings.TEST_BAMI_SUBSCRIPTION_IDS[0].tag = $null
+        { & $script:driver @script:arguments } | Should -Throw '*subscription tag must be*'
+        $script:fixture.Events | Should -HaveCount 0
+        Test-Path -LiteralPath (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeFalse
+    }
+
     It 'previews without calls or writes with candidate export <Export> and Actions context <InActions>' -ForEach @(
         @{ Export = $false; InActions = $true }
         @{ Export = $true; InActions = $true }

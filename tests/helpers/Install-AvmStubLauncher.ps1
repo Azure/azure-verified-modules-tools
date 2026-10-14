@@ -10,6 +10,9 @@ function Install-AvmStubLauncher {
         (picked up via the default PATHEXT). On Linux/macOS it is an executable
         PowerShell script named '<tool>' with a pwsh shebang.
 
+        Windows version probes return the pinned stub responses directly from
+        the launcher, without starting PowerShell. Other commands run the stub.
+
         The returned LauncherDir is intended to be prepended to $env:PATH so the
         AvmTool PATH-fallback path resolves the stubs as if they were the real
         binaries (terraform, tflint, terraform-docs, etc.).
@@ -93,11 +96,29 @@ function Install-AvmStubLauncher {
 
         if ($IsWindows) {
             $launcherPath = Join-Path $LauncherDir "$toolName.cmd"
+            $versionOutput = switch ($toolName) {
+                'terraform' {
+                    "Terraform v$toolVersion"
+                    'on linux_amd64'
+                }
+                'terraform-docs' { "terraform-docs version v$toolVersion darwin/amd64" }
+                'tflint' {
+                    "TFLint version $toolVersion"
+                    "ruleset.avm ($pluginVersion)"
+                }
+                default { "Version: $toolVersion" }
+            }
             $cmd = @(
-                '@echo off',
-                "set `"AVM_STUB_TOOL_VERSION=$toolVersion`"",
-                "set `"AVM_STUB_TFLINT_AVM_PLUGIN_VERSION=$pluginVersion`"",
-                "pwsh -NoProfile -ExecutionPolicy Bypass -File `"$stubPath`" %*",
+                '@echo off'
+                'if "%~1"=="--version" ('
+                foreach ($line in $versionOutput) {
+                    "    echo $($line.Replace('(', '^(').Replace(')', '^)'))"
+                }
+                '    exit /b 0'
+                ')'
+                "set `"AVM_STUB_TOOL_VERSION=$toolVersion`""
+                "set `"AVM_STUB_TFLINT_AVM_PLUGIN_VERSION=$pluginVersion`""
+                "pwsh -NoProfile -ExecutionPolicy Bypass -File `"$stubPath`" %*"
                 'exit /b %ERRORLEVEL%'
             ) -join "`r`n"
             Set-Content -LiteralPath $launcherPath -Value $cmd -Encoding ASCII -NoNewline

@@ -8,7 +8,7 @@ function Get-AvmBicepWorkflowEnvironment {
 
     $result = @{
         Variables = @{}; Secrets = @{}; Tokens = @{}
-        PoolJson = ''; SubscriptionId = ''; TenantId = ''; KeyVaultName = ''
+        PoolJson = ''; SubscriptionId = ''; TenantId = ''; ManagementGroupId = ''; KeyVaultName = ''
     }
     if (-not $Enabled) { return $result }
     foreach ($entry in @(
@@ -43,12 +43,26 @@ function Get-AvmBicepWorkflowEnvironment {
         $result.Tokens['namePrefix'] = $environment['TOKEN_NAMEPREFIX']
     }
     foreach ($entry in @(
-            @{ Name = 'PoolJson'; Environment = 'TEST_SUBSCRIPTION_IDS' }
-            @{ Name = 'SubscriptionId'; Environment = 'VALIDATE_SUBSCRIPTION_ID' }
-            @{ Name = 'TenantId'; Environment = 'VALIDATE_TENANT_ID' }
-            @{ Name = 'KeyVaultName'; Environment = 'CI_KEY_VAULT_NAME' }
+            @{ Name = 'PoolJson'; Names = @('VALIDATE_SUBSCRIPTION_IDS', 'TEST_SUBSCRIPTION_IDS') }
+            @{ Name = 'SubscriptionId'; Names = @('VALIDATE_SUBSCRIPTION_ID') }
+            @{ Name = 'TenantId'; Names = @('VALIDATE_TENANT_ID') }
+            @{ Name = 'ManagementGroupId'; Names = @('VALIDATE_MANAGEMENT_GROUP_ID', 'ARM_MGMTGROUP_ID') }
         )) {
-        $result[$entry.Name] = [string]$environment[$entry.Environment]
+        $found = $false
+        foreach ($source in @($result.Variables, $result.Secrets, $environment)) {
+            foreach ($name in $entry.Names) {
+                $value = $source[$name]
+                if ($null -eq $value -or ($value -is [string] -and $value.Length -eq 0)) { continue }
+                if ($value -isnot [string]) {
+                    throw [AvmConfigurationException]::new("$name must be a string.")
+                }
+                $result[$entry.Name] = $value
+                $found = $true
+                break
+            }
+            if ($found) { break }
+        }
     }
+    $result.KeyVaultName = [string]$environment['CI_KEY_VAULT_NAME']
     return $result
 }
