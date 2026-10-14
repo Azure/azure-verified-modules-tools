@@ -32,7 +32,6 @@ BeforeAll {
             $data.authoringSource = if ($PlanOnly) { 'checkout' } else { 'gallery' }
             $data.authoringVersion = '0.0.0'
             [System.IO.File]::WriteAllBytes((Join-Path $Directory 'candidate.tar'), [byte[]]@(1, 2, 3))
-            [System.IO.File]::WriteAllBytes((Join-Path $Directory 'candidate.patch'), [byte[]]@(4, 5, 6))
             $settings = @{
                 tenantId = $script:tenant
                 clientId = $script:client
@@ -186,7 +185,7 @@ Describe 'Repository sync candidate validation' {
                 ManagedRepoId = $env:AVM_MANAGED_FILES_REPO_ID
                 ManagedConfigDir = $env:AVM_MANAGED_FILES_CONFIG_LOCAL_PATH
             }
-            [pscustomobject]@{ Status = 'pass'; Steps = @() }
+            [pscustomobject]@{ Status = 'pass'; Steps = @([pscustomobject]@{ Step = 'lint'; Status = 'pass' }) }
         }
         Mock Invoke-AvmTestUnit { [pscustomobject]@{ Status = 'pass' } }
     }
@@ -226,7 +225,7 @@ Describe 'Repository sync candidate validation' {
             $env:AVM_MANAGED_FILES_CONFIG_LOCAL_PATH | Should -BeExactly 'wrong-config-directory'
             $receipt = Get-Content -LiteralPath (Join-Path $script:receipt 'validation.json') -Raw | ConvertFrom-Json -AsHashtable
             $receipt.treeSha | Should -BeExactly ('2' * 40)
-            $receipt.schemaVersion | Should -Be 2
+            $receipt.schemaVersion | Should -Be 3
             $receipt.profile | Should -BeExactly 'static-unit-v1'
             $receipt.checks.prCheck | Should -BeExactly 'pass'
             $receipt.checks.unit | Should -BeExactly 'pass'
@@ -274,11 +273,11 @@ Describe 'Repository sync candidate validation' {
         ($script:diagnostics -join "`n") | Should -Match 'Conftest, integration and E2E are deferred'
     }
 
-    It 'runs both checks but does not issue a receipt when pr-check fails' -ForEach @('pass', 'skipped') {
+    It 'logs pr-check failure before any unit work or receipt' -ForEach @('pass', 'skipped') {
         $script:unitStatus = $_
         $script:diagnostics = [System.Collections.Generic.List[string]]::new()
         Mock Write-Host { $script:diagnostics.Add([string]$Object) }
-        Mock Invoke-AvmTestUnit { [pscustomobject]@{ Status = $script:unitStatus } }
+        Mock Invoke-AvmTestUnit { throw 'Unit work must not obscure the PR-check failure.' }
         Mock Invoke-AvmPrCheck {
             [pscustomobject]@{
                 Status = 'fail'
@@ -301,9 +300,71 @@ Describe 'Repository sync candidate validation' {
             -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt `
             -CheckoutModulePath (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') } |
             Should -Throw '*pr-check=fail*'
-        Should -Invoke Invoke-AvmTestUnit -Exactly 1
+        Should -Invoke Invoke-AvmTestUnit -Exactly 0
         ($script:diagnostics -join "`n") | Should -Match 'examples/default/main\.tf:9: \[warning\] \[terraform_unused_required_providers\]'
         Test-Path -LiteralPath (Join-Path $script:receipt 'validation.json') | Should -BeFalse
+    }
+
+    It 'invalidates earlier success and blocks existing bot updates after <Failure>' -ForEach @(
+        @{ Failure = 'fail'; Expected = 'underlying pr-check failure' }
+        @{ Failure = 'error'; Expected = 'underlying pr-check failure' }
+        @{ Failure = 'throw'; Expected = 'thrown pr-check diagnostic' }
+        @{ Failure = 'missing'; Expected = 'missing or invalid check result' }
+        @{ Failure = 'invalid'; Expected = 'missing or invalid check result' }
+        @{ Failure = 'unexpected'; Expected = 'pr-check=unexpected' }
+        @{ Failure = 'contradictory'; Expected = 'underlying pr-check failure' }
+        @{ Failure = 'empty-steps'; Expected = 'pr-check=pass' }
+        @{ Failure = 'null-steps'; Expected = 'pr-check=pass' }
+        @{ Failure = 'invalid-step'; Expected = 'invalid step diagnostic' }
+        @{ Failure = 'unknown-step-status'; Expected = 'unknown step diagnostic' }
+        @{ Failure = 'array'; Expected = 'array result diagnostic' }
+    ) {
+        $script:failure = $Failure
+        $script:diagnostics = [System.Collections.Generic.List[string]]::new()
+        New-TestRepositoryCandidate -Directory $script:directory -PlanOnly $false
+        $candidate = Read-RepositorySyncCandidate -Directory $script:directory -Repository $script:repository
+        Save-RepositorySyncValidationReceipt -Candidate $candidate -Directory $script:receipt -PrCheckStatus pass -UnitStatus pass
+        Mock Import-Module {}
+        Mock Write-Host { $script:diagnostics.Add([string]$Object) }
+        Mock Invoke-AvmPrCheck {
+            switch ($script:failure) {
+                throw { throw [System.InvalidOperationException]::new('thrown pr-check diagnostic') }
+                missing { return $null }
+                invalid { return [pscustomobject]@{ Error = 'invalid result diagnostic' } }
+                empty-steps { return [pscustomobject]@{ Status = 'pass'; Steps = @() } }
+                null-steps { return [pscustomobject]@{ Status = 'pass'; Steps = @($null) } }
+                invalid-step { return [pscustomobject]@{ Status = 'pass'; Steps = @([pscustomobject]@{ Error = 'invalid step diagnostic' }) } }
+                unknown-step-status {
+                    return [pscustomobject]@{ Status = 'pass'; Steps = @([pscustomobject]@{
+                                Step = 'transform'; Status = 'unknown'; Error = 'unknown step diagnostic'
+                            }) }
+                }
+                array { return @([pscustomobject]@{ Error = 'array result diagnostic' }, [pscustomobject]@{ Status = 'pass' }) }
+                default {
+                    [pscustomobject]@{
+                        Status = if ($script:failure -eq 'contradictory') { 'pass' } else { $script:failure }
+                        Steps = @([pscustomobject]@{ Step = 'transform'; Status = 'error'; Error = 'underlying pr-check failure' })
+                    }
+                }
+            }
+        }
+        Mock Invoke-AvmTestUnit { throw 'Unit work must not run.' }
+        Mock Invoke-RepositoryFileSync { throw 'Existing bot PR update must not run.' }
+        Mock Invoke-RepositoryGitHub { throw 'PR create/update/merge must not run.' }
+        Mock Invoke-RepositoryGitHubApi { throw 'Existing bot PR lookup must not run.' }
+
+        { Invoke-RepositorySyncCandidateValidation -Repository $script:repository `
+            -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt `
+            -CheckoutModulePath (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') } | Should -Throw
+        ($script:diagnostics -join "`n") | Should -Match ([regex]::Escape($Expected))
+        Test-Path (Join-Path $script:receipt 'validation.json') | Should -BeFalse
+        { Invoke-RepositorySyncCandidatePublication -Repository $script:repository `
+            -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt } | Should -Throw
+        Should -Invoke Invoke-AvmTestUnit -Times 0
+        Should -Invoke Invoke-RepositoryFileSync -Times 0
+        Should -Invoke Invoke-RepositoryGitHub -Times 0
+        Should -Invoke Invoke-RepositoryGitHubApi -Times 0
+        Should -Invoke Invoke-RepositoryGit -Times 0 -ParameterFilter { $Arguments[0] -in @('diff', 'push') }
     }
 
     It 'does not issue a receipt for failed, errored or unexpected unit results' -ForEach @('fail', 'error', 'unexpected') {
@@ -376,11 +437,12 @@ Describe 'Repository sync publication safety' {
         Should -Invoke Invoke-RepositoryFileSync -Times 0
     }
 
-    It 'rejects legacy or different-profile receipts before publication' -ForEach @('legacy', 'profile', 'checks') {
+    It 'rejects legacy or different-profile receipts before publication' -ForEach @('legacy', 'previous', 'profile', 'checks') {
         $path = Join-Path $script:receipt 'validation.json'
         $receipt = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -AsHashtable
         switch ($_) {
             legacy { $receipt.schemaVersion = 1; $receipt.Remove('profile'); $receipt.Remove('checks') }
+            previous { $receipt.schemaVersion = 2 }
             profile { $receipt.profile = 'full' }
             checks { $receipt.Remove('checks') }
         }
@@ -388,6 +450,24 @@ Describe 'Repository sync publication safety' {
         { Invoke-RepositorySyncCandidatePublication -Repository $script:repository `
             -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt } |
             Should -Throw '*receipt does not match*'
+        Should -Invoke Invoke-RepositoryFileSync -Times 0
+    }
+
+    It 'rejects stale <Field> evidence before any publication operation' -ForEach @(
+        @{ Field = 'baseSha'; Value = ('f' * 40) }
+        @{ Field = 'treeSha'; Value = ('f' * 40) }
+        @{ Field = 'headSha'; Value = ('f' * 40) }
+        @{ Field = 'repository'; Value = 'Azure/terraform-azurerm-avm-res-other' }
+        @{ Field = 'planOnly'; Value = $true }
+        @{ Field = 'authoringVersion'; Value = '9.9.9' }
+        @{ Field = 'authoringSource'; Value = 'checkout' }
+    ) {
+        $path = Join-Path $script:receipt 'validation.json'
+        $receipt = Get-Content $path -Raw | ConvertFrom-Json -AsHashtable
+        $receipt[$Field] = $Value
+        [System.IO.File]::WriteAllText($path, ($receipt | ConvertTo-Json -Depth 6))
+        { Invoke-RepositorySyncCandidatePublication -Repository $script:repository `
+            -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt } | Should -Throw '*receipt does not match*'
         Should -Invoke Invoke-RepositoryFileSync -Times 0
     }
 
@@ -423,12 +503,13 @@ Describe 'Repository sync publication safety' {
     It 'rejects a patch that does not recreate the validated file tree before any push' {
         Mock Invoke-RepositoryFileSync {
             param($Prepare, $State, $ExpectedBaseSha)
-            & $Prepare @{ Root = 'isolated-clone'; State = $State; BaseSha = $ExpectedBaseSha }
+            & $Prepare @{ Root = (Join-Path $TestDrive 'publication' 'repository'); State = $State; BaseSha = $ExpectedBaseSha }
         }
         Mock Invoke-RepositoryGit {
             if ($Arguments[0] -eq 'write-tree') { return '3' * 40 }
             return ''
         }
+        Mock Initialize-RepositorySyncCandidateCheckout {}
         { Invoke-RepositorySyncCandidatePublication -Repository $script:repository `
             -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt } |
             Should -Throw '*does not produce the validated Git tree*'

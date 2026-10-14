@@ -43,12 +43,12 @@ BeforeAll {
     }
 
     function New-CorePreparedArtifact {
-        param([string]$Directory, [string]$BaseSha = ('a' * 40))
+        param([string]$Directory, [string]$BaseSha = ('a' * 40), [string]$Repository = 'Azure/terraform-test')
 
         $null = New-Item -ItemType Directory -Path $Directory -Force
         $candidate = @{
             schemaVersion = 1
-            repository = 'Azure/terraform-test'
+            repository = $Repository
             phase = 'prepared'
             defaultBranch = 'main'
             baseSha = $BaseSha
@@ -62,10 +62,24 @@ BeforeAll {
         }
         [System.IO.File]::WriteAllText((Join-Path $Directory 'candidate.json'), ($candidate | ConvertTo-Json -Depth 6))
         [System.IO.File]::WriteAllBytes((Join-Path $Directory 'candidate.tar'), [byte[]]@(1, 2, 3))
-        [System.IO.File]::WriteAllBytes((Join-Path $Directory 'candidate.patch'), [byte[]]@(4, 5, 6))
         $receipt = Join-Path $Directory 'receipt'
         Save-RepositorySyncValidationReceipt -Candidate $candidate -Directory $receipt -PrCheckStatus pass -UnitStatus pass
         return $receipt
+    }
+
+    function Invoke-CoreQualifiedTerraformSync {
+        param([hashtable]$Parameters)
+
+        $directory = Join-Path $TestDrive ('staged-' + [guid]::NewGuid().ToString('N'))
+        $result = Invoke-AvmPreCommitForRepository @Parameters -candidateOutputDirectory $directory
+        if ($result.HasChanges) {
+            $candidate = Read-RepositorySyncCandidate -Directory $directory -Repository $Parameters.orgAndRepoName
+            $receipt = Join-Path $directory 'receipt'
+            Save-RepositorySyncValidationReceipt -Candidate $candidate -Directory $receipt -PrCheckStatus pass -UnitStatus pass
+            $null = Invoke-RepositorySyncCandidatePublication -Repository $Parameters.orgAndRepoName `
+                -CandidateDirectory $directory -ReceiptDirectory $receipt
+        }
+        return $result
     }
 
     function Invoke-CoreApi {
@@ -125,7 +139,10 @@ BeforeAll {
             return ''
         }
         if ($Arguments -contains 'commit-tree') { $script:state.LocalHead = 'c' * 40; return $script:state.LocalHead }
-        if ($Arguments -contains 'commit') { $script:state.LocalHead = 'c' * 40; return '' }
+        if ($Arguments -contains 'commit') {
+            if ($WorkingDirectory -ceq $script:state.Root) { $script:state.LocalHead = 'c' * 40 }
+            return ''
+        }
         if ($Arguments[0] -eq 'archive' -or
             ($Arguments[0] -eq 'diff' -and @($Arguments | Where-Object { $_ -like '--output=*' }).Count -gt 0)) {
             $output = @($Arguments | Where-Object { $_ -like '--output=*' })[0].Substring(9)
@@ -133,6 +150,8 @@ BeforeAll {
             return ''
         }
         switch ($Arguments[0]) {
+            'init' { return '' }
+            'remote' { return '' }
             'config' { return '' }
             'sparse-checkout' { return '' }
             'checkout' {
@@ -209,6 +228,11 @@ Describe 'Existing repository-sync publication core' -Tag Component {
             ApiCalls = [System.Collections.Generic.List[string]]::new()
         }
         Mock Invoke-RepositoryGit { param($Arguments, $WorkingDirectory, $MaxRetries) Invoke-CoreGit @PSBoundParameters }
+        Mock Invoke-RepositorySyncProcess {
+            param($Command, $Arguments)
+            if ($Command -ne 'tar') { throw 'Only local archive extraction is allowed.' }
+            [pscustomobject]@{ ExitCode = 0; StdErr = '' }
+        }
         Mock Invoke-RepositoryGitHubApi { param($Endpoint) Invoke-CoreApi $Endpoint }
         Mock Get-RepositoryBranchHead {
             param($Repository, $Branch)
@@ -243,12 +267,14 @@ Describe 'Existing repository-sync publication core' -Tag Component {
         }
     }
 
-    It 'uses the original Terraform preparation and publication defaults through the shared core' {
+    It 'publishes receipt-qualified Terraform preparation with the original publication defaults' {
         $script:state.Repo.full_name = 'Azure/terraform-test'
         $script:state.LocalPaths = @('main.tf', '.github/CODEOWNERS')
         $script:state.RemotePaths = @('main.tf', '.github/CODEOWNERS')
-        $result = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
-            -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $false -issueLog @()
+        $parameters = $script:terraformOwnership.Clone()
+        $parameters += @{ orgAndRepoName = 'Azure/terraform-test'; repoId = 'avm-res-test'
+            repositoryConfigDir = 'configuration'; defaultBranch = 'main'; planOnly = $false; issueLog = @() }
+        $result = Invoke-CoreQualifiedTerraformSync -Parameters $parameters
         @($result.Keys | Sort-Object) | Should -Be @('HasChanges', 'IssueLog')
         $result.HasChanges | Should -BeTrue
         $result.IssueLog | Should -HaveCount 0
@@ -291,7 +317,8 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
     It 'fails before pushing when fallback bot identity configuration is invalid' {
         $env:AVM_APP_BOT_USER_ID = 'not-a-number'
         { Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
-            -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $false -issueLog @() } |
+            -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $false `
+            -candidateOutputDirectory (Join-Path $TestDrive 'invalid-actor') -issueLog @() } |
             Should -Throw '*AVM_APP_BOT_USER_ID*'
         @($script:state.GitCalls | Where-Object { $_[0] -eq 'push' }) | Should -HaveCount 0
         @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' }) | Should -HaveCount 0
@@ -319,7 +346,8 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         Mock Invoke-AvmPreCommitWithUpgradeRetry { [pscustomobject]@{ Status = 'pass'; Steps = @() } }
         $issues = @('existing issue')
         $result = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
-            -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $false -issueLog $issues
+            -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $false `
+            -candidateOutputDirectory (Join-Path $TestDrive 'unchanged') -issueLog $issues
         @($result.Keys | Sort-Object) | Should -Be @('HasChanges', 'IssueLog')
         $result.HasChanges | Should -BeFalse
         [System.Text.Encoding]::UTF8.GetString($script:state.PreparedCodeownersBytes) | Should -BeExactly $script:state.InitialCodeowners
@@ -336,6 +364,8 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         $script:state.Repo.full_name = 'Azure/terraform-test'
         $script:state.LocalPaths = @('main.tf', '.github/CODEOWNERS')
         $candidateDirectory = Join-Path $TestDrive "candidate-$Mode"
+        $null = New-Item -ItemType Directory -Path $candidateDirectory -Force
+        [System.IO.File]::WriteAllText((Join-Path $candidateDirectory 'candidate.patch'), 'stale patch')
         $result = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' `
             -repoId 'avm-res-test' -repositoryConfigDir 'configuration' -defaultBranch main `
             -planOnly $Plan -candidateOutputDirectory $candidateDirectory -issueLog @()
@@ -352,7 +382,8 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         $manifest.authoringSource | Should -BeExactly 'gallery'
         $manifest.authoringVersion | Should -BeExactly '0.0.0'
         (Get-Item -LiteralPath (Join-Path $candidateDirectory 'candidate.tar')).Length | Should -BeGreaterThan 0
-        (Get-Item -LiteralPath (Join-Path $candidateDirectory 'candidate.patch')).Length | Should -BeGreaterThan 0
+        Test-Path -LiteralPath (Join-Path $candidateDirectory 'candidate.patch') | Should -BeFalse
+        @($script:state.GitCalls | Where-Object { $_[0] -eq 'diff' -and $_ -contains '--binary' }) | Should -HaveCount 0
         @($script:state.GitCalls | Where-Object { $_ -contains 'commit' }) | Should -HaveCount 1
         @($script:state.GitCalls | Where-Object { $_[0] -eq 'push' }) | Should -HaveCount 0
         @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' }) | Should -HaveCount 0
@@ -409,18 +440,62 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
     }
 
     It 'publishes the matching validated tree using the original bot branch and merge path' {
-        $script:state.Repo.full_name = 'Azure/terraform-test'
+        $repository = 'Azure/terraform-azure-avm-res-test'
+        $script:state.Repo.full_name = $repository
         $script:state.LocalPaths = @('main.tf')
         $script:state.RemotePaths = @('main.tf')
         $directory = Join-Path $TestDrive 'validated-candidate'
-        $receipt = New-CorePreparedArtifact -Directory $directory
-        $result = Invoke-RepositorySyncCandidatePublication -Repository 'Azure/terraform-test' `
+        $receipt = New-CorePreparedArtifact -Directory $directory -Repository $repository
+        $result = Invoke-RepositorySyncCandidatePublication -Repository $repository `
             -CandidateDirectory $directory -ReceiptDirectory $receipt
         $result.Status | Should -BeExactly 'Merged'
         $script:state.Merged | Should -BeTrue
         @($script:state.GitCalls | Where-Object { $_[0] -eq 'push' }) | Should -HaveCount 1
         @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' -and $_[1] -eq 'create' }) | Should -HaveCount 1
         @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' -and $_[1] -eq 'merge' }) | Should -HaveCount 1
+    }
+
+    It 'requires validation for the case-insensitive module repository <_>' -ForEach @(
+        'Azure/Terraform-Azure-Avm-Res-Test'
+        'Azure/TERRAFORM-AZAPI-AVM-PTN-TEST'
+        'Azure/Terraform-AzureRM-AVM-Utl-Test'
+    ) {
+        { Invoke-RepositoryFileSync -Repository $_ -DefaultBranch main `
+            -Prepare { throw 'Unqualified preparation must not run.' } } |
+            Should -Throw '*requires a validated candidate and receipt*'
+        $script:state.GitCalls | Should -HaveCount 0
+        $script:state.GhCalls | Should -HaveCount 0
+        $script:state.ApiCalls | Should -HaveCount 0
+    }
+
+    It 'blocks an existing bot branch update with <_> evidence at the shared entry point' -ForEach @(
+        'missing', 'stale', 'unbound'
+    ) {
+        $repository = 'Azure/terraform-azure-avm-res-test'
+        $script:state.Repo.full_name = $repository
+        $script:state.HasPullRequest = $true
+        $script:state.RemoteHead = 'b' * 40
+        $directory = Join-Path $TestDrive ('existing-' + $_)
+        $receipt = New-CorePreparedArtifact -Directory $directory -Repository $repository
+        $candidate = Read-RepositorySyncCandidate -Directory $directory -Repository $repository
+        if ($_ -eq 'missing') {
+            Remove-Item (Join-Path $receipt 'validation.json')
+        }
+        elseif ($_ -eq 'stale') {
+            $candidate.treeSha = 'f' * 40
+        }
+        $state = if ($_ -eq 'unbound') { @{} } else {
+            @{ Candidate = $candidate; ValidationReceiptDirectory = $receipt }
+        }
+        { Invoke-RepositoryFileSync -Repository $repository -DefaultBranch main -ExpectedBaseSha ('a' * 40) `
+            -State $state -StableBranch 'avm-bot/existing' -VerifyCandidate -ExpectedActor (New-CoreActor) `
+            -Prepare { throw 'Unqualified diff generation must not run.' } } | Should -Throw
+        $script:state.GitCalls | Should -HaveCount 0
+        $script:state.GhCalls | Should -HaveCount 0
+        $script:state.ApiCalls | Should -HaveCount 0
+        $script:state.RemoteHead | Should -BeExactly ('b' * 40)
+        $script:state.HasPullRequest | Should -BeTrue
+        $script:state.Merged | Should -BeFalse
     }
 
     It 'does not push a validated candidate when the target branch moved' {
@@ -432,6 +507,50 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
             Should -Throw '*target branch moved since candidate validation*'
         @($script:state.GitCalls | Where-Object { $_[0] -eq 'push' }) | Should -HaveCount 0
         @($script:state.GhCalls | Where-Object { $_[0] -eq 'pr' }) | Should -HaveCount 0
+    }
+
+    It 'invalidates same-tree success before a failed check and never updates an existing bot pull request' {
+        $repository = 'Azure/terraform-azure-avm-res-test'
+        $script:state.Repo.full_name = $repository
+        $script:state.HasPullRequest = $true
+        $script:state.RemoteHead = 'b' * 40
+        $script:state.Branch = 'avm-bot/existing'
+        $directory = Join-Path $TestDrive 'failed-existing'
+        $receipt = New-CorePreparedArtifact -Directory $directory -Repository $repository
+        $candidate = Read-RepositorySyncCandidate -Directory $directory -Repository $repository
+        $candidate.authoringVersion = (Get-Command Invoke-AvmPrCheck).Module.Version.ToString()
+        [System.IO.File]::WriteAllText((Join-Path $directory 'candidate.json'), ($candidate | ConvertTo-Json -Depth 6))
+        Save-RepositorySyncValidationReceipt -Candidate $candidate -Directory $receipt -PrCheckStatus pass -UnitStatus pass
+        Assert-RepositorySyncValidationReceipt -Candidate $candidate -Directory $receipt
+        $settings = @{
+            tenantId = '11111111-1111-4111-8111-111111111111'
+            clientId = '22222222-2222-4222-8222-222222222222'
+            subscriptions = @(@{ name = 'test'; id = '33333333-3333-4333-8333-333333333333' })
+        }
+        [System.IO.File]::WriteAllText((Join-Path $directory 'test-settings.json'), ($settings | ConvertTo-Json -Depth 6))
+        Mock Import-Module {}
+        Mock Invoke-AvmPrCheck {
+            [pscustomobject]@{ Status = 'fail'; Steps = @([pscustomobject]@{
+                        Step = 'lint'; Status = 'fail'; Error = 'Existing candidate qualification failed.'
+                    }) }
+        }
+        Mock Invoke-AvmTestUnit { throw 'Unit tests must not obscure the failing PR-check.' }
+        { Invoke-RepositorySyncCandidateValidation -Repository $repository -CandidateDirectory $directory `
+            -ReceiptDirectory $receipt -CheckoutModulePath 'unused' } | Should -Throw '*pr-check=fail*'
+        Test-Path (Join-Path $receipt 'validation.json') | Should -BeFalse
+        { Invoke-RepositorySyncCandidatePublication -Repository $repository -CandidateDirectory $directory `
+            -ReceiptDirectory $receipt } | Should -Throw
+        { Invoke-RepositoryFileSync -Repository $repository -DefaultBranch main -ExpectedBaseSha $candidate.baseSha `
+            -State @{ Candidate = $candidate; ValidationReceiptDirectory = $receipt } `
+            -StableBranch 'avm-bot/existing' -VerifyCandidate -ExpectedActor (New-CoreActor) `
+            -Prepare { throw 'Publication diff must not run.' } } | Should -Throw
+        Should -Invoke Invoke-AvmTestUnit -Times 0
+        @($script:state.GitCalls | Where-Object { $_ -contains 'push' -or $_ -contains 'diff' }) | Should -HaveCount 0
+        $script:state.GhCalls | Should -HaveCount 0
+        $script:state.ApiCalls | Should -HaveCount 0
+        $script:state.RemoteHead | Should -BeExactly ('b' * 40)
+        $script:state.HasPullRequest | Should -BeTrue
+        $script:state.Merged | Should -BeFalse
     }
 
     It 'propagates Terraform preparation and publication failures without reporting success' -ForEach @(
@@ -450,9 +569,10 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         } else {
             Mock Invoke-RepositoryGitHub { throw "$script:failureStage failed" } -ParameterFilter { $Arguments -contains $script:failureStage }
         }
-        { Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
-            -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $false -issueLog @() } |
-            Should -Throw "*Administrative corrective action is required*$script:failureStage failed*"
+        $parameters = $script:terraformOwnership.Clone()
+        $parameters += @{ orgAndRepoName = 'Azure/terraform-test'; repoId = 'avm-res-test'
+            repositoryConfigDir = 'configuration'; defaultBranch = 'main'; planOnly = $false; issueLog = @() }
+        { Invoke-CoreQualifiedTerraformSync -Parameters $parameters } | Should -Throw "*$script:failureStage failed*"
         $script:state.Merged | Should -BeFalse
         if ($script:state.Root) { Test-Path -LiteralPath $script:state.Root | Should -BeFalse }
     }
@@ -469,10 +589,10 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         if ($_) { Mock Invoke-AvmPreCommitWithUpgradeRetry { throw 'prepare failed' } }
         try {
             if ($_) {
-                { Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -defaultBranch main -issueLog @() } |
+                { Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -defaultBranch main -planOnly $true -issueLog @() } |
                     Should -Throw '*prepare failed*'
             } else {
-                $result = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -defaultBranch main -issueLog @()
+                $result = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -defaultBranch main -planOnly $true -issueLog @()
                 $result.HasChanges | Should -BeFalse
             }
             Should -Invoke Write-Warning -Exactly 1 -ParameterFilter { $Message -like 'Failed to clean up*cleanup unavailable*' }
@@ -588,7 +708,7 @@ function Invoke-RepositoryFileSync {
     if ($probe.ExitCode -ne 0 -or $probe.StdOut -notmatch '^git version ') { throw 'Local Git transport failed.' }
     return @{ HasChanges = $false; Status = 'NoChange' }
 }
-$result = Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/offline-test' -defaultBranch main -issueLog @() `
+$result = Invoke-AvmPreCommitForRepository -orgAndRepoName 'Azure/offline-test' -defaultBranch main -issueLog @() -planOnly $true `
     -codeOwnersDefaultTeams @() -codeOwnersFileProtectionTeams @('engineering-reviewers')
 if ($result.HasChanges -or $result.Count -ne 2) { throw 'Unexpected legacy result.' }
 'fresh-process-transport-ok'

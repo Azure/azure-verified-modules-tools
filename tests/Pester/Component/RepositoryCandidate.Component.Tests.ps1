@@ -59,9 +59,6 @@ Describe 'Repository candidate original identity' -Tag Component {
         $treeSha = Invoke-RepositoryGit -WorkingDirectory $original -Arguments @('rev-parse', 'HEAD^{tree}')
         $null = Invoke-RepositoryGit -WorkingDirectory $original -Arguments @(
             'archive', '--format=tar', "--output=$(Join-Path $candidate 'candidate.tar')", 'HEAD')
-        $null = Invoke-RepositoryGit -WorkingDirectory $original -Arguments @(
-            'diff', '--binary', '--full-index', '--no-renames',
-            "--output=$(Join-Path $candidate 'candidate.patch')", $baseSha, 'HEAD')
         $manifest = @{
             schemaVersion = 1
             repository = $repository
@@ -115,11 +112,11 @@ Describe 'Repository candidate original identity' -Tag Component {
             $evidence.checks.integration | Should -BeExactly 'deferred'
             $evidence.checks.e2e | Should -BeExactly 'deferred'
         }
-        $script:validatedPaths | Should -HaveCount 2
+        $script:validatedPaths | Should -HaveCount $(if ($StaticStatus -eq 'fail') { 1 } else { 2 })
         Should -Invoke Invoke-AvmPrCheck -Exactly 1 -ParameterFilter {
             $ExcludeSteps.Count -eq 1 -and $ExcludeSteps[0] -ceq 'check policy'
         }
-        Should -Invoke Invoke-AvmTestUnit -Exactly 1
+        Should -Invoke Invoke-AvmTestUnit -Exactly $(if ($StaticStatus -eq 'fail') { 0 } else { 1 })
         Should -Invoke Invoke-AvmTestIntegration -Times 0
         Should -Invoke Invoke-AvmTestE2e -Times 0
     }
@@ -163,19 +160,13 @@ Describe 'Repository candidate archive and patch' -Tag Component {
         $archivePath = Join-Path $candidate 'candidate.tar'
         $patchPath = Join-Path $candidate 'candidate.patch'
         $null = Invoke-RepositoryGit -WorkingDirectory $original -Arguments @('archive', '--format=tar', "--output=$archivePath", 'HEAD')
-        $null = Invoke-RepositoryGit -WorkingDirectory $original -Arguments @(
-            'diff', '--binary', '--full-index', '--no-renames', "--output=$patchPath", $baseSha, 'HEAD')
-
-        $extract = Invoke-RepositorySyncProcess -Command tar -Arguments @('-xf', $archivePath, '-C', $validation)
-        $extract.ExitCode | Should -Be 0
-        $null = Invoke-RepositoryGit -WorkingDirectory $TestDrive -Arguments @('init', '--quiet', '-b', 'main', $validation)
-        $null = Invoke-RepositoryGit -WorkingDirectory $validation -Arguments @('config', '--local', 'core.autocrlf', 'false')
-        (Initialize-RepositorySyncCandidateIndex -Root $validation) | Should -BeExactly $tree
+        Test-Path $patchPath | Should -BeFalse
+        Initialize-RepositorySyncCandidateCheckout -Candidate @{
+            repository = 'Azure/terraform-azurerm-avm-res-example'; treeSha = $tree
+        } -CandidateDirectory $candidate -Root $validation
+        (Invoke-RepositoryGit -WorkingDirectory $validation -Arguments @('rev-parse', 'HEAD^{tree}')) | Should -BeExactly $tree
         Test-Path -LiteralPath (Join-Path $validation '.git' 'info' 'attributes') | Should -BeFalse
         [System.IO.File]::ReadAllText((Join-Path $validation '.gitignore')) | Should -BeExactly $ignored
-        $null = Invoke-RepositoryGit -WorkingDirectory $validation -Arguments @(
-            '-c', 'user.name=AVM test', '-c', 'user.email=avm-test@users.noreply.github.com',
-            'commit', '--quiet', '-m', 'Validate')
         (Invoke-RepositoryGit -WorkingDirectory $validation -Arguments @('status', '--porcelain')) | Should -BeNullOrEmpty
         $null = Invoke-RepositoryGit -WorkingDirectory $caseRoot -Arguments @('clone', '--quiet', $validation, $unit)
         (Invoke-RepositoryGit -WorkingDirectory $unit -Arguments @('rev-parse', 'HEAD^{tree}')) | Should -BeExactly $tree
@@ -183,8 +174,74 @@ Describe 'Repository candidate archive and patch' -Tag Component {
 
         $null = Invoke-RepositoryGit -WorkingDirectory $TestDrive -Arguments @('clone', '--quiet', $original, $publication)
         $null = Invoke-RepositoryGit -WorkingDirectory $publication -Arguments @('checkout', '--quiet', $baseSha)
+        $null = Invoke-RepositoryGit -WorkingDirectory $publication -Arguments @('fetch', '--quiet', '--no-tags', $validation, 'HEAD')
+        $null = Invoke-RepositoryGit -WorkingDirectory $publication -Arguments @(
+            'diff', '--binary', '--full-index', '--no-renames', "--output=$patchPath", $baseSha, 'FETCH_HEAD')
         $null = Invoke-RepositoryGit -WorkingDirectory $publication -Arguments @('apply', '--index', '--binary', '--', $patchPath)
         (Invoke-RepositoryGit -WorkingDirectory $publication -Arguments @('write-tree')) | Should -BeExactly $tree
+    }
+
+    Describe 'Repository candidate workflow process boundary' -Tag Component {
+        It 'returns the correct workflow exit after <Scenario>, replacing earlier success' -ForEach @(
+            @{ Scenario = 'fail'; Diagnostic = 'original returned PR-check diagnostic' }
+            @{ Scenario = 'error'; Diagnostic = 'original returned PR-check diagnostic' }
+            @{ Scenario = 'throw'; Diagnostic = 'original thrown PR-check diagnostic' }
+            @{ Scenario = 'missing'; Diagnostic = 'missing or invalid check result' }
+            @{ Scenario = 'invalid'; Diagnostic = 'original invalid PR-check diagnostic' }
+            @{ Scenario = 'pass'; Diagnostic = '' }
+        ) {
+            $root = Join-Path $TestDrive $Scenario
+            $source = Join-Path $root 'source'
+            $candidateDirectory = Join-Path $root 'candidate'
+            $receiptDirectory = Join-Path $root 'receipt'
+            $events = Join-Path $root 'events.txt'
+            $null = New-Item -ItemType Directory -Path $source, $candidateDirectory -Force
+            $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('init', '--quiet', '-b', 'main', $source)
+            [System.IO.File]::WriteAllText((Join-Path $source 'main.tf'), "variable `"name`" {}`n")
+            $null = Invoke-RepositoryGit -WorkingDirectory $source -Arguments @('add', '--all')
+            $null = Invoke-RepositoryGit -WorkingDirectory $source -Arguments @(
+                '-c', 'user.name=AVM test', '-c', 'user.email=avm-test@users.noreply.github.com', 'commit', '--quiet', '-m', 'Candidate')
+            $head = Invoke-RepositoryGit -WorkingDirectory $source -Arguments @('rev-parse', 'HEAD')
+            $tree = Invoke-RepositoryGit -WorkingDirectory $source -Arguments @('rev-parse', 'HEAD^{tree}')
+            $null = Invoke-RepositoryGit -WorkingDirectory $source -Arguments @(
+                'archive', '--format=tar', "--output=$(Join-Path $candidateDirectory 'candidate.tar')", 'HEAD')
+            $candidate = @{
+                schemaVersion = 1; repository = 'Azure/terraform-azurerm-avm-res-example'
+                phase = 'prepared'; defaultBranch = 'main'; baseSha = $head; headSha = $head; treeSha = $tree
+                hasChanges = $true; planOnly = $false; changedPaths = @('main.tf')
+                authoringSource = 'gallery'; authoringVersion = '0.0.0'
+            }
+            [System.IO.File]::WriteAllText((Join-Path $candidateDirectory 'candidate.json'), ($candidate | ConvertTo-Json -Depth 6))
+            $settings = @{
+                tenantId = '11111111-1111-4111-8111-111111111111'
+                clientId = '22222222-2222-4222-8222-222222222222'
+                subscriptions = @(@{ name = 'test'; id = '33333333-3333-4333-8333-333333333333' })
+            }
+            [System.IO.File]::WriteAllText((Join-Path $candidateDirectory 'test-settings.json'), ($settings | ConvertTo-Json -Depth 6))
+            Save-RepositorySyncValidationReceipt -Candidate $candidate -Directory $receiptDirectory -PrCheckStatus pass -UnitStatus pass
+            $fixture = Join-Path $script:root 'tests' 'fixtures' 'repository-candidate-process.ps1'
+            $arguments = @(
+                '-NoProfile', '-NonInteractive', '-File', $fixture, '-RepositoryRoot', $script:root,
+                '-CandidateDirectory', $candidateDirectory, '-ReceiptDirectory', $receiptDirectory,
+                '-Scenario', $Scenario, '-Events', $events)
+            $result = Invoke-RepositorySyncProcess -Command pwsh -Arguments $arguments
+            $output = ($result.StdOut + $result.StdErr) -replace '\x1b\[[0-9;]*[a-zA-Z]', ''
+            if ($Scenario -eq 'pass') {
+                $result.ExitCode | Should -Be 0 -Because $output
+                Assert-RepositorySyncValidationReceipt -Candidate $candidate -Directory $receiptDirectory
+                @(Get-Content $events) | Should -Be @('pr-check', 'unit')
+            }
+            else {
+                $result.ExitCode | Should -Be 1 -Because $output
+                $output | Should -Match ([regex]::Escape($Diagnostic))
+                Test-Path (Join-Path $receiptDirectory 'validation.json') | Should -BeFalse
+                $publication = Invoke-RepositorySyncProcess -Command pwsh -Arguments ($arguments + @('-Mode', 'Publish'))
+                $publication.ExitCode | Should -Be 1
+                ($publication.StdOut + $publication.StdErr) | Should -Match 'validation.json'
+                @(Get-Content $events) | Should -Be @('pr-check')
+            }
+            Test-Path (Join-Path $candidateDirectory 'candidate.patch') | Should -BeFalse
+        }
     }
 
     It 'restores existing attributes after indexing succeeds' {

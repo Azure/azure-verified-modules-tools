@@ -195,6 +195,9 @@ function Invoke-AvmPreCommitForRepository {
         $template = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' '..' 'CODEOWNERS.template') -Raw -ErrorAction Stop
         $codeowners = ConvertTo-TerraformCodeowners -Organization $orgAndRepoName.Split('/')[0] `
             -DefaultTeams $codeOwnersDefaultTeams -FileProtectionTeams $codeOwnersFileProtectionTeams -Template $template
+        if (-not $planOnly -and [string]::IsNullOrWhiteSpace($candidateOutputDirectory)) {
+            throw [System.InvalidOperationException]::new('Terraform apply requires candidate staging followed by successful candidate validation and publication.')
+        }
         $prepareState = @{
             RepoId = $repoId
             RepositoryConfigDir = $repositoryConfigDir

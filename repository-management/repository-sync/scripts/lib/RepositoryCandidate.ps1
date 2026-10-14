@@ -70,7 +70,7 @@ function Read-RepositorySyncCandidate {
                 throw [System.IO.InvalidDataException]::new('The candidate contains an unsafe changed path.')
             }
         }
-        foreach ($file in @('candidate.tar', 'candidate.patch')) {
+        foreach ($file in @('candidate.tar')) {
             $artifact = Get-Item -LiteralPath (Join-Path $Directory $file) -ErrorAction Stop
             if ($artifact.PSIsContainer -or $artifact.Length -eq 0) {
                 throw [System.IO.InvalidDataException]::new("The candidate artifact '$file' is empty or invalid.")
@@ -168,7 +168,7 @@ function Save-RepositorySyncValidationReceipt {
 
     $null = New-Item -ItemType Directory -Path $Directory -Force
     $receipt = [ordered]@{
-        schemaVersion = 2
+        schemaVersion = 3
         profile       = 'static-unit-v1'
         checks        = [ordered]@{
             prCheck     = $PrCheckStatus
@@ -181,7 +181,11 @@ function Save-RepositorySyncValidationReceipt {
         phase         = $Candidate.phase
         baseSha       = if ($Candidate.phase -ceq 'prepared') { $Candidate.baseSha } else { $null }
         hasChanges    = $Candidate.hasChanges
+        planOnly      = $Candidate.planOnly
+        headSha       = if ($Candidate.hasChanges) { $Candidate.headSha } else { $null }
         treeSha       = if ($Candidate.hasChanges) { $Candidate.treeSha } else { $null }
+        authoringSource = if ($Candidate.hasChanges) { $Candidate.authoringSource } else { $null }
+        authoringVersion = if ($Candidate.hasChanges) { $Candidate.authoringVersion } else { $null }
     }
     [System.IO.File]::WriteAllText(
         (Join-Path $Directory 'validation.json'),
@@ -197,7 +201,8 @@ function Assert-RepositorySyncValidationReceipt {
 
     $receipt = Get-Content -LiteralPath (Join-Path $Directory 'validation.json') -Raw -ErrorAction Stop |
         ConvertFrom-Json -AsHashtable -ErrorAction Stop
-    $required = @('schemaVersion', 'profile', 'checks', 'repository', 'phase', 'baseSha', 'hasChanges', 'treeSha')
+    $required = @('schemaVersion', 'profile', 'checks', 'repository', 'phase', 'baseSha', 'hasChanges', 'planOnly',
+        'headSha', 'treeSha', 'authoringSource', 'authoringVersion')
     if ($receipt -isnot [System.Collections.IDictionary] -or
         @($required | Where-Object { -not $receipt.Contains($_) }).Count -gt 0) {
         throw [System.IO.InvalidDataException]::new('The validation receipt does not match the staged candidate.')
@@ -209,7 +214,7 @@ function Assert-RepositorySyncValidationReceipt {
         throw [System.IO.InvalidDataException]::new('The validation receipt does not match the static-unit-v1 profile.')
     }
     $checksRequired = $Candidate.phase -ceq 'prepared' -and $Candidate.hasChanges
-    if ($receipt.schemaVersion -ne 2 -or $receipt.profile -cne 'static-unit-v1' -or
+    if ($receipt.schemaVersion -ne 3 -or $receipt.profile -cne 'static-unit-v1' -or
         $checks.conftest -cne 'deferred' -or $checks.integration -cne 'deferred' -or $checks.e2e -cne 'deferred' -or
         ($checksRequired -and ($checks.prCheck -cne 'pass' -or $checks.unit -cnotin @('pass', 'skipped'))) -or
         (-not $checksRequired -and ($checks.prCheck -cne 'not-run' -or $checks.unit -cne 'not-run')) -or
@@ -217,7 +222,11 @@ function Assert-RepositorySyncValidationReceipt {
         $receipt.phase -cne $Candidate.phase -or
         ($Candidate.phase -ceq 'prepared' -and $receipt.baseSha -cne $Candidate.baseSha) -or
         $receipt.hasChanges -isnot [bool] -or $receipt.hasChanges -ne $Candidate.hasChanges -or
-        ($Candidate.hasChanges -and $receipt.treeSha -cne $Candidate.treeSha)) {
+        $receipt.planOnly -isnot [bool] -or $receipt.planOnly -ne $Candidate.planOnly -or
+        ($Candidate.hasChanges -and ($receipt.treeSha -cne $Candidate.treeSha -or
+                $receipt.headSha -cne $Candidate.headSha -or
+                $receipt.authoringSource -cne $Candidate.authoringSource -or
+                $receipt.authoringVersion -cne $Candidate.authoringVersion))) {
         throw [System.IO.InvalidDataException]::new('The validation receipt does not match the staged candidate.')
     }
 }
@@ -228,16 +237,24 @@ function Format-RepositorySyncCandidateCheckResult {
         [Parameter(Mandatory)] [object]$Result
     )
 
-    if ($Result.Status -ceq 'pass') {
+    $failed = @(if ($Check -eq 'pr-check' -and $Result.PSObject.Properties['Steps']) {
+            $Result.Steps | Where-Object {
+                $null -ne $_ -and (-not $_.PSObject.Properties['Status'] -or $_.Status -cnotin @('pass', 'skipped'))
+            }
+        })
+    if ($Result.Status -ceq 'pass' -and $failed.Count -eq 0) {
         return @()
     }
 
     $lines = [System.Collections.Generic.List[string]]::new()
     $lines.Add("Candidate ${Check}: $($Result.Status)")
+    if ($Result.PSObject.Properties['Error'] -and -not [string]::IsNullOrWhiteSpace([string]$Result.Error)) {
+        $lines.Add('  ' + ([string]$Result.Error -replace '[\r\n\t]+', ' ').Trim())
+    }
     $steps = $Result.PSObject.Properties['Steps']
     $details = @(if ($Check -eq 'pr-check') {
         if ($null -ne $steps) {
-            $steps.Value | Where-Object { $null -ne $_ -and $_.Status -in @('fail', 'error') }
+            $failed
         }
     }
     else {
@@ -248,8 +265,11 @@ function Format-RepositorySyncCandidateCheckResult {
         $lines.Add('  No failing steps were returned.')
     }
     foreach ($detail in $details) {
-        $label = if ($Check -eq 'pr-check') { [string]$detail.Step } else { 'unit tests' }
-        $lines.Add("  ${label}: $($detail.Status)")
+        $label = if ($Check -eq 'unit') { 'unit tests' }
+        elseif ($detail.PSObject.Properties['Step']) { [string]$detail.Step }
+        else { 'unknown step' }
+        $status = if ($detail.PSObject.Properties['Status']) { $detail.Status } else { 'invalid result' }
+        $lines.Add("  ${label}: $status")
         $errorProperty = $detail.PSObject.Properties['Error']
         $hasError = $null -ne $errorProperty -and -not [string]::IsNullOrWhiteSpace([string]$errorProperty.Value)
         if ($hasError) {
@@ -306,6 +326,65 @@ function Format-RepositorySyncCandidateCheckResult {
     return $lines.ToArray()
 }
 
+function Assert-RepositorySyncCandidateCheckResult {
+    param(
+        [Parameter(Mandatory)] [ValidateSet('pr-check', 'unit')] [string]$Check,
+        [Parameter(Mandatory)] [AllowNull()] [AllowEmptyCollection()] [object]$Result
+    )
+
+    foreach ($entry in @($Result)) {
+        if ($null -ne $entry -and $entry.PSObject.Properties['Error']) {
+            Write-Host "Candidate ${Check}: $($entry.Error)"
+        }
+    }
+    if ($null -eq $Result -or $Result -is [array] -or
+        -not $Result.PSObject.Properties['Status'] -or $Result.Status -isnot [string]) {
+        throw [System.IO.InvalidDataException]::new("Candidate ${Check}: missing or invalid check result.")
+    }
+    foreach ($line in (Format-RepositorySyncCandidateCheckResult -Check $Check -Result $Result)) {
+        Write-Host $line
+    }
+    $accepted = if ($Check -ceq 'pr-check') { @('pass') } else { @('pass', 'skipped') }
+    $failedSteps = @()
+    if ($Check -ceq 'pr-check' -and $Result.PSObject.Properties['Steps']) {
+        $failedSteps = @($Result.Steps | Where-Object {
+                $null -eq $_ -or -not $_.PSObject.Properties['Status'] -or
+                $_.Status -isnot [string] -or $_.Status -cnotin @('pass', 'skipped')
+            })
+    }
+    if ($Result.Status -cnotin $accepted -or $failedSteps.Count -gt 0 -or
+        ($Check -ceq 'pr-check' -and
+            (-not $Result.PSObject.Properties['Steps'] -or @($Result.Steps).Count -eq 0))) {
+        throw [System.InvalidOperationException]::new("Candidate checks failed: ${Check}=$($Result.Status).")
+    }
+}
+
+function Initialize-RepositorySyncCandidateCheckout {
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary]$Candidate,
+        [Parameter(Mandatory)] [string]$CandidateDirectory,
+        [Parameter(Mandatory)] [string]$Root
+    )
+
+    $null = New-Item -ItemType Directory -Path $Root -Force
+    $archive = Invoke-RepositorySyncProcess -Command 'tar' `
+        -Arguments @('-xf', (Join-Path $CandidateDirectory 'candidate.tar'), '-C', $Root) -TimeoutSec 600
+    if ($archive.ExitCode -ne 0) {
+        throw [System.IO.InvalidDataException]::new("Failed to unpack the staged candidate: $($archive.StdErr)")
+    }
+    $parent = Split-Path -Path $Root -Parent
+    $null = Invoke-RepositoryGit -WorkingDirectory $parent -Arguments @('init', '--quiet', '-b', 'main', $Root)
+    $null = Invoke-RepositoryGit -WorkingDirectory $Root -Arguments @('remote', 'add', 'origin', "https://github.com/$($Candidate.repository).git")
+    $null = Invoke-RepositoryGit -WorkingDirectory $Root -Arguments @('config', '--local', 'core.autocrlf', 'false')
+    $null = Invoke-RepositoryGit -WorkingDirectory $Root -Arguments @('config', '--local', 'core.hooksPath', (Join-Path $parent 'disabled-hooks'))
+    if ((Initialize-RepositorySyncCandidateIndex -Root $Root) -cne $Candidate.treeSha) {
+        throw [System.IO.InvalidDataException]::new('The unpacked candidate does not match the prepared Git tree.')
+    }
+    $null = Invoke-RepositoryGit -WorkingDirectory $Root -Arguments @(
+        '-c', 'user.name=AVM candidate validation', '-c', 'user.email=avm-validation@users.noreply.github.com',
+        'commit', '--quiet', '-m', 'Validate staged candidate')
+}
+
 function Get-RepositorySyncCandidateRepoId {
     param([Parameter(Mandatory)] [string]$Repository)
 
@@ -351,6 +430,10 @@ function Invoke-RepositorySyncCandidateValidation {
         [Parameter(Mandatory)] [string]$CheckoutModulePath
     )
 
+    $receiptPath = Join-Path $ReceiptDirectory 'validation.json'
+    if (Test-Path -LiteralPath $receiptPath) {
+        Remove-Item -LiteralPath $receiptPath -Force -ErrorAction Stop
+    }
     $candidate = Read-RepositorySyncCandidate -Directory $CandidateDirectory -Repository $Repository
     if ($candidate.phase -ceq 'skipped') {
         Save-RepositorySyncValidationReceipt -Candidate $candidate -Directory $ReceiptDirectory
@@ -384,22 +467,7 @@ function Invoke-RepositorySyncCandidateValidation {
         $previousEnvironment[$name] = [System.Environment]::GetEnvironmentVariable($name, 'Process')
     }
     try {
-        $archivePath = Join-Path $CandidateDirectory 'candidate.tar'
-        $archive = Invoke-RepositorySyncProcess -Command 'tar' -Arguments @('-xf', $archivePath, '-C', $root) -TimeoutSec 600
-        if ($archive.ExitCode -ne 0) {
-            throw [System.IO.InvalidDataException]::new("Failed to unpack the staged candidate: $($archive.StdErr)")
-        }
-        $null = Invoke-RepositoryGit -WorkingDirectory $workspace -Arguments @('init', '--quiet', '-b', 'main', $root)
-        $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('remote', 'add', 'origin', $repositoryUrl)
-        $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('config', '--local', 'core.autocrlf', 'false')
-        $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('config', '--local', 'core.hooksPath', (Join-Path $workspace 'disabled-hooks'))
-        $tree = Initialize-RepositorySyncCandidateIndex -Root $root
-        if ($tree -cne $candidate.treeSha) {
-            throw [System.IO.InvalidDataException]::new('The unpacked candidate does not match the prepared Git tree.')
-        }
-        $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @(
-            '-c', 'user.name=AVM candidate validation', '-c', 'user.email=avm-validation@users.noreply.github.com',
-            'commit', '--quiet', '-m', 'Validate staged candidate')
+        Initialize-RepositorySyncCandidateCheckout -Candidate $candidate -CandidateDirectory $CandidateDirectory -Root $root
         $env:ARM_CLIENT_ID = $settings.clientId
         $env:ARM_TENANT_ID = $settings.tenantId
         $env:ARM_SUBSCRIPTION_ID = $subscription.id
@@ -411,26 +479,27 @@ function Invoke-RepositorySyncCandidateValidation {
         $env:AVM_MANAGED_FILES_CONFIG_LOCAL_PATH = (Resolve-Path -LiteralPath (
                 Join-Path $PSScriptRoot '..' '..' '..' 'repository-config') -ErrorAction Stop).Path
         Write-Host "Validating $Repository with profile static-unit-v1. Conftest, integration and E2E are deferred until full pre-release verification."
-        $prCheck = Invoke-AvmPrCheck -Path $root -Ecosystem terraform -SkipModuleVersionCheck -ExcludeSteps 'check policy'
+        try {
+            $prCheck = Invoke-AvmPrCheck -Path $root -Ecosystem terraform -SkipModuleVersionCheck -ExcludeSteps 'check policy'
+            Assert-RepositorySyncCandidateCheckResult -Check 'pr-check' -Result $prCheck
+        }
+        catch {
+            Write-Host "Candidate pr-check failed for ${Repository}: $($_.Exception.Message)"
+            throw
+        }
         $unitRoot = Join-Path $workspace 'unit'
         $null = Invoke-RepositoryGit -WorkingDirectory $workspace -Arguments @('clone', '--quiet', $root, $unitRoot)
         $null = Invoke-RepositoryGit -WorkingDirectory $unitRoot -Arguments @('remote', 'set-url', 'origin', $repositoryUrl)
         if ((Invoke-RepositoryGit -WorkingDirectory $unitRoot -Arguments @('rev-parse', 'HEAD^{tree}')) -cne $candidate.treeSha) {
             throw [System.IO.InvalidDataException]::new('The unit-test checkout differs from the validated candidate.')
         }
-        $unitTests = Invoke-AvmTestUnit -Path $unitRoot -Ecosystem terraform -SkipModuleVersionCheck
-        foreach ($line in (Format-RepositorySyncCandidateCheckResult -Check 'pr-check' -Result $prCheck)) {
-            Write-Host $line
+        try {
+            $unitTests = Invoke-AvmTestUnit -Path $unitRoot -Ecosystem terraform -SkipModuleVersionCheck
+            Assert-RepositorySyncCandidateCheckResult -Check 'unit' -Result $unitTests
         }
-        foreach ($line in (Format-RepositorySyncCandidateCheckResult -Check 'unit' -Result $unitTests)) {
-            Write-Host $line
-        }
-        if ($prCheck.Status -cne 'pass' -or $unitTests.Status -cnotin @('pass', 'skipped')) {
-            $failedSteps = @($prCheck.Steps | Where-Object Status -in @('fail', 'error') | ForEach-Object {
-                    "$($_.Step): $($_.Status)"
-                })
-            throw [System.InvalidOperationException]::new(
-                "Candidate checks failed for ${Repository}: pr-check=$($prCheck.Status) ($($failedSteps -join ', ')); unit=$($unitTests.Status).")
+        catch {
+            Write-Host "Candidate unit failed for ${Repository}: $($_.Exception.Message)"
+            throw
         }
         if (-not [string]::IsNullOrWhiteSpace((Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('status', '--porcelain'))) -or
             (Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('rev-parse', 'HEAD^{tree}')) -cne $candidate.treeSha) {
@@ -442,7 +511,8 @@ function Invoke-RepositorySyncCandidateValidation {
     }
     finally {
         foreach ($name in $environmentNames) {
-            [System.Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], 'Process')
+            [System.Environment]::SetEnvironmentVariable($name,
+                $(if ($null -eq $previousEnvironment[$name]) { [NullString]::Value } else { $previousEnvironment[$name] }), 'Process')
         }
         if (Test-Path -LiteralPath $workspace -PathType Container) {
             Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction Stop
@@ -468,15 +538,24 @@ function Invoke-RepositorySyncCandidatePublication {
     if (-not $candidate.hasChanges) {
         return @{ Status = 'NoChange'; HasChanges = $false }
     }
-    $patchPath = Join-Path $CandidateDirectory 'candidate.patch'
     $published = Invoke-RepositoryFileSync -Repository $Repository -DefaultBranch $candidate.defaultBranch `
-        -ExpectedBaseSha $candidate.baseSha -State @{ Candidate = $candidate; PatchPath = $patchPath } `
+        -ExpectedBaseSha $candidate.baseSha -State @{
+            Candidate = $candidate; CandidateDirectory = $CandidateDirectory; ValidationReceiptDirectory = $ReceiptDirectory
+        } `
         -Prepare {
             param($context)
             if ($context.BaseSha -cne $context.State.Candidate.baseSha) {
                 throw [System.InvalidOperationException]::new('The target branch moved since candidate validation; run repository sync again.')
             }
-            $null = Invoke-RepositoryGit -WorkingDirectory $context.Root -Arguments @('apply', '--index', '--binary', '--', $context.State.PatchPath)
+            $parent = Split-Path -Path $context.Root -Parent
+            $validatedRoot = Join-Path $parent 'validated'
+            Initialize-RepositorySyncCandidateCheckout -Candidate $context.State.Candidate `
+                -CandidateDirectory $context.State.CandidateDirectory -Root $validatedRoot
+            $null = Invoke-RepositoryGit -WorkingDirectory $context.Root -Arguments @('fetch', '--quiet', '--no-tags', $validatedRoot, 'HEAD')
+            $patchPath = Join-Path $parent 'candidate.patch'
+            $null = Invoke-RepositoryGit -WorkingDirectory $context.Root -Arguments @(
+                'diff', '--binary', '--full-index', '--no-renames', "--output=$patchPath", $context.BaseSha, 'FETCH_HEAD')
+            $null = Invoke-RepositoryGit -WorkingDirectory $context.Root -Arguments @('apply', '--index', '--binary', '--', $patchPath)
             $tree = Invoke-RepositoryGit -WorkingDirectory $context.Root -Arguments @('write-tree')
             if ($tree -cne $context.State.Candidate.treeSha) {
                 throw [System.IO.InvalidDataException]::new('The prepared patch does not produce the validated Git tree.')

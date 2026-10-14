@@ -112,4 +112,22 @@ Describe 'Repository sync candidate workflow' {
         $script:publish | Should -Not -Match 'ARM_CLIENT_ID:|azure/login@'
         $script:prepare | Should -Match 'name:\s*candidate-\$\{\{ inputs\.repo_name \}\}'
     }
+
+    It 'propagates validation errors and accepts receipt artifacts only from the successful current run' {
+        $script:validate | Should -Not -Match 'continue-on-error:'
+        $checks = [regex]::Match($script:validate,
+            '(?ms)^      - name: Run candidate checks\r?\n(?<body>.*?)(?=^      - name:|\z)').Groups['body'].Value
+        $checks | Should -Match '(?m)^        shell: pwsh\r?$'
+        $checks | Should -Match 'Invoke-RepositoryCandidate\.ps1 -Mode Validate'
+        $checks | Should -Not -Match '(?i)\btry\s*\{|\bcatch\s*\{|\bexit\s+0\b|SilentlyContinue'
+        $upload = [regex]::Match($script:validate,
+            '(?ms)^      - name: Upload validation receipt\r?\n(?<body>.*?)(?=^      - name:|\z)').Groups['body'].Value
+        $upload | Should -Match '(?m)^        if: success\(\)\r?$'
+        $upload | Should -Match '(?m)^          if-no-files-found: error\r?$'
+        $download = [regex]::Match($script:publish,
+            '(?ms)^      - name: Download validation receipt\r?\n(?<body>.*?)(?=^      - name:|\z)').Groups['body'].Value
+        $download | Should -Match 'uses: actions/download-artifact@'
+        $download | Should -Match 'name: validated-\$\{\{ inputs\.repo_name \}\}'
+        $download | Should -Not -Match '(?m)^\s+(run-id|repository|github-token):'
+    }
 }

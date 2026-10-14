@@ -166,6 +166,20 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
+    $modulePublication = $Repository -match '^[^/]+/terraform-(?:azure|azapi|azurerm)-avm-' -and
+        -not $PlanOnly -and -not $CandidateOutputDirectory
+    if ($modulePublication) {
+        if (-not $State.ContainsKey('Candidate') -or -not $State.ContainsKey('ValidationReceiptDirectory') -or
+            -not (Get-Command Assert-RepositorySyncValidationReceipt -CommandType Function -ErrorAction SilentlyContinue)) {
+            throw [System.InvalidOperationException]::new('Module-file publication requires a validated candidate and receipt.')
+        }
+        Assert-RepositorySyncValidationReceipt -Candidate $State.Candidate -Directory $State.ValidationReceiptDirectory
+        if ($State.Candidate.repository -cne $Repository -or $State.Candidate.phase -cne 'prepared' -or
+            -not $State.Candidate.hasChanges -or $State.Candidate.planOnly -or
+            $ExpectedBaseSha -cne $State.Candidate.baseSha) {
+            throw [System.InvalidOperationException]::new('Module-file publication does not match the validated candidate.')
+        }
+    }
     $result = @{ HasChanges = $false; Status = 'NoChange'; PullRequestUrl = $null; HeadSha = $null }
     if (-not $PSCmdlet.ShouldProcess($Repository, 'Prepare repository synchronization changes')) {
         $result.HasChanges = $PlanHasChanges.IsPresent
@@ -174,6 +188,12 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
     }
     if ($CandidateOutputDirectory -and ($StableBranch -or $VerifyCandidate -or $ReviewOnly)) {
         throw [System.ArgumentException]::new('Local candidate staging cannot use stable branches, candidate verification, or review-only publication.')
+    }
+    if ($CandidateOutputDirectory) {
+        $oldPatch = Join-Path $CandidateOutputDirectory 'candidate.patch'
+        if (Test-Path -LiteralPath $oldPatch) {
+            Remove-Item -LiteralPath $oldPatch -Force -ErrorAction Stop
+        }
     }
     if ($ExpectedBaseSha -and $ExpectedBaseSha -cnotmatch '^[0-9a-f]{40}$') {
         throw [System.ArgumentException]::new('The expected synchronization base must be a 40-character Git SHA.')
@@ -274,6 +294,12 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
             $context.ChangedPaths = @($paths.Split([char]0, [System.StringSplitOptions]::RemoveEmptyEntries))
             Assert-RepositorySyncFileScope -Paths $context.ChangedPaths -AllowedPaths $AllowedPaths
             $context.TreeSha = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('write-tree')
+            if ($modulePublication) {
+                if ($context.TreeSha -cne $State.Candidate.treeSha) {
+                    throw [System.IO.InvalidDataException]::new('The publication tree differs from the validated candidate.')
+                }
+                Assert-RepositorySyncFileScope -Paths $context.ChangedPaths -AllowedPaths @() -ExpectedPaths $State.Candidate.changedPaths
+            }
             $branch = if ($StableBranch) { $StableBranch } else { 'avm-bot/pre-commit-' + (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss') }
             $context.Branch = $branch
             $commitActor = if ($ExpectedActor) { $ExpectedActor } else { Get-RepositorySyncConfiguredBotActor }
@@ -292,9 +318,7 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
                 }
                 $null = New-Item -ItemType Directory -Path $CandidateOutputDirectory -Force
                 $archivePath = Join-Path $CandidateOutputDirectory 'candidate.tar'
-                $patchPath = Join-Path $CandidateOutputDirectory 'candidate.patch'
                 $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('archive', '--format=tar', "--output=$archivePath", 'HEAD')
-                $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('diff', '--binary', '--full-index', '--no-renames', "--output=$patchPath", $baseSha, 'HEAD')
                 $candidate = [ordered]@{
                     schemaVersion = 1
                     repository    = $Repository

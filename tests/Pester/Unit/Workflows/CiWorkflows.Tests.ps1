@@ -74,6 +74,7 @@ Describe 'Independent CI workflows' {
             'tests/Pester/Component/ModuleCatalog*.Tests.ps1', 'tests/Pester/Component/Repository*.Tests.ps1',
             'tests/Pester/Component/TerraformCodeowners*.Tests.ps1', 'tests/Pester/Helpers/ModuleCatalogFixture.ps1',
             'tests/Pester/Import-AvmTestModule.ps1', 'tests/fixtures/TestTenant.ps1', 'tests/fixtures/BicepIdentities.ps1',
+            'tests/fixtures/repository-candidate-process.ps1',
             '.github/workflows/repository-management-*.yml', '.github/workflows/module-metadata-sync.yml',
             '.github/workflows/terraform-module.yml'
         ) }
@@ -95,7 +96,8 @@ Describe 'Independent CI workflows' {
             'tests/Pester/Component/BicepModuleIdentities*.Tests.ps1', 'tests/Pester/Component/BicepTestTenantSync*.Tests.ps1',
             'tests/Pester/Component/ModuleCatalog*.Tests.ps1', 'tests/Pester/Component/Repository*.Tests.ps1',
             'tests/Pester/Component/TerraformCodeowners*.Tests.ps1', 'tests/Pester/Helpers/ModuleCatalogFixture.ps1',
-            'tests/fixtures/TestTenant.ps1', 'tests/fixtures/BicepIdentities.ps1'
+            'tests/fixtures/TestTenant.ps1', 'tests/fixtures/BicepIdentities.ps1',
+            'tests/fixtures/repository-candidate-process.ps1'
         )) {
             $paths.IndexOf("!$excluded") | Should -BeGreaterThan $paths.IndexOf('tests/**')
         }

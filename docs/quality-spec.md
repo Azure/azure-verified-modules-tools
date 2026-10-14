@@ -1727,6 +1727,17 @@ still apply when unit tests are absent. Validation receipts bind the acceptance
 profile and actual static/unit statuses to the repository, base and tree;
 publication rejects legacy or mismatched profiles and missing check evidence.
 Unchanged or skipped candidates record checks as `not-run`, not passed.
+Preparation produces a private archive and tree/path metadata, never a publication
+patch. PR-check failure, invalid results or exceptions are logged immediately and
+terminate validation before unit work. Every validation attempt first invalidates
+its earlier receipt, including success for the same repository/base/tree.
+Version 3 receipts also bind the prepared head, plan-only mode and authoring source
+and version. Only receipt-verified publication reconstructs the immutable candidate
+and generates its patch; missing/stale evidence blocks new and existing bot
+pull requests before any push, creation, update or merge. Direct Terraform apply
+without candidate staging is rejected. The shared publication core independently
+requires matching validation evidence for module repositories. Non-module catalog
+publication is unchanged; repository matrix failures remain independent.
 Archive reconstruction must index the
 committed bytes without Git content conversion, including historical CRLF
 files. Restore normal attributes before checks and require the same exact
