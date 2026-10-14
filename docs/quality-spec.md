@@ -1048,6 +1048,10 @@ record from the explicit singleton only when no pool is configured, leaving
 validation and reservation enforcement to the native selector. It does not
 parse, filter or shuffle pools itself. Validate every active selection before
 resolving the compiler, and rerun the identical native selection before login.
+Use public `Get-AvmModuleContext` to admit the selected owner for direct native
+execution before compiler preparation or authentication. Read-only discovery is
+not an execution-admission promise; unsupported owners never bypass the native
+reserved-ancestor guard or silently retarget to a family root.
 Non-General results fail before compiler or Azure dependency preparation and
 authentication; they require the retained registry-local lifecycle.
 

@@ -574,6 +574,35 @@ Describe 'Component: Bicep shared workflow target and authentication boundaries'
             Should -Throw '*registry-local prepared environment lifecycle*'
     }
 
+    It 'rejects discovered owners that native direct context cannot admit before compiler or authentication' {
+        $child = "$script:modulePath/modules/nested"
+        $folder = Join-Path $script:root $child 'tests/e2e/defaults'
+        $null = New-Item -ItemType Directory -Path $folder -Force
+        [IO.File]::WriteAllText((Join-Path $script:root $child 'main.bicep'), '')
+        [IO.File]::WriteAllText((Join-Path $folder 'main.test.bicep'), '')
+        $example = 'modules/nested/tests/e2e/defaults/main.test.bicep'
+        $native = Select-AvmTestSubscription -Path $script:root -ModulePath $script:modulePath -Example $example `
+            -TestSubscriptionIds $script:pool -RandomSeed 9 -SkipModuleVersionCheck
+        $native.ModulePath | Should -BeExactly $child
+        $native.Tag | Should -BeExactly 'General'
+        $case = @{
+            path = $example; name = 'nested'; e2eIgnore = $false
+            subscriptionIndex = $native.Index; subscriptionKey = $native.Key; subscriptionModulePath = $native.ModulePath
+            selectionSeed = 9; caseIndex = 0; identityKey = $script:case.identityKey
+        }
+        Mock Get-AzContext { throw 'Unsupported contexts must not reach Azure.' }
+
+        { Get-AvmWorkflowDeploymentMatrix -Root $script:root -ModulePath $script:modulePath -TestFiles @($case) `
+                -PoolJson $script:pool -RandomSeed 9 -ModuleClientIds $script:mappingJson -TenantId $script:tenant } |
+            Should -Throw '*modules*'
+        { Get-AvmWorkflowAuthentication -Root $script:root -ModulePath $script:modulePath -TestCase $case `
+                -PoolJson $script:pool -ModuleClientIds $script:mappingJson -TenantId $script:tenant } |
+            Should -Throw '*modules*'
+        Should -Invoke Get-AvmTool -Exactly 0
+        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0
+        Should -Invoke Get-AzContext -Exactly 0
+    }
+
     It 'rejects missing selection evidence <Field> before authentication' -ForEach @(
         @{ Field = 'selectionSeed' }
         @{ Field = 'caseIndex' }

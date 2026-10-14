@@ -71,6 +71,8 @@ function Select-AvmWorkflowSubscription {
     if ($selected[0].Tag -cne 'General') {
         throw [InvalidOperationException]::new('Reserved test subscriptions require the registry-local prepared environment lifecycle; shared native deployment cannot authenticate or execute this case.')
     }
+    $ownerPath = Resolve-AvmWorkflowPath -Root $Root -RelativePath $selected[0].ModulePath
+    $null = Get-AvmModuleContext -Path $ownerPath -Ecosystem bicep -SkipModuleVersionCheck
     return $selected[0]
 }
 
