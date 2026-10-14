@@ -56,9 +56,16 @@ Describe 'Integration: packaged Bicep subscription selection' -Tag Integration {
     }
 
     It 'rejects missing root policy and malformed pools without a source-checkout fallback' {
+        $policyPath = Join-Path $script:consumer '.reserved-test-subscriptions.json'
+        if ($IsWindows) {
+            [IO.File]::SetAttributes($policyPath, [IO.File]::GetAttributes($policyPath) -bor [IO.FileAttributes]::Hidden)
+        }
+        ([IO.File]::GetAttributes($policyPath) -band [IO.FileAttributes]::Hidden) |
+            Should -Be ([IO.FileAttributes]::Hidden)
         $script:options.TestSubscriptionIds = 'invalid'
         { Select-AvmTestSubscription @script:options } | Should -Throw '*strict JSON*'
-        Remove-Item -LiteralPath (Join-Path $script:consumer '.reserved-test-subscriptions.json')
+        Remove-Item -LiteralPath $policyPath -Force
+        Test-Path -LiteralPath $policyPath | Should -BeFalse
         { Select-AvmTestSubscription @script:options } | Should -Throw '*root .reserved-test-subscriptions.json*'
     }
 }
