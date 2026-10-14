@@ -1011,8 +1011,6 @@ function Invoke-AvmTerraformUnitTestMigration {
         }
         $hasEmptyModtm = $after.test.mock_providers.Contains('modtm') -and
         $after.test.mock_providers.modtm.mptf.is_empty
-        $hasEmptyAzapi = $after.test.mock_providers.Contains('azapi') -and
-        $after.test.mock_providers.azapi.mptf.is_empty
         $mockAliases = Get-AvmTerraformUnitTestMockAlias -Test $after.test -Path $scope.File.FullName
         $hasModtmMock = @($after.test.mock_providers.Keys | Where-Object { $_ -cmatch '^modtm(\.|$)' }).Count -gt 0
         $modtmMockRetained = $false
@@ -1092,7 +1090,7 @@ function Invoke-AvmTerraformUnitTestMigration {
         }
         $addDefaultAzapiMock = $migratesTelemetry -and -not $after.test.mock_providers.Contains('azapi') -and
         ($hasEmptyModtm -or
-        (@($retiredAliasNames | Where-Object { $_ -cmatch '^modtm\.' }).Count -gt 0 -and
+        ($hasModtmMock -and
         @($mockAliases.Keys | Where-Object { $_ -cmatch '^azapi\.' }).Count -eq 0))
         if ($addDefaultAzapiMock) {
             $null = $providerNames.Add('azapi')
@@ -1113,13 +1111,7 @@ function Invoke-AvmTerraformUnitTestMigration {
         }
         $retiredProviderReferences = @{ modtm = 0; random = $telemetryCounts.ReferenceCount }
         $retainedProviderReferences = @{ modtm = 0 }
-        $hasProviderMappings = @($after.test.runs.Values |
-                Where-Object { $_.mptf.attributes.Contains('providers') }).Count -gt 0
-        $validateMocks = $newLocations.Count -gt 0 -or $telemetryCounts.ReferenceCount -gt 0 -or
-        $missingRandomRequirements.Count -gt 0 -or $missingModtmRequirements.Count -gt 0 -or $modtmMockRetained -or
-        $retiredAliasNames.Count -gt 0 -or
-        ($migratesTelemetry -and ($hasEmptyModtm -or $hasEmptyAzapi -or $telemetryResourceIds.Count -gt 0 -or
-            ($hasProviderMappings -and $hasRandomMock -and -not $randomMockRetained)))
+        $validateMocks = $migratesTelemetry -or $newLocations.Count -gt 0
         if ($validateMocks) {
             $requiresAzapiMock = $missingRandomRequirements.Count -gt 0 -or
             @($instrumentedTargets | Where-Object { $newLocations.Contains($_.Path) }).Count -gt 0
@@ -1130,12 +1122,10 @@ function Invoke-AvmTerraformUnitTestMigration {
                     $missingRandomRequirements.Count -gt 0 -or $missingModtmRequirements.Count -gt 0 -or
                     $_ -cmatch '^(azapi|azurerm)(\.|$)' -or ($modtmMockRetained -and $_ -cmatch '^modtm(\.|$)')
                 })
-            $boundAliases = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
             $mappedAzapiRuns = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
             $unsafeMappings = @(
                 foreach ($name in $after.test.runs.Keys) {
                     $run = $after.test.runs[$name]
-                    if (-not $run.mptf.attributes.Contains('providers')) { continue }
                     $targetPath = $after.test.run_modules[$name].dir
                     if (-not $requiredProviders.ContainsKey($targetPath)) {
                         $requiredProviders[$targetPath] = Get-AvmTerraformUnitTestRequiredProvider `
@@ -1150,6 +1140,17 @@ function Invoke-AvmTerraformUnitTestMigration {
                     $baseNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
                     foreach ($provider in $names) { $null = $baseNames.Add(($provider -split '\.', 2)[0]) }
                     $names = @($baseNames)
+                    $expression = if ($run.mptf.attributes.Contains('providers')) {
+                        $run.mptf.attributes.providers
+                    }
+                    elseif ($providerMockBindings.ContainsKey($name)) {
+                        $providerMockBindings[$name]
+                    }
+                    else {
+                        $implicitNames = @(Get-AvmTerraformUnitTestMockProviderName -ProviderNames $defaultMockProviderNames `
+                                -RequiredProviders $requiredProviders[$targetPath] -ProviderSources $providerSources[$targetPath])
+                        "{`n" + (($implicitNames | ForEach-Object { "  $_ = $_" }) -join "`n") + "`n}"
+                    }
                     $retiredNames = @(
                         if ($migratesTelemetry -and $names -cnotcontains 'modtm' -and
                             ($hasEmptyModtm -or @($retiredAliasNames | Where-Object { $_ -cmatch '^modtm\.' }).Count -gt 0)) { 'modtm' }
@@ -1158,10 +1159,10 @@ function Invoke-AvmTerraformUnitTestMigration {
                             @($retiredAliasNames | Where-Object { $_ -cmatch '^random\.' }).Count -gt 0)) { 'random' }
                     )
                     $mapping = ConvertFrom-AvmTerraformUnitTestProviderMapping `
-                        -Expression $run.mptf.attributes.providers -ProviderNames $names `
-                        -MockProviderNames @($after.test.mock_providers.Keys) -RetiredProviderNames $retiredNames
+                        -Expression $expression -ProviderNames $names `
+                        -MockProviderNames @(@($after.test.mock_providers.Keys) + @($defaultMockProviderNames)) -RetiredProviderNames $retiredNames
                     if ($null -eq $mapping -and $names -ccontains 'azapi' -and
-                        $after.test.mock_providers.Contains('azapi') -and
+                        ($after.test.mock_providers.Contains('azapi') -or $addDefaultAzapiMock) -and
                         $null -ne $snapshot.PSObject.Properties['ProviderSources'] -and
                         $snapshot.ProviderSources.ContainsKey($targetPath) -and
                         $null -ne $snapshot.PSObject.Properties['ProviderRequirements'] -and
@@ -1172,7 +1173,7 @@ function Invoke-AvmTerraformUnitTestMigration {
                                 -ProviderSources $snapshot.ProviderSources[$targetPath] |
                                 ForEach-Object { ($_ -split '\.', 2)[0] } | Sort-Object -Unique)
                         $originalMapping = ConvertFrom-AvmTerraformUnitTestProviderMapping `
-                            -Expression $run.mptf.attributes.providers -ProviderNames $originalNames `
+                            -Expression $expression -ProviderNames $originalNames `
                             -MockProviderNames @($snapshot.Before.test.mock_providers.Keys)
                         if ($null -ne $originalMapping -and -not $originalMapping.Bindings.ContainsKey('azapi')) {
                             $uncovered = @(
@@ -1188,7 +1189,7 @@ function Invoke-AvmTerraformUnitTestMigration {
                                     "`n  azapi = azapi`n")
                                 $candidateMapping = ConvertFrom-AvmTerraformUnitTestProviderMapping `
                                     -Expression $expression -ProviderNames $names `
-                                    -MockProviderNames @($after.test.mock_providers.Keys) -RetiredProviderNames $retiredNames
+                                    -MockProviderNames @(@($after.test.mock_providers.Keys) + @($defaultMockProviderNames)) -RetiredProviderNames $retiredNames
                                 if ($null -ne $candidateMapping) {
                                     $uncovered = @(
                                         foreach ($source in $providerSources[$targetPath] | Where-Object { $_ -notmatch '/builtin/' }) {
@@ -1210,8 +1211,17 @@ function Invoke-AvmTerraformUnitTestMigration {
                         $name
                     }
                     else {
-                        foreach ($reference in $mapping.Bindings.Values | Where-Object { $_ -cmatch '\.' }) {
-                            $null = $boundAliases.Add($reference)
+                        $uncovered = @(
+                            foreach ($source in $providerSources[$targetPath] | Where-Object { $_ -notmatch '/builtin/' }) {
+                                if (@(Get-AvmTerraformUnitTestMockProviderName -ProviderNames @($mapping.Bindings.Keys) `
+                                            -RequiredProviders $requiredProviders[$targetPath] -ProviderSources @($source)).Count -eq 0) {
+                                    $source
+                                }
+                            }
+                        )
+                        if ($uncovered.Count -gt 0) {
+                            $name
+                            continue
                         }
                         if ($mapping.Bindings.ContainsKey('azapi')) {
                             $null = $mappedAzapiRuns.Add($name)
@@ -1222,21 +1232,18 @@ function Invoke-AvmTerraformUnitTestMigration {
                         foreach ($provider in @('modtm', 'random')) {
                             $retiredProviderReferences[$provider] += $mapping.RetiredReferences[$provider]
                         }
-                        $retainedProviderReferences.modtm +=
-                        (Get-AvmTerraformRetiredTestProviderReferenceCount -Text $run.mptf.attributes.providers -Provider modtm) -
-                        $mapping.RetiredReferences.modtm
+                        if ($run.mptf.attributes.Contains('providers')) {
+                            $retainedProviderReferences.modtm +=
+                            (Get-AvmTerraformRetiredTestProviderReferenceCount -Text $run.mptf.attributes.providers -Provider modtm) -
+                            $mapping.RetiredReferences.modtm
+                        }
                     }
                 }
             )
-            $unboundAliases = @($mockAliases.Keys | Where-Object {
-                    -not $boundAliases.Contains($_) -and
-                    (($_ -cmatch '^modtm\.' -and $modtmMockRetained) -or
-                    ($_ -cmatch '^random\.' -and ($missingRandomRequirements.Count -gt 0 -or $missingModtmRequirements.Count -gt 0)))
-                })
             $hasAzureMock = $hasAzureMock -or
             ($after.test.runs.Count -gt 0 -and $mappedAzapiRuns.Count -eq $after.test.runs.Count)
-            if (-not $hasAzureMock -or $realProviders.Count -gt 0 -or
-                $unboundAliases.Count -gt 0 -or $unsafeMappings.Count -gt 0) {
+            if (($after.test.runs.Count -gt 0 -and -not $hasAzureMock) -or $realProviders.Count -gt 0 -or
+                $unsafeMappings.Count -gt 0) {
                 throw [AvmConfigurationException]::new(
                     "Cannot automatically migrate unit test '$($scope.File.FullName)': introduced providers need default mocks or complete known alias bindings; run provider mappings must use the same provider, without real providers, unknown aliases, or aliased target keys.")
             }
@@ -1443,46 +1450,79 @@ function Invoke-AvmTerraformUnitTestMigration {
                 "Cannot migrate customized telemetry mocks in '$($plan.Path)': update MaPoTF and the unit-test profile to support $capabilityName; remove outdated tool or profile overrides.")
         }
     }
-    foreach ($plan in $plans | Where-Object { $_.RetiredAliasNames.Count -gt 0 }) {
-        $retiredJson = ConvertTo-Json -InputObject @($plan.RetiredAliasNames) -Compress
-        try {
-            $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList @(
-                'transform', '--tf-dir', $plan.Scope.Owner.Path, '--test-file', $plan.Scope.RelativePath,
-                '--mptf-dir', $Options.ProfileDirs['unit-test'],
-                '--mptf-var', "retired_mock_provider_names=$retiredJson"
-            ) -WorkingDirectory $plan.Scope.Owner.Path -EnvVars $Options.EnvVars
-        }
-        finally {
-            $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList @(
-                'clean-backup', '--tf-dir', $plan.Scope.Owner.Path, '--test-file', $plan.Scope.RelativePath
-            ) -WorkingDirectory $plan.Scope.Owner.Path -EnvVars $Options.EnvVars
-        }
-    }
-    foreach ($plan in $modtmRequirementPlans.Values | Sort-Object { $_.Path.Length } -Descending) {
-        try {
-            $arguments = $plan.Arguments + @('--mptf-dir', $Options.ProfileDirs['common'])
-            $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList $arguments `
-                -WorkingDirectory $plan.Path -EnvVars $Options.EnvVars
-        }
-        finally {
-            $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList @('clean-backup', '--tf-dir', $plan.Path) `
-                -WorkingDirectory $plan.Path -EnvVars $Options.EnvVars
+    $trivia = '(?:\s|/\*[\s\S]*?\*/|//[^\r\n]*|#[^\r\n]*)*'
+    $identifierReference = '(?<![A-Za-z0-9_-])random_uuid' + $trivia + '\.' + $trivia + 'telemetry(?![A-Za-z0-9_-])'
+    $testScopes = @(Get-AvmTerraformTestFileScope -Root $Root -ModuleTargets $ModuleTargets)
+    foreach ($scope in $testScopes) {
+        $plan = $plans | Where-Object { $_.Path -ceq $scope.File.FullName } | Select-Object -First 1
+        $instrumentedTargets = @($ModuleTargets |
+                Where-Object { $null -ne $plan -and $_.Path -cin $plan.TargetPaths -and $_.Profiles -contains 'root' })
+        if ($scope.Owner.Profiles -notcontains 'root' -and $instrumentedTargets.Count -eq 0) { continue }
+        $text = [System.IO.File]::ReadAllText($scope.File.FullName)
+        $references = [regex]::Matches($text, $identifierReference,
+            [System.Text.RegularExpressions.RegexOptions]::CultureInvariant, [TimeSpan]::FromSeconds(1)).Count
+        $validatedReferences = if ($null -ne $plan) { $plan.TelemetryCountMigration.ReferenceCount } else { 0 }
+        if ($references -ne $validatedReferences) {
+            throw [AvmConfigurationException]::new(
+                "Test file '$($scope.File.FullName)' still references retired random_uuid.telemetry; unsupported references require review before any mock retirement.")
         }
     }
-    Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets $ModuleTargets -UnitTestPlans $plans.ToArray()
-    foreach ($plan in $plans |
-            Where-Object {
-                $_.NewLocationPaths.Count -gt 0 -or $_.TelemetrySubscriptionResourceIds.Count -gt 0 -or
-                $_.ProviderMockBindings.Count -gt 0 -or $_.TelemetryCountMigration.ReferenceCount -gt 0
-            }) {
-        try {
-            $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList $plan.Arguments `
-                -WorkingDirectory $plan.Scope.Owner.Path -EnvVars $Options.EnvVars
+    $testPaths = @($testScopes | ForEach-Object { $_.File.FullName })
+    $testSnapshot = Get-AvmFileSnapshot -Path $testPaths
+    try {
+        foreach ($plan in $plans | Where-Object { $_.RetiredAliasNames.Count -gt 0 }) {
+            $retiredJson = ConvertTo-Json -InputObject @($plan.RetiredAliasNames) -Compress
+            try {
+                $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList @(
+                    'transform', '--tf-dir', $plan.Scope.Owner.Path, '--test-file', $plan.Scope.RelativePath,
+                    '--mptf-dir', $Options.ProfileDirs['unit-test'],
+                    '--mptf-var', "retired_mock_provider_names=$retiredJson"
+                ) -WorkingDirectory $plan.Scope.Owner.Path -EnvVars $Options.EnvVars
+            }
+            finally {
+                $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList @(
+                    'clean-backup', '--tf-dir', $plan.Scope.Owner.Path, '--test-file', $plan.Scope.RelativePath
+                ) -WorkingDirectory $plan.Scope.Owner.Path -EnvVars $Options.EnvVars
+            }
         }
-        finally {
-            $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList @(
-                'clean-backup', '--tf-dir', $plan.Scope.Owner.Path, '--test-file', $plan.Scope.RelativePath
-            ) -WorkingDirectory $plan.Scope.Owner.Path -EnvVars $Options.EnvVars
+        foreach ($plan in $modtmRequirementPlans.Values | Sort-Object { $_.Path.Length } -Descending) {
+            try {
+                $arguments = $plan.Arguments + @('--mptf-dir', $Options.ProfileDirs['common'])
+                $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList $arguments `
+                    -WorkingDirectory $plan.Path -EnvVars $Options.EnvVars
+            }
+            finally {
+                $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList @('clean-backup', '--tf-dir', $plan.Path) `
+                    -WorkingDirectory $plan.Path -EnvVars $Options.EnvVars
+            }
         }
+        Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets $ModuleTargets -UnitTestPlans $plans.ToArray()
+        foreach ($plan in $plans |
+                Where-Object {
+                    $_.NewLocationPaths.Count -gt 0 -or $_.TelemetrySubscriptionResourceIds.Count -gt 0 -or
+                    $_.ProviderMockBindings.Count -gt 0 -or $_.TelemetryCountMigration.ReferenceCount -gt 0
+                }) {
+            try {
+                $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList $plan.Arguments `
+                    -WorkingDirectory $plan.Scope.Owner.Path -EnvVars $Options.EnvVars
+            }
+            finally {
+                $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList @(
+                    'clean-backup', '--tf-dir', $plan.Scope.Owner.Path, '--test-file', $plan.Scope.RelativePath
+                ) -WorkingDirectory $plan.Scope.Owner.Path -EnvVars $Options.EnvVars
+            }
+        }
+    }
+    catch {
+        Restore-AvmFileSnapshot -Snapshot $testSnapshot -CurrentPath $testPaths
+        foreach ($path in $testPaths) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or
+                -not [System.Linq.Enumerable]::SequenceEqual(
+                    [byte[]][System.IO.File]::ReadAllBytes($path), [byte[]]$testSnapshot[$path])) {
+                throw [System.IO.IOException]::new(
+                    "Terraform unit-test migration failed and could not restore the original test bytes for '$path'.", $_.Exception)
+            }
+        }
+        throw
     }
 }

@@ -1557,15 +1557,18 @@ run "example" {
         @{ Expression = 'length(random_uuid.telemetry) == 1 && var.enable_telemetry' }
         @{ Expression = 'length(modtm_telemetry.telemetry) == 0 || length(random_uuid.telemetry) == 0' }
         @{ Expression = 'length(modtm_telemetry.telemetry) == 0 && length(random_uuid.telemetry) == 0 && var.enable_telemetry' }
+        @{ Expression = 'length(random_uuid.telemetry[0].result) == 36'; Aliased = $true; CheckDrift = $false }
     ) {
-        param($Expression)
+        param($Expression, $Aliased = $false, $CheckDrift = $true)
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-TelemetryModule -Root $root -WithLegacy -WithLocation
-        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+        if (-not $Aliased) {
+            Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
 resource "random_string" "authored" {
   length = 4
 }
 '@
+        }
         $unit = Join-Path $root 'tests' 'unit'
         $null = New-Item -ItemType Directory -Path $unit -Force
         $standard = Join-Path $unit 'a-standard.tftest.hcl'
@@ -1582,6 +1585,28 @@ run "authored" {
   }
 }
 "@
+        if ($Aliased) {
+            $source = @"
+mock_provider "azapi" {
+  alias = "unit"
+  mock_data "azapi_client_config" {
+    defaults = {
+      subscription_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000"
+    }
+  }
+}
+mock_provider "modtm" { alias = "unit" }
+mock_provider "random" { alias = "unit" }
+run "authored" {
+  command = plan
+  providers = { azapi = azapi.unit, modtm = modtm.unit, random = random.unit }
+  assert {
+    condition     = $Expression
+    error_message = "Keep this authored UUID property-length assertion for review."
+  }
+}
+"@
+        }
         [System.IO.File]::WriteAllText($custom, $source, [System.Text.UTF8Encoding]::new($false))
         $before = [System.IO.File]::ReadAllBytes($standard)
         $null = Invoke-TelemetryProcess -FilePath $script:terraformPath `
@@ -1594,11 +1619,18 @@ run "authored" {
             param($Root)
             Get-AvmFileSnapshot -Path @((Get-AvmTerraformFile -Root $Root).FullName)
         }
-        { Invoke-TelemetryEngine -Root $root -CheckDrift } | Should -Throw '*still references retired random_uuid.telemetry*'
+        $script:processEnvironment.MODTM_ENDPOINT = 'http://127.0.0.1:1/never-production'
+        { Invoke-TelemetryEngine -Root $root -CheckDrift:$CheckDrift } | Should -Throw '*still references retired random_uuid.telemetry*'
         [System.IO.File]::ReadAllBytes($standard) | Should -Be $before
         [System.IO.File]::ReadAllText($custom) | Should -BeExactly $source
-        foreach ($path in $snapshot.Keys) {
-            [System.IO.File]::ReadAllBytes($path) | Should -Be $snapshot[$path]
+        if ($CheckDrift) {
+            foreach ($path in $snapshot.Keys) {
+                [System.IO.File]::ReadAllBytes($path) | Should -Be $snapshot[$path]
+            }
+        }
+        if ($Aliased) {
+            [System.IO.File]::ReadAllText($custom) | Should -Match 'mock_provider "modtm" \{ alias = "unit" \}'
+            [System.IO.File]::ReadAllText($custom) | Should -Match 'mock_provider "random" \{ alias = "unit" \}'
         }
         [System.IO.File]::ReadAllBytes($lockPath) | Should -Be $lockBytes
         if ($null -ne $manifestBytes) {
@@ -1769,14 +1801,43 @@ run "clock" {
         $result.StdErr | Should -BeNullOrEmpty
     }
 
+    It 'preserves empty test files without synthesizing unused provider mocks' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $root -WithLegacy -WithLocation
+        $unit = Join-Path $root 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $unit -Force
+        $testPath = Join-Path $unit 'empty.tftest.hcl'
+        [System.IO.File]::WriteAllText($testPath, "# No authored runs or providers.`r`n", [System.Text.UTF8Encoding]::new($false))
+        $testBytes = [System.IO.File]::ReadAllBytes($testPath)
+        $snapshot = InModuleScope Avm.Authoring -Parameters @{ Root = $root } {
+            param($Root)
+            Get-AvmFileSnapshot -Path @((Get-AvmTerraformFile -Root $Root).FullName)
+        }
+        $script:processEnvironment.MODTM_ENDPOINT = 'http://127.0.0.1:1/never-production'
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'fail'
+        foreach ($path in $snapshot.Keys) {
+            [System.IO.File]::ReadAllBytes($path) | Should -Be $snapshot[$path]
+        }
+        (Invoke-TelemetryEngine -Root $root).Status | Should -Be 'pass'
+        [System.IO.File]::ReadAllBytes($testPath) | Should -Be $testBytes
+        [System.IO.File]::ReadAllText($testPath) | Should -Not -Match '\bmock_provider\b'
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'pass'
+        (Invoke-TelemetryEngine -Root $root).Changed | Should -BeNullOrEmpty
+        [System.IO.File]::ReadAllBytes($testPath) | Should -Be $testBytes
+        (Join-Path $root '.terraform.lock.hcl') | Should -Not -Exist
+        (Join-Path $root '.terraform') | Should -Not -Exist
+    }
+
     It 'preserves transitive ModTM mocks and exact selections for <Scope> runs' -TestCases @(
         @{ Scope = 'root'; Wrapper = $false }
         @{ Scope = 'selected wrapper'; Wrapper = $true }
         @{ Scope = 'stale root manifest'; Wrapper = $false; StaleManifest = $true }
         @{ Scope = 'stale selected wrapper manifest'; Wrapper = $true; StaleManifest = $true }
         @{ Scope = 'unsupported module profile'; Wrapper = $false; RejectProfile = $true; StaleManifest = $true }
+        @{ Scope = 'required nonempty ModTM without AzAPI'; Wrapper = $false; NonemptyDefault = $true }
+        @{ Scope = 'missing root alias binding'; Wrapper = $false; MissingRootBinding = $true }
     ) {
-        param($Wrapper, $RejectProfile = $false, $StaleManifest = $false)
+        param($Wrapper, $RejectProfile = $false, $StaleManifest = $false, $NonemptyDefault = $false, $MissingRootBinding = $false)
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $child = Join-Path $root 'modules' 'child'
         $dependency = Join-Path $root '.published' 'dependency'
@@ -1811,6 +1872,35 @@ output "published_id" {
   value = module.published.id
 }
 '@
+        if ($NonemptyDefault) {
+            $providerPath = Join-Path $root 'terraform.tf'
+            $providers = [System.IO.File]::ReadAllText($providerPath)
+            $azureRm = @'
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 4.0"
+    }
+'@
+            [System.IO.File]::WriteAllText($providerPath,
+                $providers.Replace('  required_providers {', "  required_providers {`n$azureRm"), [System.Text.UTF8Encoding]::new($false))
+            $currentSource += @'
+
+data "azurerm_client_config" "authored" {}
+output "tenant" {
+  value = data.azurerm_client_config.authored.tenant_id
+}
+'@
+        }
+        if ($MissingRootBinding) {
+            Set-Content -LiteralPath (Join-Path $child 'main.tf') -Encoding utf8NoBOM -Value @'
+module "published" {
+  source = "../../.published/dependency"
+}
+output "published_id" {
+  value = module.published.id
+}
+'@
+        }
         $mainPath = Join-Path $root 'main.tf'
         $initialSource = if ($StaleManifest) { 'output "published_id" { value = "not-installed" }' } else { $currentSource }
         Set-Content -LiteralPath $mainPath -Encoding utf8NoBOM -Value $initialSource
@@ -1892,6 +1982,53 @@ run "unused_child" {
   }
 }
 '@
+        if ($NonemptyDefault) {
+            $modtmMock = @'
+mock_provider "modtm" {
+  mock_resource "modtm_telemetry" {
+    defaults = {
+      id   = "mockonly"
+      tags = { fixture = "mock-only" }
+    }
+  }
+}
+'@
+            $azureRmMock = @'
+mock_provider "azurerm" {
+  mock_data "azurerm_client_config" {
+    defaults = { tenant_id = "22222222-2222-2222-2222-222222222222" }
+  }
+}
+'@
+            $source = $source.Replace('mock_provider "modtm" {}', $modtmMock).
+                Replace('variables {', "$azureRmMock`nvariables {")
+            $source = [regex]::Replace($source, '(?s)mock_provider "azapi" \{.*?\n\}\n', '')
+            $source = [regex]::Replace($source, '(?s)  providers = \{\n    azapi = azapi\n.*?    modtm = modtm.*?\n  \}\n', '')
+            $source = $source.Replace('providers = { azapi = azapi, modtm = modtm }', 'providers = { azapi = azapi }')
+        }
+        if ($MissingRootBinding) {
+            $source = @'
+mock_provider "modtm" { alias = "unit" }
+mock_provider "azapi" {
+  mock_data "azapi_client_config" {
+    defaults = {
+      subscription_resource_id = "/subscriptions/11111111-1111-1111-1111-111111111111"
+    }
+  }
+}
+variables {
+  location = "eastus"
+}
+run "implicit_root" {
+  command = apply
+}
+run "complete_child" {
+  command = apply
+  module { source = "./modules/child" }
+  providers = { azapi = azapi, modtm = modtm.unit }
+}
+'@
+        }
         $testPath = Join-Path $unit 'inherited.tftest.hcl'
         [System.IO.File]::WriteAllText($testPath, $source.Replace('__TARGET__', $target), [System.Text.UTF8Encoding]::new($false))
         $script:processEnvironment.MODTM_ENDPOINT = 'http://127.0.0.1:1/never-production'
@@ -1921,6 +2058,30 @@ run "unused_child" {
             $snapshot = InModuleScope Avm.Authoring -Parameters @{ Root = $root } {
                 param($Root)
                 Get-AvmFileSnapshot -Path @((Get-AvmTerraformFile -Root $Root).FullName)
+            }
+            if ($MissingRootBinding) {
+                foreach ($checkDrift in @($true, $false)) {
+                    { Invoke-TelemetryEngine -Root $root -CheckDrift:$checkDrift } |
+                        Should -Throw '*run provider mappings must use the same provider*'
+                    [System.IO.File]::ReadAllText($testPath) | Should -BeExactly $source
+                    if ($checkDrift) {
+                        foreach ($path in $snapshot.Keys) {
+                            [System.IO.File]::ReadAllBytes($path) | Should -Be $snapshot[$path]
+                        }
+                    }
+                    foreach ($path in $initializedPaths) {
+                        [System.IO.File]::ReadAllBytes((Join-Path $path '.terraform.lock.hcl')) | Should -Be $locks[$path]
+                        $version = Invoke-TelemetryProcess -FilePath $script:terraformPath -ArgumentList @('version', '-json') -Root $path
+                        (($version.StdOut | ConvertFrom-Json).provider_selections | ConvertTo-Json -Compress) |
+                            Should -BeExactly $selections[$path]
+                        if ($manifests.ContainsKey($path)) {
+                            $manifestPath = Join-Path -Path $path -ChildPath '.terraform' -AdditionalChildPath 'modules', 'modules.json'
+                            [System.IO.File]::ReadAllBytes($manifestPath) | Should -Be $manifests[$path]
+                        }
+                    }
+                    (Get-FileHash -LiteralPath $published).Hash | Should -BeExactly $publishedHash
+                }
+                return
             }
             if ($RejectProfile) {
                 $profile = Join-Path $root 'config' 'mapotf' 'module'
@@ -1955,8 +2116,15 @@ run "unused_child" {
             }
             (Invoke-TelemetryEngine -Root $root).Status | Should -Be 'pass'
             $content = [System.IO.File]::ReadAllText($testPath)
-            $content | Should -Match 'mock_provider "modtm" \{\}'
-            $content | Should -Match 'modtm = modtm # Retain the required binding and its comment\.'
+            if ($NonemptyDefault) {
+                $content | Should -Match 'mock_resource "modtm_telemetry"'
+                $content | Should -Match 'id\s*=\s*"mockonly"'
+                [regex]::Matches($content, 'mock_provider "azapi"').Count | Should -Be 1
+            }
+            else {
+                $content | Should -Match 'mock_provider "modtm" \{\}'
+                $content | Should -Match 'modtm = modtm # Retain the required binding and its comment\.'
+            }
             $content | Should -Not -Match '(?m)^\s*provider\s+"'
             Get-Content -LiteralPath (Join-Path $child 'terraform.tf') -Raw | Should -Not -Match '\bmodtm\s*='
             $inspection = InModuleScope Avm.Authoring -Parameters @{
@@ -1975,6 +2143,14 @@ run "unused_child" {
             }
             foreach ($name in @('implicit', 'explicit')) {
                 $inspection.runs[$name].mptf.attributes.providers | Should -Match '\bmodtm\s*=\s*modtm\b'
+                $inspection.runs[$name].mptf.attributes.providers | Should -Match '\bazapi\s*=\s*azapi\b'
+                if ($NonemptyDefault) {
+                    $inspection.runs[$name].mptf.attributes.providers | Should -Match '\bazurerm\s*=\s*azurerm\b'
+                }
+            }
+            if ($NonemptyDefault) {
+                $inspection.mock_providers.modtm.mock_resource[0].mptf.attributes.defaults.id | Should -BeExactly 'mockonly'
+                $inspection.mock_providers.modtm.mptf.is_empty | Should -BeFalse
             }
             $inspection.runs.unused_child.mptf.attributes.providers | Should -Not -Match '\bmodtm\b'
             (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'pass'

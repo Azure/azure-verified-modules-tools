@@ -764,7 +764,9 @@ expression-replacement rule before any test files change. Every reference to
 the retired identifier in that file must be accounted for by these assertions;
 other uses, including references in comments or strings that prevent that
 proof, require review even when unrelated random use retains the provider.
-Direct unit tests receive a missing AzAPI mock when retiring their empty modtm mock;
+Direct unit tests receive a missing AzAPI mock when replacing legacy ModTM
+telemetry, independently of whether an unchanged dependency retains an empty
+or non-empty ModTM mock;
 empty AzAPI mocks, including comment-only bodies, receive a valid synthetic
 subscription resource ID for `azapi_client_config` without losing comments.
 Default and literally named aliased AzAPI mocks receive only a missing
@@ -806,6 +808,12 @@ every provider alias. Local source-backed aliases retain the source checks
 above. An alias is never treated as an unaliased default.
 Complete mappings may bind an unaliased target name to its known default mock
 or a known alias of the same provider. Aliased target keys still require review.
+Prove effective source, mock and mapping coverage separately for every run's
+selected configuration tree, including generated mappings and implicit defaults.
+A binding in another run cannot cover this run, and authored location or
+client defaults do not bypass that proof.
+A valid, explicitly empty native run collection needs no mocks. Missing,
+malformed or incomplete native collections still fail inspection.
 When an instrumented target introduces AzAPI, add its existing default mock
 binding only if a pre-transform configuration provider tree proves the old
 mapping covered every selected provider. Preserve the original aliases and
@@ -856,6 +864,11 @@ Preserve assertions and mock defaults without restoring unused provider
 requirements or exempting them from lint. Verify native profile support for
 the complete mapping before changing any test file, and keep repeated
 transforms and non-writing drift checks stable.
+Validate unsupported retired-identifier references before removing any mock
+or backup. Snapshot every test file that cleanup can modify, including files
+outside direct unit-test plans. A later migration or cleanup failure restores
+their full original bytes even in normal writing mode; explicitly report any
+file whose restoration cannot be verified.
 For unchanged ModTM dependencies, preserve the mock and every required run
 binding. A removed non-default provider source must not become an inferred
 `hashicorp/modtm` source. Restore only a selected target's proven
