@@ -21,6 +21,11 @@ section when cutting a release.
 
 ### Added
 
+- `Select-AvmTestSubscription` provides the shared read-only Bicep workflow
+  subscription selector. It validates the complete tagged pool and exact root
+  reservation map, resolves an optional example's actual owning module through
+  native discovery, and preserves original pool indices and canonical digests
+  for pre-authentication binding checks. Reserved native e2e remains blocked.
 - `avm test e2e` validates and previews eligible Bicep examples before Create.
   Resource-group cases use tagged disposable groups; a narrow subset of
   subscription, management-group and tenant cases requires explicit targets
@@ -107,6 +112,14 @@ section when cutting a release.
 
 ### Changed
 
+- Bicep resource-location discovery accepts the multiple resource-type rows
+  returned by Azure PowerShell and validates every row's provider namespace.
+  Azure CLI prerequisite registration retains its single namespace-object
+  contract, including when that object contains multiple resource types.
+- Recursive Bicep e2e resolves feature and provider prerequisites from each
+  selected case's exact owning module before effects. Completed requirements
+  are deduplicated by subscription and declaration, without inheriting a
+  parent's requirements or skipping a child's distinct prerequisites.
 - Bicep end-to-end retries use one bounded loop and packaged
   `Resources/bicep/retry-policy.json` rules. In-place retries preserve the exact
   deployment and inputs; fresh retries regenerate the external naming context

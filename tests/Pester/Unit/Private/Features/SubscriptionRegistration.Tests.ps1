@@ -108,9 +108,32 @@ Describe 'Subscription provider registration state machine' {
         }
     }
 
+    It 'accepts one CLI namespace envelope with <Rows> resource-type rows without registering it again' -ForEach @(
+        @{ Rows = 1 }
+        @{ Rows = 3 }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Rows = $Rows } {
+            param($Rows)
+            $types = @(foreach ($index in 1..$Rows) {
+                    @{ resourceType = "type$index"; locations = @('East US'); apiVersions = @('2026-01-01') }
+                })
+            $script:registration.Output = @{
+                namespace = 'Microsoft.Compute'
+                id = '/subscriptions/11111111-1111-4111-8111-111111111111/providers/Microsoft.Compute'
+                registrationState = 'Registered'
+                resourceTypes = $types
+            } | ConvertTo-Json -Depth 6 -Compress
+            (Invoke-AvmSubscriptionRegistration @script:registrationInput).AlreadyRegistered | Should -Be @('Microsoft.Compute')
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[1] -eq 'show' }
+            Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[1] -eq 'register' }
+            $script:registration.IdentityChecks | Should -Be 1
+        }
+    }
+
     It 'rejects invalid provider responses: <Case>' -ForEach @(
         @{ Case = 'JSON'; Json = 'invalid' }
         @{ Case = 'singleton array'; Json = '[{"namespace":"Microsoft.Compute","registrationState":"Registered"}]' }
+        @{ Case = 'PowerShell row array instead of CLI envelope'; Json = '[{"namespace":"Microsoft.Compute","registrationState":"Registered"},{"namespace":"Microsoft.Compute","registrationState":"Registered"}]' }
         @{ Case = 'duplicate property'; Json = '{"namespace":"Microsoft.Compute","namespace":"Microsoft.Compute","registrationState":"Registered"}' }
         @{ Case = 'namespace array'; Json = '{"namespace":["Microsoft.Compute"],"registrationState":"Registered"}' }
         @{ Case = 'wrong namespace'; Json = '{"namespace":"Microsoft.Storage","registrationState":"Registered"}' }

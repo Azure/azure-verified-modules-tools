@@ -5,6 +5,15 @@ BeforeAll {
     $moduleRoot = Join-Path $PSScriptRoot '..' '..' '..' 'src' 'Avm.Authoring'
     & (Join-Path $PSScriptRoot '..' 'Import-AvmTestModule.ps1') -SourceManifest (Join-Path $moduleRoot 'Avm.Authoring.psd1')
     . (Join-Path $PSScriptRoot '..' 'Helpers' 'BicepNativeWorkflow.ps1')
+
+    function Add-ProviderChildCase {
+        param([pscustomobject] $Fixture, [string] $Example = 'defaults')
+        $child = Join-Path $Fixture.Root 'child'
+        $directory = Join-Path $child 'tests' 'e2e' $Example
+        $null = New-Item -ItemType Directory -Path $directory -Force
+        Copy-Item -LiteralPath (Join-Path $Fixture.Root 'main.bicep') -Destination $child -Force
+        Copy-Item -LiteralPath (Join-Path $Fixture.Directory 'main.test.bicep') -Destination $directory -Force
+    }
 }
 AfterAll { Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue }
 
@@ -19,6 +28,8 @@ Describe 'Component: Bicep required subscription providers' -Tag Component {
         $script:fixture.Root = $root
         $script:fixture.Directory = Join-Path $root 'tests' 'e2e' 'defaults'
         $script:options.Path = $root
+        [IO.File]::WriteAllText((Join-Path $script:registry 'bicepconfig.json'), '{}')
+        [IO.File]::WriteAllText((Join-Path $script:registry '.reserved-test-subscriptions.json'), '{}')
         $script:providerMap = Join-Path $script:registry '.required-resource-providers.json'
         Set-Content -LiteralPath $script:providerMap -Value '{"avm/res/example/module":["Microsoft.Compute"]}'
         InModuleScope Avm.Authoring {
@@ -192,5 +203,64 @@ Describe 'Component: Bicep required subscription providers' -Tag Component {
         $result.Status | Should -Be 'pass'
         @($script:fixture.Calls | Where-Object { $_ -like 'provider:*' -or $_ -eq 'tokens' }) | Should -Be $events
         (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).status | Should -Be 'Complete'
+    }
+
+    It 'selects each owner and deduplicates <Requirements> requirements by subscription and declaration' -ForEach @(
+        @{ Requirements = 'distinct'; ChildProvider = 'Microsoft.Storage'; ChildFeature = 'Microsoft.Network/ChildFeature'; Reads = 2 }
+        @{ Requirements = 'shared'; ChildProvider = 'Microsoft.Compute'; ChildFeature = 'Microsoft.Compute/RootFeature'; Reads = 1 }
+    ) {
+        Add-ProviderChildCase -Fixture $script:fixture
+        Add-ProviderChildCase -Fixture $script:fixture -Example 'other'
+        [IO.File]::WriteAllText($script:providerMap, (ConvertTo-Json -Compress -InputObject @{
+                    'avm/res/example/module' = @('Microsoft.Compute')
+                    'avm/res/example/module/child' = @($ChildProvider)
+                }))
+        [IO.File]::WriteAllText((Join-Path $script:registry '.required-features.json'), (ConvertTo-Json -Compress -InputObject @{
+                    'avm/res/example/module' = @('Microsoft.Compute/RootFeature')
+                    'avm/res/example/module/child' = @($ChildFeature)
+                }))
+        $script:options.Recurse = $true
+        $script:options.Remove('CleanupStatePath')
+        $script:fixture.StatePath = ''
+
+        $result = Invoke-AvmTestE2e @script:options
+
+        $result.Status | Should -Be 'pass'
+        $result.RunsTotal | Should -Be 3
+        @($script:fixture.Calls | Where-Object { $_ -like 'feature:show:*' }).Count | Should -Be $Reads
+        @($script:fixture.Calls | Where-Object { $_ -like 'provider:show:*' }).Count | Should -Be $Reads
+        $script:fixture.Calls | Should -Contain "provider:show:$($script:options.SubscriptionId):$ChildProvider"
+        $script:fixture.Calls | Should -Contain "feature:show:$($script:options.SubscriptionId):$($ChildFeature.Split('/')[0])"
+    }
+
+    It 'does not inherit parent prerequisites when only a child example is selected' {
+        Add-ProviderChildCase -Fixture $script:fixture
+        [IO.File]::WriteAllText((Join-Path $script:registry '.required-features.json'),
+            '{"avm/res/example/module":["Microsoft.Compute/RootFeature"]}')
+        $result = Invoke-AvmTestE2e @script:options -Recurse -Example 'child/tests/e2e/defaults'
+        $result.Status | Should -Be 'pass'
+        $result.RunsTotal | Should -Be 1
+        @($script:fixture.Calls | Where-Object { $_ -match '^(feature|provider):' }).Count | Should -Be 0
+    }
+
+    It 'does not collect child prerequisites for an explicitly selected parent example' {
+        Add-ProviderChildCase -Fixture $script:fixture
+        [IO.File]::WriteAllText($script:providerMap, '{"avm/res/example/module/child":["Microsoft.Storage"]}')
+        [IO.File]::WriteAllText((Join-Path $script:registry '.required-features.json'),
+            '{"avm/res/example/module/child":["Microsoft.Network/ChildFeature"]}')
+        $result = Invoke-AvmTestE2e @script:options -Recurse -Example 'tests/e2e/defaults'
+        $result.Status | Should -Be 'pass'
+        @($script:fixture.Calls | Where-Object { $_ -match '^(feature|provider):' }).Count | Should -Be 0
+    }
+
+    It 'rejects a selected child feature manifest before dependencies, compilation or Azure calls' {
+        Add-ProviderChildCase -Fixture $script:fixture
+        [IO.File]::WriteAllText((Join-Path $script:fixture.Root 'child' '.required-features.json'),
+            '["Microsoft.Compute/ChildFeature"]')
+        $script:options.Remove('CleanupStatePath')
+        { Invoke-AvmTestE2e @script:options -Recurse } | Should -Throw '*remove the module-root manifest*'
+        Should -Invoke Assert-AvmBicepAzureDependency -ModuleName Avm.Authoring -Exactly 0
+        Should -Invoke Invoke-AvmBicepAzureContext -ModuleName Avm.Authoring -Exactly 0
+        $script:fixture.Calls.Count | Should -Be 0
     }
 }

@@ -103,7 +103,7 @@ Describe 'Bicep registry metadata timeout retries' {
                 if ($script:providerReads -eq 1 -and $FailedRead -in @('provider', 'both')) {
                     throw [TimeoutException]::new('Provider read timed out.')
                 }
-                @{ ResourceTypes = @(@{ ResourceTypeName = 'storageAccounts'; Locations = @('East US') }) }
+                @{ ProviderNamespace = 'Microsoft.Storage'; ResourceTypes = @(@{ ResourceTypeName = 'storageAccounts'; Locations = @('East US') }) }
             }
             Mock Get-AzLocation {
                 $script:locationReads++

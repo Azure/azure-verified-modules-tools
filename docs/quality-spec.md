@@ -390,6 +390,10 @@ per module and namespace parts over 128 characters. Missing, empty and unrelated
 maps are logged registration no-ops; WhatIf validates without Azure calls.
 
 One private parser and registration implementation serves features and providers.
+Resolve declarations for each selected case's exact owning module before effects,
+including recursive and child-example selection; never inherit the invocation
+parent's declarations. Cache completed registrations by subscription and exact
+requirement, so one case cannot suppress another owner's distinct prerequisites.
 After compilation and identity verification, Bicep All/Deploy completes feature
 registration and its provider refresh, then required provider registration,
 before template/parameter token replacement, validation or deployment.

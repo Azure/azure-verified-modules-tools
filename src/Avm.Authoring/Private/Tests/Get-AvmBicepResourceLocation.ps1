@@ -28,10 +28,19 @@ function Get-AvmBicepResourceLocation {
             throw [AvmConfigurationException]::new('Automatic resource location selection requires a canonical ARM resource type.')
         }
         $providerName, $typeName = $ResourceType -split '/', 2
-        $provider = Invoke-AvmBicepRead -Activity "Read provider locations for $providerName" -Read {
-            Get-AzResourceProvider -ProviderNamespace $providerName -ErrorAction Stop
-        }
-        $resourceTypes = Get-AvmPropertyValue -InputObject $provider -Name 'ResourceTypes'
+        $providers = @(Invoke-AvmBicepRead -Activity "Read provider locations for $providerName" -Read {
+                Get-AzResourceProvider -ProviderNamespace $providerName -ErrorAction Stop
+            })
+        $resourceTypes = @(
+            foreach ($provider in $providers) {
+                $namespace = Get-AvmPropertyValue -InputObject $provider -Name 'ProviderNamespace' -NoEnumerate
+                if ($namespace -isnot [string] -or $namespace -ine $providerName) {
+                    throw [AvmProcessException]::new(
+                        "Location metadata returned an unexpected provider namespace for '$providerName'.")
+                }
+                Get-AvmPropertyValue -InputObject $provider -Name 'ResourceTypes'
+            }
+        )
         $providerLocations = @(
             foreach ($type in $resourceTypes) {
                 if ((Get-AvmPropertyValue -InputObject $type -Name 'ResourceTypeName') -eq $typeName) {
