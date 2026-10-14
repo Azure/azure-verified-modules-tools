@@ -867,18 +867,23 @@ still needs its random mock for dependencies, bind its retained unaliased
 mocks explicitly in that target's runs, including a newly introduced AzAPI
 mock. Inspect each selected target's native provider requirements and its
 configuration dependency tree. Exclude state-only providers and other test
-targets; passing an unrelated mock to a run is invalid in Terraform. Initialize
-missing dependencies with the shared backend-disabled Terraform helper,
-preserving compatible dependency selections. Restore the exact original
+targets; passing an unrelated mock to a run is invalid in Terraform. Install
+missing modules with `terraform get -no-color` through the shared process helper
+with network retry, then inspect `terraform providers`. For an existing lock,
+reuse initialized source providers through a private directory link so native
+lock checks remain enforced. If locked providers are not initialized, use the
+shared backend-disabled initialization helper with compatible selections
+preserved instead. Never initialize a backend or fall back to real provider
+execution for inspection. Restore the exact original
 provider-lock bytes, or its absence, and any existing module-manifest bytes
-even when inspection fails. Dependency inspection initializes into private
+even when inspection fails. Dependency inspection installs modules into private
 Terraform data directories, never the source tree's `.terraform` directory.
 Keep these directories alive through requirement planning, then remove them
 on transform success or failure without changing pre-existing initialization data.
 Requirement planning uses the validated immutable
 manifest snapshot captured with the fresh provider tree, not the restored
 on-disk manifest; newly added dependencies need no prior manual initialization.
-Validate root/default-directory test targets before initialization can fetch
+Validate root/default-directory test targets before module installation can fetch
 them. JSON configurations/tests, possible backend/cloud declarations and
 initialized backend metadata require review before dependency inspection;
 do not access remote state to construct mock mappings. The test

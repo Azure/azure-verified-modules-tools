@@ -15,6 +15,7 @@ Describe 'Integration: MAPOTF native Terraform test migration' -Tag 'Integration
                 'unit-test'         = Join-Path $moduleRoot 'Resources' 'mapotf' 'unit-test'
             }
             EnvVars     = @{}
+            InspectionRoot = Join-Path $TestDrive 'provider-inspection'
         }
         $script:utf8 = [System.Text.UTF8Encoding]::new($false)
 
@@ -163,6 +164,133 @@ run "child" {
         (Get-FileHash -LiteralPath $fixture.Test).Hash | Should -BeExactly $before
         @(Get-ChildItem -LiteralPath $fixture.Root -Recurse -Filter '*.mptfbackup') | Should -HaveCount 0
         (Join-Path $fixture.Root '.terraform') | Should -Not -Exist
+    }
+
+    It 'inspects the installed module graph without changing source data: <Mode>' -TestCases @(
+        @{ Mode = 'unlocked' }
+        @{ Mode = 'initialized lock' }
+        @{ Mode = 'uninitialized lock' }
+    ) {
+        param($Mode)
+        $fixture = New-NativeTestFixture
+        Set-Content -LiteralPath (Join-Path $fixture.Root 'terraform.tf') -Encoding utf8NoBOM -Value @'
+terraform {
+  required_providers {
+    random = {
+      source  = "hashicorp/random"
+      version = "= 3.9.1"
+    }
+  }
+}
+module "dependency" {
+  source = "./modules/child"
+}
+'@
+        Set-Content -LiteralPath (Join-Path $fixture.Child 'terraform.tf') -Encoding utf8NoBOM -Value @'
+terraform {
+  required_providers {
+    azapi = {
+      source  = "Azure/azapi"
+      version = "= 2.13.0"
+    }
+  }
+}
+'@
+        $lockPath = Join-Path $fixture.Root '.terraform.lock.hcl'
+        if ($Mode -ceq 'initialized lock') {
+            InModuleScope Avm.Authoring -Parameters @{ Root = $fixture.Root; Terraform = $script:terraform } {
+                param($Root, $Terraform)
+                $null = Invoke-AvmTerraformInit -TerraformPath $Terraform -WorkingDirectory $Root `
+                    -BackendFalse -NoColor -PreserveDependencySelections
+            }
+        }
+        elseif ($Mode -ceq 'uninitialized lock') {
+            [System.IO.File]::WriteAllText($lockPath, @'
+provider "registry.terraform.io/hashicorp/random" {
+  version     = "3.9.1"
+  constraints = "3.9.1"
+}
+provider "registry.terraform.io/azure/azapi" {
+  version     = "2.13.0"
+  constraints = "2.13.0"
+}
+'@, $script:utf8)
+        }
+        $dataKind = if ($Mode -ceq 'uninitialized lock') { 'modules' } else { 'providers' }
+        $originalData = Join-Path -Path $fixture.Root -ChildPath '.terraform' -AdditionalChildPath $dataKind, 'retained.bin'
+        $null = New-Item -ItemType Directory -Path (Split-Path -Parent $originalData) -Force
+        [System.IO.File]::WriteAllBytes($originalData, [byte[]]@(0, 13, 10, 255))
+        $before = @{}
+        foreach ($file in Get-ChildItem -LiteralPath $fixture.Root -Recurse -Force -File -FollowSymlink) {
+            $before[$file.FullName] = (Get-FileHash -LiteralPath $file.FullName).Hash
+        }
+        $options = $script:options.PSObject.Copy()
+        $options.InspectionRoot = Join-Path $TestDrive ('graph-inspection-' + [guid]::NewGuid().ToString('N'))
+        InModuleScope Avm.Authoring -Parameters @{ Fixture = $fixture; Options = $options; Mode = $Mode } {
+            param($Fixture, $Options, $Mode)
+            $script:inspectionOriginalProcess = (Get-Command Invoke-AvmProcess).ScriptBlock
+            $script:inspectionProcessTimings = [System.Collections.Generic.List[object]]::new()
+            $script:inspectionProcessDepth = 0
+            Mock Invoke-AvmProcess {
+                $script:inspectionProcessDepth++
+                $timer = [System.Diagnostics.Stopwatch]::StartNew()
+                try {
+                    & $script:inspectionOriginalProcess @PesterBoundParameters
+                }
+                finally {
+                    $timer.Stop()
+                    $script:inspectionProcessDepth--
+                    if ($script:inspectionProcessDepth -eq 0) {
+                        $script:inspectionProcessTimings.Add([pscustomobject]@{
+                                Command = $ArgumentList[0]
+                                Milliseconds = $timer.ElapsedMilliseconds
+                            })
+                    }
+                }
+            }
+            try {
+                $modules = @{}
+                $manifests = @{}
+                $sources = @(Get-AvmTerraformUnitTestProviderSource -Path $Fixture.Root `
+                        -ModuleTargets $Fixture.Targets -Options $Options `
+                        -ModuleProviderSources $modules -ModuleManifests $manifests)
+                $sources | Sort-Object | Should -Be @('registry.terraform.io/azure/azapi', 'registry.terraform.io/hashicorp/random')
+                $modules['dependency'] | Should -Contain 'registry.terraform.io/azure/azapi'
+                @(ConvertFrom-AvmTerraformModuleManifest -Payload $manifests[$Fixture.Root] `
+                        -WorkingDirectory $Fixture.Root) | Should -Contain $Fixture.Child
+                if ($Mode -ceq 'uninitialized lock') {
+                    Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                        $ArgumentList[0] -ceq 'init' -and $RetryNetworkFailure -and
+                        $ArgumentList -contains '-backend=false' -and $ArgumentList -notcontains '-upgrade'
+                    }
+                    Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -ceq 'get' }
+                }
+                else {
+                    Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -ceq 'init' }
+                    Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                        $ArgumentList -join '|' -ceq 'get|-no-color' -and $RetryNetworkFailure
+                    }
+                    $providers = @(Get-ChildItem -LiteralPath $Options.InspectionRoot -Directory -Recurse |
+                            Where-Object Name -eq 'providers')
+                    if ($Mode -ceq 'initialized lock') {
+                        $providers | Should -HaveCount 1
+                        $providers[0].LinkTarget | Should -BeExactly (
+                            Join-Path -Path $Fixture.Root -ChildPath '.terraform' -AdditionalChildPath 'providers')
+                    }
+                    else { $providers | Should -HaveCount 0 }
+                }
+            }
+            finally {
+                Write-Information ('Provider inspection stages: ' +
+                    (ConvertTo-Json -InputObject @($script:inspectionProcessTimings) -Compress)) -InformationAction Continue
+                Remove-Variable inspectionOriginalProcess, inspectionProcessTimings, inspectionProcessDepth -Scope Script
+            }
+        }
+        $after = @(Get-ChildItem -LiteralPath $fixture.Root -Recurse -Force -File -FollowSymlink)
+        $after.Count | Should -Be $before.Count
+        foreach ($file in $after) {
+            (Get-FileHash -LiteralPath $file.FullName).Hash | Should -BeExactly $before[$file.FullName]
+        }
     }
 
     It 'adds only new run inputs, preserves other files and is stable on the second pass' {
@@ -532,6 +660,7 @@ run "root" {
                 'unit-test' = $profile
             }
             EnvVars = @{}
+            InspectionRoot = $script:options.InspectionRoot
         }
         $snapshot = [pscustomobject]@{
             Scope = $fixture.Scope

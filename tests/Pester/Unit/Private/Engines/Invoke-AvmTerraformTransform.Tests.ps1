@@ -104,8 +104,16 @@ Describe 'Invoke-AvmTerraformTransform' {
         }
     ) {
         param($Failure, $CheckDrift)
-        InModuleScope Avm.Authoring -Parameters @{ C = $script:context; Failure = $Failure; CheckDrift = $CheckDrift } {
-            param($C, $Failure, $CheckDrift)
+        $providers = Join-Path -Path $script:moduleDir -ChildPath '.terraform' -AdditionalChildPath 'providers'
+        $null = New-Item -ItemType Directory -Path $providers -Force
+        $providerFile = Join-Path $providers 'original.bin'
+        [byte[]]$providerBytes = @(0, 13, 10, 255)
+        [System.IO.File]::WriteAllBytes($providerFile, $providerBytes)
+        InModuleScope Avm.Authoring -Parameters @{
+            C = $script:context; Failure = $Failure; CheckDrift = $CheckDrift
+            Providers = $providers; ProviderFile = $providerFile; ProviderBytes = $providerBytes
+        } {
+            param($C, $Failure, $CheckDrift, $Providers, $ProviderFile, $ProviderBytes)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
             }
@@ -115,6 +123,9 @@ Describe 'Invoke-AvmTerraformTransform' {
                 $script:AvmTestInspectionRoot = $Options.InspectionRoot
                 $null = New-Item -ItemType Directory -Path $Options.InspectionRoot
                 Set-Content -LiteralPath (Join-Path $Options.InspectionRoot 'dependency.tf') -Value 'terraform {}'
+                $linkType = if ($IsWindows) { 'Junction' } else { 'SymbolicLink' }
+                $null = New-Item -ItemType $linkType -Path (Join-Path $Options.InspectionRoot 'providers') `
+                    -Target $Providers
                 if ($Failure -ceq 'snapshot') {
                     throw [System.InvalidOperationException]::new('snapshot failed')
                 }
@@ -122,6 +133,9 @@ Describe 'Invoke-AvmTerraformTransform' {
             }
             Mock Invoke-AvmTerraformUnitTestMigration {
                 Test-Path -LiteralPath (Join-Path $Options.InspectionRoot 'dependency.tf') | Should -BeTrue
+                [System.IO.File]::ReadAllBytes(
+                    (Join-Path -Path $Options.InspectionRoot -ChildPath 'providers' -AdditionalChildPath 'original.bin')) |
+                    Should -Be $ProviderBytes
                 if ($Failure -ceq 'migration') {
                     throw [System.InvalidOperationException]::new('migration failed')
                 }
@@ -133,6 +147,8 @@ Describe 'Invoke-AvmTerraformTransform' {
                 { Invoke-AvmTerraformTransform -Context $C -CheckDrift:$CheckDrift } | Should -Throw "*$Failure failed*"
             }
             Test-Path -LiteralPath $script:AvmTestInspectionRoot | Should -BeFalse
+            Test-Path -LiteralPath $ProviderFile | Should -BeTrue
+            [System.IO.File]::ReadAllBytes($ProviderFile) | Should -Be $ProviderBytes
             Remove-Variable AvmTestInspectionRoot -Scope Script
         }
     }

@@ -618,6 +618,10 @@ function Get-AvmTerraformUnitTestProviderSource {
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
+    $inspectionRoot = $Options.PSObject.Properties['InspectionRoot']
+    if ($null -eq $inspectionRoot -or [string]::IsNullOrWhiteSpace($inspectionRoot.Value)) {
+        throw [AvmConfigurationException]::new('Dependency inspection requires an owned temporary InspectionRoot.')
+    }
     $files = @(Get-ChildItem -LiteralPath $Path -File)
     $trivia = '(?:\s|#[^\r\n]*|//[^\r\n]*|/\*[\s\S]*?\*/)'
     $stateDeclaration = '\b(?:backend|state_store|state_store_provider)' + $trivia + '+"' +
@@ -654,7 +658,7 @@ function Get-AvmTerraformUnitTestProviderSource {
         $null = Get-AvmTerraformUnitTestInspection -Scope $scope -ModuleTargets $ModuleTargets -Options $Options
     }
     $environment = $Options.EnvVars.Clone()
-    foreach ($name in @('TF_DATA_DIR', 'TF_CLI_ARGS', 'TF_CLI_ARGS_init', 'TF_CLI_ARGS_providers')) {
+    foreach ($name in @('TF_DATA_DIR', 'TF_CLI_ARGS', 'TF_CLI_ARGS_init', 'TF_CLI_ARGS_get', 'TF_CLI_ARGS_providers')) {
         $environment[$name] = $null
     }
     $environment.TF_DATA_DIR = Join-Path $Options.InspectionRoot ([guid]::NewGuid().ToString('N'))
@@ -667,9 +671,22 @@ function Get-AvmTerraformUnitTestProviderSource {
     }
     $manifestPath = Join-Path -Path $environment.TF_DATA_DIR -ChildPath 'modules' -AdditionalChildPath 'modules.json'
     try {
-        $null = Invoke-AvmTerraformInit -TerraformPath $Options.TerraformPath -WorkingDirectory $Path `
-            -EnvVars $environment -BackendFalse -NoColor -PreserveDependencySelections `
-            -Label 'terraform init (unit-test provider dependencies)'
+        $providerDirectory = Join-Path -Path $Path -ChildPath '.terraform' -AdditionalChildPath 'providers'
+        if ($lockExists -and -not (Test-Path -LiteralPath $providerDirectory -PathType Container)) {
+            $null = Invoke-AvmTerraformInit -TerraformPath $Options.TerraformPath -WorkingDirectory $Path `
+                -EnvVars $environment -BackendFalse -NoColor -PreserveDependencySelections `
+                -Label 'terraform init (unit-test provider dependencies)'
+        }
+        else {
+            if ($lockExists) {
+                $linkType = if ($IsWindows) { 'Junction' } else { 'SymbolicLink' }
+                $null = New-Item -ItemType $linkType -Path (Join-Path $environment.TF_DATA_DIR 'providers') `
+                    -Target $providerDirectory -ErrorAction Stop
+            }
+            $null = Invoke-AvmProcess -FilePath $Options.TerraformPath -ArgumentList @('get', '-no-color') `
+                -WorkingDirectory $Path -EnvVars $environment -RetryNetworkFailure `
+                -Label 'terraform get (unit-test provider dependencies)'
+        }
         $result = Invoke-AvmProcess -FilePath $Options.TerraformPath `
             -ArgumentList @('providers', '-no-color', '-test-directory=tests') `
             -WorkingDirectory $Path -EnvVars $environment

@@ -315,6 +315,7 @@ Describe 'Terraform unit-test migration' {
             $script:fixture.Targets[1].Path = $script:fixture.Child
             $null = New-Item -ItemType Directory -Path $script:fixture.Child -Force
             Mock Invoke-AvmTerraformInit -ModuleName Avm.Authoring {}
+            Mock Invoke-AvmProcess -ModuleName Avm.Authoring {} -ParameterFilter { $ArgumentList[0] -ceq 'get' }
         }
 
         It 'keeps configuration dependencies but excludes tests and state-only providers' {
@@ -345,11 +346,35 @@ Providers required by state:
                     $ArgumentList -join '|' -ceq 'providers|-no-color|-test-directory=tests' -and
                     $WorkingDirectory -ceq $Fixture.Child
                 }
-                Should -Invoke Invoke-AvmTerraformInit -Exactly 1 -ParameterFilter {
-                    $TerraformPath -ceq $Fixture.Options.TerraformPath -and
+                Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                    $FilePath -ceq $Fixture.Options.TerraformPath -and
+                    $ArgumentList -join '|' -ceq 'get|-no-color' -and [bool]$RetryNetworkFailure -and
                     $WorkingDirectory -ceq $Fixture.Child -and
-                    [bool]$BackendFalse -and [bool]$NoColor -and [bool]$PreserveDependencySelections
+                    $EnvVars.TF_DATA_DIR.StartsWith($Fixture.Options.InspectionRoot)
                 }
+                Should -Invoke Invoke-AvmTerraformInit -Exactly 0
+            }
+        }
+
+        It 'rejects a missing inspection scope before native work: <Shape>' -TestCases @(
+            @{ Shape = 'absent' }
+            @{ Shape = 'null'; Value = $null }
+            @{ Shape = 'blank'; Value = ' ' }
+        ) {
+            param($Shape, $Value)
+            if ($Shape -ceq 'absent') {
+                $script:fixture.Options.PSObject.Properties.Remove('InspectionRoot')
+            }
+            else {
+                $script:fixture.Options.InspectionRoot = $Value
+            }
+            InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {
+                param($Fixture)
+                { Get-AvmTerraformUnitTestProviderSource -Path $Fixture.Child `
+                        -ModuleTargets $Fixture.Targets -Options $Fixture.Options } |
+                    Should -Throw '*requires an owned temporary InspectionRoot*'
+                Should -Invoke Invoke-AvmProcess -Exactly 0
+                Should -Invoke Invoke-AvmTerraformInit -Exactly 0
             }
         }
 
@@ -424,15 +449,16 @@ Providers required by state:
         }
 
         It 'propagates dependency installation failure without reading provider requirements' {
-            Mock Invoke-AvmTerraformInit -ModuleName Avm.Authoring {
+            Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
                 throw [System.InvalidOperationException]::new('module installation failed')
-            }
+            } -ParameterFilter { $ArgumentList[0] -ceq 'get' }
             InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {
                 param($Fixture)
                 { Get-AvmTerraformUnitTestProviderSource -Path $Fixture.Child `
                         -ModuleTargets $Fixture.Targets -Options $Fixture.Options } |
                     Should -Throw '*module installation failed*'
-                Should -Invoke Invoke-AvmTerraformInit -Exactly 1
+                Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -ceq 'get' }
+                Should -Invoke Invoke-AvmTerraformInit -Exactly 0
                 Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -ceq 'providers' }
             }
         }
@@ -440,7 +466,7 @@ Providers required by state:
         It 'isolates dependency inspection arguments without changing the caller environment' {
             Set-Content -LiteralPath (Join-Path $script:fixture.Child 'main.tf') -Encoding utf8NoBOM `
                 -Value 'module "backend" { source = "../backend" }'
-            foreach ($name in @('TF_DATA_DIR', 'TF_CLI_ARGS', 'TF_CLI_ARGS_init', 'TF_CLI_ARGS_providers')) {
+            foreach ($name in @('TF_DATA_DIR', 'TF_CLI_ARGS', 'TF_CLI_ARGS_init', 'TF_CLI_ARGS_get', 'TF_CLI_ARGS_providers')) {
                 $script:fixture.Options.EnvVars[$name] = 'authored'
             }
             $script:fixture.Options.EnvVars['AVM_TEST_INSPECTION_JSON'] = "Providers required by configuration:`n."
@@ -448,13 +474,15 @@ Providers required by state:
                 param($Fixture)
                 @(Get-AvmTerraformUnitTestProviderSource -Path $Fixture.Child `
                         -ModuleTargets $Fixture.Targets -Options $Fixture.Options) | Should -HaveCount 0
-                Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter {
                     $EnvVars.TF_DATA_DIR.StartsWith($Fixture.Options.InspectionRoot + [IO.Path]::DirectorySeparatorChar) -and
                     $null -eq $EnvVars.TF_CLI_ARGS -and
-                    $null -eq $EnvVars.TF_CLI_ARGS_init -and $null -eq $EnvVars.TF_CLI_ARGS_providers
+                    $null -eq $EnvVars.TF_CLI_ARGS_init -and $null -eq $EnvVars.TF_CLI_ARGS_get -and
+                    $null -eq $EnvVars.TF_CLI_ARGS_providers
                 }
                 $Fixture.Options.EnvVars.TF_DATA_DIR | Should -BeExactly 'authored'
                 $Fixture.Options.EnvVars.TF_CLI_ARGS_init | Should -BeExactly 'authored'
+                $Fixture.Options.EnvVars.TF_CLI_ARGS_get | Should -BeExactly 'authored'
             }
         }
 
@@ -471,29 +499,32 @@ Providers required by state:
             if ($EmptyLock) { $original = @() }
             if ($ExistingLock) {
                 [System.IO.File]::WriteAllBytes($lockPath, $original)
+                $null = New-Item -ItemType Directory -Path (
+                    Join-Path -Path $script:fixture.Child -ChildPath '.terraform' -AdditionalChildPath 'providers') -Force
             }
-            $script:fixture.Options.EnvVars['AVM_TEST_FAIL_INIT'] = $Failure
+            $script:fixture.Options.EnvVars['AVM_TEST_FAIL_GET'] = $Failure
             $script:fixture.Options.EnvVars['AVM_TEST_INSPECTION_JSON'] = "Providers required by configuration:`n."
             $manifestPath = Join-Path -Path $script:fixture.Child -ChildPath '.terraform' -AdditionalChildPath 'modules', 'modules.json'
             $null = New-Item -ItemType Directory -Path (Split-Path -Parent $manifestPath) -Force
             $manifestBytes = [System.Text.Encoding]::UTF8.GetBytes(
                 "{`r`n  `"Modules`": [{`"Key`":`"`",`"Dir`":`".`"},{`"Key`":`"published`",`"Dir`":`".terraform/modules/published`",`"Source`":`"Azure/example/azurerm`",`"Version`":`"0.1.0`"}]`r`n}`r`n")
             [System.IO.File]::WriteAllBytes($manifestPath, $manifestBytes)
-            Mock Invoke-AvmTerraformInit -ModuleName Avm.Authoring {
+            Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
                 Set-Content -LiteralPath (Join-Path $WorkingDirectory '.terraform.lock.hcl') -Value 'updated lock'
                 $directory = Join-Path $EnvVars.TF_DATA_DIR 'modules'
                 $null = New-Item -ItemType Directory -Path $directory -Force
                 Set-Content -LiteralPath (Join-Path $directory 'modules.json') -Value '{"Modules":[]}'
-                if ($EnvVars.AVM_TEST_FAIL_INIT) {
+                if ($EnvVars.AVM_TEST_FAIL_GET) {
                     throw [System.InvalidOperationException]::new('module installation failed')
                 }
-            }
+            } -ParameterFilter { $ArgumentList[0] -ceq 'get' }
             InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture; Failure = $Failure } {
                 param($Fixture, $Failure)
                 if ($Failure) {
                     { Get-AvmTerraformUnitTestProviderSource -Path $Fixture.Child `
                             -ModuleTargets $Fixture.Targets -Options $Fixture.Options } |
                         Should -Throw '*module installation failed*'
+                    Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -ceq 'providers' }
                 }
                 else {
                     @(Get-AvmTerraformUnitTestProviderSource -Path $Fixture.Child `
@@ -510,6 +541,45 @@ Providers required by state:
             [System.IO.File]::ReadAllBytes($manifestPath) | Should -Be $manifestBytes
         }
 
+        It 'initializes locked providers only when absent, preserving isolation: <Failure>' -TestCases @(
+            @{ Failure = $false }
+            @{ Failure = $true }
+        ) {
+            param($Failure)
+            $lockPath = Join-Path $script:fixture.Child '.terraform.lock.hcl'
+            [byte[]]$original = @(0, 13, 10, 255)
+            [System.IO.File]::WriteAllBytes($lockPath, $original)
+            $script:fixture.Options.EnvVars['AVM_TEST_FAIL_INIT'] = $Failure
+            $script:fixture.Options.EnvVars['AVM_TEST_INSPECTION_JSON'] = "Providers required by configuration:`n."
+            Mock Invoke-AvmTerraformInit -ModuleName Avm.Authoring {
+                Set-Content -LiteralPath (Join-Path $WorkingDirectory '.terraform.lock.hcl') -Value 'updated lock'
+                $null = New-Item -ItemType Directory -Path (Join-Path $EnvVars.TF_DATA_DIR 'providers') -Force
+                if ($EnvVars.AVM_TEST_FAIL_INIT) {
+                    throw [System.InvalidOperationException]::new('locked initialization failed')
+                }
+            }
+            InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture; Failure = $Failure } {
+                param($Fixture, $Failure)
+                $inspect = {
+                    Get-AvmTerraformUnitTestProviderSource -Path $Fixture.Child `
+                        -ModuleTargets $Fixture.Targets -Options $Fixture.Options
+                }
+                if ($Failure) { $inspect | Should -Throw '*locked initialization failed*' }
+                else { & $inspect }
+                Should -Invoke Invoke-AvmTerraformInit -Exactly 1 -ParameterFilter {
+                    $TerraformPath -ceq $Fixture.Options.TerraformPath -and
+                    $WorkingDirectory -ceq $Fixture.Child -and
+                    $EnvVars.TF_DATA_DIR.StartsWith($Fixture.Options.InspectionRoot + [IO.Path]::DirectorySeparatorChar) -and
+                    [bool]$BackendFalse -and [bool]$NoColor -and [bool]$PreserveDependencySelections
+                }
+                Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -ceq 'get' }
+                Should -Invoke Invoke-AvmProcess -Exactly $(if ($Failure) { 0 } else { 1 }) `
+                    -ParameterFilter { $ArgumentList[0] -ceq 'providers' }
+            }
+            [System.IO.File]::ReadAllBytes($lockPath) | Should -Be $original
+            Test-Path -LiteralPath (Join-Path $script:fixture.Child '.terraform') | Should -BeFalse
+        }
+
         It 'accepts an empty configuration tree without including state requirements' {
             InModuleScope Avm.Authoring {
                 @(ConvertFrom-AvmTerraformProviderTree `
@@ -521,7 +591,7 @@ Providers required by state:
         It 'leaves <TargetName> initialization data unchanged: <ExistingData>, <Failure>' -TestCases @(
             foreach ($targetName in @('root', 'setup')) {
                 foreach ($existingData in @($false, $true)) {
-                    foreach ($failure in @('none', 'init', 'providers')) {
+                    foreach ($failure in @('none', 'get', 'providers')) {
                         @{ TargetName = $targetName; ExistingData = $existingData; Failure = $failure }
                     }
                 }
@@ -547,16 +617,16 @@ Providers required by state:
                 }
             }
             $script:fixture.Options.EnvVars['AVM_TEST_FAILURE'] = $Failure
-            Mock Invoke-AvmTerraformInit -ModuleName Avm.Authoring {
+            Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
                 $directory = Join-Path $EnvVars.TF_DATA_DIR 'modules'
                 $null = New-Item -ItemType Directory -Path $directory -Force
                 Set-Content -LiteralPath (Join-Path $directory 'modules.json') -Value '{"Modules":[{"Key":"","Dir":"."}]}'
                 [System.IO.File]::WriteAllBytes((Join-Path $EnvVars.TF_DATA_DIR 'provider.bin'), [byte[]]@(1, 2, 3))
                 Set-Content -LiteralPath (Join-Path $WorkingDirectory '.terraform.lock.hcl') -Value 'temporary lock'
-                if ($EnvVars.AVM_TEST_FAILURE -ceq 'init') {
-                    throw [System.InvalidOperationException]::new('inspection init failed')
+                if ($EnvVars.AVM_TEST_FAILURE -ceq 'get') {
+                    throw [System.InvalidOperationException]::new('inspection get failed')
                 }
-            }
+            } -ParameterFilter { $ArgumentList[0] -ceq 'get' }
             Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
                 if ($EnvVars.AVM_TEST_FAILURE -ceq 'providers') {
                     throw [System.InvalidOperationException]::new('inspection providers failed')
@@ -571,6 +641,14 @@ Providers required by state:
                 }
                 if ($Failure -ceq 'none') { & $inspect }
                 else { $inspect | Should -Throw "*inspection $Failure failed*" }
+                Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                    $ArgumentList -join '|' -ceq 'get|-no-color' -and
+                    $WorkingDirectory -ceq $Fixture.Child -and
+                    $EnvVars.TF_DATA_DIR.StartsWith($Fixture.Options.InspectionRoot + [IO.Path]::DirectorySeparatorChar)
+                }
+                Should -Invoke Invoke-AvmProcess -Exactly $(if ($Failure -ceq 'get') { 0 } else { 1 }) `
+                    -ParameterFilter { $ArgumentList[0] -ceq 'providers' }
+                Should -Invoke Invoke-AvmTerraformInit -Exactly 0
             }
             if ($ExistingData) {
                 [System.IO.File]::ReadAllBytes($lockPath) | Should -Be $lockBytes
@@ -587,7 +665,7 @@ Providers required by state:
 
         It 'carries fresh ModTM records while restoring stale manifest bytes: <Failure>' -TestCases @(
             @{ Failure = 'none' }
-            @{ Failure = 'init'; ExpectedError = '*module installation failed*' }
+            @{ Failure = 'get'; ExpectedError = '*module installation failed*' }
             @{ Failure = 'providers'; ExpectedError = '*missing Terraform configuration tree*' }
             @{ Failure = 'manifest'; ExpectedError = '*not valid JSON*' }
         ) {
@@ -604,6 +682,8 @@ Providers required by state:
             $lockPath = Join-Path $script:fixture.Child '.terraform.lock.hcl'
             [byte[]]$lockBytes = @(1, 2, 3, 13, 10)
             [System.IO.File]::WriteAllBytes($lockPath, $lockBytes)
+            $null = New-Item -ItemType Directory -Path (
+                Join-Path -Path $script:fixture.Child -ChildPath '.terraform' -AdditionalChildPath 'providers') -Force
             $script:fixture.Options.EnvVars['AVM_TEST_FRESH_MANIFEST'] = @{
                 Modules = @(
                     @{ Key = ''; Dir = '.' }
@@ -612,16 +692,16 @@ Providers required by state:
                 )
             } | ConvertTo-Json -Depth 5 -Compress
             $script:fixture.Options.EnvVars['AVM_TEST_FAILURE'] = $Failure
-            Mock Invoke-AvmTerraformInit -ModuleName Avm.Authoring {
+            Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
                 $payload = if ($EnvVars.AVM_TEST_FAILURE -ceq 'manifest') { 'invalid JSON' } else { $EnvVars.AVM_TEST_FRESH_MANIFEST }
                 $directory = Join-Path $EnvVars.TF_DATA_DIR 'modules'
                 $null = New-Item -ItemType Directory -Path $directory -Force
                 Set-Content -LiteralPath (Join-Path $directory 'modules.json') -Value $payload -Encoding utf8NoBOM -NoNewline
                 Set-Content -LiteralPath (Join-Path $WorkingDirectory '.terraform.lock.hcl') -Value 'updated lock'
-                if ($EnvVars.AVM_TEST_FAILURE -ceq 'init') {
+                if ($EnvVars.AVM_TEST_FAILURE -ceq 'get') {
                     throw [System.InvalidOperationException]::new('module installation failed')
                 }
-            }
+            } -ParameterFilter { $ArgumentList[0] -ceq 'get' }
             Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
                 $text = if ($ArgumentList[0] -ceq 'providers') {
                     if ($EnvVars.AVM_TEST_FAILURE -ceq 'providers') { 'invalid tree' }
@@ -677,9 +757,11 @@ Providers required by state:
                     $parameters.RequiredProviders[$Fixture.Child].modtm.version | Should -BeExactly '~> 0.3'
                     $manifests[$Fixture.Child] | Should -BeExactly $Fixture.Options.EnvVars.AVM_TEST_FRESH_MANIFEST
                 }
-                Should -Invoke Invoke-AvmTerraformInit -Exactly 1 -ParameterFilter {
-                    [bool]$BackendFalse -and [bool]$PreserveDependencySelections -and $WorkingDirectory -ceq $Fixture.Child
+                Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                    $ArgumentList -join '|' -ceq 'get|-no-color' -and [bool]$RetryNetworkFailure -and
+                    $WorkingDirectory -ceq $Fixture.Child
                 }
+                Should -Invoke Invoke-AvmTerraformInit -Exactly 0
             }
             [System.IO.File]::ReadAllBytes($manifestPath) | Should -Be $manifestBytes
             [System.IO.File]::ReadAllBytes($lockPath) | Should -Be $lockBytes

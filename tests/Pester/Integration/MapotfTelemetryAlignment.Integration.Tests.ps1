@@ -2139,11 +2139,14 @@ run "complete_child" {
             Get-Content -LiteralPath (Join-Path $child 'terraform.tf') -Raw | Should -Not -Match '\bmodtm\s*='
             $inspection = InModuleScope Avm.Authoring -Parameters @{
                 Root = $root; Tool = $script:mapotfPath; Profiles = $script:profilesRoot
+                Terraform = $script:terraformPath; InspectionRoot = Join-Path $TestDrive ('snapshot-inspection-' + [guid]::NewGuid().ToString('N'))
             } {
-                param($Root, $Tool, $Profiles)
+                param($Root, $Tool, $Profiles, $Terraform, $InspectionRoot)
                 $targets = @(Get-AvmTerraformTransformTarget -Root $Root)
                 @(Get-AvmTerraformUnitTestSnapshot -Root $Root -ModuleTargets $targets -Options ([pscustomobject]@{
                         ToolPath = $Tool
+                        TerraformPath = $Terraform
+                        InspectionRoot = $InspectionRoot
                         ProfileDirs = @{
                             module = Join-Path $Profiles 'module'
                             'unit-test-inspect' = Join-Path $Profiles 'unit-test-inspect'
@@ -2369,11 +2372,16 @@ __TARGET__
         }
         [System.IO.File]::WriteAllText($testPath, $source, [System.Text.UTF8Encoding]::new($false))
         $inspect = {
-            InModuleScope Avm.Authoring -Parameters @{ Root = $root; Tool = $script:mapotfPath; Profiles = $script:profilesRoot } {
-                param($Root, $Tool, $Profiles)
+            InModuleScope Avm.Authoring -Parameters @{
+                Root = $root; Tool = $script:mapotfPath; Profiles = $script:profilesRoot
+                Terraform = $script:terraformPath; InspectionRoot = Join-Path $TestDrive ('snapshot-inspection-' + [guid]::NewGuid().ToString('N'))
+            } {
+                param($Root, $Tool, $Profiles, $Terraform, $InspectionRoot)
                 $targets = @(Get-AvmTerraformTransformTarget -Root $Root)
                 Get-AvmTerraformUnitTestSnapshot -Root $Root -ModuleTargets $targets -Options ([pscustomobject]@{
                         ToolPath = $Tool
+                        TerraformPath = $Terraform
+                        InspectionRoot = $InspectionRoot
                         ProfileDirs = @{
                             module = Join-Path $Profiles 'module'
                             'unit-test-inspect' = Join-Path $Profiles 'unit-test-inspect'
@@ -2863,12 +2871,15 @@ __ASSERTION__
             $first | Should -Not -Match '=[ \t]*(?:modtm|random)\b'
             InModuleScope Avm.Authoring -Parameters @{
                 Root = $root; Tool = $script:mapotfPath; Profiles = $script:profilesRoot
+                Terraform = $script:terraformPath; InspectionRoot = Join-Path $TestDrive ('snapshot-inspection-' + [guid]::NewGuid().ToString('N'))
             } {
-                param($Root, $Tool, $Profiles)
+                param($Root, $Tool, $Profiles, $Terraform, $InspectionRoot)
                 $targets = @(Get-AvmTerraformTransformTarget -Root $Root)
                 $inspection = @(Get-AvmTerraformUnitTestSnapshot -Root $Root -ModuleTargets $targets `
                         -Options ([pscustomobject]@{
                             ToolPath = $Tool
+                            TerraformPath = $Terraform
+                            InspectionRoot = $InspectionRoot
                             ProfileDirs = @{
                                 module = Join-Path $Profiles 'module'
                                 'unit-test-inspect' = Join-Path $Profiles 'unit-test-inspect'
