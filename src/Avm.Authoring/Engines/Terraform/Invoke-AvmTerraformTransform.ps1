@@ -219,7 +219,7 @@ function Get-AvmTerraformTransformTarget {
     return $targets.ToArray()
 }
 
-function Test-AvmTerraformRandomProviderInUse {
+function Test-AvmTerraformProviderInUse {
     [CmdletBinding()]
     [OutputType([bool])]
     param(
@@ -230,7 +230,11 @@ function Test-AvmTerraformRandomProviderInUse {
         [object[]] $ModuleTargets,
 
         [Parameter(Mandatory)]
-        [string] $TestDirectory
+        [string] $TestDirectory,
+
+        [Parameter(Mandatory)]
+        [ValidateSet('modtm', 'random')]
+        [string] $Provider
     )
 
     Set-StrictMode -Version 3.0
@@ -259,21 +263,21 @@ function Test-AvmTerraformRandomProviderInUse {
     foreach ($directory in $directories) {
         foreach ($file in Get-ChildItem -LiteralPath $directory -File) {
             if ($file.Name.EndsWith('.tf.json', [System.StringComparison]::OrdinalIgnoreCase)) {
-                Write-AvmLog "Preserving random mock: JSON configuration '$($file.FullName)' needs dependency review." -Level Verbose | Out-Null
+                Write-AvmLog "Preserving $Provider mock: JSON configuration '$($file.FullName)' needs dependency review." -Level Verbose | Out-Null
                 return $true
             }
             if (-not $file.Name.EndsWith('.tf', [System.StringComparison]::OrdinalIgnoreCase)) {
                 continue
             }
             $source = [System.IO.File]::ReadAllText($file.FullName)
-            if ($source -match '(?m)^[ \t]*random[ \t]*=[ \t]*\{' -or
-                $source -match 'hashicorp/random' -or
-                $source -match '(?m)^[ \t]*(?:resource|data|ephemeral)[ \t]+"random_[^"]+"[ \t]+"[^"]+"') {
+            if ($source -match ('(?m)^[ \t]*' + $Provider + '[ \t]*=[ \t]*\{') -or
+                $source -match ('(?:hashicorp|azure)/' + $Provider) -or
+                $source -match ('(?m)^[ \t]*(?:resource|data|ephemeral)[ \t]+"' + $Provider + '_[^"]+"[ \t]+"[^"]+"')) {
                 return $true
             }
             $moduleBlocks = [regex]::Matches($source, '(?m)^[ \t]*module[ \t]+"[^"]+"[ \t]*\{')
             if ([regex]::Matches($source, '(?m)^[ \t]*module\b(?!\.)').Count -ne $moduleBlocks.Count) {
-                Write-AvmLog "Preserving random mock: module declarations in '$($file.FullName)' need dependency review." -Level Verbose | Out-Null
+                Write-AvmLog "Preserving $Provider mock: module declarations in '$($file.FullName)' need dependency review." -Level Verbose | Out-Null
                 return $true
             }
             foreach ($block in $moduleBlocks) {
@@ -281,15 +285,50 @@ function Test-AvmTerraformRandomProviderInUse {
                     $source.Substring($block.Index + $block.Length),
                     '\A\s*source[ \t]*=[ \t]*"(?<path>\.\.?/[^"]+)"')
                 if (-not $sourceMatch.Success) {
-                    Write-AvmLog "Preserving random mock: a module source in '$($file.FullName)' is not a known local dependency." -Level Verbose | Out-Null
+                    Write-AvmLog "Preserving $Provider mock: a module source in '$($file.FullName)' is not a known local dependency." -Level Verbose | Out-Null
                     return $true
                 }
                 $dependencyPath = [System.IO.Path]::GetFullPath($sourceMatch.Groups['path'].Value, $directory)
                 if (-not $directories.Contains([System.IO.Path]::TrimEndingDirectorySeparator($dependencyPath))) {
-                    Write-AvmLog "Preserving random mock: module dependency '$dependencyPath' was not scanned." -Level Verbose | Out-Null
+                    Write-AvmLog "Preserving $Provider mock: module dependency '$dependencyPath' was not scanned." -Level Verbose | Out-Null
                     return $true
                 }
             }
+        }
+    }
+    return $false
+}
+
+function Test-AvmTerraformScopedProviderInUse {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)] [object] $Scope,
+        [Parameter(Mandatory)] [object[]] $ModuleTargets,
+        [AllowEmptyCollection()] [string[]] $TargetPaths = @(),
+        [Parameter(Mandatory)] [hashtable] $Cache,
+        [Parameter(Mandatory)] [ValidateSet('modtm', 'random')] [string] $Provider
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+    $testDirectory = Split-Path -Parent $Scope.File.FullName
+    $ownerPrefix = $Scope.Owner.Path + [System.IO.Path]::DirectorySeparatorChar
+    $ownerScannedPaths = @($ModuleTargets | Where-Object {
+            $_.Profiles -notcontains 'example' -and
+            $_.Path.StartsWith($ownerPrefix, [System.StringComparison]::Ordinal)
+        } | ForEach-Object { $_.Path })
+    foreach ($path in @($Scope.Owner.Path) + $TargetPaths) {
+        if ($path -cin $ownerScannedPaths) {
+            continue
+        }
+        $key = "$Provider|$path|$testDirectory"
+        if (-not $Cache.ContainsKey($key)) {
+            $Cache[$key] = Test-AvmTerraformProviderInUse `
+                -ModulePath $path -ModuleTargets $ModuleTargets -TestDirectory $testDirectory -Provider $Provider
+        }
+        if ($Cache[$key]) {
+            return $true
         }
     }
     return $false
@@ -305,28 +344,8 @@ function Test-AvmTerraformScopedRandomProviderInUse {
         [Parameter(Mandatory)] [hashtable] $Cache
     )
 
-    Set-StrictMode -Version 3.0
-    $ErrorActionPreference = 'Stop'
-    $testDirectory = Split-Path -Parent $Scope.File.FullName
-    $ownerPrefix = $Scope.Owner.Path + [System.IO.Path]::DirectorySeparatorChar
-    $ownerScannedPaths = @($ModuleTargets | Where-Object {
-            $_.Profiles -notcontains 'example' -and
-            $_.Path.StartsWith($ownerPrefix, [System.StringComparison]::Ordinal)
-        } | ForEach-Object { $_.Path })
-    foreach ($path in @($Scope.Owner.Path) + $TargetPaths) {
-        if ($path -cin $ownerScannedPaths) {
-            continue
-        }
-        $key = "$path|$testDirectory"
-        if (-not $Cache.ContainsKey($key)) {
-            $Cache[$key] = Test-AvmTerraformRandomProviderInUse `
-                -ModulePath $path -ModuleTargets $ModuleTargets -TestDirectory $testDirectory
-        }
-        if ($Cache[$key]) {
-            return $true
-        }
-    }
-    return $false
+    Test-AvmTerraformScopedProviderInUse -Scope $Scope -ModuleTargets $ModuleTargets `
+        -TargetPaths $TargetPaths -Cache $Cache -Provider random
 }
 
 function Remove-AvmLegacyTelemetryTestMock {
@@ -355,6 +374,7 @@ function Remove-AvmLegacyTelemetryTestMock {
     $emptyRandomMock = '(?m)^[ \t]*mock_provider[ \t]+"random"[ \t]*\{[ \t\r\n]*\}[ \t]*(?:\r?\n)?'
     $randomMock = '(?m)^[ \t]*mock_provider[ \t]+"random"[ \t]*\{'
     $randomUse = @{}
+    $modtmUse = @{}
 
     foreach ($scope in Get-AvmTerraformTestFileScope -Root $Root -ModuleTargets $ModuleTargets) {
         $file = $scope.File
@@ -380,24 +400,40 @@ function Remove-AvmLegacyTelemetryTestMock {
         else { 0 }
         if ($identifierReferences -ne $validatedIdentifierReferences) {
             throw [AvmConfigurationException]::new(
-                "Test file '$($file.FullName)' still references retired random_uuid.telemetry; only complete length(random_uuid.telemetry) == 0 or == 1 assertions on instrumented unit-test targets can be migrated automatically. Review other references manually.")
+                "Test file '$($file.FullName)' still references retired random_uuid.telemetry; only complete zero-or-one count assertions, optionally prefixed by a ModTM or AzAPI telemetry-count assertion joined with &&, on instrumented unit-test targets can be migrated automatically. Review other references manually.")
         }
         $isUnitTest = $scope.IsUnitTest
         $retiredMock = [regex]::Match($original, $emptyMock)
-        $updated = [regex]::Replace($original, $emptyMock, '')
-        if ([regex]::IsMatch($updated, $customMock)) {
+        $withoutModtmMocks = [regex]::Replace($original, $emptyMock, '')
+        if ([regex]::IsMatch($withoutModtmMocks, $customMock) -and
+            -not ($validatedMocks -and $null -ne $unitPlan.PSObject.Properties['RetainModtmMock'] -and $unitPlan.RetainModtmMock)) {
             throw [AvmConfigurationException]::new(
                 "Test file '$($file.FullName)' contains a non-empty modtm mock; remove or rewrite it manually before telemetry migration.")
         }
+        $retainModtm = if ($null -ne $unitPlan -and $null -ne $unitPlan.PSObject.Properties['RetainModtmMock']) {
+            $unitPlan.RetainModtmMock
+        }
+        else {
+            $targetPaths = @()
+            if ($null -ne $unitPlan) { $targetPaths = @($unitPlan.TargetPaths) }
+            Test-AvmTerraformScopedProviderInUse -Scope $scope -ModuleTargets $ModuleTargets `
+                -TargetPaths $targetPaths -Cache $modtmUse -Provider modtm
+        }
+        $updated = if ($retainModtm) { $original } else { $withoutModtmMocks }
+        $retainedModtmReferences = if ($validatedMocks -and
+            $null -ne $unitPlan.PSObject.Properties['RetainedProviderReferences']) {
+            $unitPlan.RetainedProviderReferences.modtm
+        }
+        else { 0 }
         $emptyAzapi = [regex]::Match($updated, $emptyAzapiMock)
         $hasAzapiMock = [regex]::IsMatch($updated, $azapiMock)
-        $needsAzapiMock = $retiredMock.Success -and
-        (-not $hasAzapiMock -or ($validatedMocks -and $unitPlan.AddDefaultAzapiMock))
+        $needsAzapiMock = ($retiredMock.Success -and -not $hasAzapiMock) -or
+        ($validatedMocks -and $unitPlan.AddDefaultAzapiMock)
         if ($isUnitTest -and ($retiredMock.Success -or $emptyAzapi.Success -or $validatedMocks)) {
             $modtmReferences = Get-AvmTerraformRetiredTestProviderReferenceCount -Text $updated -Provider modtm
             if ($updated -match '(?m)^[ \t]*provider[ \t]+"azapi"[ \t]*\{' -or
                 ($null -eq $unitPlan -and $updated -match '(?m)^[ \t]*module[ \t]*\{') -or
-                $modtmReferences -ne $retiredProviderReferences.modtm -or
+                $modtmReferences -ne ($retiredProviderReferences.modtm + $retainedModtmReferences) -or
                 (-not $validatedMocks -and $hasAzapiMock -and $updated -match '\balias[ \t]*=')) {
                 throw [AvmConfigurationException]::new(
                     "Cannot automatically migrate telemetry mocks in '$($file.FullName)': an authored provider, alias, provider mapping, or delegated test module needs review.")
@@ -419,7 +455,8 @@ mock_provider "azapi" {
                 $updated = $updated.Remove($emptyAzapi.Index, $emptyAzapi.Length).Insert($emptyAzapi.Index, $replacementMock)
             }
             else {
-                $updated = $updated.Insert($retiredMock.Index, $replacementMock)
+                $index = if ($retiredMock.Success) { $retiredMock.Index } else { 0 }
+                $updated = $updated.Insert($index, $replacementMock)
             }
         }
         $updated = [regex]::Replace($updated, $legacyReference, 'azapi_resource.telemetry')
@@ -706,8 +743,13 @@ function Invoke-AvmTerraformTransform {
         deepest first.
         Their module calls receive only missing required locations; authored
         locations, optional defaults and telemetry opt-outs remain unchanged.
-        Empty modtm test mocks,
-        telemetry references, and empty random mocks in direct unit tests
+        Empty modtm test mocks are retired only when selected targets no
+        longer require their provider. Unchanged dependencies retain the
+        mock, its proven source requirement and same-provider module bindings,
+        including known local callers and example wrappers, without restoring
+        unrelated unused requirements. Proven same-provider aliases and local
+        literal source client defaults retain their authored values.
+        Telemetry references and empty random mocks in direct unit tests
         with no remaining random provider usage are migrated. Custom mocks
         that cannot be removed safely fail with an actionable error. The
         final call removes '*.tf.mptfbackup' files.

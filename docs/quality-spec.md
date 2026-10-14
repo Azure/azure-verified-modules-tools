@@ -761,21 +761,31 @@ unrelated request headers. Commented-out resources are not active header
 usages.
 Terraform must still install their former
 providers once when an existing state references them; after the state
-forgets those addresses, new installations do not require `modtm`. The
+forgets those addresses, migrated source does not require `modtm` unless an
+unchanged dependency still needs it. The
 random provider requirement is removed only if no other random resources
 or data sources remain in the module. The transform also removes obsolete
 `modtm` provider declarations in examples and standalone test modules when
-they have no remaining `modtm` resources or data sources, empty `modtm` test
-mocks, and standard references to the old telemetry resource. Direct unit
+they have no remaining `modtm` resources, data sources or explicit module
+provider bindings. Empty `modtm` test mocks are retired only when the selected
+targets' configuration dependency trees prove the provider is unused.
+Standard references to the old telemetry resource are migrated. Direct unit
 assertions whose complete condition is `length(random_uuid.telemetry) == 0`
 or `== 1` are migrated to `terraform_data.telemetry` only when their selected
-target is instrumented. The count, comparison, error message and surrounding
+target is instrumented. The condition may also prefix that comparison with
+a zero-or-one count comparison on `modtm_telemetry.telemetry` or
+`azapi_resource.telemetry`, joined with `&&`. Preserve both clauses and their
+boolean meaning; other operators, additional terms, indexed/property
+references and computed comparisons still require review rather than a
+partial rewrite. The counts, comparisons, error message and surrounding
 comments are preserved. Native profile inspection must confirm the exact
 expression-replacement rule before any test files change. Every reference to
 the retired identifier in that file must be accounted for by these assertions;
 other uses, including references in comments or strings that prevent that
 proof, require review even when unrelated random use retains the provider.
-Direct unit tests receive a missing AzAPI mock when retiring their empty modtm mock;
+Direct unit tests receive a missing AzAPI mock when replacing legacy ModTM
+telemetry, independently of whether an unchanged dependency retains an empty
+or non-empty ModTM mock;
 empty AzAPI mocks, including comment-only bodies, receive a valid synthetic
 subscription resource ID for `azapi_client_config` without losing comments.
 Default and literally named aliased AzAPI mocks receive only a missing
@@ -788,9 +798,13 @@ older overrides that silently ignore either feature fail with upgrade guidance.
 Use an authored literal `subscription_id` to construct its matching
 `/subscriptions/<guid>` value; otherwise use the synthetic subscription.
 Existing resource-ID defaults, unrelated mocks, comments and expressions are
-preserved. Source-based mocks, defaults that native inspection cannot resolve
-to an object, and nonliteral subscription IDs require review instead of
-overwriting or guessing their values.
+preserved. Source-backed AzAPI mocks may retain a literal local source directory within
+their owning module. Inspect its HCL mock files with native reflection before
+adding a client resource ID. Preserve all literal source client defaults in
+the inline update and leave source files unchanged; an authored inline
+client-config block retains its precedence. Escaping, linked, missing or JSON
+sources, source overrides, duplicate client defaults, computed defaults and
+nonliteral subscription IDs require review instead of overwriting or guessing.
 Published dependencies and legacy telemetry
 in scopes without a telemetry prefix are not migrated by the root profile.
 Native MaPoTF inspects each direct `tests/unit/*.tftest.hcl` file before source
@@ -808,11 +822,23 @@ missing inputs. Assertions, targets and telemetry opt-outs are preserved.
 Real-provider declarations, unproven aliases and partial or cross-provider
 bindings still require review rather than being silently changed; an AzureRM
 mock alone cannot cover new AzAPI telemetry. AzAPI aliases must have consistent
-literal native names, labels and addresses and no external mock source.
+literal native names, labels and addresses; the same identity checks apply to
+every provider alias. Local source-backed aliases retain the source checks
+above. An alias is never treated as an unaliased default.
 Complete mappings may bind an unaliased target name to its known default mock
 or a known alias of the same provider. Aliased target keys still require review.
-Preserve safe authored bindings; remove only bindings to a retired empty ModTM
-mock or an empty random mock whose provider is absent from that target's
+Prove effective source, mock and mapping coverage separately for every run's
+selected configuration tree, including generated mappings and implicit defaults.
+A binding in another run cannot cover this run, and authored location or
+client defaults do not bypass that proof.
+A valid, explicitly empty native run collection needs no mocks. Missing,
+malformed or incomplete native collections still fail inspection.
+When an instrumented target introduces AzAPI, add its existing default mock
+binding only if a pre-transform configuration provider tree proves the old
+mapping covered every selected provider. Preserve the original aliases and
+comments; incomplete or unmocked prior coverage still fails.
+Preserve safe authored bindings; remove only bindings to an empty ModTM or
+random mock whose provider is absent from that target's
 configuration dependency tree. Preserve all remaining expression text and
 comments. Before cleanup, account for every retired provider reference in
 validated mappings; unexplained references still fail. A default AzAPI
@@ -821,7 +847,10 @@ mapping update body before modifying any test file. Integration tests do not
 receive new mocks or locations.
 Non-empty modtm test mocks and remaining
 author-owned `modtm` resources or data sources fail with
-actionable diagnostics instead of being silently rewritten. When random was
+actionable diagnostics instead of being silently rewritten. Validated ModTM
+mocks needed by unchanged dependencies remain authored. Literal alias-only
+ModTM or random mocks may be retired natively only when proven unused, with
+exact target-address capability checks before writes. When random was
 used only by retired telemetry, standard empty `mock_provider "random"`
 blocks in direct unit tests are removed if the owner, selected local test
 targets, their known local children, and test setup no longer need that
@@ -841,7 +870,10 @@ configuration dependency tree. Exclude state-only providers and other test
 targets; passing an unrelated mock to a run is invalid in Terraform. Initialize
 missing dependencies with the shared backend-disabled Terraform helper,
 preserving compatible dependency selections. Restore the exact original
-provider-lock bytes, or its absence, even when inspection fails.
+provider-lock bytes, or its absence, and any existing module-manifest bytes
+even when inspection fails. Requirement planning uses the validated immutable
+manifest snapshot captured with the fresh provider tree, not the restored
+on-disk manifest; newly added dependencies need no prior manual initialization.
 Validate root/default-directory test targets before initialization can fetch
 them. JSON configurations/tests, possible backend/cloud declarations and
 initialized backend metadata require review before dependency inspection;
@@ -851,6 +883,27 @@ Preserve assertions and mock defaults without restoring unused provider
 requirements or exempting them from lint. Verify native profile support for
 the complete mapping before changing any test file, and keep repeated
 transforms and non-writing drift checks stable.
+Validate unsupported retired-identifier references before removing any mock
+or backup. Snapshot every test file that cleanup can modify, including files
+outside direct unit-test plans. A later migration or cleanup failure restores
+their full original bytes even in normal writing mode; explicitly report any
+file whose restoration cannot be verified.
+For unchanged ModTM dependencies, preserve the mock and every required run
+binding. A removed non-default provider source must not become an inferred
+`hashicorp/modtm` source. Restore only a selected target's proven
+`Azure/modtm` requirement, retaining its original source and version when
+available, and bind the same provider explicitly to the actual dependencies
+that declare it. Known local intermediates may receive the same repair;
+known local callers and example wrappers also receive only their proven
+required source declaration and same-provider binding. Finish the normal
+ordering profile on restored scopes so the first pass is already drift-free.
+Published dependencies remain untouched. Computed or aliased module bindings,
+JSON dependencies and unproven source inheritance require review. Verify the
+exact native source update and object-merging capabilities before writes.
+Unrelated selected targets still retire their unused bindings and requirements.
+Native regression fixtures use loopback-only ModTM endpoints and verify mocked
+resource values, full original locks, installed selections, repeat stability
+and failure-path drift restoration without production collector access.
 
 `avm pre-commit` and `avm pr-check` resolve their required tools before the
 first step, which validates metadata for the selected root and its module
