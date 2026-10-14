@@ -19,7 +19,8 @@ run "apply" {
     source = "./tests/wrapper"
   }
   providers = {
-    azapi = azapi
+    azapi  = azapi
+    random = random
   }
 
   variables {
@@ -54,7 +55,8 @@ run "current_interface" {
     source = "./tests/wrapper"
   }
   providers = {
-    azapi = azapi
+    azapi  = azapi
+    random = random
   }
 
   variables {
@@ -74,7 +76,8 @@ run "safe_defaults" {
     source = "./tests/wrapper"
   }
   providers = {
-    azapi = azapi
+    azapi  = azapi
+    random = random
   }
 
   assert {
@@ -90,7 +93,8 @@ run "telemetry_disabled" {
     source = "./tests/wrapper"
   }
   providers = {
-    azapi = azapi
+    azapi  = azapi
+    random = random
   }
 
   variables {

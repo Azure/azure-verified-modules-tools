@@ -19,7 +19,9 @@ run "setup" {
     source = "./tests/unit/setup"
   }
   providers = {
-    azapi = azapi
+    azapi   = azapi
+    azurerm = azurerm
+    random  = random
   }
 
   assert {

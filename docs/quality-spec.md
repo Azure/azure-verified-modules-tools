@@ -1765,6 +1765,11 @@ status aggregation.
 
 Authoring pull-request/manual runs retain both Terraform fixtures per OS and
 one Bicep integration leg per OS. Main pushes skip both integration matrices.
+Terraform telemetry transformations run in the AzureRM fixture leg and telemetry
+mock-safety scenarios in the AzAPI fixture leg, once per OS. Delegated fixture
+preservation and mocked unit execution follow `AVM_INTEGRATION_FIXTURE`; an
+unset selector runs the complete union. Discovery tests require that the two
+fixture selections have no overlapping telemetry scenarios or missing coverage.
 Existing integration environment approval and job-specific permissions remain
 in place. Workflow and repository-management CI need no Azure credentials.
 

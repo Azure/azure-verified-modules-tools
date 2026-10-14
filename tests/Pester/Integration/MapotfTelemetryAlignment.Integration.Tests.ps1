@@ -289,6 +289,10 @@ resource "azapi_resource" "example" {
         }
     }
 
+Context 'shared telemetry transformations' -ForEach (@(
+        @{ TelemetryFixture = 'terraform-azurerm-avm-res-mock' }
+    ) | Where-Object { -not $env:AVM_INTEGRATION_FIXTURE -or $_.TelemetryFixture -eq $env:AVM_INTEGRATION_FIXTURE }) {
+
     It 'migrates legacy telemetry without destroying state and preserves user providers' {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-TelemetryModule -Root $root -WithLocation -WithLegacy
@@ -1828,6 +1832,12 @@ run "clock" {
         (Join-Path $root '.terraform') | Should -Not -Exist
     }
 
+}
+
+Context 'telemetry mock safety' -ForEach (@(
+        @{ TelemetryFixture = 'terraform-azure-avm-res-mock' }
+    ) | Where-Object { -not $env:AVM_INTEGRATION_FIXTURE -or $_.TelemetryFixture -eq $env:AVM_INTEGRATION_FIXTURE }) {
+
     It 'preserves transitive ModTM mocks and exact selections for <Scope> runs' -TestCases @(
         @{ Scope = 'root'; Wrapper = $false }
         @{ Scope = 'selected wrapper'; Wrapper = $true }
@@ -3129,29 +3139,6 @@ run "second" {
         $result.StdOut | Should -Match 'azapi_resource\.telemetry\[0\] will be updated in-place'
     }
 
-    It 'preserves existing delegated fixture tests during transformation for <Fixture>' -TestCases @(
-        @{ Fixture = 'terraform-azure-avm-res-mock' }
-        @{ Fixture = 'terraform-azurerm-avm-res-mock' }
-    ) {
-        param($Fixture)
-
-        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
-        $source = Join-Path $script:repoRoot 'tests' 'fixtures' 'modules' $Fixture
-        Copy-Item -LiteralPath $source -Destination $root -Recurse -Force
-        $tests = @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter '*.tftest.hcl')
-        $hashes = @{}
-        foreach ($file in $tests) {
-            $hashes[$file.FullName] = (Get-FileHash -LiteralPath $file.FullName).Hash
-        }
-        $result = Invoke-TelemetryEngine -Root $root -CheckDrift
-        $result.Status | Should -BeExactly 'pass'
-        @($result.Changed).Count | Should -Be 0
-        foreach ($file in $tests) {
-            (Get-FileHash -LiteralPath $file.FullName).Hash | Should -BeExactly $hashes[$file.FullName]
-        }
-        @(Get-ChildItem -LiteralPath $root -Recurse -Filter '*.mptfbackup') | Should -HaveCount 0
-    }
-
     It 'accepts a 36-character version at the 64-character Azure name limit' {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-TelemetryModule -Root $root
@@ -3371,10 +3358,80 @@ run "source" {
         $currentProviders.StdOut | Should -Not -Match 'Azure/modtm|hashicorp/random'
     }
 
-    It 'keeps the <Name> fixture unit suite isolated from Azure after migration' -TestCases @(
+}
+
+Context 'delegated Terraform fixtures' {
+    It 'requires explicit bindings to default mocks instead of executing omitted real providers' -ForEach (@(
+            @{ BindingFixture = 'terraform-azurerm-avm-res-mock' }
+        ) | Where-Object { -not $env:AVM_INTEGRATION_FIXTURE -or $_.BindingFixture -eq $env:AVM_INTEGRATION_FIXTURE }) {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $root -WithLegacy -WithLocation
+        Add-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+resource "random_string" "proof" {
+  length = 12
+}
+'@
+        $unit = Join-Path $root 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $unit -Force
+        $testPath = Join-Path $unit 'mock.tftest.hcl'
+        $source = @'
+mock_provider "azapi" {}
+mock_provider "modtm" {}
+mock_provider "random" {
+  mock_resource "random_string" {
+    defaults = { result = "default-mock" }
+  }
+}
+run "mock_only" {
+  command = apply
+  providers = {
+    azapi = azapi
+  }
+  assert {
+    condition = random_string.proof.result == "default-mock"
+    error_message = "The random resource must use the explicitly selected mock."
+  }
+}
+'@
+        [System.IO.File]::WriteAllText($testPath, $source)
+        { Invoke-TelemetryEngine -Root $root -CheckDrift } |
+            Should -Throw '*complete known alias bindings*'
+        [System.IO.File]::ReadAllText($testPath) | Should -BeExactly $source
+        [System.IO.File]::WriteAllText($testPath, $source.Replace('azapi = azapi', "azapi = azapi`n    random = random"))
+        (Invoke-TelemetryEngine -Root $root).Status | Should -BeExactly 'pass'
+        Assert-TelemetryTerraformValid -Root $root -TestDirectory 'tests/unit'
+        $result = Invoke-TelemetryProcess -FilePath $script:terraformPath `
+            -ArgumentList @('test', '-no-color', '-test-directory=tests/unit') -Root $root
+        $result.StdOut | Should -Match 'Success! 1 passed, 0 failed\.'
+    }
+
+    It 'preserves existing delegated fixture tests during transformation for <Fixture>' -TestCases (@(
+            @{ Fixture = 'terraform-azure-avm-res-mock' }
+            @{ Fixture = 'terraform-azurerm-avm-res-mock' }
+        ) | Where-Object { -not $env:AVM_INTEGRATION_FIXTURE -or $_.Fixture -eq $env:AVM_INTEGRATION_FIXTURE }) {
+        param($Fixture)
+
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $source = Join-Path $script:repoRoot 'tests' 'fixtures' 'modules' $Fixture
+        Copy-Item -LiteralPath $source -Destination $root -Recurse -Force
+        $tests = @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter '*.tftest.hcl')
+        $hashes = @{}
+        foreach ($file in $tests) {
+            $hashes[$file.FullName] = (Get-FileHash -LiteralPath $file.FullName).Hash
+        }
+        $result = Invoke-TelemetryEngine -Root $root -CheckDrift
+        $result.Status | Should -BeExactly 'pass'
+        @($result.Changed).Count | Should -Be 0
+        foreach ($file in $tests) {
+            (Get-FileHash -LiteralPath $file.FullName).Hash | Should -BeExactly $hashes[$file.FullName]
+        }
+        @(Get-ChildItem -LiteralPath $root -Recurse -Filter '*.mptfbackup') | Should -HaveCount 0
+    }
+
+    It 'keeps the <Name> fixture unit suite isolated from Azure after migration' -TestCases (@(
         @{ Name = 'terraform-azurerm-avm-res-mock'; ExpectedRuns = 2 }
         @{ Name = 'terraform-azure-avm-res-mock'; ExpectedRuns = 4 }
-    ) {
+    ) | Where-Object { -not $env:AVM_INTEGRATION_FIXTURE -or $_.Name -eq $env:AVM_INTEGRATION_FIXTURE }) {
         param($Name, $ExpectedRuns)
 
         $source = Join-Path $script:repoRoot 'tests' 'fixtures' 'modules' $Name
@@ -3386,4 +3443,5 @@ run "source" {
             -ArgumentList @('test', '-no-color', '-test-directory=tests/unit') -Root $root
         $result.StdOut | Should -Match ("Success! {0} passed, 0 failed\." -f $ExpectedRuns)
     }
+}
 }
