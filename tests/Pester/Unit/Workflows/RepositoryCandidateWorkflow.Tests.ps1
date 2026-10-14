@@ -96,6 +96,13 @@ Describe 'Repository sync candidate workflow' {
         $script:validate | Should -Not -Match 'contents:\s*write|create-github-app-token@'
     }
 
+    It 'requires only the candidate profile without adding an integration or E2E gate' {
+        $script:validate | Should -Match 'Invoke-RepositoryCandidate\.ps1 -Mode Validate'
+        $script:validate | Should -Not -Match 'avm test (integration|e2e)|Invoke-AvmTest(Integration|E2E)'
+        $script:publish | Should -Match '(?m)^    needs: validate-candidate\r?$'
+        $script:workflow | Should -Not -Match '(?m)^  (integration-test|e2e-test):'
+    }
+
     It 'publishes only after this repository validation passes and never for plan-only' {
         $script:publish | Should -Match 'needs:\s*validate-candidate'
         $script:publish | Should -Match ([regex]::Escape("if: `${{ needs.validate-candidate.result == 'success' && !inputs.plan_only }}"))

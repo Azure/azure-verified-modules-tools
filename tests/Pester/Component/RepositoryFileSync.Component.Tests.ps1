@@ -64,7 +64,7 @@ BeforeAll {
         [System.IO.File]::WriteAllBytes((Join-Path $Directory 'candidate.tar'), [byte[]]@(1, 2, 3))
         [System.IO.File]::WriteAllBytes((Join-Path $Directory 'candidate.patch'), [byte[]]@(4, 5, 6))
         $receipt = Join-Path $Directory 'receipt'
-        Save-RepositorySyncValidationReceipt -Candidate $candidate -Directory $receipt
+        Save-RepositorySyncValidationReceipt -Candidate $candidate -Directory $receipt -PrCheckStatus pass -UnitStatus pass
         return $receipt
     }
 

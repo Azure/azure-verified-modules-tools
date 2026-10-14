@@ -21,18 +21,23 @@ Describe 'Repository candidate original identity' -Tag Component {
         }
     }
 
-    It 'preserves <ModuleType> identity in both temporary checkouts' -TestCases @(
-        @{ Provider = 'azurerm'; Kind = 'res'; ModuleType = 'resource' }
-        @{ Provider = 'azure'; Kind = 'ptn'; ModuleType = 'pattern' }
-        @{ Provider = 'azapi'; Kind = 'utl'; ModuleType = 'utility' }
+    It 'preserves <ModuleType> identity with static=<StaticStatus> and unit=<UnitStatus>' -TestCases @(
+        @{ Provider = 'azurerm'; Kind = 'res'; ModuleType = 'resource'; StaticStatus = 'pass'; UnitStatus = 'pass' }
+        @{ Provider = 'azure'; Kind = 'ptn'; ModuleType = 'pattern'; StaticStatus = 'pass'; UnitStatus = 'pass' }
+        @{ Provider = 'azapi'; Kind = 'utl'; ModuleType = 'utility'; StaticStatus = 'pass'; UnitStatus = 'pass' }
+        @{ Provider = 'azurerm'; Kind = 'res'; ModuleType = 'resource'; StaticStatus = 'pass'; UnitStatus = 'skipped' }
+        @{ Provider = 'azurerm'; Kind = 'res'; ModuleType = 'resource'; StaticStatus = 'fail'; UnitStatus = 'pass' }
+        @{ Provider = 'azurerm'; Kind = 'res'; ModuleType = 'resource'; StaticStatus = 'pass'; UnitStatus = 'fail' }
     ) {
-        param($Provider, $Kind, $ModuleType)
+        param($Provider, $Kind, $ModuleType, $StaticStatus, $UnitStatus)
 
+        $script:staticStatus = $StaticStatus
+        $script:unitStatus = $UnitStatus
         $repository = "Azure/terraform-$Provider-avm-$Kind-example"
         $script:expectedRemote = "https://github.com/$repository.git"
         $script:expectedModuleType = $ModuleType
         $script:validatedPaths = [System.Collections.Generic.List[string]]::new()
-        $caseRoot = Join-Path $TestDrive $Kind
+        $caseRoot = Join-Path $TestDrive "$Kind-$StaticStatus-$UnitStatus"
         $original = Join-Path $caseRoot 'original'
         $candidate = Join-Path $caseRoot 'candidate'
         $receipt = Join-Path $caseRoot 'receipt'
@@ -80,20 +85,43 @@ Describe 'Repository candidate original identity' -Tag Component {
         [System.IO.File]::WriteAllText((Join-Path $candidate 'test-settings.json'), ($settings | ConvertTo-Json -Depth 6))
         Mock Invoke-AvmPrCheck {
             Assert-TestCandidateIdentity -Path $Path
-            [pscustomobject]@{ Status = 'pass'; Steps = @() }
+            [pscustomobject]@{
+                Status = $script:staticStatus
+                Steps = @([pscustomobject]@{ Step = 'lint'; Status = $script:staticStatus })
+            }
         }
         Mock Invoke-AvmTestUnit {
             Assert-TestCandidateIdentity -Path $Path
-            [pscustomobject]@{ Status = 'pass' }
+            [pscustomobject]@{ Status = $script:unitStatus }
+        }
+        Mock Invoke-AvmTestIntegration { throw 'Integration is deferred for this profile.' }
+        Mock Invoke-AvmTestE2e { throw 'E2E is deferred for this profile.' }
+
+        $validate = {
+            Invoke-RepositorySyncCandidateValidation -Repository $repository `
+                -CandidateDirectory $candidate -ReceiptDirectory $receipt `
+                -CheckoutModulePath (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1')
         }
 
-        $result = Invoke-RepositorySyncCandidateValidation -Repository $repository `
-            -CandidateDirectory $candidate -ReceiptDirectory $receipt `
-            -CheckoutModulePath (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1')
-
-        $result | Should -BeExactly 'Passed'
+        if ($StaticStatus -eq 'fail' -or $UnitStatus -eq 'fail') {
+            { & $validate } | Should -Throw '*Candidate checks failed*'
+            Test-Path -LiteralPath (Join-Path $receipt 'validation.json') | Should -BeFalse
+        } else {
+            & $validate | Should -BeExactly 'Passed'
+            Assert-RepositorySyncValidationReceipt -Candidate $manifest -Directory $receipt
+            $evidence = Get-Content -LiteralPath (Join-Path $receipt 'validation.json') -Raw | ConvertFrom-Json -AsHashtable
+            $evidence.checks.unit | Should -BeExactly $UnitStatus
+            $evidence.checks.conftest | Should -BeExactly 'deferred'
+            $evidence.checks.integration | Should -BeExactly 'deferred'
+            $evidence.checks.e2e | Should -BeExactly 'deferred'
+        }
         $script:validatedPaths | Should -HaveCount 2
-        Assert-RepositorySyncValidationReceipt -Candidate $manifest -Directory $receipt
+        Should -Invoke Invoke-AvmPrCheck -Exactly 1 -ParameterFilter {
+            $ExcludeSteps.Count -eq 1 -and $ExcludeSteps[0] -ceq 'check policy'
+        }
+        Should -Invoke Invoke-AvmTestUnit -Exactly 1
+        Should -Invoke Invoke-AvmTestIntegration -Times 0
+        Should -Invoke Invoke-AvmTestE2e -Times 0
     }
 }
 

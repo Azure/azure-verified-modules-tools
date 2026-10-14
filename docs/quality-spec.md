@@ -1567,11 +1567,22 @@ This section is the implementation-level expression of the **Security stance** p
 - Integration tests are tagged `-Tag Integration` and excluded from default local runs. Selected authoring pull-request and manual CI runs include them; main pushes do not.
 - A stub-binary harness in `tests/fixtures/bin/` provides PowerShell scripts named `terraform.ps1`, `tflint.ps1`, etc. that emit pre-canned output. The resolver is hooked at test time to point at the stubs.
 
-Repository-sync candidate validation requires static checks to pass. Terraform
+Repository-sync candidate validation uses the `static-unit-v1` acceptance
+profile: all `pr-check` steps except `check policy` must pass, matching the
+fork workflow's explicit Conftest exclusion. This profile runs non-authenticated
+static analysis and unit tests only; Conftest, integration and E2E verification
+are deferred to a separate full-module pre-release check, never reported as
+passed. Normal standalone and module release validation defaults do not change.
+Keep the candidate authentication, identity configuration and permissions in
+place for future reintroduction of authenticated checks. Terraform
 unit tests run when discovered; an absent suite is a visible, non-blocking
 `skipped` result, never a unit-test pass. Failures or execution errors in
 existing suites block validation. Candidate-tree and publication safeguards
-still apply when unit tests are absent. Archive reconstruction must index the
+still apply when unit tests are absent. Validation receipts bind the acceptance
+profile and actual static/unit statuses to the repository, base and tree;
+publication rejects legacy or mismatched profiles and missing check evidence.
+Unchanged or skipped candidates record checks as `not-run`, not passed.
+Archive reconstruction must index the
 committed bytes without Git content conversion, including historical CRLF
 files. Restore normal attributes before checks and require the same exact
 prepared tree; do not normalize the artifact or relax the tree comparison.

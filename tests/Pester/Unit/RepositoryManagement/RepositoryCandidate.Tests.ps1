@@ -204,7 +204,9 @@ Describe 'Repository sync candidate validation' {
                 -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt `
                 -CheckoutModulePath (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1')
             $result | Should -BeExactly 'Passed'
-            Should -Invoke Invoke-AvmPrCheck -Exactly 1 -ParameterFilter { $SkipModuleVersionCheck }
+            Should -Invoke Invoke-AvmPrCheck -Exactly 1 -ParameterFilter {
+                $SkipModuleVersionCheck -and $ExcludeSteps.Count -eq 1 -and $ExcludeSteps[0] -ceq 'check policy'
+            }
             $script:prCheckEnvironment.Client | Should -BeExactly $script:client
             $script:prCheckEnvironment.Tenant | Should -BeExactly $script:tenant
             $script:prCheckEnvironment.Subscription | Should -BeExactly $script:subscription
@@ -224,6 +226,13 @@ Describe 'Repository sync candidate validation' {
             $env:AVM_MANAGED_FILES_CONFIG_LOCAL_PATH | Should -BeExactly 'wrong-config-directory'
             $receipt = Get-Content -LiteralPath (Join-Path $script:receipt 'validation.json') -Raw | ConvertFrom-Json -AsHashtable
             $receipt.treeSha | Should -BeExactly ('2' * 40)
+            $receipt.schemaVersion | Should -Be 2
+            $receipt.profile | Should -BeExactly 'static-unit-v1'
+            $receipt.checks.prCheck | Should -BeExactly 'pass'
+            $receipt.checks.unit | Should -BeExactly 'pass'
+            foreach ($check in @('conftest', 'integration', 'e2e')) {
+                $receipt.checks[$check] | Should -BeExactly 'deferred'
+            }
         }
         finally {
             [System.Environment]::SetEnvironmentVariable('GH_TOKEN', $originalGhToken, 'Process')
@@ -260,6 +269,9 @@ Describe 'Repository sync candidate validation' {
         $candidate = Read-RepositorySyncCandidate -Directory $script:directory -Repository $script:repository
         { Assert-RepositorySyncValidationReceipt -Candidate $candidate -Directory $script:receipt } |
             Should -Not -Throw
+        $receipt = Get-Content -LiteralPath (Join-Path $script:receipt 'validation.json') -Raw | ConvertFrom-Json -AsHashtable
+        $receipt.checks.unit | Should -BeExactly 'skipped'
+        ($script:diagnostics -join "`n") | Should -Match 'Conftest, integration and E2E are deferred'
     }
 
     It 'runs both checks but does not issue a receipt when pr-check fails' -ForEach @('pass', 'skipped') {
@@ -331,6 +343,9 @@ Describe 'Repository sync candidate validation' {
         Should -Invoke Invoke-AvmPrCheck -Times 0
         Should -Invoke Invoke-AvmTestUnit -Times 0
         Test-Path -LiteralPath (Join-Path $script:receipt 'validation.json') | Should -BeTrue
+        $receipt = Get-Content -LiteralPath (Join-Path $script:receipt 'validation.json') -Raw | ConvertFrom-Json -AsHashtable
+        $receipt.checks.prCheck | Should -BeExactly 'not-run'
+        $receipt.checks.unit | Should -BeExactly 'not-run'
     }
 
     It 'does not turn incomplete preparation into a passing validation' {
@@ -349,7 +364,7 @@ Describe 'Repository sync publication safety' {
         $script:receipt = Join-Path $TestDrive ('receipt-' + [guid]::NewGuid().ToString('N'))
         New-TestRepositoryCandidate -Directory $script:directory
         $candidate = Read-RepositorySyncCandidate -Directory $script:directory -Repository $script:repository
-        Save-RepositorySyncValidationReceipt -Candidate $candidate -Directory $script:receipt
+        Save-RepositorySyncValidationReceipt -Candidate $candidate -Directory $script:receipt -PrCheckStatus pass -UnitStatus pass
         Mock Invoke-RepositoryFileSync { throw 'The candidate should not be published.' }
     }
 
@@ -361,10 +376,44 @@ Describe 'Repository sync publication safety' {
         Should -Invoke Invoke-RepositoryFileSync -Times 0
     }
 
+    It 'rejects legacy or different-profile receipts before publication' -ForEach @('legacy', 'profile', 'checks') {
+        $path = Join-Path $script:receipt 'validation.json'
+        $receipt = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -AsHashtable
+        switch ($_) {
+            legacy { $receipt.schemaVersion = 1; $receipt.Remove('profile'); $receipt.Remove('checks') }
+            profile { $receipt.profile = 'full' }
+            checks { $receipt.Remove('checks') }
+        }
+        [System.IO.File]::WriteAllText($path, ($receipt | ConvertTo-Json -Depth 6))
+        { Invoke-RepositorySyncCandidatePublication -Repository $script:repository `
+            -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt } |
+            Should -Throw '*receipt does not match*'
+        Should -Invoke Invoke-RepositoryFileSync -Times 0
+    }
+
+    It 'rejects missing or inaccurate check evidence before publication' -ForEach @(
+        @{ Check = 'prCheck'; Status = 'not-run' }
+        @{ Check = 'unit'; Status = 'fail' }
+        @{ Check = 'unit'; Status = 'not-run' }
+        @{ Check = 'conftest'; Status = 'pass' }
+        @{ Check = 'integration'; Status = 'pass' }
+        @{ Check = 'e2e'; Status = 'pass' }
+        @{ Check = 'unit'; Status = $null }
+    ) {
+        $path = Join-Path $script:receipt 'validation.json'
+        $receipt = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -AsHashtable
+        if ($null -eq $Status) { $receipt.checks.Remove($Check) } else { $receipt.checks[$Check] = $Status }
+        [System.IO.File]::WriteAllText($path, ($receipt | ConvertTo-Json -Depth 6))
+        { Invoke-RepositorySyncCandidatePublication -Repository $script:repository `
+            -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt } |
+            Should -Throw '*receipt does not match*'
+        Should -Invoke Invoke-RepositoryFileSync -Times 0
+    }
+
     It 'never publishes a plan-only candidate' {
         New-TestRepositoryCandidate -Directory $script:directory -PlanOnly $true
         $candidate = Read-RepositorySyncCandidate -Directory $script:directory -Repository $script:repository
-        Save-RepositorySyncValidationReceipt -Candidate $candidate -Directory $script:receipt
+        Save-RepositorySyncValidationReceipt -Candidate $candidate -Directory $script:receipt -PrCheckStatus pass -UnitStatus pass
         { Invoke-RepositorySyncCandidatePublication -Repository $script:repository `
             -CandidateDirectory $script:directory -ReceiptDirectory $script:receipt } |
             Should -Throw '*Plan-only candidates cannot be published*'

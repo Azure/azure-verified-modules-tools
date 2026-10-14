@@ -161,12 +161,22 @@ function Read-RepositorySyncTestSettings {
 function Save-RepositorySyncValidationReceipt {
     param(
         [Parameter(Mandatory)] [System.Collections.IDictionary]$Candidate,
-        [Parameter(Mandatory)] [string]$Directory
+        [Parameter(Mandatory)] [string]$Directory,
+        [ValidateSet('pass', 'not-run')] [string]$PrCheckStatus = 'not-run',
+        [ValidateSet('pass', 'skipped', 'not-run')] [string]$UnitStatus = 'not-run'
     )
 
     $null = New-Item -ItemType Directory -Path $Directory -Force
     $receipt = [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
+        profile       = 'static-unit-v1'
+        checks        = [ordered]@{
+            prCheck     = $PrCheckStatus
+            unit        = $UnitStatus
+            conftest    = 'deferred'
+            integration = 'deferred'
+            e2e         = 'deferred'
+        }
         repository    = $Candidate.repository
         phase         = $Candidate.phase
         baseSha       = if ($Candidate.phase -ceq 'prepared') { $Candidate.baseSha } else { $null }
@@ -187,12 +197,23 @@ function Assert-RepositorySyncValidationReceipt {
 
     $receipt = Get-Content -LiteralPath (Join-Path $Directory 'validation.json') -Raw -ErrorAction Stop |
         ConvertFrom-Json -AsHashtable -ErrorAction Stop
-    $required = @('schemaVersion', 'repository', 'phase', 'baseSha', 'hasChanges', 'treeSha')
+    $required = @('schemaVersion', 'profile', 'checks', 'repository', 'phase', 'baseSha', 'hasChanges', 'treeSha')
     if ($receipt -isnot [System.Collections.IDictionary] -or
         @($required | Where-Object { -not $receipt.Contains($_) }).Count -gt 0) {
         throw [System.IO.InvalidDataException]::new('The validation receipt does not match the staged candidate.')
     }
-    if ($receipt.schemaVersion -ne 1 -or $receipt.repository -cne $Candidate.repository -or
+    $checks = $receipt.checks
+    $requiredChecks = @('prCheck', 'unit', 'conftest', 'integration', 'e2e')
+    if ($checks -isnot [System.Collections.IDictionary] -or
+        @($requiredChecks | Where-Object { -not $checks.Contains($_) }).Count -gt 0) {
+        throw [System.IO.InvalidDataException]::new('The validation receipt does not match the static-unit-v1 profile.')
+    }
+    $checksRequired = $Candidate.phase -ceq 'prepared' -and $Candidate.hasChanges
+    if ($receipt.schemaVersion -ne 2 -or $receipt.profile -cne 'static-unit-v1' -or
+        $checks.conftest -cne 'deferred' -or $checks.integration -cne 'deferred' -or $checks.e2e -cne 'deferred' -or
+        ($checksRequired -and ($checks.prCheck -cne 'pass' -or $checks.unit -cnotin @('pass', 'skipped'))) -or
+        (-not $checksRequired -and ($checks.prCheck -cne 'not-run' -or $checks.unit -cne 'not-run')) -or
+        $receipt.repository -cne $Candidate.repository -or
         $receipt.phase -cne $Candidate.phase -or
         ($Candidate.phase -ceq 'prepared' -and $receipt.baseSha -cne $Candidate.baseSha) -or
         $receipt.hasChanges -isnot [bool] -or $receipt.hasChanges -ne $Candidate.hasChanges -or
@@ -389,8 +410,8 @@ function Invoke-RepositorySyncCandidateValidation {
         $env:AVM_MANAGED_FILES_REPO_ID = Get-RepositorySyncCandidateRepoId -Repository $Repository
         $env:AVM_MANAGED_FILES_CONFIG_LOCAL_PATH = (Resolve-Path -LiteralPath (
                 Join-Path $PSScriptRoot '..' '..' '..' 'repository-config') -ErrorAction Stop).Path
-        Write-Host "Validating $Repository in test subscription '$($subscription.name)'."
-        $prCheck = Invoke-AvmPrCheck -Path $root -Ecosystem terraform -SkipModuleVersionCheck
+        Write-Host "Validating $Repository with profile static-unit-v1. Conftest, integration and E2E are deferred until full pre-release verification."
+        $prCheck = Invoke-AvmPrCheck -Path $root -Ecosystem terraform -SkipModuleVersionCheck -ExcludeSteps 'check policy'
         $unitRoot = Join-Path $workspace 'unit'
         $null = Invoke-RepositoryGit -WorkingDirectory $workspace -Arguments @('clone', '--quiet', $root, $unitRoot)
         $null = Invoke-RepositoryGit -WorkingDirectory $unitRoot -Arguments @('remote', 'set-url', 'origin', $repositoryUrl)
@@ -415,7 +436,8 @@ function Invoke-RepositorySyncCandidateValidation {
             (Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('rev-parse', 'HEAD^{tree}')) -cne $candidate.treeSha) {
             throw [System.InvalidOperationException]::new('Candidate checks changed the prepared file tree.')
         }
-        Save-RepositorySyncValidationReceipt -Candidate $candidate -Directory $ReceiptDirectory
+        Save-RepositorySyncValidationReceipt -Candidate $candidate -Directory $ReceiptDirectory `
+            -PrCheckStatus $prCheck.Status -UnitStatus $unitTests.Status
         return 'Passed'
     }
     finally {
