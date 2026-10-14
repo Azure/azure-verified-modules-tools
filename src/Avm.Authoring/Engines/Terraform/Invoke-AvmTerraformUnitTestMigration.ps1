@@ -657,18 +657,15 @@ function Get-AvmTerraformUnitTestProviderSource {
     foreach ($name in @('TF_DATA_DIR', 'TF_CLI_ARGS', 'TF_CLI_ARGS_init', 'TF_CLI_ARGS_providers')) {
         $environment[$name] = $null
     }
+    $environment.TF_DATA_DIR = Join-Path $Options.InspectionRoot ([guid]::NewGuid().ToString('N'))
+    $null = New-Item -ItemType Directory -Path $environment.TF_DATA_DIR -Force -ErrorAction Stop
     $lockPath = Join-Path $Path '.terraform.lock.hcl'
     $lockExists = Test-Path -LiteralPath $lockPath -PathType Leaf
     [byte[]]$lockContent = @()
     if ($lockExists) {
         $lockContent = [System.IO.File]::ReadAllBytes($lockPath)
     }
-    $manifestPath = Join-Path -Path $Path -ChildPath '.terraform' -AdditionalChildPath 'modules', 'modules.json'
-    $manifestExists = Test-Path -LiteralPath $manifestPath -PathType Leaf
-    [byte[]]$manifestContent = @()
-    if ($manifestExists) {
-        $manifestContent = [System.IO.File]::ReadAllBytes($manifestPath)
-    }
+    $manifestPath = Join-Path -Path $environment.TF_DATA_DIR -ChildPath 'modules' -AdditionalChildPath 'modules.json'
     try {
         $null = Invoke-AvmTerraformInit -TerraformPath $Options.TerraformPath -WorkingDirectory $Path `
             -EnvVars $environment -BackendFalse -NoColor -PreserveDependencySelections `
@@ -685,18 +682,11 @@ function Get-AvmTerraformUnitTestProviderSource {
         return $sources
     }
     finally {
-        try {
-            if ($lockExists) {
-                [System.IO.File]::WriteAllBytes($lockPath, $lockContent)
-            }
-            elseif (Test-Path -LiteralPath $lockPath -PathType Leaf) {
-                Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop
-            }
+        if ($lockExists) {
+            [System.IO.File]::WriteAllBytes($lockPath, $lockContent)
         }
-        finally {
-            if ($manifestExists) {
-                [System.IO.File]::WriteAllBytes($manifestPath, $manifestContent)
-            }
+        elseif (Test-Path -LiteralPath $lockPath -PathType Leaf) {
+            Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop
         }
     }
 }

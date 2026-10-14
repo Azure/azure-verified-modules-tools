@@ -96,6 +96,47 @@ Describe 'Invoke-AvmTerraformTransform' {
         }
     }
 
+    It 'keeps inspection dependencies through migration and cleans them after <Failure>, drift=<CheckDrift>' -TestCases @(
+        foreach ($checkDrift in @($false, $true)) {
+            foreach ($failure in @('none', 'snapshot', 'migration')) {
+                @{ Failure = $failure; CheckDrift = $checkDrift }
+            }
+        }
+    ) {
+        param($Failure, $CheckDrift)
+        InModuleScope Avm.Authoring -Parameters @{ C = $script:context; Failure = $Failure; CheckDrift = $CheckDrift } {
+            param($C, $Failure, $CheckDrift)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Resolve-AvmMapotfConfigDir { "/fake/$ProfileName" }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Mock Get-AvmTerraformUnitTestSnapshot {
+                $script:AvmTestInspectionRoot = $Options.InspectionRoot
+                $null = New-Item -ItemType Directory -Path $Options.InspectionRoot
+                Set-Content -LiteralPath (Join-Path $Options.InspectionRoot 'dependency.tf') -Value 'terraform {}'
+                if ($Failure -ceq 'snapshot') {
+                    throw [System.InvalidOperationException]::new('snapshot failed')
+                }
+                @()
+            }
+            Mock Invoke-AvmTerraformUnitTestMigration {
+                Test-Path -LiteralPath (Join-Path $Options.InspectionRoot 'dependency.tf') | Should -BeTrue
+                if ($Failure -ceq 'migration') {
+                    throw [System.InvalidOperationException]::new('migration failed')
+                }
+            }
+            if ($Failure -ceq 'none') {
+                (Invoke-AvmTerraformTransform -Context $C -CheckDrift:$CheckDrift).Status | Should -Be 'pass'
+            }
+            else {
+                { Invoke-AvmTerraformTransform -Context $C -CheckDrift:$CheckDrift } | Should -Throw "*$Failure failed*"
+            }
+            Test-Path -LiteralPath $script:AvmTestInspectionRoot | Should -BeFalse
+            Remove-Variable AvmTestInspectionRoot -Scope Script
+        }
+    }
+
     It 'does not annotate a location that already exists in a prefix-free module' {
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'metadata.json') `
             -Value '{"canonicalType":"helper"}' -Encoding utf8NoBOM

@@ -58,14 +58,15 @@ BeforeAll {
             After     = $after
             Snapshots = @([pscustomobject]@{ Scope = $scope; Hash = 'before'; Before = $before })
             Options   = [pscustomobject]@{
-                ToolPath      = Join-Path $TestDrive 'mapotf'
-                TerraformPath = Join-Path $TestDrive 'terraform'
-                ProfileDirs   = @{
+                ToolPath       = Join-Path $TestDrive 'mapotf'
+                TerraformPath  = Join-Path $TestDrive 'terraform'
+                ProfileDirs    = @{
                     module              = Join-Path $TestDrive 'module-profile'
                     'unit-test-inspect' = Join-Path $TestDrive 'inspection'
                     'unit-test'         = Join-Path $TestDrive 'location'
                 }
-                EnvVars       = @{}
+                EnvVars        = @{}
+                InspectionRoot = Join-Path $TestDrive ('provider-inspection-' + [guid]::NewGuid().ToString('N'))
             }
         }
     }
@@ -448,7 +449,8 @@ Providers required by state:
                 @(Get-AvmTerraformUnitTestProviderSource -Path $Fixture.Child `
                         -ModuleTargets $Fixture.Targets -Options $Fixture.Options) | Should -HaveCount 0
                 Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
-                    $null -eq $EnvVars.TF_DATA_DIR -and $null -eq $EnvVars.TF_CLI_ARGS -and
+                    $EnvVars.TF_DATA_DIR.StartsWith($Fixture.Options.InspectionRoot + [IO.Path]::DirectorySeparatorChar) -and
+                    $null -eq $EnvVars.TF_CLI_ARGS -and
                     $null -eq $EnvVars.TF_CLI_ARGS_init -and $null -eq $EnvVars.TF_CLI_ARGS_providers
                 }
                 $Fixture.Options.EnvVars.TF_DATA_DIR | Should -BeExactly 'authored'
@@ -479,8 +481,9 @@ Providers required by state:
             [System.IO.File]::WriteAllBytes($manifestPath, $manifestBytes)
             Mock Invoke-AvmTerraformInit -ModuleName Avm.Authoring {
                 Set-Content -LiteralPath (Join-Path $WorkingDirectory '.terraform.lock.hcl') -Value 'updated lock'
-                Set-Content -LiteralPath (Join-Path -Path $WorkingDirectory -ChildPath '.terraform' `
-                        -AdditionalChildPath 'modules', 'modules.json') -Value '{"Modules":[]}'
+                $directory = Join-Path $EnvVars.TF_DATA_DIR 'modules'
+                $null = New-Item -ItemType Directory -Path $directory -Force
+                Set-Content -LiteralPath (Join-Path $directory 'modules.json') -Value '{"Modules":[]}'
                 if ($EnvVars.AVM_TEST_FAIL_INIT) {
                     throw [System.InvalidOperationException]::new('module installation failed')
                 }
@@ -515,6 +518,73 @@ Providers required by state:
             }
         }
 
+        It 'leaves <TargetName> initialization data unchanged: <ExistingData>, <Failure>' -TestCases @(
+            foreach ($targetName in @('root', 'setup')) {
+                foreach ($existingData in @($false, $true)) {
+                    foreach ($failure in @('none', 'init', 'providers')) {
+                        @{ TargetName = $targetName; ExistingData = $existingData; Failure = $failure }
+                    }
+                }
+            }
+        ) {
+            param($TargetName, $ExistingData, $Failure)
+            if ($TargetName -ceq 'setup') {
+                $script:fixture.Child = Join-Path -Path $script:fixture.Child -ChildPath 'tests' -AdditionalChildPath 'unit', 'setup'
+                $script:fixture.Targets[1].Path = $script:fixture.Child
+                $null = New-Item -ItemType Directory -Path $script:fixture.Child -Force
+            }
+            $data = Join-Path $script:fixture.Child '.terraform'
+            $lockPath = Join-Path $script:fixture.Child '.terraform.lock.hcl'
+            [byte[]]$lockBytes = @(0, 13, 10, 255)
+            $original = @{}
+            if ($ExistingData) {
+                [System.IO.File]::WriteAllBytes($lockPath, $lockBytes)
+                foreach ($relative in @('modules/modules.json', 'providers/existing/provider.bin')) {
+                    $path = Join-Path $data $relative
+                    $null = New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force
+                    [System.IO.File]::WriteAllBytes($path, [byte[]]@(0, 13, 10, 255))
+                    $original[$path] = (Get-FileHash -LiteralPath $path).Hash
+                }
+            }
+            $script:fixture.Options.EnvVars['AVM_TEST_FAILURE'] = $Failure
+            Mock Invoke-AvmTerraformInit -ModuleName Avm.Authoring {
+                $directory = Join-Path $EnvVars.TF_DATA_DIR 'modules'
+                $null = New-Item -ItemType Directory -Path $directory -Force
+                Set-Content -LiteralPath (Join-Path $directory 'modules.json') -Value '{"Modules":[{"Key":"","Dir":"."}]}'
+                [System.IO.File]::WriteAllBytes((Join-Path $EnvVars.TF_DATA_DIR 'provider.bin'), [byte[]]@(1, 2, 3))
+                Set-Content -LiteralPath (Join-Path $WorkingDirectory '.terraform.lock.hcl') -Value 'temporary lock'
+                if ($EnvVars.AVM_TEST_FAILURE -ceq 'init') {
+                    throw [System.InvalidOperationException]::new('inspection init failed')
+                }
+            }
+            Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
+                if ($EnvVars.AVM_TEST_FAILURE -ceq 'providers') {
+                    throw [System.InvalidOperationException]::new('inspection providers failed')
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = "Providers required by configuration:`n."; StdErr = '' }
+            }
+            InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture; Failure = $Failure } {
+                param($Fixture, $Failure)
+                $inspect = {
+                    Get-AvmTerraformUnitTestProviderSource -Path $Fixture.Child `
+                        -ModuleTargets $Fixture.Targets -Options $Fixture.Options
+                }
+                if ($Failure -ceq 'none') { & $inspect }
+                else { $inspect | Should -Throw "*inspection $Failure failed*" }
+            }
+            if ($ExistingData) {
+                [System.IO.File]::ReadAllBytes($lockPath) | Should -Be $lockBytes
+                @(Get-ChildItem -LiteralPath $data -Recurse -File).Count | Should -Be $original.Count
+                foreach ($path in $original.Keys) {
+                    (Get-FileHash -LiteralPath $path).Hash | Should -BeExactly $original[$path]
+                }
+            }
+            else {
+                Test-Path -LiteralPath $lockPath | Should -BeFalse
+                Test-Path -LiteralPath $data | Should -BeFalse
+            }
+        }
+
         It 'carries fresh ModTM records while restoring stale manifest bytes: <Failure>' -TestCases @(
             @{ Failure = 'none' }
             @{ Failure = 'init'; ExpectedError = '*module installation failed*' }
@@ -523,8 +593,9 @@ Providers required by state:
         ) {
             param($Failure, $ExpectedError)
             $manifestPath = Join-Path -Path $script:fixture.Child -ChildPath '.terraform' -AdditionalChildPath 'modules', 'modules.json'
-            $dependency = Join-Path -Path $script:fixture.Child -ChildPath '.terraform' -AdditionalChildPath 'modules', 'published'
-            $null = New-Item -ItemType Directory -Path $dependency -Force
+            $dependency = Join-Path $script:fixture.Options.InspectionRoot 'published'
+            $null = New-Item -ItemType Directory -Path $dependency, (Split-Path -Parent $manifestPath) -Force
+            Set-Content -LiteralPath (Join-Path $dependency 'main.tf') -Value 'terraform {}'
             Set-Content -LiteralPath (Join-Path $script:fixture.Child 'main.tf') -Encoding utf8NoBOM `
                 -Value 'module "published" { source = "Azure/example/azurerm" }'
             [byte[]]$manifestBytes = [System.Text.Encoding]::UTF8.GetBytes(
@@ -533,13 +604,19 @@ Providers required by state:
             $lockPath = Join-Path $script:fixture.Child '.terraform.lock.hcl'
             [byte[]]$lockBytes = @(1, 2, 3, 13, 10)
             [System.IO.File]::WriteAllBytes($lockPath, $lockBytes)
-            $script:fixture.Options.EnvVars['AVM_TEST_FRESH_MANIFEST'] =
-                '{"Modules":[{"Key":"","Dir":"."},{"Key":"existing","Dir":".terraform/modules/existing","Version":"0.1.0"},{"Key":"published","Dir":".terraform/modules/published","Source":"registry.terraform.io/Azure/example/azurerm","Version":"0.1.0"}]}'
+            $script:fixture.Options.EnvVars['AVM_TEST_FRESH_MANIFEST'] = @{
+                Modules = @(
+                    @{ Key = ''; Dir = '.' }
+                    @{ Key = 'existing'; Dir = '.terraform/modules/existing'; Version = '0.1.0' }
+                    @{ Key = 'published'; Dir = $dependency; Source = 'registry.terraform.io/Azure/example/azurerm'; Version = '0.1.0' }
+                )
+            } | ConvertTo-Json -Depth 5 -Compress
             $script:fixture.Options.EnvVars['AVM_TEST_FAILURE'] = $Failure
             Mock Invoke-AvmTerraformInit -ModuleName Avm.Authoring {
                 $payload = if ($EnvVars.AVM_TEST_FAILURE -ceq 'manifest') { 'invalid JSON' } else { $EnvVars.AVM_TEST_FRESH_MANIFEST }
-                Set-Content -LiteralPath (Join-Path -Path $WorkingDirectory -ChildPath '.terraform' `
-                        -AdditionalChildPath 'modules', 'modules.json') -Value $payload -Encoding utf8NoBOM -NoNewline
+                $directory = Join-Path $EnvVars.TF_DATA_DIR 'modules'
+                $null = New-Item -ItemType Directory -Path $directory -Force
+                Set-Content -LiteralPath (Join-Path $directory 'modules.json') -Value $payload -Encoding utf8NoBOM -NoNewline
                 Set-Content -LiteralPath (Join-Path $WorkingDirectory '.terraform.lock.hcl') -Value 'updated lock'
                 if ($EnvVars.AVM_TEST_FAILURE -ceq 'init') {
                     throw [System.InvalidOperationException]::new('module installation failed')

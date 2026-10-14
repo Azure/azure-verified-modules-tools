@@ -882,6 +882,7 @@ function Invoke-AvmTerraformTransform {
         $snapshot = Get-AvmFileSnapshot -Path @($beforeFiles | ForEach-Object { $_.FullName })
     }
 
+    $inspectionRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('avm-provider-inspection-' + [guid]::NewGuid().ToString('N'))
     try {
         # mapotf reads provider schemas (order_resource_attrs et al.) by shelling
         # out to terraform, which it finds by name on PATH. GitHub-hosted runners
@@ -905,10 +906,11 @@ function Invoke-AvmTerraformTransform {
             -ErrorAction Stop
 
         $transformOptions = [pscustomobject]@{
-            ToolPath      = $tool.Path
-            TerraformPath = $terraform.Path
-            ProfileDirs   = $profileDirs
-            EnvVars       = $mapotfEnv
+            ToolPath       = $tool.Path
+            TerraformPath  = $terraform.Path
+            ProfileDirs    = $profileDirs
+            EnvVars        = $mapotfEnv
+            InspectionRoot = $inspectionRoot
         }
         $moduleTargets = @($targets | Where-Object { $_.Scope -in @('root', 'module') })
         $testTargets = @($targets | Where-Object { $_.Scope -eq 'test' })
@@ -1014,10 +1016,17 @@ function Invoke-AvmTerraformTransform {
         $legacyIssues = @(Get-AvmRemainingModtmIssue -Root $Context.Root -Targets @($moduleTargets + $exampleTargets + $testTargets))
     }
     finally {
-        if ($null -ne $snapshot) {
-            Write-AvmLog 'transform: restoring terraform snapshot after drift check' -Level Verbose | Out-Null
-            $current = @(Get-AvmTerraformFile -Root $Context.Root | ForEach-Object { $_.FullName })
-            Restore-AvmFileSnapshot -Snapshot $snapshot -CurrentPath $current
+        try {
+            if ($null -ne $snapshot) {
+                Write-AvmLog 'transform: restoring terraform snapshot after drift check' -Level Verbose | Out-Null
+                $current = @(Get-AvmTerraformFile -Root $Context.Root | ForEach-Object { $_.FullName })
+                Restore-AvmFileSnapshot -Snapshot $snapshot -CurrentPath $current
+            }
+        }
+        finally {
+            if (Test-Path -LiteralPath $inspectionRoot) {
+                Remove-Item -LiteralPath $inspectionRoot -Recurse -Force -ErrorAction Stop -ProgressAction SilentlyContinue
+            }
         }
     }
 

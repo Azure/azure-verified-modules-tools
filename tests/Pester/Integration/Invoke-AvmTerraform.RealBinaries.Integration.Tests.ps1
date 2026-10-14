@@ -94,7 +94,7 @@ Describe 'Integration: real-binary Terraform chains' -Tag 'Integration' {
         $script:SkipReason = $null
 
         $runId = [Guid]::NewGuid().ToString('N').Substring(0, 8)
-        $script:RunRoot = if ($IsWindows) {
+        $script:RunRoot = if ($IsWindows -and -not $env:AVM_HOME) {
             Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Avm' 'IntegrationTests' $runId
         }
         else {
