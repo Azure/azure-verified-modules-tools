@@ -605,6 +605,44 @@ function ConvertFrom-AvmTerraformProviderTree {
     return [string[]]@($sources)
 }
 
+function Assert-AvmTerraformLocalsOnlyJson {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [string] $ReviewMessage
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+    $jsonDocument = $null
+    $jsonReview = "$ReviewMessage; '$Path'"
+    try {
+        $jsonOptions = [System.Text.Json.JsonDocumentOptions]::new()
+        $jsonOptions.MaxDepth = 100
+        $jsonDocument = [System.Text.Json.JsonDocument]::Parse(
+            [System.IO.File]::ReadAllText($Path), $jsonOptions)
+        if ($jsonDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+            throw [AvmConfigurationException]::new("$jsonReview must be an object containing only locals blocks.")
+        }
+        foreach ($property in $jsonDocument.RootElement.EnumerateObject()) {
+            $localBlocks = if ($property.Value.ValueKind -eq [System.Text.Json.JsonValueKind]::Array) {
+                @($property.Value.EnumerateArray())
+            }
+            else { @($property.Value) }
+            if ($property.Name -cne 'locals' -or
+                @($localBlocks | Where-Object { $_.ValueKind -ne [System.Text.Json.JsonValueKind]::Object }).Count -gt 0) {
+                throw [AvmConfigurationException]::new("$jsonReview must contain only locals blocks.")
+            }
+        }
+    }
+    catch [System.Text.Json.JsonException] {
+        throw [AvmConfigurationException]::new("$jsonReview is not valid JSON.")
+    }
+    finally {
+        if ($null -ne $jsonDocument) { $jsonDocument.Dispose() }
+    }
+}
+
 function Get-AvmTerraformUnitTestProviderSource {
     [CmdletBinding()]
     [OutputType([string[]])]
@@ -627,12 +665,15 @@ function Get-AvmTerraformUnitTestProviderSource {
     $stateDeclaration = '\b(?:backend|state_store|state_store_provider)' + $trivia + '+"' +
     '|\bcloud' + $trivia + '*\{'
     foreach ($file in $files) {
-        if ($file.Name.EndsWith('.tf.json', [System.StringComparison]::OrdinalIgnoreCase) -or
-            ($file.Name.EndsWith('.tf', [System.StringComparison]::OrdinalIgnoreCase) -and
+        if ($file.Name.EndsWith('.tf.json', [System.StringComparison]::OrdinalIgnoreCase)) {
+            Assert-AvmTerraformLocalsOnlyJson -Path $file.FullName `
+                -ReviewMessage "Cannot inspect provider dependencies for '$Path': JSON configuration requires review"
+        }
+        elseif ($file.Name.EndsWith('.tf', [System.StringComparison]::OrdinalIgnoreCase) -and
             [regex]::IsMatch([System.IO.File]::ReadAllText($file.FullName), $stateDeclaration,
-                [System.Text.RegularExpressions.RegexOptions]::CultureInvariant, [TimeSpan]::FromSeconds(1)))) {
+                [System.Text.RegularExpressions.RegexOptions]::CultureInvariant, [TimeSpan]::FromSeconds(1))) {
             throw [AvmConfigurationException]::new(
-                "Cannot inspect provider dependencies for '$Path': review JSON configuration or possible backend/cloud declarations before running dependency inspection.")
+                "Cannot inspect provider dependencies for '$Path': review possible backend/cloud declarations before running dependency inspection.")
         }
     }
     if (Test-Path -LiteralPath (Join-Path -Path $Path -ChildPath '.terraform' -AdditionalChildPath 'terraform.tfstate')) {
@@ -807,33 +848,8 @@ function Get-AvmTerraformUnitTestModtmRequirementPlan {
                 [System.IO.Path]::GetFullPath($record[0].Dir, $Path))
             foreach ($jsonFile in @(Get-ChildItem -LiteralPath $dependency -File |
                         Where-Object { $_.Name.EndsWith('.tf.json', [System.StringComparison]::OrdinalIgnoreCase) })) {
-                $jsonDocument = $null
-                $jsonReview = "Cannot preserve ModTM mocks for '$Path': JSON dependency '$name' requires review; '$($jsonFile.FullName)'"
-                try {
-                    $jsonOptions = [System.Text.Json.JsonDocumentOptions]::new()
-                    $jsonOptions.MaxDepth = 100
-                    $jsonDocument = [System.Text.Json.JsonDocument]::Parse(
-                        [System.IO.File]::ReadAllText($jsonFile.FullName), $jsonOptions)
-                    if ($jsonDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
-                        throw [AvmConfigurationException]::new("$jsonReview must be an object containing only locals blocks.")
-                    }
-                    foreach ($property in $jsonDocument.RootElement.EnumerateObject()) {
-                        $localBlocks = if ($property.Value.ValueKind -eq [System.Text.Json.JsonValueKind]::Array) {
-                            @($property.Value.EnumerateArray())
-                        }
-                        else { @($property.Value) }
-                        if ($property.Name -cne 'locals' -or
-                            @($localBlocks | Where-Object { $_.ValueKind -ne [System.Text.Json.JsonValueKind]::Object }).Count -gt 0) {
-                            throw [AvmConfigurationException]::new("$jsonReview must contain only locals blocks.")
-                        }
-                    }
-                }
-                catch [System.Text.Json.JsonException] {
-                    throw [AvmConfigurationException]::new("$jsonReview is not valid JSON.")
-                }
-                finally {
-                    if ($null -ne $jsonDocument) { $jsonDocument.Dispose() }
-                }
+                Assert-AvmTerraformLocalsOnlyJson -Path $jsonFile.FullName `
+                    -ReviewMessage "Cannot preserve ModTM mocks for '$Path': JSON dependency '$name' requires review"
             }
             if (-not $RequiredProviders.ContainsKey($dependency)) {
                 $RequiredProviders[$dependency] = Get-AvmTerraformUnitTestRequiredProvider -Path $dependency -Options $Options
@@ -913,14 +929,18 @@ function Get-AvmTerraformUnitTestModtmRequirementPlan {
             [Array]::Sort($versions, [System.StringComparer]::Ordinal)
             $requirement.version = $versions -join ', '
         }
-        $requirementJson = ConvertTo-Json -InputObject $requirement -Compress -EscapeHandling EscapeHtml
+        $requirementAttributes = foreach ($attribute in $requirement.GetEnumerator()) {
+            $value = ConvertTo-Json -InputObject $attribute.Value -Compress
+            "    $($attribute.Key) = $value"
+        }
+        $requirementBody = "required_providers {`n  modtm = {`n$($requirementAttributes -join "`n")`n  }`n}`n"
+        $bodyJson = ConvertTo-Json -InputObject $requirementBody -Compress
         $bindingsJson = ConvertTo-Json -InputObject $bindings -Compress
         $arguments = @(
             'transform', '--tf-dir', $Path, '--mptf-dir', $Options.ProfileDirs.module,
-            '--mptf-var', "unit_test_modtm_requirement=$requirementJson",
+            '--mptf-var', "unit_test_modtm_requirement=$bodyJson",
             '--mptf-var', "unit_test_modtm_bindings=$bindingsJson"
         )
-        $bodyJson = ConvertTo-Json -InputObject "required_providers {`n  modtm = $requirementJson`n}`n" -Compress
         $capabilities = [System.Collections.Generic.List[string]]::new()
         $capabilities.Add(
             "try(length(transform.update_in_place.unit_test_modtm_requirement), 0) + " +
@@ -928,7 +948,7 @@ function Get-AvmTerraformUnitTestModtmRequirementPlan {
         $capabilities.Add(
             "try(transform.update_in_place.unit_test_modtm_requirement[`"1`"].merge_object_attributes && " +
             "transform.update_in_place.unit_test_modtm_requirement[`"1`"].dynamic_block_body == $bodyJson, " +
-            "try(transform.new_block.unit_test_modtm_requirement[`"1`"].dynamic_block_body == $bodyJson, false))")
+            "try(transform.new_block.unit_test_modtm_requirement[`"1`"].body == $bodyJson, false))")
         foreach ($name in $bindings.Keys) {
             $nameJson = ConvertTo-Json -InputObject $name -Compress
             $bindingJson = ConvertTo-Json -InputObject "providers = $($bindings[$name])`n" -Compress

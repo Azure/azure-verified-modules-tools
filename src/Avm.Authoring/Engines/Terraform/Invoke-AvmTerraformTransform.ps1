@@ -263,8 +263,15 @@ function Test-AvmTerraformProviderInUse {
     foreach ($directory in $directories) {
         foreach ($file in Get-ChildItem -LiteralPath $directory -File) {
             if ($file.Name.EndsWith('.tf.json', [System.StringComparison]::OrdinalIgnoreCase)) {
-                Write-AvmLog "Preserving $Provider mock: JSON configuration '$($file.FullName)' needs dependency review." -Level Verbose | Out-Null
-                return $true
+                try {
+                    Assert-AvmTerraformLocalsOnlyJson -Path $file.FullName `
+                        -ReviewMessage "Preserving $Provider mock: JSON configuration needs dependency review"
+                }
+                catch [AvmConfigurationException] {
+                    Write-AvmLog $_.Exception.Message -Level Verbose | Out-Null
+                    return $true
+                }
+                continue
             }
             if (-not $file.Name.EndsWith('.tf', [System.StringComparison]::OrdinalIgnoreCase)) {
                 continue
