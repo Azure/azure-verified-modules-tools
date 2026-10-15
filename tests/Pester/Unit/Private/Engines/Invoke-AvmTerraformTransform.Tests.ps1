@@ -535,6 +535,8 @@ run "telemetry" {
         @{ Source = 'resource "random_string" "suffix" { length = 4 }'; SourceFile = 'main.tf' }
         @{ Source = 'terraform { required_providers { random = { source = "hashicorp/random" } } }'; SourceFile = 'main.tf' }
         @{ Source = '{"resource":{"random_string":{"suffix":{"length":4}}}}'; SourceFile = 'generated.tf.json' }
+        @{ Source = '{"locals":'; SourceFile = 'generated.tf.json' }
+        @{ Source = '{"locals":{},"terraform":{"backend":{}}}'; SourceFile = 'generated.tf.json' }
     ) {
         param($Source, $SourceFile)
         Add-Content -LiteralPath (Join-Path $script:moduleDir $SourceFile) -Value $Source
@@ -721,10 +723,17 @@ run "aliased" {
         [System.IO.File]::ReadAllBytes($testFile) | Should -Be $before
     }
 
-    It 'removes an obsolete mock when known local dependencies do not use random' {
+    It 'removes an obsolete mock when known local dependencies use only <SourceKind>' -TestCases @(
+        @{ SourceKind = 'HCL locals'; SourceFile = 'main.tf'; Source = 'locals {}' }
+        @{ SourceKind = 'JSON locals'; SourceFile = 'locals.tf.json'; Source = '{"locals":{"region":"eastus"}}' }
+        @{ SourceKind = 'JSON locals arrays'; SourceFile = 'locals.tf.json'; Source = '{"locals":[{"region":"eastus"}]}' }
+    ) {
+        param($SourceFile, $Source)
         $child = Join-Path $script:moduleDir 'modules' 'child'
         $null = New-Item -ItemType Directory -Path $child -Force
-        Set-Content -LiteralPath (Join-Path $child 'main.tf') -Encoding utf8NoBOM -Value 'locals {}'
+        $sourcePath = Join-Path $child $SourceFile
+        Set-Content -LiteralPath $sourcePath -Encoding utf8NoBOM -Value $Source
+        $sourceBytes = [System.IO.File]::ReadAllBytes($sourcePath)
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'main.tf') -Encoding utf8NoBOM `
             -Value "module `"child`" {`n  source = `"./modules/child`"`n}`n"
         $testDir = Join-Path $script:moduleDir 'tests' 'unit'
@@ -740,6 +749,7 @@ run "aliased" {
         }
 
         Get-Content -LiteralPath $testFile -Raw | Should -Not -Match 'mock_provider "random"'
+        [System.IO.File]::ReadAllBytes($sourcePath) | Should -Be $sourceBytes
     }
 
     It 'preserves random mocks when a local child still uses the provider' {

@@ -394,7 +394,18 @@ Providers required by state:
             @{ Shape = 'backend separated by comments'; File = 'backend.tf'; Text = 'terraform { backend /* preserve */ "azurerm" {} }' }
             @{ Shape = 'cloud execution'; File = 'main.tf'; Text = "terraform { cloud # authored`n { organization = `"example`" } }" }
             @{ Shape = 'state store'; File = 'main.tf'; Text = 'terraform { state_store "azure" "example" {} }' }
-            @{ Shape = 'JSON configuration'; File = 'main.tf.json'; Text = '{}' }
+            @{ Shape = 'JSON backend'; File = 'main.tf.json'; Text = '{"terraform":{"backend":{"azurerm":{}}}}' }
+            @{ Shape = 'JSON cloud'; File = 'main.tf.json'; Text = '{"terraform":{"cloud":{"organization":"example"}}}' }
+            @{ Shape = 'JSON provider'; File = 'main.tf.json'; Text = '{"provider":{"modtm":{}}}' }
+            @{ Shape = 'JSON requirements'; File = 'main.tf.json'; Text = '{"terraform":{"required_providers":{}}}' }
+            @{ Shape = 'JSON module'; File = 'main.tf.json'; Text = '{"locals":{},"module":{"remote":{"source":"Azure/example/azurerm"}}}' }
+            @{ Shape = 'malformed JSON'; File = 'main.tf.json'; Text = '{"locals":' }
+            @{ Shape = 'JSON comments'; File = 'main.tf.json'; Text = '{"locals":{/* comment */}}' }
+            @{ Shape = 'JSON trailing comma'; File = 'main.tf.json'; Text = '{"locals":{},}' }
+            @{ Shape = 'nonobject JSON'; File = 'main.tf.json'; Text = '[]' }
+            @{ Shape = 'nonobject locals'; File = 'main.tf.json'; Text = '{"locals":null}' }
+            @{ Shape = 'malformed locals array'; File = 'main.tf.json'; Text = '{"locals":[{},null]}' }
+            @{ Shape = 'miscased locals'; File = 'main.tf.json'; Text = '{"Locals":{}}' }
             @{ Shape = 'JSON test'; File = 'root.tftest.json'; Text = '{}' }
         ) {
             param($File, $Text)
@@ -406,7 +417,35 @@ Providers required by state:
                     Should -Throw '*review*'
                 Should -Invoke Invoke-AvmProcess -Exactly 0
                 Should -Invoke Invoke-AvmTerraformInit -Exactly 0
+                $Fixture.Options.InspectionRoot | Should -Not -Exist
             }
+        }
+
+        It 'inspects providers with <Shape> without changing JSON' -TestCases @(
+            @{ Shape = 'locals-only region data'; Json = '{"locals":{"geo_codes_by_name":{"eastus":"US"}}}' }
+            @{ Shape = 'locals-only block arrays'; Json = '{"locals":[{"region":"eastus"},{"code":"${local.region}"}]}' }
+            @{ Shape = 'provider-like local values'; Json = '{"locals":{"terraform":{"backend":{}},"provider":{"modtm":{}}}}' }
+            @{ Shape = 'an empty JSON configuration'; Json = '{}' }
+            @{ Shape = 'multiple locals-only files'; Json = '{"locals":{}}'; AdditionalJson = '{"locals":{"region":"eastus"}}' }
+        ) {
+            param($Json, $AdditionalJson)
+            $path = Join-Path $script:fixture.Child 'locals.geo.codes.tf.json'
+            [System.IO.File]::WriteAllText($path, "$Json`r`n", [System.Text.UTF8Encoding]::new($false))
+            $bytes = [System.IO.File]::ReadAllBytes($path)
+            if ($AdditionalJson) {
+                Set-Content -LiteralPath (Join-Path $script:fixture.Child 'locals.extra.tf.json') `
+                    -Value $AdditionalJson -Encoding utf8NoBOM
+            }
+            $script:fixture.Options.EnvVars['AVM_TEST_INSPECTION_JSON'] = "Providers required by configuration:`n."
+            InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {
+                param($Fixture)
+                @(Get-AvmTerraformUnitTestProviderSource -Path $Fixture.Child `
+                        -ModuleTargets $Fixture.Targets -Options $Fixture.Options) | Should -HaveCount 0
+                Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -ceq 'get' }
+                Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -ceq 'providers' }
+                Should -Invoke Invoke-AvmTerraformInit -Exactly 0
+            }
+            [System.IO.File]::ReadAllBytes($path) | Should -Be $bytes
         }
 
         It 'does not access an initialized backend even when its declaration was removed' {
@@ -977,10 +1016,15 @@ Providers required by state:
                     $plan = Get-AvmTerraformUnitTestModtmRequirementPlan @Parameters
                     $encoded = @($plan.Arguments | Where-Object { $_ -like 'unit_test_modtm_requirement=*' })[0].
                         Substring('unit_test_modtm_requirement='.Length)
-                    $requirement = ConvertFrom-Json -InputObject $encoded -AsHashtable
+                    $body = ConvertFrom-Json -InputObject $encoded
+                    $requirement = $Parameters.RequiredProviders[$Caller].modtm
                     $requirement['version'] | Should -BeExactly $Expected
-                    $Parameters.RequiredProviders[$Caller].modtm['version'] | Should -BeExactly $Expected
                     $requirement.source | Should -BeIn @('Azure/modtm', 'registry.terraform.io/azure/modtm')
+                    $attributes = "    source = `"$($requirement.source)`"`n"
+                    if ($Expected) { $attributes += "    version = `"$Expected`"`n" }
+                    $body | Should -BeExactly "required_providers {`n  modtm = {`n$attributes  }`n}`n"
+                    $body | Should -Not -Match '\\u003[ce]'
+                    $plan.Capabilities.Contains("dynamic_block_body == $encoded") | Should -BeTrue
                 }
                 Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -ceq 'debug' }
                 Should -Invoke Invoke-AvmTerraformInit -Exactly 0
