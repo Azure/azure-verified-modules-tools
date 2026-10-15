@@ -805,10 +805,35 @@ function Get-AvmTerraformUnitTestModtmRequirementPlan {
             }
             $dependency = [System.IO.Path]::TrimEndingDirectorySeparator(
                 [System.IO.Path]::GetFullPath($record[0].Dir, $Path))
-            if (@(Get-ChildItem -LiteralPath $dependency -File |
-                        Where-Object { $_.Name.EndsWith('.tf.json', [System.StringComparison]::OrdinalIgnoreCase) }).Count -gt 0) {
-                throw [AvmConfigurationException]::new(
-                    "Cannot preserve ModTM mocks for '$Path': JSON dependency '$name' requires review.")
+            foreach ($jsonFile in @(Get-ChildItem -LiteralPath $dependency -File |
+                        Where-Object { $_.Name.EndsWith('.tf.json', [System.StringComparison]::OrdinalIgnoreCase) })) {
+                $jsonDocument = $null
+                $jsonReview = "Cannot preserve ModTM mocks for '$Path': JSON dependency '$name' requires review; '$($jsonFile.FullName)'"
+                try {
+                    $jsonOptions = [System.Text.Json.JsonDocumentOptions]::new()
+                    $jsonOptions.MaxDepth = 100
+                    $jsonDocument = [System.Text.Json.JsonDocument]::Parse(
+                        [System.IO.File]::ReadAllText($jsonFile.FullName), $jsonOptions)
+                    if ($jsonDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+                        throw [AvmConfigurationException]::new("$jsonReview must be an object containing only locals blocks.")
+                    }
+                    foreach ($property in $jsonDocument.RootElement.EnumerateObject()) {
+                        $localBlocks = if ($property.Value.ValueKind -eq [System.Text.Json.JsonValueKind]::Array) {
+                            @($property.Value.EnumerateArray())
+                        }
+                        else { @($property.Value) }
+                        if ($property.Name -cne 'locals' -or
+                            @($localBlocks | Where-Object { $_.ValueKind -ne [System.Text.Json.JsonValueKind]::Object }).Count -gt 0) {
+                            throw [AvmConfigurationException]::new("$jsonReview must contain only locals blocks.")
+                        }
+                    }
+                }
+                catch [System.Text.Json.JsonException] {
+                    throw [AvmConfigurationException]::new("$jsonReview is not valid JSON.")
+                }
+                finally {
+                    if ($null -ne $jsonDocument) { $jsonDocument.Dispose() }
+                }
             }
             if (-not $RequiredProviders.ContainsKey($dependency)) {
                 $RequiredProviders[$dependency] = Get-AvmTerraformUnitTestRequiredProvider -Path $dependency -Options $Options

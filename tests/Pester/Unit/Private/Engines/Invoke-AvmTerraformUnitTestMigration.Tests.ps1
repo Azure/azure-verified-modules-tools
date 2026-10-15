@@ -783,6 +783,118 @@ Providers required by state:
             }
         }
 
+        Context 'JSON dependency safeguards' {
+            BeforeEach {
+                $dependency = Join-Path $script:fixture.Options.InspectionRoot 'regions'
+                $null = New-Item -ItemType Directory -Path $dependency -Force
+                $script:dependencyJsonPath = Join-Path $dependency 'locals.geo.codes.tf.json'
+                $source = 'registry.terraform.io/azure/modtm'
+                $script:dependencyParameters = @{
+                    Path                  = $script:fixture.Child
+                    ModuleTargets         = $script:fixture.Targets
+                    Options               = $script:fixture.Options
+                    RequiredProviders     = @{ $script:fixture.Child = @{} }
+                    ProviderSources       = @{ $script:fixture.Child = @($source) }
+                    ModuleProviderSources = @{ $script:fixture.Child = @{ regions = @($source) } }
+                    ModuleManifests       = @{
+                        $script:fixture.Child = ConvertTo-Json -Depth 5 -Compress -InputObject @{
+                            Modules = @(
+                                @{ Key = ''; Dir = '.' }
+                                @{ Key = 'regions'; Dir = $dependency; Version = '0.9.0' }
+                            )
+                        }
+                    }
+                    OriginalRequirements  = @{}
+                    Plans                 = @{}
+                    PlanningPaths         = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+                    BindDependencies      = $true
+                }
+                Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
+                    [pscustomobject]@{
+                        ExitCode = 0
+                        StdOut   = '{"regions":{"source":"Azure/avm-utl-regions/azurerm","mptf":{}}}'
+                        StdErr   = ''
+                    }
+                }
+                Mock Get-AvmTerraformUnitTestRequiredProvider -ModuleName Avm.Authoring {
+                    @{ modtm = @{ source = 'azure/modtm'; version = '~> 0.3' } }
+                }
+            }
+
+            It 'preserves source, version and bindings for <Shape> without changing JSON' -TestCases @(
+                @{ Shape = 'region lookup data'; Json = '{"locals":{"geo_codes_by_name":{"eastus":"US"}}}' }
+                @{ Shape = 'multiple locals blocks'; Json = '{"locals":[{"region":"eastus"},{"code":"US"}]}' }
+                @{ Shape = 'local expressions'; Json = '{"locals":{"region":"${var.location}"}}' }
+                @{ Shape = 'provider-like local data'; Json = '{"locals":{"terraform":{"required_providers":{}},"provider":{"modtm":{}}}}' }
+                @{ Shape = 'empty configuration'; Json = '{}' }
+                @{ Shape = 'multiple JSON files'; Json = '{"locals":{}}'; AdditionalJson = '{"locals":{"region":"eastus"}}' }
+            ) {
+                param($Json, $AdditionalJson)
+                Set-Content -LiteralPath $script:dependencyJsonPath -Value $Json -Encoding utf8NoBOM
+                if ($AdditionalJson) {
+                    Set-Content -LiteralPath (Join-Path (Split-Path -Parent $script:dependencyJsonPath) 'extra.tf.json') `
+                        -Value $AdditionalJson -Encoding utf8NoBOM
+                }
+                $bytes = [System.IO.File]::ReadAllBytes($script:dependencyJsonPath)
+                InModuleScope Avm.Authoring -Parameters @{ Parameters = $script:dependencyParameters } {
+                    param($Parameters)
+                    $plan = Get-AvmTerraformUnitTestModtmRequirementPlan @Parameters
+                    $plan.Arguments | Should -Contain 'unit_test_modtm_bindings={"regions":"{ modtm = modtm }"}'
+                    $requirement = $Parameters.RequiredProviders[$Parameters.Path].modtm
+                    $requirement.source | Should -BeExactly 'registry.terraform.io/azure/modtm'
+                    $requirement.version | Should -BeExactly '~> 0.3'
+                    Should -Invoke Get-AvmTerraformUnitTestRequiredProvider -Exactly 1
+                    Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -ceq 'transform' }
+                    Should -Invoke Invoke-AvmTerraformInit -Exactly 0
+                }
+                [System.IO.File]::ReadAllBytes($script:dependencyJsonPath) | Should -Be $bytes
+            }
+
+            It 'rejects <Shape> before inspecting provider requirements or planning writes' -TestCases @(
+                @{ Shape = 'malformed JSON'; Json = '{' }
+                @{ Shape = 'empty JSON'; Json = '' }
+                @{ Shape = 'JSON comments'; Json = '{"locals":{/* comment */}}' }
+                @{ Shape = 'trailing commas'; Json = '{"locals":{},}' }
+                @{ Shape = 'null document'; Json = 'null' }
+                @{ Shape = 'scalar document'; Json = 'true' }
+                @{ Shape = 'array document'; Json = '[{"locals":{}}]' }
+                @{ Shape = 'null locals'; Json = '{"locals":null}' }
+                @{ Shape = 'scalar locals'; Json = '{"locals":"eastus"}' }
+                @{ Shape = 'malformed locals block array'; Json = '{"locals":[{},null]}' }
+                @{ Shape = 'miscased locals'; Json = '{"Locals":{}}' }
+                @{ Shape = 'provider requirements'; Json = '{"terraform":{"required_providers":{"modtm":{"source":"Azure/modtm"}}}}' }
+                @{ Shape = 'provider configurations'; Json = '{"provider":{"modtm":{"alias":"other"}}}' }
+                @{ Shape = 'module calls'; Json = '{"module":{"other":{"source":"../other"}}}' }
+                @{ Shape = 'resources'; Json = '{"resource":{"modtm_telemetry":{"other":{}}}}' }
+                @{ Shape = 'data sources'; Json = '{"data":{"modtm_module_source":{"other":{}}}}' }
+                @{ Shape = 'backend configuration'; Json = '{"terraform":{"backend":{"azurerm":{}}}}' }
+                @{ Shape = 'cloud configuration'; Json = '{"terraform":{"cloud":{"organization":"example"}}}' }
+                @{ Shape = 'mixed locals and provider configuration'; Json = '{"locals":{},"provider":{"modtm":{}}}' }
+                @{ Shape = 'unknown blocks'; Json = '{"unrecognized":{}}' }
+                @{ Shape = 'a second JSON file with provider overrides'; Json = '{"locals":{}}'; AdditionalJson = '{"terraform":{"required_providers":{}}}' }
+            ) {
+                param($Json, $AdditionalJson)
+                Set-Content -LiteralPath $script:dependencyJsonPath -Value $Json -Encoding utf8NoBOM
+                if ($AdditionalJson) {
+                    Set-Content -LiteralPath (Join-Path (Split-Path -Parent $script:dependencyJsonPath) 'extra_override.tf.json') `
+                        -Value $AdditionalJson -Encoding utf8NoBOM
+                }
+                $bytes = [System.IO.File]::ReadAllBytes($script:dependencyJsonPath)
+                InModuleScope Avm.Authoring -Parameters @{ Parameters = $script:dependencyParameters } {
+                    param($Parameters)
+                    { Get-AvmTerraformUnitTestModtmRequirementPlan @Parameters } |
+                        Should -Throw "*JSON dependency 'regions' requires review*"
+                    $Parameters.Plans.Count | Should -Be 0
+                    $Parameters.RequiredProviders[$Parameters.Path].Contains('modtm') | Should -BeFalse
+                    $Parameters.PlanningPaths.Count | Should -Be 0
+                    Should -Invoke Get-AvmTerraformUnitTestRequiredProvider -Exactly 0
+                    Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -ceq 'transform' }
+                    Should -Invoke Invoke-AvmTerraformInit -Exactly 0
+                }
+                [System.IO.File]::ReadAllBytes($script:dependencyJsonPath) | Should -Be $bytes
+            }
+        }
+
         It 'synthesizes only proven ModTM version constraints: <Case>' -TestCases @(
             @{ Case = 'unchanged published dependency'; Versions = @('= 0.3.5'); Expected = '= 0.3.5' }
             @{ Case = 'known local target'; Versions = @('~> 0.3'); Expected = '~> 0.3'; LocalTarget = $true }

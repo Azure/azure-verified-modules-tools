@@ -941,8 +941,14 @@ unchanged. Default and complete example-wrapper regressions must check both
 required-provider and unused-provider lint as well as independent validation,
 exact dependency selections and lock/manifest bytes. Finish the normal
 ordering profile on restored scopes so the first pass is already drift-free.
-Published dependencies remain untouched. Computed or aliased module bindings,
-JSON dependencies and unproven source inheritance require review. Verify the
+Published dependencies remain untouched. A dependency's direct `.tf.json` files
+may contain only `locals` blocks in strict JSON objects, including arrays of
+locals objects; empty configuration objects are also safe. Inspect every such
+file without evaluating expressions or rewriting its bytes. Provider source,
+version and binding proof still comes from native inspection of the dependency's
+HCL. Computed or aliased module bindings, other JSON dependency blocks and
+unproven source inheritance require review. JSON in selected inspection targets
+and tests retains its pre-installation review guard. Verify the
 exact native source update and object-merging capabilities before writes.
 Unrelated selected targets still retire their unused bindings and requirements.
 Native regression fixtures use loopback-only ModTM endpoints and verify mocked
