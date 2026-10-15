@@ -97,7 +97,6 @@ function Get-RepositorySyncTerraformEnvironment {
         TF_IN_AUTOMATION = 'true'
         TF_INPUT = 'false'
         TF_WORKSPACE = 'default'
-        ACTIONS_STATE_LOCK_TOKEN = $null
         TF_LOG = $null
         TF_LOG_CORE = $null
         TF_LOG_PROVIDER = $null
@@ -153,45 +152,32 @@ function Invoke-RepositorySyncTerraform {
     if (-not $Json -and -not $Quiet) {
         Write-Information "Running Terraform $($Arguments[0])..." -InformationAction Continue
     }
-    $recoveryAttempted = $false
-    $recoveryFailure = ''
-    for ($attempt = 0; $attempt -lt 2; $attempt++) {
+    if ($LockRecovery.Count -gt 0 -and $Arguments[0] -cin @('plan', 'apply')) {
         try {
-            $result = Invoke-RepositorySyncProcess -Command terraform -Arguments $Arguments `
-                -WorkingDirectory $Root -EnvVars $Environment -TimeoutSec 1800 @options
-        }
-        catch [System.TimeoutException] {
-            $message = "Terraform $($Arguments[0]) timed out; the child process was stopped. Inspect state ownership before retrying an interrupted apply."
-            if (-not $Json -and -not $Quiet) {
-                $message += "`n" + (Protect-RepositorySyncLogText -Text (@(
-                    $_.Exception.Data['StdOut'], $_.Exception.Data['StdErr']
-                ) -join "`n") -Environment $Environment)
-            }
-            throw [System.TimeoutException]::new($message)
-        }
-        if ($result.ExitCode -eq 0 -or $attempt -ne 0 -or $LockRecovery.Count -eq 0 -or
-            $Json -or ($Arguments -cmatch '^-{1,2}json(?:=|$)') -or $Arguments[0] -cnotin @('plan', 'apply') -or
-            -not (Test-RepositorySyncLockAcquisitionFailure -Text @($result.StdOut, $result.StdErr))) {
-            break
-        }
-        $recoveryAttempted = $true
-        try {
-            if (-not (Clear-TerraformStateLock @LockRecovery -errorOutput @($result.StdOut, $result.StdErr) `
-                -workingDirectory $Root -environment $Environment -Confirm:$false)) {
-                $recoveryFailure = 'State-lock recovery was declined; Terraform was not retried.'
-                break
+            if (-not (Clear-TerraformStateLock @LockRecovery -workingDirectory $Root -environment $Environment -Confirm:$false)) {
+                throw [System.InvalidOperationException]::new('State-lock preflight was declined.')
             }
         }
         catch {
-            $recoveryFailure = Protect-RepositorySyncLogText -Text $_.Exception.Message -Environment $Environment
-            break
+            $detail = Protect-RepositorySyncLogText -Text $_.Exception.Message -Environment $Environment
+            throw [System.InvalidOperationException]::new("State-lock preflight failed; Terraform $($Arguments[0]) was not started. $detail")
         }
     }
+    try {
+        $result = Invoke-RepositorySyncProcess -Command terraform -Arguments $Arguments `
+            -WorkingDirectory $Root -EnvVars $Environment -TimeoutSec 1800 @options
+    }
+    catch [System.TimeoutException] {
+        $message = "Terraform $($Arguments[0]) timed out; the child process was stopped. Inspect state ownership before retrying an interrupted apply."
+        if (-not $Json -and -not $Quiet) {
+            $message += "`n" + (Protect-RepositorySyncLogText -Text (@(
+                $_.Exception.Data['StdOut'], $_.Exception.Data['StdErr']
+            ) -join "`n") -Environment $Environment)
+        }
+        throw [System.TimeoutException]::new($message)
+    }
     if ($result.ExitCode -ne 0) {
-        $outcome = $recoveryAttempted ?
-            "bounded lock recovery did not resolve the failure; no further automatic retry is permitted. $recoveryFailure" :
-            'no automatic apply retry or state repair was attempted.'
-        $message = "Terraform $($Arguments[0]) failed (exit code $($result.ExitCode)); $outcome"
+        $message = "Terraform $($Arguments[0]) failed (exit code $($result.ExitCode)); no automatic retry was attempted."
         if (-not $Json) {
             $message += "`n" + (Protect-RepositorySyncLogText -Text (@($result.StdOut, $result.StdErr) -join "`n") -Environment $Environment)
         }

@@ -132,21 +132,21 @@ Describe 'Component: Terraform init Git environment cleanup' -Tag Component {
         }
     }
 
-    It 'preserves identity overrides and the runtime representation of an empty value' {
+    It 'restores a <Case> identity override from its observed process state' -ForEach @(
+        @{ Case = 'nonempty'; Value = 'original' }
+        @{ Case = 'empty'; Value = '' }
+    ) {
         $name = 'GIT_AUTHOR_NAME'
         $before = [System.Environment]::GetEnvironmentVariable($name)
         try {
-            [System.Environment]::SetEnvironmentVariable($name, 'temporary')
-            Restore-TestGitEnvironment -Names @($name) -Saved @{ GIT_AUTHOR_NAME = 'original' }
-            [System.Environment]::GetEnvironmentVariable($name) | Should -BeExactly 'original'
+            [System.Environment]::SetEnvironmentVariable($name, $Value)
+            $saved = [System.Environment]::GetEnvironmentVariable($name)
+            $wasPresent = Test-Path -LiteralPath "Env:$name"
 
-            [System.Environment]::SetEnvironmentVariable($name, '')
-            $emptyValue = [System.Environment]::GetEnvironmentVariable($name)
-            $emptyWasPresent = Test-Path -LiteralPath "Env:$name"
             [System.Environment]::SetEnvironmentVariable($name, 'temporary')
-            Restore-TestGitEnvironment -Names @($name) -Saved @{ GIT_AUTHOR_NAME = $emptyValue }
-            Test-Path -LiteralPath "Env:$name" | Should -Be $emptyWasPresent
-            [System.Environment]::GetEnvironmentVariable($name) | Should -BeExactly $emptyValue
+            Restore-TestGitEnvironment -Names @($name) -Saved @{ GIT_AUTHOR_NAME = $saved }
+            Test-Path -LiteralPath "Env:$name" | Should -Be $wasPresent
+            [System.Environment]::GetEnvironmentVariable($name) | Should -BeExactly $saved
         }
         finally {
             Restore-TestGitEnvironment -Names @($name) -Saved @{ GIT_AUTHOR_NAME = $before }

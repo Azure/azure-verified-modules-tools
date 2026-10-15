@@ -12,7 +12,7 @@ function Invoke-AvmCheckPolicy {
 
         The ecosystem is determined by Get-AvmModuleContext, which honours
         the .avm/context.psd1 override file and the -Ecosystem filter.
-        Bicep policy checks use packaged ps-rule.yaml and .ps-rule/ assets
+        Bicep policy checks use packaged ps-rule.yaml and rules/ assets
         under Resources/bicep/psrule. PSRule 2.9.0 and
         PSRule.Rules.Azure 1.47.0 must be installed separately. Set
         VALIDATE_SUBSCRIPTION_IDS or the TEST_SUBSCRIPTION_IDS alias. The first
@@ -24,6 +24,16 @@ function Invoke-AvmCheckPolicy {
         VALIDATE_MANAGEMENT_GROUP_ID (or ARM_MGMTGROUP_ID), TOKEN_NAMEPREFIX,
         and localToken_* variables for tokens used by the selected tests.
         Missing inputs or uninspectable results fail rather than skip.
+
+        Terraform post-hook failure or interrupted cleanup retains recovery
+        staging beneath the AVM cache (AVM_HOME/cache when overridden). The
+        warning identifies the local path; it can contain sensitive state,
+        plans, and environment files and must not be uploaded. Recover fixture
+        resources before manually removing retained staging. Successful cleanup
+        removes staging even when planning or policy evaluation fails.
+        The original error remains terminating. When both evaluation and the
+        post hook fail, Exception.Data['AvmPolicyPostError'] retains the post
+        ErrorRecord; Exception.Data['AvmPolicyStagePath'] identifies staging.
 
         Routed by the dispatcher: 'avm check policy'.
 

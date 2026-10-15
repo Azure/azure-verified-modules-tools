@@ -165,6 +165,16 @@ locals {
     BeforeEach {
         $script:target = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $null = New-Item -ItemType Directory -Path $script:target
+        Set-Content -LiteralPath (Join-Path $script:target 'metadata.json') -Encoding utf8NoBOM -Value @'
+{
+  "$schema": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json",
+  "moduleDisplayName": "Provider requirements fixture",
+  "moduleDescription": "Fixture for provider requirement transforms.",
+  "canonicalType": "Microsoft.Resources/resourceGroups",
+  "telemetryIdPrefix": "46d3xtrf.res.d4e5f6a",
+  "owners": []
+}
+'@
         Set-Content -LiteralPath (Join-Path $script:target 'terraform.tf') -Encoding utf8NoBOM -Value @'
 terraform {
   required_version = "~> 1.9"
@@ -252,6 +262,137 @@ module "child" {
 
         Invoke-ProviderTransform -Root $script:target
         Get-TerraformContent -Root $script:target | Should -BeExactly $first
+    }
+
+    It 'adds AzAPI for <Kind> without a terraform block in <FileState>' -TestCases @(
+        foreach ($kind in @(
+            @{ Name = 'a resource'; Source = 'resource "azapi_resource" "example" {}'; Telemetry = $false }
+            @{ Name = 'a data source'; Source = 'data "azapi_client_config" "example" {}'; Telemetry = $false }
+            @{ Name = 'generated telemetry'; Source = ''; Telemetry = $true }
+        )) {
+            foreach ($fileState in @('an absent file', 'an authored file')) {
+                @{ Kind = $kind.Name; Source = $kind.Source; Telemetry = $kind.Telemetry; FileState = $fileState }
+            }
+        }
+    ) {
+        param($Kind, $Source, $Telemetry, $FileState)
+        $terraformFile = Join-Path $script:target 'terraform.tf'
+        if ($FileState -eq 'an absent file') {
+            Remove-Item -LiteralPath $terraformFile
+        }
+        else {
+            Set-Content -LiteralPath $terraformFile -Encoding utf8NoBOM -Value @'
+locals {
+  authored_note = "Keep this value."
+}
+'@
+        }
+        Set-Content -LiteralPath (Join-Path $script:target 'main.tf') -Value $Source -Encoding utf8NoBOM
+
+        Invoke-ProviderTransform -Root $script:target -RootProfile:$Telemetry
+        $first = Get-TerraformContent -Root $script:target
+        ([regex]::Matches($first, '(?m)^terraform\s*\{')).Count | Should -Be 1
+        $first | Should -Match 'source\s*=\s*"Azure/azapi"'
+        $first | Should -Match 'version\s*=\s*"~> 2\.12"'
+        if ($FileState -eq 'an authored file') {
+            $first | Should -Match 'authored_note\s*=\s*"Keep this value\."'
+        }
+        (Invoke-UnusedProviderLint -Root $script:target).ExitCode | Should -Be 0
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:target } {
+            param($Root)
+            $tool = Resolve-AvmTool -Name terraform
+            $providers = Invoke-AvmProcess -FilePath $tool.Path -ArgumentList @('providers') -WorkingDirectory $Root
+            $providers.StdOut | Should -Match 'registry\.terraform\.io/azure/azapi'
+        }
+
+        Invoke-ProviderTransform -Root $script:target -RootProfile:$Telemetry
+        Get-TerraformContent -Root $script:target | Should -BeExactly $first
+    }
+
+    It 'does not invent a terraform block for <Name> without direct AzAPI use' -TestCases @(
+        @{ Name = 'a provider-free helper'; Source = 'output "name" { value = "example" }' }
+        @{ Name = 'another provider'; Source = 'resource "random_uuid" "example" {}' }
+    ) {
+        param($Name, $Source)
+        Remove-Item -LiteralPath (Join-Path $script:target 'terraform.tf')
+        Set-Content -LiteralPath (Join-Path $script:target 'main.tf') -Value $Source -Encoding utf8NoBOM
+        Invoke-ProviderTransform -Root $script:target
+        $first = Get-TerraformContent -Root $script:target
+        $first | Should -Not -Match '(?m)^terraform\s*\{'
+        (Join-Path $script:target 'terraform.tf') | Should -Not -Exist
+        (Invoke-UnusedProviderLint -Root $script:target).ExitCode | Should -Be 0
+        Invoke-ProviderTransform -Root $script:target
+        Get-TerraformContent -Root $script:target | Should -BeExactly $first
+    }
+
+    It 'reuses <Kind> rather than creating a duplicate terraform block' -TestCases @(
+        @{ Kind = 'an empty block'; Configuration = 'terraform {}'; Backend = $false }
+        @{
+            Kind = 'a backend-only block'
+            Backend = $true
+            Configuration = @'
+terraform {
+  backend "local" {
+    path = "authored.tfstate"
+  }
+}
+'@
+        }
+    ) {
+        param($Kind, $Configuration, $Backend)
+        Set-Content -LiteralPath (Join-Path $script:target 'terraform.tf') -Value $Configuration -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $script:target 'main.tf') `
+            -Value 'data "azapi_client_config" "example" {}' -Encoding utf8NoBOM
+        Invoke-ProviderTransform -Root $script:target
+        $first = Get-TerraformContent -Root $script:target
+        ([regex]::Matches($first, '(?m)^terraform\s*\{')).Count | Should -Be 1
+        $first | Should -Match 'source\s*=\s*"Azure/azapi"'
+        $first | Should -Match 'version\s*=\s*"~> 2\.12"'
+        if ($Backend) {
+            $first | Should -Match 'backend "local"'
+            $first | Should -Match 'path\s*=\s*"authored\.tfstate"'
+        }
+        Invoke-ProviderTransform -Root $script:target
+        Get-TerraformContent -Root $script:target | Should -BeExactly $first
+    }
+
+    It 'creates provider requirements for an instrumented child without a terraform block' {
+        $child = Join-Path $script:target 'modules' 'principal_assignment'
+        $null = New-Item -ItemType Directory -Path $child -Force
+        Set-Content -LiteralPath (Join-Path $child 'metadata.json') -Encoding utf8NoBOM -Value @'
+{
+  "$schema": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json",
+  "moduleDisplayName": "Kusto principal assignment",
+  "moduleDescription": "Fixture for an instrumented child without provider configuration.",
+  "canonicalType": "Microsoft.Kusto/clusters/principalAssignments",
+  "telemetryIdPrefix": "46d3xtrf.res.9006bfb"
+}
+'@
+        Set-Content -LiteralPath (Join-Path $child 'main.tf') -Encoding utf8NoBOM -Value @'
+resource "azurerm_kusto_cluster_principal_assignment" "this" {
+  cluster_name        = "example"
+  name                = "example"
+  principal_id        = "00000000-0000-0000-0000-000000000000"
+  principal_type      = "App"
+  resource_group_name = "example"
+  role                = "Viewer"
+  tenant_id           = "00000000-0000-0000-0000-000000000000"
+}
+'@
+        $result = InModuleScope Avm.Authoring -Parameters @{ Root = $script:target } {
+            param($Root)
+            Invoke-AvmTerraformTransform -Context ([pscustomobject]@{ Root = $Root; Ecosystem = 'terraform' })
+        }
+        $result.Status | Should -Be 'pass' -Because ($result | ConvertTo-Json -Depth 12 -Compress)
+        (Join-Path $child 'terraform.tf') | Should -Exist
+        Get-TerraformContent -Root $child | Should -Match 'source\s*=\s*"Azure/azapi"'
+        Get-TerraformContent -Root $child | Should -Match 'resource "azurerm_kusto_cluster_principal_assignment" "this"'
+        $drift = InModuleScope Avm.Authoring -Parameters @{ Root = $script:target } {
+            param($Root)
+            Invoke-AvmTerraformTransform -Context ([pscustomobject]@{ Root = $Root; Ecosystem = 'terraform' }) -CheckDrift
+        }
+        $drift.Status | Should -Be 'pass'
+        $drift.Changed | Should -BeNullOrEmpty
     }
 
     It 'enforces the floor for <Constraint> without losing other providers' -TestCases @(
@@ -440,6 +581,14 @@ terraform {
     It 'keeps provider-free local helpers lint-clean and drift-free with the full profile chain' {
         $helper = Join-Path $script:target 'modules' 'site_config_helpers'
         $null = New-Item -ItemType Directory -Path $helper -Force
+        Set-Content -LiteralPath (Join-Path $helper 'metadata.json') -Encoding utf8NoBOM -Value @'
+{
+  "$schema": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json",
+  "moduleDisplayName": "Provider-free helper",
+  "moduleDescription": "Helper fixture without telemetry.",
+  "canonicalType": "helper"
+}
+'@
         Copy-Item -LiteralPath (Join-Path $script:target 'terraform.tf') -Destination $helper
         Set-Content -LiteralPath (Join-Path $helper 'main.tf') -Encoding utf8NoBOM -Value @'
 variable "name" {

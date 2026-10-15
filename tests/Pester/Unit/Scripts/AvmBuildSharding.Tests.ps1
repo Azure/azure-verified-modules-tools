@@ -18,6 +18,152 @@ BeforeAll {
     }
 }
 
+Describe 'Initialize-AvmPesterRegistry' {
+    BeforeEach {
+        $script:registryPath = 'Microsoft.PowerShell.Core\Registry::HKEY_CURRENT_USER\Software\Pester'
+        $script:registryCollision = [System.Management.Automation.ErrorRecord]::new(
+            [System.IO.IOException]::new('A key in this path already exists.'),
+            'System.IO.IOException',
+            [System.Management.Automation.ErrorCategory]::ResourceExists,
+            $script:registryPath
+        )
+        Mock Test-Path { $false }
+        Mock New-Item { [pscustomobject]@{ Name = 'Pester' } }
+        Mock Start-Sleep {}
+        Mock Write-Information {}
+    }
+
+    It 'preserves an existing shared registry key without writing or retrying' {
+        Mock Test-Path { $true }
+
+        @(Initialize-AvmPesterRegistry).Count | Should -Be 0
+
+        Should -Invoke Test-Path -Exactly 1 -ParameterFilter {
+            $LiteralPath -eq $script:registryPath -and $PathType -eq 'Container' -and $ErrorAction -eq 'Stop'
+        }
+        Should -Invoke New-Item -Exactly 0
+        Should -Invoke Start-Sleep -Exactly 0
+        Should -Invoke Write-Information -Exactly 0
+    }
+
+    It 'creates a missing key without forcing replacement or returning provider output' {
+        @(Initialize-AvmPesterRegistry).Count | Should -Be 0
+
+        Should -Invoke New-Item -Exactly 1 -ParameterFilter {
+            $Path -eq $script:registryPath -and -not $Force -and $ErrorAction -eq 'Stop'
+        }
+        Should -Invoke Start-Sleep -Exactly 0
+    }
+
+    It 'rechecks the shared key after a concurrent creator wins' {
+        $script:registryProbes = 0
+        Mock Test-Path { ++$script:registryProbes -gt 1 }
+        Mock New-Item { throw $script:registryCollision }
+
+        Initialize-AvmPesterRegistry
+
+        Should -Invoke Test-Path -Exactly 2
+        Should -Invoke New-Item -Exactly 1
+        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Milliseconds -eq 100 }
+        Should -Invoke Write-Information -Exactly 1 -ParameterFilter {
+            $MessageData -like '*attempt 1/3*retrying initialization*' -and $InformationAction -eq 'Continue'
+        }
+    }
+
+    It 'allows success on the final bounded attempt' {
+        $script:registryCreates = 0
+        Mock New-Item {
+            if (++$script:registryCreates -lt 3) {
+                throw $script:registryCollision
+            }
+        }
+
+        Initialize-AvmPesterRegistry
+
+        Should -Invoke Test-Path -Exactly 3
+        Should -Invoke New-Item -Exactly 3
+        Should -Invoke Start-Sleep -Exactly 2
+        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Milliseconds -eq 100 }
+        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Milliseconds -eq 200 }
+        Should -Invoke Write-Information -Exactly 2
+    }
+
+    It 'rethrows the final collision after three attempts without another delay' {
+        $script:registryCreates = 0
+        Mock New-Item {
+            ++$script:registryCreates
+            throw [System.Management.Automation.ErrorRecord]::new(
+                [System.IO.IOException]::new("Registry collision $script:registryCreates"),
+                'System.IO.IOException',
+                [System.Management.Automation.ErrorCategory]::ResourceExists,
+                $script:registryPath
+            )
+        }
+
+        { Initialize-AvmPesterRegistry } | Should -Throw '*Registry collision 3*' -ExceptionType ([System.IO.IOException])
+
+        Should -Invoke Test-Path -Exactly 3
+        Should -Invoke New-Item -Exactly 3
+        Should -Invoke Start-Sleep -Exactly 2
+        Should -Invoke Write-Information -Exactly 2
+    }
+
+    It 'does not retry a different IO failure' {
+        Mock New-Item {
+            throw [System.Management.Automation.ErrorRecord]::new(
+                [System.IO.IOException]::new('Registry write failed'),
+                'System.IO.IOException',
+                [System.Management.Automation.ErrorCategory]::WriteError,
+                $script:registryPath
+            )
+        }
+
+        { Initialize-AvmPesterRegistry } | Should -Throw '*Registry write failed*' -ExceptionType ([System.IO.IOException])
+
+        Should -Invoke New-Item -Exactly 1
+        Should -Invoke Start-Sleep -Exactly 0
+        Should -Invoke Write-Information -Exactly 0
+    }
+
+    It 'does not retry access denied' {
+        Mock New-Item { throw [System.UnauthorizedAccessException]::new('Registry access denied') }
+
+        { Initialize-AvmPesterRegistry } | Should -Throw '*Registry access denied*' -ExceptionType ([System.UnauthorizedAccessException])
+
+        Should -Invoke New-Item -Exactly 1
+        Should -Invoke Start-Sleep -Exactly 0
+        Should -Invoke Write-Information -Exactly 0
+    }
+
+    It 'does not identify a collision from category or message alone' {
+        Mock New-Item {
+            throw [System.Management.Automation.ErrorRecord]::new(
+                [System.InvalidOperationException]::new('A key in this path already exists.'),
+                'InvalidOperation',
+                [System.Management.Automation.ErrorCategory]::ResourceExists,
+                $script:registryPath
+            )
+        }
+
+        { Initialize-AvmPesterRegistry } | Should -Throw -ExceptionType ([System.InvalidOperationException])
+
+        Should -Invoke New-Item -Exactly 1
+        Should -Invoke Start-Sleep -Exactly 0
+        Should -Invoke Write-Information -Exactly 0
+    }
+
+    It 'does not retry a failed registry probe' {
+        Mock Test-Path { throw [System.IO.IOException]::new('Registry probe failed') }
+
+        { Initialize-AvmPesterRegistry } | Should -Throw '*Registry probe failed*' -ExceptionType ([System.IO.IOException])
+
+        Should -Invoke Test-Path -Exactly 1
+        Should -Invoke New-Item -Exactly 0
+        Should -Invoke Start-Sleep -Exactly 0
+        Should -Invoke Write-Information -Exactly 0
+    }
+}
+
 Describe 'New-AvmPesterShardPlan' {
     It 'partitions files deterministically by descending weight' {
         $files = @(
@@ -247,6 +393,29 @@ Describe 'broken teardown' {
         $null = & pwsh -NoLogo -NoProfile -NonInteractive -File $shard -Path $probe -OutputPath $output 2>&1
         $LASTEXITCODE | Should -Be 1
         ([xml](Get-Content -LiteralPath $output -Raw)).'test-results'.total | Should -Be 1
+    }
+
+    It 'runs a failing assertion only once and preserves its failed result' {
+        $probe = Join-Path $TestDrive 'Failing.Tests.ps1'
+        $record = Join-Path $TestDrive 'attempts.txt'
+        [IO.File]::WriteAllText($probe, @"
+Describe 'failure is not retried' {
+    It 'fails once' {
+        Add-Content -LiteralPath '$record' -Value 'attempt'
+        1 | Should -Be 2
+    }
+}
+"@)
+        $shard = Join-Path $script:repoRoot 'build' 'Invoke-AvmPesterShard.ps1'
+        $output = Join-Path $TestDrive 'failed.xml'
+
+        $null = & pwsh -NoLogo -NoProfile -NonInteractive -File $shard -Path $probe -OutputPath $output 2>&1
+
+        $LASTEXITCODE | Should -Be 1
+        @(Get-Content -LiteralPath $record).Count | Should -Be 1
+        $result = ([xml](Get-Content -LiteralPath $output -Raw)).'test-results'
+        $result.total | Should -Be 1
+        $result.failures | Should -Be 1
     }
 
     It 'fails a shard when a test file cannot be loaded, even if other tests pass' {

@@ -9,7 +9,7 @@ function Get-AvmBicepPolicyConfiguration {
         (Join-Path -Path $PSScriptRoot -ChildPath '..' `
             -AdditionalChildPath '..', 'Resources', 'bicep', 'psrule'))
     $optionPath = Join-Path $directory 'ps-rule.yaml'
-    $rulePath = Join-Path $directory '.ps-rule'
+    $rulePath = Join-Path $directory 'rules'
     if (-not [System.IO.File]::Exists($optionPath) -or
         -not [System.IO.Directory]::Exists($rulePath)) {
         throw [AvmConfigurationException]::new(
@@ -45,7 +45,7 @@ function Get-AvmBicepPolicyConfiguration {
         if (($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or
             (-not $entry.PSIsContainer -and $entry.Name -cnotmatch '\.Rule\.yaml$')) {
             throw [AvmConfigurationException]::new(
-                'Bicep PSRule rules must be regular .Rule.yaml files under .ps-rule/.')
+                'Bicep PSRule rules must be regular .Rule.yaml files under rules/.')
         }
     }
 

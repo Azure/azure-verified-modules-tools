@@ -313,27 +313,7 @@ Describe 'Existing retry transport literal-argv mode' {
     }
 }
 
-Describe 'State lock acquisition classification' {
-    It 'recognizes the complete native acquisition diagnostic with ANSI gutters' {
-        $text = @(
-            "$($script:esc)[31m$([char]0x2502)$($script:esc)[0m Error: Error acquiring the state lock"
-            "$([char]0x2502) Error message: state blob is already locked"
-        )
-        Test-RepositorySyncLockAcquisitionFailure -Text $text | Should -BeTrue
-        Test-RepositorySyncLockAcquisitionFailure -Text @('Error acquiring the state lock') | Should -BeTrue
-    }
-
-    It 'refuses unrelated or ambiguous diagnostics: <Case>' -ForEach @(
-        @{ Case = 'release'; Text = @('Error: Error releasing the state lock') }
-        @{ Case = 'provider'; Text = @('Error: Provider failed: Error acquiring the state lock') }
-        @{ Case = 'quotation'; Text = @('A previous run reported Error acquiring the state lock') }
-        @{ Case = 'partial'; Text = @('Error: Error acquiring the state lock and then something else') }
-        @{ Case = 'multiple failures'; Text = @('Error: Error acquiring the state lock', 'Error: Apply interrupted') }
-        @{ Case = 'empty'; Text = @() }
-    ) {
-        Test-RepositorySyncLockAcquisitionFailure -Text $Text | Should -BeFalse
-    }
-
+Describe 'Legacy state-lock handling' {
     It 'does not reconnect unverified legacy retries to lock release' {
         Mock Clear-TerraformStateLock { throw 'Legacy recovery must not run.' }
         $result = Invoke-TerraformUnderTest -Responses @(
