@@ -128,13 +128,15 @@ Describe 'Module Resources packaging' {
                 'avm_terraform_sensitive_variable_default_disallowed',
                 'avm_azapi_resource_tags_required',
                 'avm_azapi_replace_triggers_refs_valid',
-                'avm_terraform_configuration_file_required',
-                'avm_output_resource_id_required'
+                'avm_terraform_configuration_file_required'
             )) {
             $root | Should -Not -Match ('rule\s+"{0}"' -f $defaultEnabledRule)
             $module | Should -Not -Match ('rule\s+"{0}"' -f $defaultEnabledRule)
         }
 
+        $root | Should -Not -Match 'rule\s+"avm_output_resource_id_required"'
+        $module | Should -Match '(?s)rule\s+"avm_output_resource_id_required"\s*\{\s*enabled\s*=\s*false\s*\}'
+        $root | Should -Match '(?s)rule\s+"avm_provider_modtm_version_constraint"\s*\{\s*enabled\s*=\s*false\s*\}'
         $module | Should -Match '(?s)rule\s+"avm_provider_modtm_version_constraint"\s*\{\s*enabled\s*=\s*false\s*\}'
         foreach ($exampleRule in @(
                 'avm_terraform_literal_heredoc_disallowed',
@@ -190,9 +192,16 @@ Describe 'Module Resources packaging' {
                 'order_variable_attrs.mptf.hcl'
             )
             module = @(
+                'ensure_location_variable.mptf.hcl'
                 'move_misplaced_blocks.mptf.hcl'
                 'required_provider_versions.mptf.hcl'
+                'retain_modtm_test_provider.mptf.hcl'
                 'sort_outputs.mptf.hcl'
+            )
+            'module-call' = @(
+                'propagate_telemetry.mptf.hcl'
+            )
+            'variable-order' = @(
                 'sort_variables.mptf.hcl'
             )
             root = @(
@@ -200,6 +209,17 @@ Describe 'Module Resources packaging' {
             )
             example = @(
                 'disable_telemetry.mptf.hcl'
+                'location.mptf.hcl'
+            )
+            'provider-cleanup' = @(
+                'remove_modtm_provider.mptf.hcl'
+            )
+            'unit-test-inspect' = @(
+                'inspect.mptf.hcl'
+            )
+            'unit-test' = @(
+                'location.mptf.hcl'
+                'telemetry.mptf.hcl'
             )
         }
 

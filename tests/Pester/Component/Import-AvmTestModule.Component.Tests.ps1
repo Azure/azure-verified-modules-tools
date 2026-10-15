@@ -40,9 +40,20 @@ Describe 'Component: extracted package test imports' -Tag Component {
         }
     }
 
-    It 'imports by name and checks definitions without using the source manifest' {
+    It 'imports the exact package when another module version is loaded' {
+        $otherModule = Join-Path $script:importRoot 'other' 'Avm.Authoring'
+        $null = New-Item -ItemType Directory -Path $otherModule
+        $otherManifest = Join-Path $otherModule 'Avm.Authoring.psd1'
+        New-ModuleManifest -Path $otherManifest -RootModule 'Avm.Authoring.psm1' `
+            -ModuleVersion '98.0.0' -FunctionsToExport 'Get-AvmPackageFixture'
+        Set-Content -LiteralPath (Join-Path $otherModule 'Avm.Authoring.psm1') `
+            -Encoding utf8NoBOM -Value "function Get-AvmPackageFixture { 'other' }"
+        Import-Module -Name $otherManifest -Force -Global
+        (Get-Command -Name Get-AvmPackageFixture).Module.ModuleBase | Should -BeExactly $otherModule
+
         . $script:importHelper -SourceManifest (Join-Path $script:importRoot 'missing-source.psd1')
-        (Get-Module -Name Avm.Authoring).ModuleBase | Should -BeExactly $script:fakeModule
+        (Get-Command -Name Get-AvmPackageFixture).Module.ModuleBase | Should -BeExactly $script:fakeModule
+        (Get-Module -Name Avm.Authoring).ModuleBase | Should -Contain $otherModule
         Get-AvmPackageFixture | Should -BeExactly 'fixture'
     }
 
@@ -68,7 +79,7 @@ Describe 'Component: extracted package test imports' -Tag Component {
     It 'preserves the ordinary source-import path when no package was requested' {
         [System.Environment]::SetEnvironmentVariable('AVM_TEST_PACKAGE_ROOT', [NullString]::Value, 'Process')
         . $script:importHelper -SourceManifest $script:fakeManifest
-        (Get-Module -Name Avm.Authoring).ModuleBase | Should -BeExactly $script:fakeModule
+        (Get-Command -Name Get-AvmPackageFixture).Module.ModuleBase | Should -BeExactly $script:fakeModule
         Get-AvmPackageFixture | Should -BeExactly 'fixture'
     }
 }

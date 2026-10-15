@@ -72,26 +72,28 @@ function Get-CommandParameterNames {
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 $workflowPath = Join-Path (Join-Path (Join-Path $repoRoot ".github") "workflows") "repository-management-sync.yml"
+$repositoryWorkflowPath = Join-Path (Join-Path (Join-Path $repoRoot ".github") "workflows") "repository-management-sync-repository.yml"
 $syncScriptPath = Join-Path $PSScriptRoot "Invoke-RepositorySync.ps1"
 $avmPreCommitPath = Join-Path (Join-Path $PSScriptRoot "lib") "AvmPreCommit.ps1"
 $sharedSyncPath = Join-Path $PSScriptRoot "lib" "RepositoryFileSync.ps1"
 $teamsAndUsersPath = Join-Path (Join-Path $PSScriptRoot "lib") "TeamsAndUsers.ps1"
 
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
+$repositoryWorkflow = Get-Content -LiteralPath $repositoryWorkflowPath -Raw
 Assert-True `
     -Actual ($workflow -match '(?m)^      force_file_update:\r?\n        description: .+\r?\n        default: false\r?\n        type: boolean$') `
     -Description "force_file_update to be a false-by-default boolean workflow input"
 Assert-True `
-    -Actual ($workflow -match '(?ms)if\s*\(\$triggerType -eq "workflow_dispatch"\)\s*\{.*?\$forceFileUpdate = "\$\{\{ inputs\.force_file_update \}\}"\.ToLower\(\) -eq "true".*?\}') `
+    -Actual ($repositoryWorkflow -match '(?ms)if\s*\(\$triggerType -eq "workflow_dispatch"\)\s*\{.*?\$forceFileUpdate = "\$\{\{ inputs\.force_file_update \}\}"\.ToLower\(\) -eq "true".*?\}') `
     -Description "force_file_update to be read only for workflow_dispatch"
 Assert-True `
-    -Actual ($workflow.Contains('-forceFileUpdate:$forceFileUpdate')) `
+    -Actual ($repositoryWorkflow.Contains('-forceFileUpdate:$forceFileUpdate')) `
     -Description "the workflow to forward force_file_update"
 Assert-True `
-    -Actual ($workflow -notmatch 'force_user_removal|forceUserRemoval') `
+    -Actual ("$workflow`n$repositoryWorkflow" -notmatch 'force_user_removal|forceUserRemoval') `
     -Description "the removed force-user-removal workflow input and logic to stay absent"
 Assert-True `
-    -Actual ($workflow -notmatch '(?i)metadata_?backfill|metadata_?update_?source') `
+    -Actual ("$workflow`n$repositoryWorkflow" -notmatch '(?i)metadata_?backfill|metadata_?update_?source') `
     -Description "the removed metadata backfill and source-reader workflow options to stay absent"
 
 $syncAst = Get-ScriptAst -Path $syncScriptPath

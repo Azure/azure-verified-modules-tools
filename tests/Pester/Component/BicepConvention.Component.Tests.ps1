@@ -903,6 +903,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $source = [System.IO.File]::ReadAllText($scaffoldTemplate)
         $source = $source.Replace('<Add module name>', 'Mock scaffold')
         $source = $source.Replace('<Add description>', 'Deploys a mock scaffold.')
+        $source | Should -Match ([regex]::Escape(
+                "@description('Optional. Enable/Disable usage telemetry for module.')"))
         [System.IO.File]::WriteAllText($sourcePath, $source)
         foreach ($name in @('metadata.json', 'version.json')) {
             Copy-Item -LiteralPath (Join-Path $script:modulePath $name) -Destination (Join-Path $scaffold $name)
@@ -1483,7 +1485,9 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         }
 
         It 'rejects the wrong casing of an allowlist directory on Windows and Linux' {
-            Rename-Item -LiteralPath (Split-Path $script:allowlistPath -Parent) -NewName '.Avm'
+            Rename-Item -LiteralPath (Split-Path $script:allowlistPath -Parent) -NewName '.avm-case-fixture' -ErrorAction Stop
+            Rename-Item -LiteralPath (Join-Path $script:workingRoot '.avm-case-fixture') -NewName '.Avm' -ErrorAction Stop
+            (Get-Item -LiteralPath (Join-Path $script:workingRoot '.Avm') -Force).Name | Should -BeExactly '.Avm'
             $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
             $result.Issues.Code | Should -Contain 'avm.bicep.child-publish-allowlist'
         }
@@ -1500,7 +1504,9 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
                     throw [System.UnauthorizedAccessException]::new('Fixture directory is unreadable.')
                 }
             }
-            Rename-Item -LiteralPath (Split-Path $script:allowlistPath -Parent) -NewName '.Avm'
+            Rename-Item -LiteralPath (Split-Path $script:allowlistPath -Parent) -NewName '.avm-case-fixture' -ErrorAction Stop
+            Rename-Item -LiteralPath (Join-Path $script:workingRoot '.avm-case-fixture') -NewName '.Avm' -ErrorAction Stop
+            (Get-Item -LiteralPath (Join-Path $script:workingRoot '.Avm') -Force).Name | Should -BeExactly '.Avm'
 
             $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
             $result.Issues.Code | Should -Contain 'avm.bicep.test-discovery'

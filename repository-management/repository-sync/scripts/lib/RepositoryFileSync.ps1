@@ -143,6 +143,7 @@ function Invoke-RepositoryFileSync {
         [switch] $PlanOnly,
         [switch] $ReviewOnly,
         [switch] $PlanHasChanges,
+        [string] $CandidateOutputDirectory,
         [scriptblock] $Prepare,
         [hashtable] $GeneratedFiles = @{},
         [string[]] $AllowedPaths = @(),
@@ -152,6 +153,7 @@ function Invoke-RepositoryFileSync {
         [switch] $VerifyCandidate,
         [object] $ExpectedActor,
         [scriptblock] $ValidateChange,
+        [string] $ExpectedBaseSha,
         [hashtable] $State = @{},
         [string] $Title = 'chore: run avm pre-commit [skip ci]',
         [string] $CommitMessage,
@@ -164,11 +166,37 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
+    $modulePublication = $Repository -match '^[^/]+/terraform-(?:azure|azapi|azurerm)-avm-' -and
+        -not $PlanOnly -and -not $CandidateOutputDirectory
+    if ($modulePublication) {
+        if (-not $State.ContainsKey('Candidate') -or -not $State.ContainsKey('ValidationReceiptDirectory') -or
+            -not (Get-Command Assert-RepositorySyncValidationReceipt -CommandType Function -ErrorAction SilentlyContinue)) {
+            throw [System.InvalidOperationException]::new('Module-file publication requires a validated candidate and receipt.')
+        }
+        Assert-RepositorySyncValidationReceipt -Candidate $State.Candidate -Directory $State.ValidationReceiptDirectory
+        if ($State.Candidate.repository -cne $Repository -or $State.Candidate.phase -cne 'prepared' -or
+            -not $State.Candidate.hasChanges -or $State.Candidate.planOnly -or
+            $ExpectedBaseSha -cne $State.Candidate.baseSha) {
+            throw [System.InvalidOperationException]::new('Module-file publication does not match the validated candidate.')
+        }
+    }
     $result = @{ HasChanges = $false; Status = 'NoChange'; PullRequestUrl = $null; HeadSha = $null }
     if (-not $PSCmdlet.ShouldProcess($Repository, 'Prepare repository synchronization changes')) {
         $result.HasChanges = $PlanHasChanges.IsPresent
         $result.Status = 'Preview'
         return $result
+    }
+    if ($CandidateOutputDirectory -and ($StableBranch -or $VerifyCandidate -or $ReviewOnly)) {
+        throw [System.ArgumentException]::new('Local candidate staging cannot use stable branches, candidate verification, or review-only publication.')
+    }
+    if ($CandidateOutputDirectory) {
+        $oldPatch = Join-Path $CandidateOutputDirectory 'candidate.patch'
+        if (Test-Path -LiteralPath $oldPatch) {
+            Remove-Item -LiteralPath $oldPatch -Force -ErrorAction Stop
+        }
+    }
+    if ($ExpectedBaseSha -and $ExpectedBaseSha -cnotmatch '^[0-9a-f]{40}$') {
+        throw [System.ArgumentException]::new('The expected synchronization base must be a 40-character Git SHA.')
     }
     if ($StableBranch -and -not $ExpectedActor) {
         throw [System.ArgumentException]::new('Stable synchronization branches require an expected app actor.')
@@ -214,6 +242,9 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('config', '--local', 'core.hooksPath', (Join-Path $parent 'disabled-hooks'))
         $baseSha = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('rev-parse', 'HEAD')
         if ($baseSha -cnotmatch '^[0-9a-f]{40}$') { throw [System.IO.InvalidDataException]::new('Invalid synchronization base SHA.') }
+        if ($ExpectedBaseSha -and $baseSha -cne $ExpectedBaseSha) {
+            throw [System.InvalidOperationException]::new('The target branch moved since candidate validation; run repository sync again.')
+        }
         $context = @{
             Repository = $repo; Root = $root; BaseSha = $baseSha; DefaultBranch = $DefaultBranch
             AllowedPaths = $AllowedPaths; ExpectedActor = $ExpectedActor; ValidateChange = $ValidateChange
@@ -237,16 +268,77 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
             }
             $status = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('status', '--porcelain')
             $result.HasChanges = -not [string]::IsNullOrWhiteSpace($status)
-            if (-not $result.HasChanges) { return $result }
+            if (-not $result.HasChanges) {
+                if ($CandidateOutputDirectory) {
+                    $null = New-Item -ItemType Directory -Path $CandidateOutputDirectory -Force
+                    $candidate = [ordered]@{
+                        schemaVersion = 1
+                        repository    = $Repository
+                        phase         = 'prepared'
+                        defaultBranch = $DefaultBranch
+                        baseSha       = $baseSha
+                        hasChanges    = $false
+                        planOnly      = $PlanOnly.IsPresent
+                    }
+                    [System.IO.File]::WriteAllText(
+                        (Join-Path $CandidateOutputDirectory 'candidate.json'),
+                        (ConvertTo-Json -InputObject $candidate -Depth 5) + "`n",
+                        [System.Text.UTF8Encoding]::new($false))
+                }
+                return $result
+            }
             Write-Host $status
-            if ($PlanOnly) { $result.Status = 'Planned'; return $result }
+            if ($PlanOnly -and -not $CandidateOutputDirectory) { $result.Status = 'Planned'; return $result }
             $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('add', '--all')
             $paths = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('diff', '--cached', '--no-renames', '--name-only', '-z')
             $context.ChangedPaths = @($paths.Split([char]0, [System.StringSplitOptions]::RemoveEmptyEntries))
             Assert-RepositorySyncFileScope -Paths $context.ChangedPaths -AllowedPaths $AllowedPaths
             $context.TreeSha = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('write-tree')
+            if ($modulePublication) {
+                if ($context.TreeSha -cne $State.Candidate.treeSha) {
+                    throw [System.IO.InvalidDataException]::new('The publication tree differs from the validated candidate.')
+                }
+                Assert-RepositorySyncFileScope -Paths $context.ChangedPaths -AllowedPaths @() -ExpectedPaths $State.Candidate.changedPaths
+            }
             $branch = if ($StableBranch) { $StableBranch } else { 'avm-bot/pre-commit-' + (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss') }
             $context.Branch = $branch
+            $commitActor = if ($ExpectedActor) { $ExpectedActor } else { Get-RepositorySyncConfiguredBotActor }
+            $author = $commitActor.login
+            $email = "$($commitActor.id)+$($commitActor.login)@users.noreply.github.com"
+            $identity = @('-c', "user.name=$author", '-c', "user.email=$email")
+            $message = if ($CommitMessage) { $CommitMessage } else { $Title }
+            if ($CandidateOutputDirectory) {
+                $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('checkout', '--quiet', '-b', $branch)
+                $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments ($identity + @('commit', '--quiet', '-m', $message))
+                $headSha = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('rev-parse', 'HEAD')
+                if ($headSha -cnotmatch '^[0-9a-f]{40}$' -or
+                    (Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('rev-parse', 'HEAD^{tree}')) -cne $context.TreeSha -or
+                    -not [string]::IsNullOrWhiteSpace((Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('status', '--porcelain')))) {
+                    throw [System.InvalidOperationException]::new('The locally staged candidate is not a clean commit with the prepared file tree.')
+                }
+                $null = New-Item -ItemType Directory -Path $CandidateOutputDirectory -Force
+                $archivePath = Join-Path $CandidateOutputDirectory 'candidate.tar'
+                $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('archive', '--format=tar', "--output=$archivePath", 'HEAD')
+                $candidate = [ordered]@{
+                    schemaVersion = 1
+                    repository    = $Repository
+                    phase         = 'prepared'
+                    defaultBranch = $DefaultBranch
+                    baseSha       = $baseSha
+                    hasChanges    = $true
+                    planOnly      = $PlanOnly.IsPresent
+                    headSha       = $headSha
+                    treeSha       = $context.TreeSha
+                    changedPaths  = $context.ChangedPaths
+                }
+                [System.IO.File]::WriteAllText(
+                    (Join-Path $CandidateOutputDirectory 'candidate.json'),
+                    (ConvertTo-Json -InputObject $candidate -Depth 5) + "`n",
+                    [System.Text.UTF8Encoding]::new($false))
+                $result.Status = if ($PlanOnly) { 'Planned' } else { 'Staged' }
+                $result.HeadSha = $headSha
+                return $result
+            }
             $oldHead = $null
             $open = @()
             if ($StableBranch) {
@@ -276,11 +368,6 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
             }
             if (-not $reuseHead) {
                 $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('checkout', '--quiet', '-b', $branch)
-                $commitActor = if ($ExpectedActor) { $ExpectedActor } else { Get-RepositorySyncConfiguredBotActor }
-                $author = $commitActor.login
-                $email = "$($commitActor.id)+$($commitActor.login)@users.noreply.github.com"
-                $identity = @('-c', "user.name=$author", '-c', "user.email=$email")
-                $message = if ($CommitMessage) { $CommitMessage } else { $Title }
                 if ($oldHead) {
                     $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('fetch', '--quiet', '--no-tags', 'origin', "refs/heads/$branch")
                     $headSha = Invoke-RepositoryGit -WorkingDirectory $root -Arguments ($identity + @('commit-tree', $context.TreeSha, '-p', $baseSha, '-p', $oldHead, '-m', $message))
@@ -290,9 +377,9 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
                     $headSha = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('rev-parse', 'HEAD')
                 }
                 if ($headSha -cnotmatch '^[0-9a-f]{40}$' -or
-                    ($VerifyCandidate -and (
+                    (($VerifyCandidate -or $ExpectedBaseSha) -and (
                         (Get-RepositoryBranchHead -Repository $Repository -Branch $DefaultBranch) -cne $baseSha -or
-                        (Get-RepositoryBranchHead -Repository $Repository -Branch $branch) -cne $oldHead))) {
+                        ($VerifyCandidate -and (Get-RepositoryBranchHead -Repository $Repository -Branch $branch) -cne $oldHead)))) {
                     throw [System.InvalidOperationException]::new('The synchronization base or candidate moved before publishing.')
                 }
                 $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('push', '--quiet', '--set-upstream', 'origin', $branch)
@@ -321,6 +408,10 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
             if ($VerifyCandidate) { Assert-RepositorySyncCandidate -Context $context }
             if ($ReviewOnly) { $result.Status = 'ReviewRequired'; return $result }
             if ($VerifyCandidate -and -not $repo.allow_squash_merge) { throw [System.InvalidOperationException]::new('Squash merging is unavailable on the synchronization target.') }
+            if ($ExpectedBaseSha -and
+                (Get-RepositoryBranchHead -Repository $Repository -Branch $DefaultBranch) -cne $baseSha) {
+                throw [System.InvalidOperationException]::new('The target branch moved before the validated candidate could be merged.')
+            }
             $merge = @(
                 'pr', 'merge', $result.PullRequestUrl, "--repo=$Repository", '--squash', '--admin',
                 '--match-head-commit', $context.HeadSha, '--subject', $Title, '--body='

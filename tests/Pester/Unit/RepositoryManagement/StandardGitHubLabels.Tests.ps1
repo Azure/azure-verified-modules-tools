@@ -366,10 +366,12 @@ Describe 'Local Terraform label source' {
         $variables = Get-Content -Raw (Join-Path $terraformRoot 'variables.tf')
         $locals = Get-Content -Raw (Join-Path $terraformRoot 'locals.tf')
         $workflow = Get-Content -Raw (Join-Path $root '.github' 'workflows' 'repository-management-sync.yml')
+        $reusableWorkflow = Get-Content -Raw (Join-Path $root '.github' 'workflows' 'repository-management-sync-repository.yml')
         $variables | Should -Match '\.\./\.\./labels/avm-standard-github-labels\.json'
         $locals | Should -Match 'jsondecode\(file\(var\.github_labels_source_path\)\)\.labels'
         $locals | Should -Match 'try\(label\.githubDescription, label\.description\)'
         $workflow | Should -Not -Match 'Get-AvmLabels\.ps1'
+        $reusableWorkflow | Should -Not -Match 'Get-AvmLabels\.ps1'
         Test-Path -LiteralPath (Join-Path $root 'repository-management' 'repository-sync' 'scripts' 'Get-AvmLabels.ps1') |
             Should -BeFalse
     }

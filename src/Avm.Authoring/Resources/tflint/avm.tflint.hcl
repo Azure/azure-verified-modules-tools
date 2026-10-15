@@ -80,6 +80,10 @@ rule "terraform_workspace_remote" {
   enabled = true
 }
 
+rule "avm_provider_modtm_version_constraint" {
+  enabled = false
+}
+
 rule "avm_azapi_data_response_export_values_required" {
   enabled  = true
   severity = "notice"

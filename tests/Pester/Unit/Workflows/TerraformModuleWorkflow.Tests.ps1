@@ -559,6 +559,8 @@ Describe 'CI workflow' {
         $component.Value | Should -Match 'os: \[ubuntu-latest, windows-latest, macos-latest\]'
         foreach ($job in @($unit, $component)) {
             $job.Value | Should -Match '(?m)^    timeout-minutes: 25\r?$'
+            $job.Value | Should -Match 'fail-fast:\s*false'
+            $job.Value | Should -Not -Match 'continue-on-error:\s*true'
             $job.Value | Should -Match 'Install-AvmBuildPrerequisites\.ps1 -IncludePSScriptAnalyzer'
         }
         $component.Value | Should -Match 'run: \./build\.ps1 ci-component -TestGroup Authoring'
