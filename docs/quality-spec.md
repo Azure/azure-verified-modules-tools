@@ -882,8 +882,9 @@ references fail for manual review; mocks for other random use are preserved.
 The owner's inspection already covers its known non-example descendants;
 selected test wrappers reuse that result rather than treating a previously
 inspected ancestor dependency as unknown.
-JSON configurations and module dependencies that cannot be checked locally
-also retain their random mocks rather than assuming the provider is unused.
+JSON configurations other than proven locals-only objects and module
+dependencies that cannot be checked locally also retain their random mocks
+rather than assuming the provider is unused.
 Ephemeral declarations count as provider use when retiring legacy requirements.
 Preserve the authored source and version constraints of providers used by
 ephemeral blocks rather than broadening them to the normal profile defaults.
@@ -911,8 +912,10 @@ Requirement planning uses the validated immutable
 manifest snapshot captured with the fresh provider tree, not the restored
 on-disk manifest; newly added dependencies need no prior manual initialization.
 Validate root/default-directory test targets before module installation can fetch
-them. JSON configurations/tests, possible backend/cloud declarations and
-initialized backend metadata require review before dependency inspection;
+them. Inspect every target's direct JSON configuration with the shared
+locals-only validator before installing dependencies. Other JSON configurations,
+JSON tests, possible backend/cloud declarations and initialized backend
+metadata require review before dependency inspection;
 do not access remote state to construct mock mappings. The test
 owner's requirement does not cover a separately selected local target.
 Preserve assertions and mock defaults without restoring unused provider
@@ -941,15 +944,17 @@ unchanged. Default and complete example-wrapper regressions must check both
 required-provider and unused-provider lint as well as independent validation,
 exact dependency selections and lock/manifest bytes. Finish the normal
 ordering profile on restored scopes so the first pass is already drift-free.
-Published dependencies remain untouched. A dependency's direct `.tf.json` files
-may contain only `locals` blocks in strict JSON objects, including arrays of
-locals objects; empty configuration objects are also safe. Inspect every such
-file without evaluating expressions or rewriting its bytes. Provider source,
-version and binding proof still comes from native inspection of the dependency's
-HCL. Computed or aliased module bindings, other JSON dependency blocks and
-unproven source inheritance require review. JSON in selected inspection targets
-and tests retains its pre-installation review guard. Verify the
-exact native source update and object-merging capabilities before writes.
+Published dependencies remain untouched. An inspected target's or dependency's
+direct `.tf.json` files may contain only `locals` blocks in strict JSON objects,
+including arrays of locals objects; empty configuration objects are also safe.
+Inspect every such
+file with the same validator without evaluating expressions or rewriting its
+bytes. Proven locals-only JSON does not retain otherwise unused provider mocks.
+Provider source, version and binding proof still comes from native inspection
+of their HCL. Computed or aliased module bindings, other JSON dependency blocks and
+unproven source inheritance require review. Nonlocals JSON in selected
+inspection targets and all JSON tests retain their pre-installation review guard.
+Verify the exact native source update and object-merging capabilities before writes.
 Unrelated selected targets still retire their unused bindings and requirements.
 Native regression fixtures use loopback-only ModTM endpoints and verify mocked
 resource values, full original locks, installed selections, repeat stability
