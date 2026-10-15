@@ -194,6 +194,8 @@ Describe 'Bicep PSRule configuration boundaries' {
         }
         $configuration.OptionPath | Should -BeExactly (
             Join-Path $script:moduleRoot 'Resources' 'bicep' 'psrule' 'ps-rule.yaml')
+        $configuration.RulePath | Should -BeExactly (
+            Join-Path $script:moduleRoot 'Resources' 'bicep' 'psrule' 'rules')
         @(Get-ChildItem -LiteralPath $configuration.RulePath -File -Force).Count | Should -Be 8
         $configuration.OptionPath | Should -Not -BeLike "$root*"
     }
@@ -221,7 +223,7 @@ Describe 'Bicep PSRule configuration boundaries' {
         Copy-Item -LiteralPath (Join-Path $script:moduleRoot 'Resources' 'bicep' 'psrule') -Destination $resources -Recurse
         $resolver = Join-Path $engine 'Get-AvmBicepPolicyConfiguration.ps1'
         Copy-Item -LiteralPath (Join-Path $script:moduleRoot 'Engines' 'Bicep' 'Get-AvmBicepPolicyConfiguration.ps1') -Destination $resolver
-        [System.IO.File]::WriteAllText((Join-Path $resources 'psrule' '.ps-rule' 'local.Rule.ps1'), 'throw')
+        [System.IO.File]::WriteAllText((Join-Path $resources 'psrule' 'rules' 'local.Rule.ps1'), 'throw')
         {
             InModuleScope 'Avm.Authoring' -Parameters @{ Resolver = $resolver; Root = $TestDrive } {
                 param($Resolver, $Root)
@@ -229,6 +231,28 @@ Describe 'Bicep PSRule configuration boundaries' {
                 Get-AvmBicepPolicyConfiguration
             }
         } | Should -Throw '*regular .Rule.yaml files*'
+    }
+
+    It 'rejects a linked visible rules directory before loading any policy options' {
+        $package = Join-Path $TestDrive 'linked-package'
+        $engine = Join-Path $package 'Engines' 'Bicep'
+        $resources = Join-Path $package 'Resources' 'bicep' 'psrule'
+        $outside = Join-Path $TestDrive 'outside-rules'
+        $null = New-Item -ItemType Directory -Path $engine, $resources, $outside -Force
+        Copy-Item -LiteralPath (Join-Path $script:moduleRoot 'Resources' 'bicep' 'psrule' 'ps-rule.yaml') `
+            -Destination $resources
+        $resolver = Join-Path $engine 'Get-AvmBicepPolicyConfiguration.ps1'
+        Copy-Item -LiteralPath (Join-Path $script:moduleRoot 'Engines' 'Bicep' 'Get-AvmBicepPolicyConfiguration.ps1') `
+            -Destination $resolver
+        $linkType = if ($IsWindows) { 'Junction' } else { 'SymbolicLink' }
+        $null = New-Item -ItemType $linkType -Path (Join-Path $resources 'rules') -Target $outside
+        {
+            InModuleScope Avm.Authoring -Parameters @{ Resolver = $resolver } {
+                param($Resolver)
+                . $Resolver
+                Get-AvmBicepPolicyConfiguration
+            }
+        } | Should -Throw '*rules cannot be linked outside the installed package*'
     }
 }
 

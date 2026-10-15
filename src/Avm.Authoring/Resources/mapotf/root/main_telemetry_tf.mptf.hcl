@@ -32,6 +32,7 @@ data "resource" "azapi_resource" {
 
 data "resource" "all_resources" {}
 data "data" "all_data" {}
+data "ephemeral" "all_ephemeral" {}
 data "terraform" "providers" {}
 
 data "local" "main_location" {
@@ -208,6 +209,12 @@ EOT
       if startswith(data_type, "modtm_") && !(data_type == "modtm_module_source" && name == "telemetry")
     ]
   ])
+  other_modtm_ephemeral = flatten([
+    for resource_type, by_name in data.ephemeral.all_ephemeral.result : [
+      for name, resource in by_name : name
+      if startswith(resource_type, "modtm_")
+    ]
+  ])
   other_random_resources = flatten([
     for resource_type, by_name in data.resource.all_resources.result : [
       for name, resource in by_name : name
@@ -220,6 +227,12 @@ EOT
     for data_type, by_name in data.data.all_data.result : [
       for name, source in by_name : name
       if startswith(data_type, "random_")
+    ]
+  ])
+  other_random_ephemeral = flatten([
+    for resource_type, by_name in data.ephemeral.all_ephemeral.result : [
+      for name, resource in by_name : name
+      if startswith(resource_type, "random_")
     ]
   ])
 
@@ -382,7 +395,7 @@ locals {
 }
 
 transform "remove_block_element" "drop_modtm_provider" {
-  for_each             = local.modtm_provider_exists && length(local.other_modtm_resources) == 0 && length(local.other_modtm_data) == 0 && !local.modtm_provider_call_used ? toset([1]) : toset([])
+  for_each             = local.modtm_provider_exists && length(local.other_modtm_resources) == 0 && length(local.other_modtm_data) == 0 && length(local.other_modtm_ephemeral) == 0 && !local.modtm_provider_call_used ? toset([1]) : toset([])
   target_block_address = "terraform"
   paths                = ["required_providers.modtm"]
   depends_on = [
@@ -392,7 +405,7 @@ transform "remove_block_element" "drop_modtm_provider" {
 }
 
 transform "remove_block_element" "drop_unused_random_provider" {
-  for_each             = (local.random_uuid_exists || local.legacy_random_id_exists) && local.random_provider_exists && length(local.other_random_resources) == 0 && length(local.other_random_data) == 0 ? toset([1]) : toset([])
+  for_each             = (local.random_uuid_exists || local.legacy_random_id_exists) && local.random_provider_exists && length(local.other_random_resources) == 0 && length(local.other_random_data) == 0 && length(local.other_random_ephemeral) == 0 ? toset([1]) : toset([])
   target_block_address = "terraform"
   paths                = ["required_providers.random"]
   depends_on = [

@@ -4,16 +4,23 @@ data "terraform" this {
 
 data "resource" "for_provider_versions" {}
 data "data" "for_provider_versions" {}
+data "ephemeral" "for_provider_versions" {}
 
 locals {
   provider_terraform_block_exists = try(data.terraform.this.block != null, false)
   azapi_provider_required = (
     can(data.terraform.this.required_providers.azapi) ||
     length([
-      for t in concat(keys(data.resource.for_provider_versions.result), keys(data.data.for_provider_versions.result)) : t
+      for t in concat(keys(data.resource.for_provider_versions.result), keys(data.data.for_provider_versions.result), keys(data.ephemeral.for_provider_versions.result)) : t
       if startswith(t, "azapi_")
     ]) > 0
   )
+  preserve_azapi_ephemeral_requirement = can(data.terraform.this.required_providers.azapi) && anytrue([
+    for t in keys(data.ephemeral.for_provider_versions.result) : startswith(t, "azapi_")
+  ])
+  preserve_random_ephemeral_requirement = can(data.terraform.this.required_providers.random) && anytrue([
+    for t in keys(data.ephemeral.for_provider_versions.result) : startswith(t, "random_")
+  ])
   azapi_provider_version_valid  = try(!semvercheck(data.terraform.this.required_providers.azapi.version, "2.11.999"), false) && try(semvercheck(data.terraform.this.required_providers.azapi.version, "2.999.999"), false)
   random_provider_version_valid = try(!semvercheck(data.terraform.this.required_providers.random.version, "2.999.999"), true) && try(semvercheck(data.terraform.this.required_providers.random.version, "3.999.999"), true)
 }
@@ -34,7 +41,7 @@ transform "new_block" azapi_terraform {
 }
 
 transform "update_in_place" azapi_provider_version {
-  for_each                = local.provider_terraform_block_exists && local.azapi_provider_required && !local.azapi_provider_version_valid ? toset([1]) : toset([])
+  for_each                = local.provider_terraform_block_exists && local.azapi_provider_required && !local.azapi_provider_version_valid && !local.preserve_azapi_ephemeral_requirement ? toset([1]) : toset([])
   target_block_address    = "terraform"
   merge_object_attributes = true
   asraw {
@@ -48,7 +55,7 @@ transform "update_in_place" azapi_provider_version {
 }
 
 transform "update_in_place" random_provider_version {
-  for_each                = !local.random_provider_version_valid ? toset([1]) : toset([])
+  for_each                = !local.random_provider_version_valid && !local.preserve_random_ephemeral_requirement ? toset([1]) : toset([])
   target_block_address    = "terraform"
   merge_object_attributes = true
   asraw {

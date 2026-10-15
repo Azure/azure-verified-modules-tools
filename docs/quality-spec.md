@@ -344,6 +344,28 @@ This is the integration point for `mise` / `asdf` / `tenv` users who centralise 
 
 ## 8. Hidden folder and repo-local conventions
 
+### Terraform policy recovery staging
+
+Terraform policy checks stage examples under `Get-AvmFolder -Kind Cache` in
+`policy-stage/avm-policy-<unique-id>`. Immediately before its pre hook, each
+example marks cleanup required and confirms it only after its post hook returns
+successfully. Examples that never start hooks do not require fixture cleanup.
+The parent checks every example after workers finish; failed, interrupted, or
+unconfirmed cleanup retains the entire staging tree in place, preserving local
+state, Terraform data, plans, hooks, and environment files without relocation.
+Successful post cleanup still removes staging even after a primary check error.
+Retention is not a successful check or permission to retry cleanup automatically.
+
+Retained staging inherits the standard user-cache protection and is never
+uploaded as a public artifact. Diagnostics report the recovery path and error
+types, not state, plans, environment values, or secondary hook-error contents.
+Keep the original typed terminating error; attach a simultaneous post ErrorRecord
+in `Exception.Data['AvmPolicyPostError']` and the retained path in
+`Exception.Data['AvmPolicyStagePath']`. A staging-removal failure must also remain
+explicit, preserving a prior error and attaching its secondary ErrorRecord in
+`Exception.Data['AvmPolicyStageCleanupError']`. Recovery and manual deletion
+require operator action; checks do not inspect or operate on retained state.
+
 ### Per-repo files
 
 The CLI does not require any per-repo state. Persistent state (tool cache,
@@ -862,6 +884,11 @@ selected test wrappers reuse that result rather than treating a previously
 inspected ancestor dependency as unknown.
 JSON configurations and module dependencies that cannot be checked locally
 also retain their random mocks rather than assuming the provider is unused.
+Ephemeral declarations count as provider use when retiring legacy requirements.
+Preserve the authored source and version constraints of providers used by
+ephemeral blocks rather than broadening them to the normal profile defaults.
+Native initialization and validation prove these requirements; they do not
+establish provider-mocked execution support for ephemeral operations.
 When an instrumented unit-test target has no direct random requirement but
 still needs its random mock for dependencies, bind its retained unaliased
 mocks explicitly in that target's runs, including a newly introduced AzAPI
@@ -1870,6 +1897,13 @@ including workflow and repository-management tests.
 - Release artefacts:
   - PSGallery via `Publish-PSResource` in `scripts/Publish-AvmAuthoring.ps1`. The workflow checks publisher code out from the default branch, so a release tag cannot influence code that receives the API key.
   - GitHub Release with the zipped module folder and a `SHA256SUMS` file.
+- Bundled Bicep PSRule YAML lives under the visible
+  `Resources/bicep/psrule/rules/` directory. The resolver passes this path
+  explicitly; no `.ps-rule` directory convention is required. Keep all eight
+  rule files and their bytes intact through the release-compatible archive
+  route. Package acceptance compares the complete module file set, exact
+  casing and bytes, and executes the extracted rules with PSRule. Local
+  unsigned archive checks do not qualify production signatures or a release.
 - Releases are split across ADO and GitHub. `.pipelines/release-avm-authoring.yml` in `github-private/azure/Azure-Verified-Modules` stages, ESRP-signs, verifies, packages and uploads the release assets, then promotes the prerelease. The GitHub Actions workflow runs on `release.released`, with a guarded `workflow_dispatch` fallback requiring the exact tag of an existing published full release. Both triggers use the same trusted default-branch code to download the signed zip and `SHA256SUMS`, validate checksum, layout, version and signature blocks, and publish the extracted module to PSGallery without rebuilding or modifying the release.
 - The release pipeline is **idempotent / re-runnable**:
   - The GitHub PSGallery publish step passes `-SkipIfAlreadyPublished`, so re-running a tag whose version is already on the Gallery warns and exits 0 instead of failing.

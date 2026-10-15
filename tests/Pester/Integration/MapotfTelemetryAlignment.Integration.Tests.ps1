@@ -293,6 +293,84 @@ Context 'shared telemetry transformations' -ForEach (@(
         @{ TelemetryFixture = 'terraform-azurerm-avm-res-mock' }
     ) | Where-Object { -not $env:AVM_INTEGRATION_FIXTURE -or $_.TelemetryFixture -eq $env:AVM_INTEGRATION_FIXTURE }) {
 
+    It 'preserves ephemeral Random source and constraint <Constraint>, alias=<Alias>' -TestCases @(
+        @{ Constraint = '~> 3.7'; Alias = $false }
+        @{ Constraint = '= 3.9.1'; Alias = $false }
+        @{ Constraint = '~> 3.7'; Alias = $true }
+        @{ Constraint = '= 3.9.1'; Alias = $true }
+    ) {
+        param($Constraint, $Alias)
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $root -WithLegacy -WithLocation
+        $requirements = Join-Path $root 'terraform.tf'
+        $source = [System.IO.File]::ReadAllText($requirements).
+            Replace('>= 1.9.0, < 2.0.0', '>= 1.10.0, < 2.0.0').
+            Replace('~> 3.6', $Constraint)
+        [System.IO.File]::WriteAllText($requirements, $source, [System.Text.UTF8Encoding]::new($false))
+        Set-Content -LiteralPath (Join-Path $root 'enable.tf') -Encoding utf8NoBOM -Value @'
+variable "enable_telemetry" {
+  type    = bool
+  default = false
+}
+'@
+        $credential = Join-Path $root 'credential.tf'
+        $provider = if ($Alias) { '  provider = random.unit' } else { '' }
+        $declaration = if ($Alias) { "provider `"random`" {`n  alias = `"unit`"`n}`n" } else { '' }
+        Set-Content -LiteralPath $credential -Encoding utf8NoBOM -Value @"
+$declaration
+# Preserve the ephemeral credential and its authored defaults.
+ephemeral "random_password" "telemetry" {
+$provider
+  length  = 20
+  special = false
+}
+"@
+        $null = Invoke-TelemetryProcess -FilePath $script:terraformPath `
+            -ArgumentList @('init', '-backend=false', '-input=false', '-no-color') -Root $root
+        $lockPath = Join-Path $root '.terraform.lock.hcl'
+        $lockBytes = [System.IO.File]::ReadAllBytes($lockPath)
+        $manifestPath = Join-Path -Path $root -ChildPath '.terraform' -AdditionalChildPath 'modules', 'modules.json'
+        $manifestBytes = if (Test-Path -LiteralPath $manifestPath) { [System.IO.File]::ReadAllBytes($manifestPath) } else { $null }
+        $snapshot = InModuleScope Avm.Authoring -Parameters @{ Root = $root } {
+            param($Root)
+            Get-AvmFileSnapshot -Path @((Get-AvmTerraformFile -Root $Root).FullName)
+        }
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'fail'
+        foreach ($path in $snapshot.Keys) {
+            [System.IO.File]::ReadAllBytes($path) | Should -Be $snapshot[$path]
+        }
+        (Invoke-TelemetryEngine -Root $root).Status | Should -Be 'pass'
+        $required = InModuleScope Avm.Authoring -Parameters @{
+            Root = $root; Tool = $script:mapotfPath; Profiles = $script:profilesRoot
+        } {
+            param($Root, $Tool, $Profiles)
+            Get-AvmTerraformUnitTestRequiredProvider -Path $Root -Options ([pscustomobject]@{
+                    ToolPath = $Tool; ProfileDirs = @{ module = Join-Path $Profiles 'module' }; EnvVars = @{}
+                })
+        }
+        $required.random.source | Should -BeExactly 'hashicorp/random'
+        $required.random.version | Should -BeExactly $Constraint
+        $required.Contains('modtm') | Should -BeFalse
+        $first = [System.IO.File]::ReadAllText($credential)
+        $first | Should -Match 'ephemeral "random_password" "telemetry"'
+        $first | Should -Match 'length\s*=\s*20'
+        $first | Should -Match 'special\s*=\s*false'
+        $first | Should -Match 'Preserve the ephemeral credential and its authored defaults\.'
+        if ($Alias) { $first | Should -Match 'provider\s*=\s*random\.unit' }
+        $validation = Invoke-TelemetryProcess -FilePath $script:terraformPath `
+            -ArgumentList @('validate', '-no-color', '-json') -Root $root
+        ($validation.StdOut | ConvertFrom-Json).valid | Should -BeTrue
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -Be 'pass'
+        (Invoke-TelemetryEngine -Root $root).Changed | Should -BeNullOrEmpty
+        [System.IO.File]::ReadAllText($credential) | Should -BeExactly $first
+        [System.IO.File]::ReadAllBytes($lockPath) | Should -Be $lockBytes
+        if ($null -ne $manifestBytes) {
+            [System.IO.File]::ReadAllBytes($manifestPath) | Should -Be $manifestBytes
+        }
+        else { Test-Path -LiteralPath $manifestPath | Should -BeFalse }
+        @(Get-ChildItem -LiteralPath $root -Recurse -Filter '*.tfstate' -File -Force) | Should -HaveCount 0
+    }
+
     It 'migrates legacy telemetry without destroying state and preserves user providers' {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-TelemetryModule -Root $root -WithLocation -WithLegacy

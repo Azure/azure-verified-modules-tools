@@ -18,6 +18,7 @@ function Invoke-AvmTerraformPolicyExample {
     $evaluated = 0
 
     try {
+        $Example.CleanupStarted = $true
         Invoke-AvmScriptHook `
             -HookPath (Join-Path $Example.StagedPath 'pre.ps1') `
             -WorkingDirectory $Example.StagedPath `
@@ -113,15 +114,17 @@ function Invoke-AvmTerraformPolicyExample {
             -WorkingDirectory $Example.StagedPath `
             -EnvVars $envVars `
             -Label ("policy {0} post.ps1" -f $Example.Name)
+        $Example.CleanupCompleted = $true
     }
     catch {
         if ($null -eq $primaryError) {
             throw
         }
+        $primaryError.Exception.Data['AvmPolicyPostError'] = $_
         Write-AvmLog `
             -Level Warning `
             -File (Join-Path $Example.RelativePath 'post.ps1') `
-            -Message ("Policy post hook also failed; preserving the primary error: {0}" -f $_.Exception.Message)
+            -Message ("Policy post hook also failed ({0}); preserving the primary error and attaching the post error as AvmPolicyPostError." -f $_.Exception.GetType().Name)
     }
 
     if ($null -ne $primaryError) {
@@ -230,6 +233,9 @@ function Invoke-AvmTerraformCheckPolicy {
         The staging directory is deliberately beneath the policy bundle cache.
         Conftest strips the drive letter from --policy paths on Windows;
         keeping the working tree and bundles on one volume preserves resolution.
+        If any example's post hook fails or cleanup is interrupted, the staging
+        tree is retained in place for recovery. Diagnostics identify its path
+        without printing state, plans, environment values, or hook errors.
 
         Conftest output is captured as JSON rather than streamed. The legacy
         command used --quiet; omitting that switch here has the same user-visible
@@ -329,6 +335,8 @@ function Invoke-AvmTerraformCheckPolicy {
     $evaluated = 0
     $streamOutput = Test-AvmVerboseEnabled
     $effectiveThrottle = if ($streamOutput) { 1 } else { $ThrottleLimit }
+    $examples = [System.Collections.Generic.List[object]]::new()
+    $policyError = $null
 
     try {
         $defaultExceptions = Join-Path `
@@ -342,7 +350,6 @@ function Invoke-AvmTerraformCheckPolicy {
             -Force `
             -ErrorAction Stop
 
-        $examples = [System.Collections.Generic.List[object]]::new()
         for ($exampleIndex = 0; $exampleIndex -lt $activeExamples.Count; $exampleIndex++) {
             $sourceExample = $activeExamples[$exampleIndex]
             $relativeExample = [System.IO.Path]::GetRelativePath($Context.Root, $sourceExample)
@@ -363,10 +370,12 @@ function Invoke-AvmTerraformCheckPolicy {
                 -Message ("policy: example {0}/{1} = {2}" -f ($exampleIndex + 1), $activeExamples.Count, $exampleName) |
                 Out-Null
             $examples.Add([pscustomobject]@{
-                    Name         = $exampleName
-                    RelativePath = $relativeExample
-                    StagedPath   = $stagedExample
-                    StageRoot    = $caseRoot
+                    Name             = $exampleName
+                    RelativePath     = $relativeExample
+                    StagedPath       = $stagedExample
+                    StageRoot        = $caseRoot
+                    CleanupStarted   = $false
+                    CleanupCompleted = $false
                 })
         }
 
@@ -395,14 +404,44 @@ function Invoke-AvmTerraformCheckPolicy {
             }
         }
     }
+    catch {
+        $policyError = $_
+        throw
+    }
     finally {
         if (Test-Path -LiteralPath $stageRoot) {
-            Remove-Item `
-                -LiteralPath $stageRoot `
-                -Recurse `
-                -Force `
-                -ErrorAction SilentlyContinue `
-                -ProgressAction SilentlyContinue
+            if (@($examples | Where-Object { $_.CleanupStarted -and -not $_.CleanupCompleted }).Count -gt 0) {
+                if ($null -ne $policyError) {
+                    $policyError.Exception.Data['AvmPolicyStagePath'] = $stageRoot
+                }
+                Write-AvmLog `
+                    -Level Warning `
+                    -Message ("Policy cleanup is incomplete. Recovery staging is retained at '{0}'. It may contain sensitive state, plans, and environment files; do not upload it. Recover resources before manually removing this directory." -f $stageRoot)
+            }
+            else {
+                try {
+                    Remove-Item `
+                        -LiteralPath $stageRoot `
+                        -Recurse `
+                        -Force `
+                        -ErrorAction Stop `
+                        -ProgressAction SilentlyContinue
+                }
+                catch {
+                    if ($null -eq $policyError) {
+                        $_.Exception.Data['AvmPolicyStagePath'] = $stageRoot
+                        Write-AvmLog `
+                            -Level Warning `
+                            -Message ("Policy staging removal failed ({0}). Remaining staging is at '{1}'; do not upload it." -f $_.Exception.GetType().Name, $stageRoot)
+                        throw
+                    }
+                    $policyError.Exception.Data['AvmPolicyStageCleanupError'] = $_
+                    $policyError.Exception.Data['AvmPolicyStagePath'] = $stageRoot
+                    Write-AvmLog `
+                        -Level Warning `
+                        -Message ("Policy staging removal also failed ({0}); preserving the primary error. Remaining staging is at '{1}'; do not upload it." -f $_.Exception.GetType().Name, $stageRoot)
+                }
+            }
         }
     }
 
