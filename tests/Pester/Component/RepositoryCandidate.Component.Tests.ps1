@@ -197,6 +197,7 @@ Describe 'Repository candidate archive and patch' -Tag Component {
             $events = Join-Path $root 'events.txt'
             $null = New-Item -ItemType Directory -Path $source, $candidateDirectory -Force
             $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('init', '--quiet', '-b', 'main', $source)
+            $null = Invoke-RepositoryGit -WorkingDirectory $source -Arguments @('config', '--local', 'core.autocrlf', 'false')
             [System.IO.File]::WriteAllText((Join-Path $source 'main.tf'), "variable `"name`" {}`n")
             $null = Invoke-RepositoryGit -WorkingDirectory $source -Arguments @('add', '--all')
             $null = Invoke-RepositoryGit -WorkingDirectory $source -Arguments @(
