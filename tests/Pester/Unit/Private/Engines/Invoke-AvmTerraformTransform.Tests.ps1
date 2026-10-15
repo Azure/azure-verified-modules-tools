@@ -77,7 +77,8 @@ Describe 'Invoke-AvmTerraformTransform' {
                 ([array]::IndexOf($ArgumentList, '/fake/module')) -lt ([array]::IndexOf($ArgumentList, '/fake/common')) -and
                 $ArgumentList -contains '--tf-dir' -and
                 [string]::IsNullOrWhiteSpace([string]$EnvVars['TF_PLUGIN_CACHE_DIR']) -and
-                -not [string]::IsNullOrWhiteSpace([string]$EnvVars['MAPOTF_PROVIDER_SCHEMA_CACHE_DIR'])
+                -not [string]::IsNullOrWhiteSpace([string]$EnvVars['MAPOTF_PROVIDER_SCHEMA_CACHE_DIR']) -and
+                -not [string]::IsNullOrWhiteSpace([string]$EnvVars['MAPOTF_MODULE_SOURCE_CACHE_DIR'])
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $ArgumentList[0] -eq 'transform' -and
@@ -297,6 +298,58 @@ variable "location" {
             }
             finally {
                 $env:TF_PLUGIN_CACHE_DIR = $savedPluginCache
+            }
+        }
+    }
+
+    It 'routes MaPoTF caches through AVM_HOME for every phase, drift=<CheckDrift>' -TestCases @(
+        @{ CheckDrift = $false }
+        @{ CheckDrift = $true }
+    ) {
+        param($CheckDrift)
+
+        InModuleScope Avm.Authoring -Parameters @{ C = $script:context; CheckDrift = $CheckDrift } {
+            param($C, $CheckDrift)
+            $savedHome = $env:AVM_HOME
+            $savedModuleCache = $env:MAPOTF_MODULE_SOURCE_CACHE_DIR
+            try {
+                $env:AVM_HOME = Join-Path $C.Root 'avm-home'
+                $env:MAPOTF_MODULE_SOURCE_CACHE_DIR = '/ambient/module-cache'
+                $expectedCache = Join-Path $env:AVM_HOME 'cache'
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+                }
+                Mock Resolve-AvmMapotfConfigDir { "/fake/$ProfileName" }
+                Mock Get-AvmTerraformTransformTarget {
+                    @(
+                        [pscustomobject]@{ Path = $C.Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
+                        [pscustomobject]@{ Path = '/fake/example'; Scope = 'example'; Profiles = @('example', 'provider-cleanup', 'common') }
+                        [pscustomobject]@{ Path = '/fake/test'; Scope = 'test'; Profiles = @('module-call', 'variable-order', 'provider-cleanup', 'test') }
+                    )
+                }
+                Mock Invoke-AvmParallel
+                Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+                Mock Get-AvmRemainingModtmIssue { @() }
+
+                Invoke-AvmTerraformTransform -Context $C -ThrottleLimit 4 -CheckDrift:$CheckDrift | Out-Null
+
+                Should -Invoke Invoke-AvmParallel -Exactly 4 -ParameterFilter {
+                    $Argument.EnvVars.MAPOTF_PROVIDER_SCHEMA_CACHE_DIR -ceq (Join-Path $expectedCache 'mapotf-provider-schema') -and
+                    $Argument.EnvVars.MAPOTF_MODULE_SOURCE_CACHE_DIR -ceq (Join-Path $expectedCache 'mapotf-module-source') -and
+                    -not $Argument.EnvVars.ContainsKey('MAPOTF_MODULE_SOURCE_CACHE') -and
+                    -not $Argument.EnvVars.ContainsKey('MAPOTF_MODULE_SOURCE_CACHE_TTL')
+                }
+                Should -Invoke Invoke-AvmProcess -Exactly 3 -ParameterFilter {
+                    $ArgumentList[0] -eq 'clean-backup' -and
+                    $EnvVars.MAPOTF_MODULE_SOURCE_CACHE_DIR -ceq (Join-Path $expectedCache 'mapotf-module-source')
+                }
+                $env:MAPOTF_MODULE_SOURCE_CACHE_DIR | Should -BeExactly '/ambient/module-cache'
+            }
+            finally {
+                [Environment]::SetEnvironmentVariable('AVM_HOME',
+                    $(if ($null -eq $savedHome) { [NullString]::Value } else { $savedHome }), 'Process')
+                [Environment]::SetEnvironmentVariable('MAPOTF_MODULE_SOURCE_CACHE_DIR',
+                    $(if ($null -eq $savedModuleCache) { [NullString]::Value } else { $savedModuleCache }), 'Process')
             }
         }
     }

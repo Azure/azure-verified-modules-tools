@@ -686,6 +686,21 @@ ranges; authored declarations are not annotated. Other unused declarations
 remain lint findings. The inline-ignore audit exempts only the exact directive
 on the canonical required declaration in a module's `variables.tf`.
 
+The common MaPoTF ordering profile loads AzureRM, AzAPI and Random schemas only
+when the current scope contains matching resource or data-source type prefixes.
+Provider declarations, aliases, custom local provider names and resources in
+called modules do not independently require a schema. Empty and ephemeral-only
+scopes need none. Preserve required/optional ordering, promoted AzAPI attributes,
+head/foot meta-arguments and source-order fallback for unknown types/providers.
+Required schema failures remain errors; unused schemas must not be fetched or
+materialized, including on cache hits.
+Transform subprocesses receive `MAPOTF_PROVIDER_SCHEMA_CACHE_DIR` and
+`MAPOTF_MODULE_SOURCE_CACHE_DIR` under the AVM cache as `mapotf-provider-schema`
+and `mapotf-module-source`, respectively, so both honor `AVM_HOME`. Cache
+enablement and TTL controls remain inherited. The module-source directory is
+used only by MaPoTF versions supporting that cache; forwarding it does not
+change the pinned tool version.
+
 Instrumented roots and children run the `root,module,common` profiles; other
 module scopes run `module,common`. Profiles execute sequentially so module
 provider rules see the generated telemetry. A second `module-call,variable-order,common`

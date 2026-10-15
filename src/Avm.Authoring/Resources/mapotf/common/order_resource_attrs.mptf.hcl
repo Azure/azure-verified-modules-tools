@@ -4,8 +4,8 @@
 # lists per resource/data type, then drives `reorder_attributes.body_attributes` so every body is
 # emitted as `required (alphabetical) → optional (alphabetical) → anything-else`.
 #
-# Note: mapotf runs `terraform init` + `terraform providers schema` under the hood to populate
-# `data "provider_schema"`, so this transform implies a one-time provider download per run.
+# Load schemas only for matching resource/data blocks in this scope. Provider declarations,
+# module dependencies and ephemeral blocks do not need schemas for body ordering.
 #
 # azapi special handling: a handful of attributes are technically optional in the provider schema
 # but are far more important than `body` and friends (`name`, `parent_id`, `location`, ...). They
@@ -21,16 +21,19 @@
 # order. Extend this file when new providers become common.
 
 data "provider_schema" "azurerm" {
+  for_each         = length(local.attrs_azurerm_resource_addrs) + length(local.attrs_azurerm_data_addrs) > 0 ? toset(["used"]) : toset([])
   provider_source  = "hashicorp/azurerm"
   provider_version = "~> 4.0"
 }
 
 data "provider_schema" "azapi" {
+  for_each         = length(local.attrs_azapi_resource_addrs) + length(local.attrs_azapi_data_addrs) > 0 ? toset(["used"]) : toset([])
   provider_source  = "Azure/azapi"
   provider_version = "~> 2.12"
 }
 
 data "provider_schema" "random" {
+  for_each         = length(local.attrs_random_resource_addrs) + length(local.attrs_random_data_addrs) > 0 ? toset(["used"]) : toset([])
   provider_source  = "hashicorp/random"
   provider_version = "~> 3.0"
 }
@@ -86,26 +89,26 @@ locals {
   # ---- azapi per-type body_attributes (required + promoted, then optional minus promoted) ----
 
   attrs_azapi_resource_body_by_type = {
-    for t in keys(try(data.provider_schema.azapi.resources_required_attributes, {})) : t => concat(
+    for t in keys(try(data.provider_schema.azapi["used"].resources_required_attributes, {})) : t => concat(
       sort(distinct(concat(
-        try(data.provider_schema.azapi.resources_required_attributes[t], []),
-        [for a in local.attrs_azapi_promoted : a if contains(try(data.provider_schema.azapi.resources_optional_attributes[t], []), a)]
+        try(data.provider_schema.azapi["used"].resources_required_attributes[t], []),
+        [for a in local.attrs_azapi_promoted : a if contains(try(data.provider_schema.azapi["used"].resources_optional_attributes[t], []), a)]
       ))),
       sort([
-        for a in try(data.provider_schema.azapi.resources_optional_attributes[t], []) :
+        for a in try(data.provider_schema.azapi["used"].resources_optional_attributes[t], []) :
         a if !contains(local.attrs_azapi_promoted, a)
       ])
     )
   }
 
   attrs_azapi_data_body_by_type = {
-    for t in keys(try(data.provider_schema.azapi.data_sources_required_attributes, {})) : t => concat(
+    for t in keys(try(data.provider_schema.azapi["used"].data_sources_required_attributes, {})) : t => concat(
       sort(distinct(concat(
-        try(data.provider_schema.azapi.data_sources_required_attributes[t], []),
-        [for a in local.attrs_azapi_promoted : a if contains(try(data.provider_schema.azapi.data_sources_optional_attributes[t], []), a)]
+        try(data.provider_schema.azapi["used"].data_sources_required_attributes[t], []),
+        [for a in local.attrs_azapi_promoted : a if contains(try(data.provider_schema.azapi["used"].data_sources_optional_attributes[t], []), a)]
       ))),
       sort([
-        for a in try(data.provider_schema.azapi.data_sources_optional_attributes[t], []) :
+        for a in try(data.provider_schema.azapi["used"].data_sources_optional_attributes[t], []) :
         a if !contains(local.attrs_azapi_promoted, a)
       ])
     )
@@ -119,8 +122,8 @@ transform "reorder_attributes" "azurerm_resource_body" {
   target_block_address = each.key
   head_attributes      = ["for_each", "count", "provider"]
   body_attributes = concat(
-    try(data.provider_schema.azurerm.resources_required_attributes[each.value], []),
-    try(data.provider_schema.azurerm.resources_optional_attributes[each.value], []),
+    try(data.provider_schema.azurerm["used"].resources_required_attributes[each.value], []),
+    try(data.provider_schema.azurerm["used"].resources_optional_attributes[each.value], []),
   )
   foot_attributes          = ["lifecycle", "depends_on"]
   sort_body_alphabetically = false
@@ -140,8 +143,8 @@ transform "reorder_attributes" "random_resource_body" {
   target_block_address = each.key
   head_attributes      = ["for_each", "count", "provider"]
   body_attributes = concat(
-    try(data.provider_schema.random.resources_required_attributes[each.value], []),
-    try(data.provider_schema.random.resources_optional_attributes[each.value], []),
+    try(data.provider_schema.random["used"].resources_required_attributes[each.value], []),
+    try(data.provider_schema.random["used"].resources_optional_attributes[each.value], []),
   )
   foot_attributes          = ["lifecycle", "depends_on"]
   sort_body_alphabetically = false
@@ -154,8 +157,8 @@ transform "reorder_attributes" "azurerm_data_body" {
   target_block_address = each.key
   head_attributes      = ["for_each", "count", "provider"]
   body_attributes = concat(
-    try(data.provider_schema.azurerm.data_sources_required_attributes[each.value], []),
-    try(data.provider_schema.azurerm.data_sources_optional_attributes[each.value], []),
+    try(data.provider_schema.azurerm["used"].data_sources_required_attributes[each.value], []),
+    try(data.provider_schema.azurerm["used"].data_sources_optional_attributes[each.value], []),
   )
   foot_attributes          = ["lifecycle", "depends_on"]
   sort_body_alphabetically = false
@@ -175,8 +178,8 @@ transform "reorder_attributes" "random_data_body" {
   target_block_address = each.key
   head_attributes      = ["for_each", "count", "provider"]
   body_attributes = concat(
-    try(data.provider_schema.random.data_sources_required_attributes[each.value], []),
-    try(data.provider_schema.random.data_sources_optional_attributes[each.value], []),
+    try(data.provider_schema.random["used"].data_sources_required_attributes[each.value], []),
+    try(data.provider_schema.random["used"].data_sources_optional_attributes[each.value], []),
   )
   foot_attributes          = ["lifecycle", "depends_on"]
   sort_body_alphabetically = false
