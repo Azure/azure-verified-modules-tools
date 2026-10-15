@@ -176,6 +176,8 @@ Describe 'Shared network retry' {
             @{ Name = 'git transport stderr'; Kind = 'Transient'; Factory = "[AvmProcessException]::new(`"git exited with code 128.``nfatal: unable to access 'https://github.com/x/': Could not resolve host: github.com`")" }
             @{ Name = 'a git authentication error'; Kind = 'Permanent'; Factory = "[AvmProcessException]::new('fatal: Authentication failed for https://github.com/x/')" }
             @{ Name = 'wrapped Terraform provider output'; Kind = 'Transient'; Factory = "[System.Exception]::new(`"`$([char]0x1B)[31m`$([char]0x2502) Error: Failed to install provider``n`$([char]0x2502) context deadline``n`$([char]0x2502) exceeded (Client.Timeout exceeded while awaiting``n`$([char]0x2502) headers)`")" }
+            @{ Name = 'a provider download TCP dial timeout'; Kind = 'Transient'; Factory = "[AvmProcessException]::new('Error while installing azure/azapi: dial tcp 20.29.134.23:443: i/o timeout')" }
+            @{ Name = 'an application I/O timeout'; Kind = 'Permanent'; Factory = "[AvmProcessException]::new('I/O timeout while waiting for a deployment')" }
             @{ Name = 'a configuration error'; Kind = 'Permanent'; Factory = "[AvmConfigurationException]::new('connection reset in config text')" }
         ) {
             InModuleScope 'Avm.Authoring' -Parameters @{ Factory = $Factory; Expected = $Kind } {
@@ -340,9 +342,14 @@ Describe 'Shared network retry' {
             $script:pwsh = (Get-Process -Id $PID).Path
         }
 
-        It 'reruns a process whose output reports a transient network failure' {
-            $marker = Join-Path $TestDrive 'attempted'
-            $script = "if (Test-Path '$marker') { 'done'; exit 0 }; New-Item '$marker' | Out-Null; [Console]::Error.WriteLine('fatal: Connection reset by peer'); exit 128"
+        It 'reruns a process whose output reports <Failure>' -TestCases @(
+            @{ Failure = 'a reset connection'; Message = 'fatal: Connection reset by peer' }
+            @{ Failure = 'a provider download TCP dial timeout'; Message = 'Error while installing azure/azapi: dial tcp 20.29.134.23:443: i/o timeout' }
+        ) {
+            param($Failure, $Message)
+
+            $marker = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            $script = "if (Test-Path '$marker') { 'done'; exit 0 }; New-Item '$marker' | Out-Null; [Console]::Error.WriteLine('$Message'); exit 128"
             InModuleScope 'Avm.Authoring' -Parameters @{ Pwsh = $script:pwsh; Script = $script } {
                 param($Pwsh, $Script)
                 $result = Invoke-AvmProcess -FilePath $Pwsh -ArgumentList @('-NoProfile', '-Command', $Script) -RetryNetworkFailure

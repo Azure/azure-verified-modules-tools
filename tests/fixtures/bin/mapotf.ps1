@@ -1,12 +1,5 @@
 # AVM test-only stub for `mapotf`.
-# Handles only the verbs Invoke-AvmTerraformTransform actually invokes:
-# `--version` (so Resolve-AvmTool -AllowPathFallback succeeds), `transform`
-# (driven as `transform --mptf-dir <configs> --tf-dir <root>`) and
-# `clean-backup` (driven as `clean-backup --tf-dir <root>`). Both verbs are
-# deterministic no-ops here: the stub mutates nothing, so the engine's
-# before/after hash snapshot yields an empty change set (Status='pass', and
-# no drift under -CheckDrift). A future $env:AVM_STUB_MAPOTF_* escape hatch
-# can simulate a real transform/drift if an Integration test needs it.
+# Transforms are no-ops; native inspection accepts only the empty component fixture.
 
 if ($args.Count -eq 0) {
     Write-Error 'stub mapotf: no arguments'
@@ -24,6 +17,22 @@ switch ($args[0]) {
     }
     'transform' {
         # No-op: leave every *.tf untouched so the engine reports no changes.
+        exit 0
+    }
+    'debug' {
+        $fileIndex = [array]::IndexOf($args, '--test-file')
+        $rootIndex = [array]::IndexOf($args, '--tf-dir')
+        if ($fileIndex -lt 0 -or $rootIndex -lt 0 -or
+            $fileIndex + 1 -ge $args.Count -or $rootIndex + 1 -ge $args.Count) {
+            Write-Error 'stub mapotf: debug requires --tf-dir and --test-file'
+            exit 64
+        }
+        $testFile = Join-Path $args[$rootIndex + 1] $args[$fileIndex + 1]
+        if ((Get-Content -LiteralPath $testFile -Raw -ErrorAction Stop).Trim() -cne '# fixture') {
+            Write-Error 'stub mapotf: native inspection supports only the empty component fixture'
+            exit 64
+        }
+        Write-Output '{"test":{"variables":null,"runs":{},"run_modules":{},"mock_providers":{},"providers":{}},"modules":{}}'
         exit 0
     }
     'clean-backup' {

@@ -446,7 +446,7 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
             moduleDisplayName = 'Blob Services'
             moduleDescription = 'Deploys a Storage Account blob service.'
             canonicalType = 'Microsoft.Storage/storageAccounts/blobServices'
-            telemetryIdPrefix = '46d3xtrf.res.explicit'
+            telemetryIdPrefix = '46d3xtrf.res.a1b2c3d'
         }
 
         $result = Initialize-AvmModule -Path $root -Ecosystem terraform -ModuleType resource -ChildModule `
@@ -477,7 +477,7 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
             moduleDisplayName = 'Blob Services'
             moduleDescription = 'Deploys a Storage Account blob service.'
             canonicalType = 'Microsoft.Storage/storageAccounts/blobServices'
-            telemetryIdPrefix = '46d3xtrf.res.explicit'
+            telemetryIdPrefix = '46d3xtrf.res.a1b2c3d'
         }
 
         $plan = Initialize-AvmModule -Path $root -Ecosystem terraform -ModuleType resource -ChildModule `
@@ -498,7 +498,7 @@ resource avmTelemetry 'Microsoft.Resources/deployments@2025-04-01' = {
             moduleDisplayName = 'Blob Services'
             moduleDescription = 'Deploys a Storage Account blob service.'
             canonicalType = 'Microsoft.Storage/storageAccounts/blobServices'
-            telemetryIdPrefix = '46d3xtrf.res.explicit'
+            telemetryIdPrefix = '46d3xtrf.res.a1b2c3d'
         }
 
         $result = avm -SkipModuleVersionCheck init -Ecosystem terraform -ModuleType resource -ChildModule `

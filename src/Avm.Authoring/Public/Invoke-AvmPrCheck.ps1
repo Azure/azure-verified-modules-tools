@@ -260,9 +260,10 @@ function Invoke-AvmPrCheck {
             $stepParameters = @{}
             if (-not $def.PSObject.Properties['ContextOnly'] -or -not $def.ContextOnly) {
                 $stepParameters = @{
-                    Path              = $context.Root
-                    Ecosystem         = $context.Ecosystem
-                    AllowPathFallback = $AllowPathFallback
+                    Path                   = $context.Root
+                    Ecosystem              = $context.Ecosystem
+                    AllowPathFallback      = $AllowPathFallback
+                    SkipModuleVersionCheck = $SkipModuleVersionCheck
                 }
             }
             $stepResult = Invoke-AvmNestedCommand {

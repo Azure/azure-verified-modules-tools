@@ -109,16 +109,15 @@ Describe 'The Terraform repository-sync entry point uses the shared publication 
         Should -Invoke Invoke-RepositoryGitHub -Times 0
     }
 
-    It 'preserves the exact legacy return shape for no-change, plan, and apply outcomes' -ForEach @(
+    It 'preserves the adapter return shape for no-change and plan outcomes' -ForEach @(
         @{ CoreStatus = 'NoChange'; Changed = $false; Plan = $false }
         @{ CoreStatus = 'Planned'; Changed = $true; Plan = $true }
-        @{ CoreStatus = 'Merged'; Changed = $true; Plan = $false }
     ) {
         $script:coreResult = @{ HasChanges = $Changed; Status = $CoreStatus; PullRequestUrl = 'unused'; HeadSha = 'unused' }
         Mock Invoke-RepositoryFileSync { $script:coreResult }
         $issues = @([pscustomobject]@{ message = 'existing issue' })
         $result = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -repoId 'avm-res-test' `
-            -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $Plan -issueLog $issues
+            -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $true -issueLog $issues
         $result | Should -BeOfType [hashtable]
         @($result.Keys | Sort-Object) | Should -Be @('HasChanges', 'IssueLog')
         $result.HasChanges | Should -Be $Changed
@@ -129,9 +128,54 @@ Describe 'The Terraform repository-sync entry point uses the shared publication 
         $script:sequence = [System.Collections.Generic.List[string]]::new()
         Mock Import-Module { $script:sequence.Add('import') }
         Mock Invoke-RepositoryFileSync { $script:sequence.Add('clone'); @{ HasChanges = $false } }
-        $null = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -defaultBranch main -issueLog @()
+        $null = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' -defaultBranch main -planOnly $true -issueLog @()
         $script:sequence.ToArray() | Should -Be @('import', 'clone')
         Should -Invoke Import-Module -Exactly 1 -ParameterFilter { $Name -ceq 'Avm.Authoring' -and $ErrorAction -eq 'Stop' }
+    }
+
+    It 'rejects legacy direct Terraform publication before cloning or diff generation' {
+        { Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-azure-avm-res-test' `
+            -defaultBranch main -planOnly $false -issueLog @() } | Should -Throw '*Terraform apply requires candidate staging*'
+        Should -Invoke Invoke-RepositoryFileSync -Times 0
+        Should -Invoke Invoke-RepositoryGit -Times 0
+        Should -Invoke Invoke-RepositoryGitHub -Times 0
+    }
+
+    It 'selects the checked-out authoring module only for plan-only previews' {
+        $source = Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
+        Mock Remove-AvmMetadataFileConflict { $false }
+        Mock Resolve-AvmManagedFilesUpgradeDecision { @{ Upgrade = $false; Reason = 'current pin' } }
+        Mock Invoke-AvmPreCommitWithUpgradeRetry { [pscustomobject]@{ Status = 'pass'; Steps = @() } }
+        Mock Invoke-RepositoryFileSync {
+            param($Prepare, $State, $PlanOnly)
+            & $Prepare @{ Root = 'isolated-clone'; Repository = @{ full_name = 'Azure/terraform-test' }; State = $State; PlanOnly = $PlanOnly }
+            @{ HasChanges = $false; Status = 'NoChange' }
+        }
+        $null = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' `
+            -defaultBranch main -planOnly $true -authoringModulePath $source -issueLog @()
+        Should -Invoke Import-Module -Exactly 1 -ParameterFilter { $Name -ceq $source }
+        Should -Invoke Invoke-AvmPreCommitWithUpgradeRetry -Exactly 1 -ParameterFilter { $modulePath -ceq $source }
+
+        { Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' `
+            -defaultBranch main -planOnly $false -authoringModulePath $source -issueLog @() } |
+            Should -Throw '*only supported for plan-only*'
+    }
+
+    It 'does not replace the checked-out authoring module with the Gallery release' {
+        $source = Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
+        Mock Invoke-AvmPreCommit { [pscustomobject]@{ Status = 'pass' } }
+        Mock Update-PSResource { throw 'Gallery must not be upgraded during a branch preview.' }
+        $null = Invoke-AvmPreCommitWithUpgradeRetry -repoId 'avm-res-test' `
+            -repositoryConfigDir 'configuration' -modulePath $source
+        Should -Invoke Import-Module -Exactly 1 -ParameterFilter { $Name -ceq $source -and $Force }
+        Should -Invoke Invoke-AvmPreCommit -Exactly 1 -ParameterFilter { $SkipModuleVersionCheck }
+        Should -Invoke Update-PSResource -Times 0
+    }
+
+    It 'keeps the Gallery version check enabled without a checked-out source' {
+        Mock Invoke-AvmPreCommit { [pscustomobject]@{ Status = 'pass' } }
+        $null = Invoke-AvmPreCommitWithUpgradeRetry -repoId 'avm-res-test' -repositoryConfigDir 'configuration'
+        Should -Invoke Invoke-AvmPreCommit -Exactly 1 -ParameterFilter { -not $SkipModuleVersionCheck }
     }
 
     It 'keeps the existing Terraform preparation and upgrade behavior in its adapter' {

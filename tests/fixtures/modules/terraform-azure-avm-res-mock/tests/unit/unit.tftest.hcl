@@ -1,5 +1,11 @@
-mock_provider "azapi" {}
-mock_provider "modtm" {}
+mock_provider "azapi" {
+  mock_data "azapi_client_config" {
+    defaults = {
+      subscription_id          = "00000000-0000-0000-0000-000000000000"
+      subscription_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000"
+    }
+  }
+}
 mock_provider "random" {}
 
 variables {
@@ -11,6 +17,10 @@ run "apply" {
 
   module {
     source = "./tests/wrapper"
+  }
+  providers = {
+    azapi  = azapi
+    random = random
   }
 
   variables {
@@ -44,6 +54,10 @@ run "current_interface" {
   module {
     source = "./tests/wrapper"
   }
+  providers = {
+    azapi  = azapi
+    random = random
+  }
 
   variables {
     create_mock_resources = true
@@ -61,6 +75,10 @@ run "safe_defaults" {
   module {
     source = "./tests/wrapper"
   }
+  providers = {
+    azapi  = azapi
+    random = random
+  }
 
   assert {
     condition     = module.test.example_resource_counts.resource_groups == 0 && module.test.example_resource_counts.singleton_resource_groups == 0
@@ -73,6 +91,10 @@ run "telemetry_disabled" {
 
   module {
     source = "./tests/wrapper"
+  }
+  providers = {
+    azapi  = azapi
+    random = random
   }
 
   variables {

@@ -10,6 +10,21 @@ AfterAll {
 }
 
 Describe 'Component: module catalog helpers' -Tag Component {
+    It 'resolves the bundled draft-07 meta-schema and still rejects invalid catalogs' {
+        $schema = Join-Path $repoRoot 'src' 'Avm.Authoring' 'Resources' 'Schemas' 'v1' 'avm-modules-catalog.schema.json'
+        $definition = Read-AvmCatalogJson -Path $schema
+        $definition['$schema'] | Should -BeExactly 'http://json-schema.org/draft-07/schema#'
+        $catalog = [ordered]@{
+            '$schema' = $definition['$id']
+            schemaVersion = 1
+            modules = @{}
+        }
+        Test-Json -Json (ConvertTo-AvmCatalogJson -Value $catalog) -SchemaFile $schema | Should -BeTrue
+        $catalog.schemaVersion = 2
+        Test-Json -Json (ConvertTo-AvmCatalogJson -Value $catalog) -SchemaFile $schema `
+            -ErrorAction SilentlyContinue | Should -BeFalse
+    }
+
     It 'carries optional historical prefixes into the unchanged v1 catalog' {
         $fixture = New-CatalogFixture -AdoptAll
         $bicep = @($fixture.Modules | Where-Object { $_.Ecosystem -eq 'bicep' -and $_.ModuleType -eq 'resource' })[0]

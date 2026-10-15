@@ -243,7 +243,7 @@ exit $ExitCode
         else {
             $caught | Should -BeOfType ([System.InvalidOperationException])
             $caught.Data['ExitCode'] | Should -Be 7
-            $caught.Message | Should -Match 'no automatic apply retry or state repair'
+            $caught.Message | Should -Match 'no automatic retry was attempted\.'
             $caught.Message | Should -Not -Match 'private-first-line|private-second-line'
         }
     }

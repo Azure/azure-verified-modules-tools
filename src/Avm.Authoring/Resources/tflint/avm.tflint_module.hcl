@@ -125,6 +125,10 @@ rule "avm_output_entire_resource_disallowed" {
   severity = "notice"
 }
 
+rule "avm_output_resource_id_required" {
+  enabled = false
+}
+
 rule "avm_provider_azurerm_disallowed" {
   enabled  = true
   severity = "notice"

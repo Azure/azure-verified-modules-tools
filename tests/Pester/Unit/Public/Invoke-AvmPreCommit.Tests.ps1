@@ -105,6 +105,36 @@ Describe 'Invoke-AvmPreCommit' {
         }
     }
 
+    It 'passes a source-preview version opt-out through context resolution and all Terraform steps' {
+        $dir = Join-Path $TestDrive ('precommit-version-' + [guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $dir
+        [System.IO.File]::WriteAllText((Join-Path $dir 'main.tf'), "terraform {}`n")
+
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            Mock Test-AvmModuleVersion {
+                if (-not $SkipModuleVersionCheck) {
+                    throw [System.InvalidOperationException]::new('A nested Gallery version check was not skipped.')
+                }
+            }
+            Mock Invoke-AvmSync { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmTransform { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmFormat { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmDocs { [pscustomobject]@{ Status = 'pass' } }
+
+            $run = Invoke-AvmPreCommit -Path $D -Ecosystem terraform -SkipModuleVersionCheck
+            Should -Invoke Test-AvmModuleVersion -Exactly 1 -ParameterFilter { $SkipModuleVersionCheck }
+            foreach ($command in @('Invoke-AvmSync', 'Invoke-AvmCheckConvention', 'Invoke-AvmTransform',
+                    'Invoke-AvmFormat', 'Invoke-AvmDocs')) {
+                Should -Invoke $command -Exactly 1 -ParameterFilter { $SkipModuleVersionCheck }
+            }
+            $run
+        }
+
+        $result.Status | Should -Be 'pass'
+    }
+
     It 'resolves <Ecosystem> tools before metadata and stops on metadata failure' -TestCases @(
         @{ Ecosystem = 'bicep'; Kind = 'bicep-module' }
         @{ Ecosystem = 'terraform'; Kind = 'terraform-module-repo' }

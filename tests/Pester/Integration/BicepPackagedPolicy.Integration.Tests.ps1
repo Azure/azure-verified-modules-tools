@@ -11,7 +11,34 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
         }
         $script:package = Join-Path $TestDrive 'installed' 'Avm.Authoring'
         $null = New-Item -ItemType Directory -Path (Split-Path $script:package) -Force
-        Copy-Item -LiteralPath (Split-Path $manifest) -Destination $script:package -Recurse
+        $sourceRoot = Join-Path $repoRoot 'src' 'Avm.Authoring'
+        $sourceFiles = @(Get-ChildItem -LiteralPath $sourceRoot -Recurse -File -Force)
+        $expectedEntries = @($sourceFiles | ForEach-Object {
+                'Avm.Authoring/' + [System.IO.Path]::GetRelativePath($sourceRoot, $_.FullName).Replace('\', '/')
+            })
+        $archivePath = Join-Path $TestDrive 'Avm.Authoring-local-unsigned.zip'
+        Compress-Archive -LiteralPath (Split-Path $manifest) -DestinationPath $archivePath
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($archivePath)
+        try {
+            $entries = @($archive.Entries | Where-Object { $_.Name })
+            $entries.Count | Should -Be $expectedEntries.Count
+            @(Compare-Object -ReferenceObject $expectedEntries -DifferenceObject @($entries.FullName) -CaseSensitive) |
+                Should -HaveCount 0
+            @($entries | Where-Object { $_.FullName -cmatch '^Avm[.]Authoring/(?:[.]git|tests|out|test-results)/' }) |
+                Should -HaveCount 0
+        }
+        finally {
+            $archive.Dispose()
+        }
+        Expand-Archive -LiteralPath $archivePath -DestinationPath (Split-Path $script:package)
+        foreach ($file in $sourceFiles) {
+            $relative = [System.IO.Path]::GetRelativePath($sourceRoot, $file.FullName)
+            (Get-FileHash -LiteralPath (Join-Path $script:package $relative)).Hash |
+                Should -BeExactly (Get-FileHash -LiteralPath $file.FullName).Hash
+        }
+        $rules = @(Get-ChildItem -LiteralPath (Join-Path $script:package 'Resources' 'bicep' 'psrule' 'rules') -File)
+        $rules | Should -HaveCount 8
+        @($rules | Where-Object { $_.Name -cnotmatch '\.Rule\.yaml$' }) | Should -HaveCount 0
         Import-Module (Join-Path $script:package 'Avm.Authoring.psd1') -Force
         . (Join-Path $repoRoot 'scripts' 'bicep-workflows' 'Validation.ps1')
         $script:fixture = Join-Path $repoRoot 'tests' 'fixtures' 'modules' 'bicep-storage'
@@ -58,6 +85,7 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
         }
         $configuration.OptionPath | Should -BeLike "$script:package*"
         $configuration.RulePath | Should -BeLike "$script:package*"
+        Split-Path -Leaf $configuration.RulePath | Should -BeExactly 'rules'
         $result = Invoke-AvmCheckPolicy -Path $script:modulePath -SkipModuleVersionCheck
         $result.Status | Should -Be 'pass' -Because (@($result.Issues | ForEach-Object Message) -join '; ')
         $result.TestsSelected | Should -Be 2

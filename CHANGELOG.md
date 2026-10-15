@@ -107,6 +107,28 @@ section when cutting a release.
 
 ### Changed
 
+- Pinned MaPoTF 0.3.0 enables native, single-file Terraform test migration.
+  Known root and local-child runs receive only newly required location inputs,
+  preserving authored global/run values, regions, assertions and telemetry
+  opt-outs. Remote or unknown targets are rejected without fetching them.
+- Terraform MaPoTF now replaces `modtm` telemetry with an empty
+  subscription-scoped AzAPI deployment for metadata-backed roots and children.
+  Roots other than utilities without Azure resources and all Azure-deploying
+  children gain a required `var.location` when absent. Telemetry uses it;
+  child and example calls forward it when missing without overwriting
+  authored per-item locations. The deployment name reports the seven-hex prefix,
+  full version (or `0-0-0`), one-character distribution source, and stable
+  instance suffix; no resource tags or raw source paths are sent. A changing
+  empty-template output forces a write on every normal apply. Legacy telemetry
+  state is forgotten without destroying it, though existing state needs the
+  former provider installed for one final initialization. Standard `modtm`
+  test mocks, provider requirements, and resource references in instrumented
+  modules migrate too; custom `modtm` use is reported as an error. Packaged
+  TFLint disables only its retired `modtm` requirement and exempts only the
+  generated tagless telemetry deployment from the generic customer-tags rule.
+  The unused random provider declaration is removed when telemetry was its
+  only use, and the generated TFLint ignore no longer produces an author
+  warning; other inline ignores still warn.
 - `avm check convention` for Bicep now runs its rules as a packaged Pester
   suite (`Resources/bicep/conventions`), so it, and therefore Bicep
   `pre-commit` and `pr-check`, requires Pester 5.5.0 or later. Compilation,
@@ -352,6 +374,27 @@ section when cutting a release.
 
 ### Fixed
 
+- TFLint uses attested AVM ruleset v1.2.0 and requires `resource_id` only
+  for resource roots. Validated pattern and utility roots receive their
+  module class automatically; child and example scopes are excluded.
+  Conflicting identities, class overrides, and incompatible plugin pins
+  fail explicitly instead of weakening resource-root checks.
+- MaPoTF sorts newly added child `location` variables with existing required
+  inputs on the first transform, avoiding a second-pass change during
+  candidate validation.
+- Telemetry migration removes empty `random` provider mocks from direct unit
+  tests only when the root, local children, and test setup no longer use the
+  provider. Authored random use is retained; custom mocks need manual review.
+  JSON configurations and unscanned module dependencies retain their mocks;
+  explicit test provider mappings are checked before any mock is removed.
+- Standard telemetry unit mocks migrate to AzAPI with a valid synthetic
+  client-config subscription ID. Custom mocks are preserved, and ambiguous
+  real-provider contexts or unknown test targets fail explicitly instead of being
+  silently mocked.
+- Newly scaffolded Bicep modules use the canonical telemetry parameter
+  description that matches their metadata-backed prefix declaration, so
+  their source passes the convention check without changing the separately
+  supported published telemetry form.
 - Bicep e2e now watches the same deployment after a submission timeout instead
   of failing with an unknown outcome. A recovered failure is retried as a
   confirmed failure; the timed-out deployment is never resubmitted. Confirmed

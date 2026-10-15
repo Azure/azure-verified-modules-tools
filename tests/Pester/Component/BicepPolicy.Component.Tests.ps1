@@ -33,7 +33,7 @@ Describe 'Bicep PSRule policy checks' -Tag 'Component' {
                     'Resources' 'bicep' 'psrule'
                 [pscustomobject]@{
                     OptionPath = Join-Path $folder 'ps-rule.yaml'
-                    RulePath   = Join-Path $folder '.ps-rule'
+                    RulePath   = Join-Path $folder 'rules'
                     Option     = $null
                 }
             }

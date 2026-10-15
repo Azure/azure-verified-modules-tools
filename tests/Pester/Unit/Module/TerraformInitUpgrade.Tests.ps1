@@ -26,6 +26,16 @@ Describe 'Terraform init upgrade guard' {
                         $node -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
                         $node.Value -eq 'init'
                     }, $true)) {
+                $command = $literal.Parent
+                while ($null -ne $command -and
+                    $command -isnot [System.Management.Automation.Language.CommandAst] -and
+                    $command -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) {
+                    $command = $command.Parent
+                }
+                if ($command -is [System.Management.Automation.Language.CommandAst] -and
+                    $command.GetCommandName() -ceq 'Invoke-RepositoryGit') {
+                    continue
+                }
                 $container = $literal.Parent
                 while (
                     $null -ne $container -and
