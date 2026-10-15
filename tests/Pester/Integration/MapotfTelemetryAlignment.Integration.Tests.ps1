@@ -2507,8 +2507,10 @@ __TARGET__
         @{ Usage = 'source-backed'; Dependencies = $true; SourceBacked = $true }
         @{ Usage = 'complete example callers'; Dependencies = $true; SourceBacked = $false; Examples = $true }
         @{ Usage = 'locals-only JSON example callers'; Dependencies = $true; SourceBacked = $false; Examples = $true; JsonDependency = $true }
+        @{ Usage = 'locals-only JSON roots'; Dependencies = $false; SourceBacked = $false; JsonTargets = $true }
+        @{ Usage = 'locals-only JSON roots and examples'; Dependencies = $true; SourceBacked = $false; Examples = $true; JsonDependency = $true; JsonTargets = $true }
     ) {
-        param($Dependencies, $SourceBacked, $Examples = $false, $JsonDependency = $false)
+        param($Dependencies, $SourceBacked, $Examples = $false, $JsonDependency = $false, $JsonTargets = $false)
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-TelemetryModule -Root $root -WithLegacy -WithLocation
         $providerPath = Join-Path $root 'terraform.tf'
@@ -2527,6 +2529,19 @@ output "tenant" {
   value = data.azurerm_client_config.authored.tenant_id
 }
 '@
+        $jsonFiles = @{}
+        if ($JsonTargets) {
+            $jsonPath = Join-Path $root 'locals.geo.codes.tf.json'
+            [System.IO.File]::WriteAllText($jsonPath,
+                "{`r`n  `"locals`": {`"geo_codes_by_name`": {`"eastus`": `"US`"}}`r`n}`r`n",
+                [System.Text.UTF8Encoding]::new($false))
+            $jsonFiles[$jsonPath] = [System.IO.File]::ReadAllBytes($jsonPath)
+            Add-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+output "region_code" {
+  value = local.geo_codes_by_name.eastus
+}
+'@
+        }
         $dependencyFile = $null
         $dependencyBytes = $null
         if ($Dependencies) {
@@ -2624,6 +2639,15 @@ __ASSERT__
             "assert {`n  condition = output.suffix == `"unit`"`n  error_message = `"Retain the required random alias.`"`n}"
         }
         else { '' }
+        if ($JsonTargets) {
+            $assertion += @'
+
+assert {
+  condition     = output.region_code == "US"
+  error_message = "The root's JSON region data must remain available after telemetry migration."
+}
+'@
+        }
         $testPath = Join-Path $unit 'aliases.tftest.hcl'
         [System.IO.File]::WriteAllText($testPath,
             $source.Replace('__CLIENT__', $client).Replace('__RANDOM__', $random).
@@ -2631,7 +2655,6 @@ __ASSERT__
         $exampleLocks = @{}
         $exampleManifests = @{}
         $exampleSelections = @{}
-        $jsonDependencyFiles = @{}
         if ($Examples) {
             if ($JsonDependency) {
                 $regions = Join-Path $root '.published' 'regions'
@@ -2649,12 +2672,18 @@ output "region_code" {
                 Set-Content -LiteralPath $regionsBlocks -Encoding utf8NoBOM `
                     -Value '{"locals":[{"region":"eastus"},{"region_code":"${local.geo_codes_by_name[local.region]}"}]}'
                 foreach ($path in @($regionsMain, $regionsJson, $regionsBlocks)) {
-                    $jsonDependencyFiles[$path] = [System.IO.File]::ReadAllBytes($path)
+                    $jsonFiles[$path] = [System.IO.File]::ReadAllBytes($path)
                 }
             }
             foreach ($name in @('default', 'complete')) {
                 $example = Join-Path $root 'examples' $name
                 $null = New-Item -ItemType Directory -Path $example -Force
+                if ($JsonTargets) {
+                    $jsonPath = Join-Path $example 'locals.blocks.tf.json'
+                    Set-Content -LiteralPath $jsonPath -Encoding utf8NoBOM `
+                        -Value '{"locals":[{"region":"eastus"},{"region_code":"${local.region}"}]}'
+                    $jsonFiles[$jsonPath] = [System.IO.File]::ReadAllBytes($jsonPath)
+                }
                 $exampleProviders = [regex]::Replace([System.IO.File]::ReadAllText($providerPath),
                     '(?m)^[ \t]*modtm[ \t]*=[ \t]*\{[^{}]*\}[ \t]*\r?\n', '')
                 $exampleProviders | Should -Not -Match '\bmodtm\s*='
@@ -2777,8 +2806,8 @@ plugin "terraform" {
         if ($Dependencies) {
             [System.IO.File]::ReadAllBytes($dependencyFile) | Should -Be $dependencyBytes
         }
-        foreach ($path in $jsonDependencyFiles.Keys) {
-            [System.IO.File]::ReadAllBytes($path) | Should -Be $jsonDependencyFiles[$path]
+        foreach ($path in $jsonFiles.Keys) {
+            [System.IO.File]::ReadAllBytes($path) | Should -Be $jsonFiles[$path]
         }
         foreach ($example in $exampleLocks.Keys) {
             [System.IO.File]::ReadAllBytes((Join-Path $example '.terraform.lock.hcl')) | Should -Be $exampleLocks[$example]

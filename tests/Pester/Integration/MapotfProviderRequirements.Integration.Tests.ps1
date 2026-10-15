@@ -192,6 +192,107 @@ terraform {
         Remove-Module -Name 'Avm.Authoring' -Force -ErrorAction SilentlyContinue
     }
 
+    It 'renders retained ModTM requirements without JSON encoding for <State>' -TestCases @(
+        @{ State = 'an authored requirement'; Source = 'azure/modtm'; Version = '~> 0.3' }
+        @{ State = 'an example without a requirement'; Source = 'registry.terraform.io/azure/modtm'; Version = '>= 0.3.0, < 0.4.0' }
+        @{ State = 'no terraform block'; Source = 'Azure/modtm'; Version = '~> 0.3' }
+        @{ State = 'an existing inline requirement'; Source = 'azure/modtm'; Version = '~> 0.3' }
+        @{ State = 'an authored versionless requirement'; Source = 'Azure/modtm'; Version = $null }
+    ) {
+        param($State, $Source, $Version)
+
+        $root = $script:target
+        $dependency = Join-Path $root 'dependency'
+        $null = New-Item -ItemType Directory -Path $dependency
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+module "dependency" {
+  source = "./dependency"
+}
+'@
+        $terraformFile = Join-Path $root 'terraform.tf'
+        $requirement = [ordered]@{ source = $Source }
+        $expected = "    modtm = {`n      source = `"$Source`"`n    }"
+        if ($Version) {
+            $requirement.version = $Version
+            $expected = "    modtm = {`n      source  = `"$Source`"`n      version = `"$Version`"`n    }"
+        }
+        $existing = $State -in @('an authored requirement', 'an existing inline requirement', 'an authored versionless requirement')
+        if ($existing) {
+            if ($State -eq 'an existing inline requirement') {
+                $expected = '    modtm = { source = "azure/modtm", version = "~> 0.3" }'
+            }
+            Set-Content -LiteralPath $terraformFile -Encoding utf8NoBOM -Value "terraform {`n  required_providers {`n$expected`n  }`n}"
+        }
+        elseif ($State -eq 'no terraform block') {
+            Remove-Item -LiteralPath $terraformFile
+        }
+        Set-Content -LiteralPath (Join-Path $dependency 'terraform.tf') -Encoding utf8NoBOM -Value @'
+terraform {
+  required_providers {
+    modtm = {
+      source  = "Azure/modtm"
+      version = "~> 0.3"
+    }
+  }
+}
+'@
+
+        InModuleScope Avm.Authoring -Parameters @{
+            Root = $root; Dependency = $dependency; Profiles = $script:profilesRoot
+            Requirement = $requirement; Existing = $existing; Expected = $expected
+        } {
+            param($Root, $Dependency, $Profiles, $Requirement, $Existing, $Expected)
+
+            $mapotf = Resolve-AvmTool -Name mapotf
+            $source = 'registry.terraform.io/azure/modtm'
+            $required = @{
+                $Root = @{}
+                $Dependency = @{ modtm = $Requirement }
+            }
+            if ($Existing) { $required[$Root].modtm = $Requirement }
+            $plan = Get-AvmTerraformUnitTestModtmRequirementPlan -Path $Root `
+                -ModuleTargets @([pscustomobject]@{ Path = $Root }) `
+                -Options ([pscustomobject]@{
+                    ToolPath = $mapotf.Path
+                    ProfileDirs = @{ module = Join-Path $Profiles 'module' }
+                    EnvVars = @{}
+                }) `
+                -RequiredProviders $required -ProviderSources @{ $Root = @($source) } `
+                -ModuleProviderSources @{ $Root = @{ dependency = @($source) } } `
+                -ModuleManifests @{
+                    $Root = ConvertTo-Json -Depth 5 -Compress -InputObject @{
+                        Modules = @(@{ Key = ''; Dir = '.' }, @{ Key = 'dependency'; Dir = $Dependency })
+                    }
+                } `
+                -OriginalRequirements @{ $Root = @{ modtm = $Requirement } } `
+                -Plans @{} -PlanningPaths ([System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)) `
+                -BindDependencies
+            $inspection = @('debug') + $plan.Arguments[1..($plan.Arguments.Count - 1)] + @('--eval', $plan.Capabilities)
+            $capabilities = Invoke-AvmProcess -FilePath $mapotf.Path -ArgumentList $inspection -WorkingDirectory $Root
+            ($capabilities.StdOut | ConvertFrom-Json) | Should -BeTrue
+            $null = Invoke-AvmProcess -FilePath $mapotf.Path -ArgumentList $plan.Arguments -WorkingDirectory $Root
+            $null = Invoke-AvmProcess -FilePath $mapotf.Path -ArgumentList @('clean-backup', '--tf-dir', $Root) -WorkingDirectory $Root
+
+            $terraformFile = Join-Path $Root 'terraform.tf'
+            $first = [System.IO.File]::ReadAllText($terraformFile)
+            $first | Should -Match ([regex]::Escape($Expected)) -Because 'generated provider requirements should use multiline HCL and preserve authored formatting'
+            $first | Should -Not -Match '\\u003[ce]'
+            $terraform = Resolve-AvmTool -Name terraform
+            $null = Invoke-AvmProcess -FilePath $terraform.Path -ArgumentList @('fmt', '-check', '-diff') -WorkingDirectory $Root
+            $requirements = Invoke-AvmProcess -FilePath $mapotf.Path -WorkingDirectory $Root -ArgumentList @(
+                'debug', '--tf-dir', $Root, '--mptf-dir', (Join-Path $Profiles 'module'),
+                '--eval', 'data.terraform.this.required_providers.modtm'
+            )
+            $actual = ConvertFrom-Json -InputObject $requirements.StdOut -AsHashtable
+            $actual.source | Should -BeExactly $Requirement.source
+            $actual['version'] | Should -BeExactly $Requirement['version']
+
+            $null = Invoke-AvmProcess -FilePath $mapotf.Path -ArgumentList $plan.Arguments -WorkingDirectory $Root
+            $null = Invoke-AvmProcess -FilePath $mapotf.Path -ArgumentList @('clean-backup', '--tf-dir', $Root) -WorkingDirectory $Root
+            [System.IO.File]::ReadAllText($terraformFile) | Should -BeExactly $first
+        }
+    }
+
     It 'does not add AzAPI for <Name> and stays lint-clean and idempotent' -TestCases @(
         @{
             Name = 'a provider-free helper'

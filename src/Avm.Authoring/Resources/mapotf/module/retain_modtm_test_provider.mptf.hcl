@@ -1,6 +1,6 @@
 variable "unit_test_modtm_requirement" {
-  type    = map(string)
-  default = {}
+  type    = string
+  default = ""
 }
 
 variable "unit_test_modtm_bindings" {
@@ -14,15 +14,15 @@ transform "update_in_place" "unit_test_modtm_requirement" {
   for_each                = length(var.unit_test_modtm_requirement) > 0 && local.provider_terraform_block_exists ? toset(["1"]) : toset([])
   target_block_address    = "terraform"
   merge_object_attributes = true
-  dynamic_block_body      = "required_providers {\n  modtm = ${jsonencode(var.unit_test_modtm_requirement)}\n}\n"
+  dynamic_block_body      = var.unit_test_modtm_requirement
 }
 
 transform "new_block" "unit_test_modtm_requirement" {
-  for_each           = length(var.unit_test_modtm_requirement) > 0 && !local.provider_terraform_block_exists ? toset(["1"]) : toset([])
-  new_block_type     = "terraform"
-  labels             = []
-  filename           = "terraform.tf"
-  dynamic_block_body = "required_providers {\n  modtm = ${jsonencode(var.unit_test_modtm_requirement)}\n}\n"
+  for_each       = length(var.unit_test_modtm_requirement) > 0 && !local.provider_terraform_block_exists ? toset(["1"]) : toset([])
+  new_block_type = "terraform"
+  labels         = []
+  filename       = "terraform.tf"
+  body           = var.unit_test_modtm_requirement
 }
 
 transform "update_in_place" "unit_test_modtm_bindings" {
