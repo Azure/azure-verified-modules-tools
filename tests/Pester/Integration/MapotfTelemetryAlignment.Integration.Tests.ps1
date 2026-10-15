@@ -2506,8 +2506,9 @@ __TARGET__
         @{ Usage = 'retained'; Dependencies = $true; SourceBacked = $false }
         @{ Usage = 'source-backed'; Dependencies = $true; SourceBacked = $true }
         @{ Usage = 'complete example callers'; Dependencies = $true; SourceBacked = $false; Examples = $true }
+        @{ Usage = 'locals-only JSON example callers'; Dependencies = $true; SourceBacked = $false; Examples = $true; JsonDependency = $true }
     ) {
-        param($Dependencies, $SourceBacked, $Examples = $false)
+        param($Dependencies, $SourceBacked, $Examples = $false, $JsonDependency = $false)
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-TelemetryModule -Root $root -WithLegacy -WithLocation
         $providerPath = Join-Path $root 'terraform.tf'
@@ -2630,7 +2631,27 @@ __ASSERT__
         $exampleLocks = @{}
         $exampleManifests = @{}
         $exampleSelections = @{}
+        $jsonDependencyFiles = @{}
         if ($Examples) {
+            if ($JsonDependency) {
+                $regions = Join-Path $root '.published' 'regions'
+                $null = New-Item -ItemType Directory -Path $regions -Force
+                $regionsMain = Join-Path $regions 'main.tf'
+                [System.IO.File]::WriteAllBytes($regionsMain, $dependencyBytes)
+                Add-Content -LiteralPath $regionsMain -Encoding utf8NoBOM -Value @'
+output "region_code" {
+  value = local.region_code
+}
+'@
+                $regionsJson = Join-Path $regions 'locals.geo.codes.tf.json'
+                Set-Content -LiteralPath $regionsJson -Encoding utf8NoBOM -Value '{"locals":{"geo_codes_by_name":{"eastus":"US"}}}'
+                $regionsBlocks = Join-Path $regions 'locals.blocks.tf.json'
+                Set-Content -LiteralPath $regionsBlocks -Encoding utf8NoBOM `
+                    -Value '{"locals":[{"region":"eastus"},{"region_code":"${local.geo_codes_by_name[local.region]}"}]}'
+                foreach ($path in @($regionsMain, $regionsJson, $regionsBlocks)) {
+                    $jsonDependencyFiles[$path] = [System.IO.File]::ReadAllBytes($path)
+                }
+            }
             foreach ($name in @('default', 'complete')) {
                 $example = Join-Path $root 'examples' $name
                 $null = New-Item -ItemType Directory -Path $example -Force
@@ -2648,6 +2669,13 @@ module "test" {
   }
 }
 '@
+                if ($JsonDependency) {
+                    Add-Content -LiteralPath (Join-Path $example 'main.tf') -Encoding utf8NoBOM -Value @'
+module "regions" {
+  source = "../../.published/regions"
+}
+'@
+                }
                 $null = Invoke-TelemetryProcess -FilePath $script:terraformPath `
                     -ArgumentList @('init', '-backend=false', '-input=false', '-no-color') -Root $example
                 $exampleLocks[$example] = [System.IO.File]::ReadAllBytes((Join-Path $example '.terraform.lock.hcl'))
@@ -2706,6 +2734,10 @@ plugin "terraform" {
         foreach ($example in $exampleLocks.Keys) {
             Get-Content -LiteralPath (Join-Path $example 'terraform.tf') -Raw | Should -Match 'modtm\s*=\s*\{'
             Get-Content -LiteralPath (Join-Path $example 'main.tf') -Raw | Should -Match 'modtm\s*=\s*modtm\b'
+            if ($JsonDependency) {
+                Get-Content -LiteralPath (Join-Path $example 'main.tf') -Raw |
+                    Should -Match '(?ms)^module "regions" \{[^}]*modtm\s*=\s*modtm\b'
+            }
             [System.IO.File]::ReadAllBytes((Join-Path $example '.terraform.lock.hcl')) | Should -Be $exampleLocks[$example]
             $path = Join-Path -Path $example -ChildPath '.terraform' -AdditionalChildPath 'modules', 'modules.json'
             [System.IO.File]::ReadAllBytes($path) | Should -Be $exampleManifests[$example]
@@ -2744,6 +2776,9 @@ plugin "terraform" {
         }
         if ($Dependencies) {
             [System.IO.File]::ReadAllBytes($dependencyFile) | Should -Be $dependencyBytes
+        }
+        foreach ($path in $jsonDependencyFiles.Keys) {
+            [System.IO.File]::ReadAllBytes($path) | Should -Be $jsonDependencyFiles[$path]
         }
         foreach ($example in $exampleLocks.Keys) {
             [System.IO.File]::ReadAllBytes((Join-Path $example '.terraform.lock.hcl')) | Should -Be $exampleLocks[$example]
