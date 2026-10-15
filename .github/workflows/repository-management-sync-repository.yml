@@ -444,7 +444,7 @@ jobs:
         run: |
           $candidate = Get-Content -LiteralPath (Join-Path $env:CANDIDATE_DIRECTORY 'candidate.json') -Raw |
             ConvertFrom-Json -AsHashtable
-          "has-changes=$([string]$candidate.hasChanges).ToLowerInvariant()" |
+          "has-changes=$(([string]$candidate.hasChanges).ToLowerInvariant())" |
             Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Create GitHub App token

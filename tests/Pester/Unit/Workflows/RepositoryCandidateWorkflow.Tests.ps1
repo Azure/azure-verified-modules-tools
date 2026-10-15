@@ -113,6 +113,68 @@ Describe 'Repository sync candidate workflow' {
         $script:prepare | Should -Match 'name:\s*candidate-\$\{\{ inputs\.repo_name \}\}'
     }
 
+    Context 'Candidate change output' {
+        BeforeAll {
+            $step = [regex]::Match($script:publish,
+                '(?ms)^      - name: Inspect candidate\r?\n(?<body>.*?)(?=^      - name:|\z)')
+            $step.Success | Should -BeTrue
+            $step.Groups['body'].Value | Should -Match '(?m)^        id: candidate\r?$'
+            $run = [regex]::Match($step.Groups['body'].Value,
+                '(?ms)^        run: \|\r?\n(?<body>(?: {10}[^\r\n]*\r?\n|\r?\n)*)')
+            $run.Success | Should -BeTrue
+            $script:inspectCandidate = [scriptblock]::Create(($run.Groups['body'].Value -replace '(?m)^ {10}', ''))
+        }
+
+        BeforeEach {
+            $script:previousCandidateEnvironment = @{}
+            foreach ($name in @('CANDIDATE_DIRECTORY', 'GITHUB_OUTPUT')) {
+                $script:previousCandidateEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+            }
+            $env:CANDIDATE_DIRECTORY = Join-Path $TestDrive 'candidate'
+            $env:GITHUB_OUTPUT = 'candidate-output'
+            $script:candidateOutput = [System.Collections.Generic.List[string]]::new()
+            Mock Get-Content {
+                ConvertTo-Json -InputObject @{ hasChanges = $script:candidateHasChanges } -Compress
+            }
+            Mock Out-File {
+                param($InputObject)
+                $script:candidateOutput.Add([string]$InputObject)
+            } -RemoveParameterType Encoding
+        }
+
+        AfterEach {
+            foreach ($name in $script:previousCandidateEnvironment.Keys) {
+                $value = $script:previousCandidateEnvironment[$name]
+                [Environment]::SetEnvironmentVariable($name, ($null -eq $value ? [NullString]::Value : $value), 'Process')
+            }
+        }
+
+        It 'writes the exact lowercase output for hasChanges=<HasChanges>' -ForEach @(
+            @{ HasChanges = $true; Expected = 'true' }
+            @{ HasChanges = $false; Expected = 'false' }
+        ) {
+            $script:candidateHasChanges = $HasChanges
+            & $script:inspectCandidate
+            $script:candidateOutput | Should -HaveCount 1
+            $script:candidateOutput[0] | Should -BeExactly "has-changes=$Expected"
+            Should -Invoke Get-Content -Exactly 1 -ParameterFilter {
+                $LiteralPath -eq (Join-Path $env:CANDIDATE_DIRECTORY 'candidate.json') -and $Raw
+            }
+            Should -Invoke Out-File -Exactly 1 -ParameterFilter {
+                $FilePath -eq $env:GITHUB_OUTPUT -and $Append -and $Encoding -eq 'utf8'
+            }
+        }
+
+        It 'requests a publication token only for changed candidates and passes it to publication' {
+            $token = [regex]::Match($script:publish,
+                '(?ms)^      - name: Create GitHub App token\r?\n(?<body>.*?)(?=^      - name:|\z)')
+            $token.Success | Should -BeTrue
+            $token.Groups['body'].Value | Should -Match '(?m)^        if: steps\.candidate\.outputs\.has-changes == ''true''\r?$'
+            $token.Groups['body'].Value | Should -Match '(?m)^        id: app-token\r?$'
+            $script:publish | Should -Match '(?m)^          GH_TOKEN: \$\{\{ steps\.app-token\.outputs\.token \}\}\r?$'
+        }
+    }
+
     It 'propagates validation errors and accepts receipt artifacts only from the successful current run' {
         $script:validate | Should -Not -Match 'continue-on-error:'
         $checks = [regex]::Match($script:validate,
