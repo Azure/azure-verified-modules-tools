@@ -310,6 +310,101 @@ Describe 'Terraform unit-test migration' {
         }
     }
 
+    Context 'baseline provider-tree selection' {
+        BeforeEach {
+            Mock Get-AvmTerraformUnitTestInspection -ModuleName Avm.Authoring { $Scope.Inspection }
+            Mock Get-AvmTerraformUnitTestRequiredProvider -ModuleName Avm.Authoring {
+                @{ azapi = @{ source = 'Azure/azapi' } }
+            }
+            Mock Test-AvmTerraformScopedProviderInUse -ModuleName Avm.Authoring { $false }
+            Mock Get-AvmTerraformUnitTestProviderSource -ModuleName Avm.Authoring {
+                @('registry.terraform.io/azure/azapi')
+            }
+        }
+
+        It 'does not load Terraform dependencies before fully mocked templates gain their inputs' {
+            InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {
+                param($Fixture)
+                Mock Get-AvmTerraformTestFileScope { $Fixture.Scope }
+                $snapshots = @(Get-AvmTerraformUnitTestSnapshot -Root $Fixture.Root `
+                        -ModuleTargets $Fixture.Targets -Options $Fixture.Options)
+                $snapshots[0].ProviderSources.Count | Should -Be 0
+                Should -Invoke Get-AvmTerraformUnitTestProviderSource -Exactly 0
+                Should -Invoke Test-AvmTerraformScopedProviderInUse -Exactly 2 -ParameterFilter {
+                    $IncludeSelectedExamples -and $TargetPaths.Count -eq 2
+                }
+            }
+        }
+
+        It 'retains native baseline proof for a possible unmocked <LocalProvider> dependency' -TestCases @(
+            @{ LocalProvider = 'random' }
+            @{ LocalProvider = 'time' }
+        ) {
+            param($LocalProvider)
+            InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture; LocalProvider = $LocalProvider } {
+                param($Fixture, $LocalProvider)
+                Mock Get-AvmTerraformTestFileScope { $Fixture.Scope }
+                Mock Test-AvmTerraformScopedProviderInUse { $Provider -ceq $LocalProvider }
+                $snapshots = @(Get-AvmTerraformUnitTestSnapshot -Root $Fixture.Root `
+                        -ModuleTargets $Fixture.Targets -Options $Fixture.Options)
+                $snapshots[0].ProviderSources.Count | Should -Be 2
+                Should -Invoke Get-AvmTerraformUnitTestProviderSource -Exactly 2
+            }
+        }
+
+        It 'does not request preservation proof for mocked <LocalProvider> requirements' -TestCases @(
+            @{ LocalProvider = 'random' }
+            @{ LocalProvider = 'time' }
+        ) {
+            param($LocalProvider)
+            $script:fixture.After.test.mock_providers[$LocalProvider] = @{ mptf = @{ is_empty = $true } }
+            InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture; LocalProvider = $LocalProvider } {
+                param($Fixture, $LocalProvider)
+                Mock Get-AvmTerraformTestFileScope { $Fixture.Scope }
+                Mock Get-AvmTerraformUnitTestRequiredProvider {
+                    @{ azapi = @{ source = 'Azure/azapi' }; $LocalProvider = @{ source = "hashicorp/$LocalProvider" } }
+                }
+                $snapshots = @(Get-AvmTerraformUnitTestSnapshot -Root $Fixture.Root `
+                        -ModuleTargets $Fixture.Targets -Options $Fixture.Options)
+                $snapshots[0].ProviderSources.Count | Should -Be 0
+                Should -Invoke Get-AvmTerraformUnitTestProviderSource -Exactly 0
+                Should -Invoke Test-AvmTerraformScopedProviderInUse -Exactly 0 -ParameterFilter {
+                    $Provider -ceq $LocalProvider
+                }
+            }
+        }
+
+        It 'keeps native baseline proof mandatory when an authored mapping needs new AzAPI coverage' {
+            $script:fixture.After.test.mock_providers.modtm = @{ mptf = @{ is_empty = $true } }
+            $script:fixture.After.test.runs.root.mptf.attributes.providers = '{ modtm = modtm }'
+            InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {
+                param($Fixture)
+                Mock Get-AvmTerraformTestFileScope { $Fixture.Scope }
+                Mock Get-AvmTerraformUnitTestRequiredProvider { @{ modtm = @{ source = 'Azure/modtm' } } }
+                $snapshots = @(Get-AvmTerraformUnitTestSnapshot -Root $Fixture.Root `
+                        -ModuleTargets $Fixture.Targets -Options $Fixture.Options)
+                $snapshots[0].ProviderSources.Keys | Should -HaveCount 1
+                $snapshots[0].ProviderSources.ContainsKey($Fixture.Root) | Should -BeTrue
+                Should -Invoke Get-AvmTerraformUnitTestProviderSource -Exactly 1 -ParameterFilter { $Path -ceq $Fixture.Root }
+            }
+        }
+
+        It 'preserves proof for an unmocked local provider declared under another name' {
+            $script:fixture.After.test.mock_providers.time = @{ mptf = @{ is_empty = $true } }
+            InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {
+                param($Fixture)
+                Mock Get-AvmTerraformTestFileScope { $Fixture.Scope }
+                Mock Get-AvmTerraformUnitTestRequiredProvider {
+                    @{ azapi = @{ source = 'Azure/azapi' }; clock = @{ source = 'hashicorp/time' } }
+                }
+                $snapshots = @(Get-AvmTerraformUnitTestSnapshot -Root $Fixture.Root `
+                        -ModuleTargets $Fixture.Targets -Options $Fixture.Options)
+                $snapshots[0].ProviderSources.Count | Should -Be 2
+                Should -Invoke Get-AvmTerraformUnitTestProviderSource -Exactly 2
+            }
+        }
+    }
+
     Context 'configuration provider trees' {
         BeforeEach {
             $script:fixture.Child = Join-Path $script:fixture.Child ([guid]::NewGuid().ToString('N'))
@@ -2716,12 +2811,17 @@ Providers required by state:
             Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'transform' }
         }
 
-        It 'checks selected source coverage even when inputs and client defaults need no repair' {
+        It 'checks unmocked <UnmockedSource> coverage even when inputs and client defaults need no repair' -TestCases @(
+            @{ UnmockedSource = 'registry.terraform.io/hashicorp/azurerm' }
+            @{ UnmockedSource = 'registry.terraform.io/azure/modtm' }
+        ) {
+            param($UnmockedSource)
             foreach ($target in $script:fixture.Targets) {
                 $script:fixture.Before.modules[$target.Path].variables.location = @{ required = $true }
             }
+            $script:fixture.Options.EnvVars['AVM_TEST_UNMOCKED_SOURCE'] = $UnmockedSource
             Mock Get-AvmTerraformUnitTestProviderSource -ModuleName Avm.Authoring {
-                @('registry.terraform.io/azure/azapi', 'registry.terraform.io/hashicorp/azurerm')
+                @('registry.terraform.io/azure/azapi', $Options.EnvVars['AVM_TEST_UNMOCKED_SOURCE'])
             }
             { Invoke-UnitMigrationFixture -Fixture $script:fixture } | Should -Throw '*Cannot automatically migrate unit test*'
             Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0

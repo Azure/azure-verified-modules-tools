@@ -833,6 +833,13 @@ Native MaPoTF inspects each direct `tests/unit/*.tftest.hcl` file before source
 transformation. Root runs and explicitly selected, known local module
 targets, including discovered examples and standalone test setup and wrapper modules,
 are supported; remote or unknown targets fail without fetching them.
+Load pre-transform provider trees only when preserving existing local bindings
+or augmenting an introduced provider mapping needs their evidence. Conservative
+local-provider usage checks select those inspections; they never establish
+binding coverage. Fully mocked templates can reference inputs that instrumentation
+has not created yet, so their native dependency loading waits until after the
+source transforms. Every selected post-transform provider tree still requires
+complete mock or proven preserved-binding coverage.
 Only root and child modules establish test-file ownership; example and
 standalone test targets do not change which files are direct unit tests.
 After source transformation, only a target that gained a previously absent,

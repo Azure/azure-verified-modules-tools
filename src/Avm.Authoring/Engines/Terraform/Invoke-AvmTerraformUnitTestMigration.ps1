@@ -131,6 +131,12 @@ function Get-AvmTerraformUnitTestSnapshot {
     $ErrorActionPreference = 'Stop'
     $requirements = @{}
     $originalProviderSources = @{}
+    $providerUse = @{}
+    $localProviderSources = @(
+        'registry.terraform.io/azure/alz'
+        'registry.terraform.io/hashicorp/random'
+        'registry.terraform.io/hashicorp/time'
+    )
     foreach ($scope in Get-AvmTerraformTestFileScope -Root $Root -ModuleTargets $ModuleTargets |
             Where-Object IsUnitTest) {
         $inspection = Get-AvmTerraformUnitTestInspection -Scope $scope -ModuleTargets $ModuleTargets -Options $Options
@@ -141,9 +147,26 @@ function Get-AvmTerraformUnitTestSnapshot {
                     $requirements[$path] = Get-AvmTerraformUnitTestRequiredProvider -Path $path -Options $Options
                 }
             }
+            $mockedNames = @($inspection.test.mock_providers.Keys | ForEach-Object { ($_ -split '\.', 2)[0] })
+            $preservationProof = $inspection.test.providers.Count -gt 0
+            foreach ($provider in @('random', 'time')) {
+                if ($preservationProof) { break }
+                if ($provider -cnotin $mockedNames) {
+                    $preservationProof = Test-AvmTerraformScopedProviderInUse -Scope $scope -ModuleTargets $ModuleTargets `
+                        -TargetPaths @($inspection.test.run_modules.Values | ForEach-Object { $_.dir }) `
+                        -Cache $providerUse -Provider $provider -IncludeSelectedExamples
+                }
+            }
             foreach ($name in $inspection.test.run_modules.Keys) {
                 $targetPath = $inspection.test.run_modules[$name].dir
-                if (-not $originalProviderSources.ContainsKey($targetPath)) {
+                $unmockedNames = @($requirements[$targetPath].Keys | Where-Object { $_ -cnotin $mockedNames })
+                $localNames = @(Get-AvmTerraformUnitTestMockProviderName -ProviderNames $unmockedNames `
+                        -RequiredProviders $requirements[$targetPath] -ProviderSources $localProviderSources)
+                $introducesMapping = $inspection.test.runs[$name].mptf.attributes.Contains('providers') -and
+                -not $requirements[$targetPath].Contains('azapi') -and
+                @($ModuleTargets | Where-Object { $_.Path -ceq $targetPath -and $_.Profiles -contains 'root' }).Count -gt 0
+                if (($preservationProof -or $localNames.Count -gt 0 -or $introducesMapping) -and
+                    -not $originalProviderSources.ContainsKey($targetPath)) {
                     $originalProviderSources[$targetPath] = @(Get-AvmTerraformUnitTestProviderSource `
                             -Path $targetPath -ModuleTargets $ModuleTargets -Options $Options)
                 }
