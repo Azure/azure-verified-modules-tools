@@ -116,10 +116,22 @@ section when cutting a release.
 
 ### Changed
 
+- Fresh telemetry generation now has deterministic block, local-attribute and
+  precondition ordering. Independent migrations produce the same reviewed
+  bytes, without moving unrelated owner declarations or controlling headers.
+- AzAPI request headers and their helper locals are module-owner managed.
+  Terraform transforms preserve authored headers, including historical AVM
+  names and merged delete preconditions, instead of retiring them.
+- Terraform integration now exercises packaged public pre-commit twice and
+  full pr-check against unchanged canonical fixtures and one reviewed legacy
+  migration. Byte inventories include docs, tests, dotfiles and tracked locks.
+  Decision and filesystem coverage lives in unit/component suites; minimal
+  native compatibility and package/bootstrap qualification run separately
+  without repeating exhaustive matrices in every fixture job. Bicep metadata
+  acceptance runs only in the Bicep selection.
 - Bumped pinned MaPoTF to `0.4.1`, with refreshed SHA256 hashes for all six
   supported platforms. This release reuses exact-version public module
-  inspections ([Azure/mapotf#136](https://github.com/Azure/mapotf/pull/136));
-  transform rules, test coverage, CI matrix and time limits are unchanged.
+  inspections ([Azure/mapotf#136](https://github.com/Azure/mapotf/pull/136)).
 - Pinned MaPoTF 0.3.0 enables native, single-file Terraform test migration.
   Known root and local-child runs receive only newly required location inputs,
   preserving authored global/run values, regions, assertions and telemetry
@@ -187,9 +199,6 @@ section when cutting a release.
   install it. Automation can explicitly pass `-SkipModuleVersionCheck`. Source
   builds identify themselves with manifest version `0.0.0`; release packaging
   stamps the tag version into the distributed manifest.
-- Retired the completed AzAPI request-header cleanup from the Mapotf common
-  profile, reducing work performed for every root, local-module, and example
-  transform.
 - Bumped pinned `mapotf` to 0.2.2 (was 0.2.1), which adds a persistent
   provider-schema cache shared across mapotf processes. Warm runs of the full
   transform stage against the `terraform-azure-avm-res-mock` fixture dropped
@@ -263,15 +272,6 @@ section when cutting a release.
   Terraform's module manifest so Git and registry subdirectory sources use
   the correct required and optional inputs. It retains batched provider-schema
   retrieval from 0.1.11.
-- The packaged MaPoTF rules now remove AVM telemetry contributions from AzAPI
-  headers and nested-module tracing chains while preserving unrelated custom
-  headers. Cleanup removes the associated forwarding arguments, helper locals,
-  and input variables. MaPoTF rules are split into common, module, root, and
-  example profiles: root modules run root, module, and common, submodules run
-  module plus common, and examples run example plus common. Examples receive
-  in-place telemetry opt-out and ordering but never
-  module file-layout transforms. Telemetry continues through the root
-  `modtm_telemetry` resource.
 - The packaged AVM TFLint plugin now pins 1.0.0 and every AVM rule reference
   uses its canonical `avm_*` name. Built-in Terraform rule names remain
   unchanged. The previously deferred rule families now receive native

@@ -783,6 +783,17 @@ The module catalog maps the metadata prefix to its canonical type. A
 precondition rejects a version with unsupported name characters or a
 combined name longer than 64 characters; neither is silently truncated.
 
+Independent fresh telemetry migrations must produce identical file bytes, not
+just equivalent Terraform. Conditional append operations explicitly depend on
+all preceding potential writers so an absent earlier transform cannot break
+the order. The metadata locals use a literal native block body to preserve
+attribute order. The module profile orders the generated telemetry precondition
+before the common profile orders its resource body; the pinned native tool
+cannot compose those two ordering modes in one profile. Match the generated
+resource identity and leave owner deployments, headers and expressions intact.
+The first-pass golden remains byte-exact, followed by a second full public
+pre-commit byte check and a non-writing pr-check.
+
 The empty template contains the Bicep-style information output and a
 non-reporting `apply_id` output set to `plantimestamp()`. This changes the
 resource body once per normal plan, forcing an in-place deployment PUT even
@@ -828,21 +839,14 @@ and the helper's gate and four-byte length; matching resource names alone
 must not remove other authored deployments or random resources.
 Retain the helper and its provider if any Terraform source still references
 it or the scope contains JSON configuration that needs review.
-For an undeclared legacy `avm_azapi_header` local, retire the standard
-telemetry-only AzAPI operation headers and preserve a wildcard `If-Match`
-delete precondition when it is merged with that header. Match the complete
-known expression, not just the local name. Retire the complete canonical
-`avm_azapi_header`, `avm_azapi_headers`, `fork_avm` and
-`valid_module_source_regex` helper bundle only when its declaration and
-reference counts prove that no source or Terraform test uses it outside the
-bundle. Check HCL tests at the root and under `tests/`; retain the bundle
-when JSON configuration or JSON tests prevent that proof. Native metadata
-must identify one source directory, even after earlier resource retirement.
-Remove only those local attributes, not neighboring authored values.
-Preserve duplicate declarations, other declared header locals, custom gates
-and mixed headers for review; never invent a fallback header or remove
-unrelated request headers. Commented-out resources are not active header
-usages.
+AzAPI request headers belong to the module owner. Tools must not remove,
+retire or rewrite operation headers or their helper locals, including former
+AVM header names, conditional expressions, literal strings and merged
+`If-Match` preconditions. Adding headers alone must not cause a check failure.
+Ordinary Terraform schema and reference validation still applies: owners
+must reconcile any references to retired resources themselves. Migrate
+standard telemetry output expressions rather than globally replacing text
+inside owner-authored expressions.
 Terraform must still install their former
 providers once when an existing state references them; after the state
 forgets those addresses, migrated source does not require `modtm` unless an
@@ -853,7 +857,7 @@ or data sources remain in the module. The transform also removes obsolete
 they have no remaining `modtm` resources, data sources or explicit module
 provider bindings. Empty `modtm` test mocks are retired only when the selected
 targets' configuration dependency trees prove the provider is unused.
-Standard references to the old telemetry resource are migrated. Direct unit
+Standard output references to the old telemetry resource are migrated. Direct unit
 assertions whose complete condition is `length(random_uuid.telemetry) == 0`
 or `== 1` are migrated to `terraform_data.telemetry` only when their selected
 target is instrumented. The condition may also prefix that comparison with
@@ -1842,10 +1846,49 @@ This section is the implementation-level expression of the **Security stance** p
 | ----------- | ---------------------------- | ---------------------------------- | ------- | --------------- |
 | Unit        | `tests/Pester/Unit/`         | Pure logic; mocks only             | No      | No              |
 | Component   | `tests/Pester/Component/`    | Real FS under `TestDrive`; stub binaries via fixture scripts in `tests/fixtures/bin/` | No | Real            |
-| Integration | `tests/Pester/Integration/`  | Pulls and runs the real managed tools from the resolver against the on-disk fixtures | Yes | Real |
+| Integration | `tests/Pester/Integration/`  | Packaged public-command acceptance against canonical and representative migration fixtures | Yes | Real |
+| Qualification | `tests/Pester/Qualification/` | Minimal native compatibility and separately selected package/download/bootstrap proof | Yes | Real |
 
 - Integration tests are tagged `-Tag Integration` and excluded from default local runs. Selected authoring pull-request and manual CI runs include them; main pushes do not.
 - A stub-binary harness in `tests/fixtures/bin/` provides PowerShell scripts named `terraform.ps1`, `tflint.ps1`, etc. that emit pre-canned output. The resolver is hooked at test time to point at the stubs.
+
+Terraform acceptance uses the built `out/Avm.Authoring` package and the public
+`avm` dispatcher. Both canonical AzureRM and AzAPI fixtures must be correct
+before execution: the first full `avm pre-commit` changes no authored bytes.
+Snapshot that output, run the full public pre-commit a second time, and require
+zero added, deleted or modified authored/managed source, docs, tests and tracked
+lock/pin files. Then full `avm pr-check` must pass every expected step and leave
+the same tree unchanged. Returned `Changed` arrays and Git's ignored-file status
+are not substitutes for byte inventories.
+
+One legacy user-flow fixture permits reviewed first-pass changes only, compared
+with checked-in expected output independent of the transform executed by the
+test. It covers utility upgrades, current telemetry, provider cleanup, naming
+compatibility, owner headers, authored locations and telemetry opt-outs. The
+second full public pre-commit must be byte-identical. Provider-mocked consumer
+tests run without Azure authentication and with a loopback ModTM endpoint; the
+temporary repository alone is committed before full pr-check. Keep tracked
+Terraform locks in the before/after inventories. Only root Git metadata, new
+Terraform working caches, and initially absent lock files created during
+initialization in known configuration directories are transient. Do not ignore
+all dotfiles, all ignored Git paths, or authored files under tool-like paths.
+
+Missing policy-plan credentials block full local acceptance; do not skip a
+required step, exclude a policy, or turn missing evidence into a pass. CI uses
+the existing approved OIDC identity. Acceptance and qualification do not deploy
+Azure resources. Qualification may run provider-mocked Terraform applies and
+provider-free local plans, but never real-provider applies.
+
+Keep source/version matching, native response/argument contracts, provider
+mapping decisions and safety predicates in unit tests. Real filesystem,
+manifest, lock, cache, environment, rollback and subprocess-failure contracts
+belong in component tests with stub processes. Do not move real native calls
+into these tiers. Native HCL/token behavior, provider-schema selection,
+downloaded inspection reuse and Terraform naming-state continuity require a
+small native compatibility suite; mocks or duplicated formulas are not proof
+of those semantics. Consolidate upstream permutations rather than rebuilding
+whole transform fixtures for each decision. Install/download/attestation and
+cold/offline package qualification run separately from module fixture jobs.
 
 Repository-sync candidate validation uses the `static-unit-v1` acceptance
 profile: all `pr-check` steps except `check policy` must pass, matching the
@@ -1894,6 +1937,10 @@ modules fail explicitly; they must not fall back to a release.
 
 - 70% line coverage on `src/Avm.Authoring/` minimum, enforced via Pester `CodeCoverage`. CI build fails below the floor.
 - Coverage is tracked per file; new files start with the floor and ratchet up as code matures.
+- The coverage gate retains the unit inventory plus the filesystem suites
+  relocated from it, so tier corrections do not remove production coverage.
+  The complete component suite still runs independently on each OS; do not
+  duplicate all component execution merely to move a test between tiers.
 
 ### Reusable Terraform module CI
 
@@ -1955,7 +2002,7 @@ also requires recorded SFI sign-off before merge.
 
 ### Scoped CI
 
-Three independent workflows use GitHub's native `on.push.paths` and
+Four independent workflows use GitHub's native `on.push.paths` and
 `on.pull_request.paths` filters for pushes to `main` and pull requests targeting
 `main`. Each also has `workflow_dispatch` to run its own suite without a file
 change. There is no dispatcher, custom changed-file detection or cross-workflow
@@ -1964,17 +2011,22 @@ status aggregation.
 | Workflow | File | Coverage |
 | --- | --- | --- |
 | `Authoring: CI` | `ci-authoring.yml` | Lint once on Ubuntu; authoring unit and component tests on Ubuntu, Windows and macOS; the Ubuntu unit leg enforces the 70% coverage floor. |
+| `Authoring: Package qualification` | `ci-package-qualification.yml` | Cold/offline runtime dependencies, release downloads, checksums and ruleset attestation on all three operating systems when package/pin/bootstrap dependencies change. |
 | `Workflows: CI` | `ci-workflows.yml` | Workflow definitions, embedded installation behavior and CI contract tests on Ubuntu only. |
 | `Repos: CI` | `repository-management-config-test.yml` | Repository-management unit/component tests, configuration checks and mocked Terraform validation on Ubuntu only. |
 
 Authoring pull-request/manual runs retain both Terraform fixtures per OS and
 one Bicep integration leg per OS. Main pushes skip both integration matrices.
-Terraform telemetry transformations run in the AzureRM fixture leg; telemetry
-mock-safety and utility-migration scenarios run in the AzAPI fixture leg, once
-per OS. Delegated fixture
-preservation and mocked unit execution follow `AVM_INTEGRATION_FIXTURE`; an
-unset selector runs the complete union. Discovery tests require that the two
-fixture selections have no overlapping telemetry scenarios or missing coverage.
+Both Terraform legs run canonical public-command acceptance; the AzAPI leg
+also runs the single legacy utility migration. Selection follows
+`AVM_INTEGRATION_FIXTURE`; an unset selector runs the complete union. Discovery
+tests require disjoint fixture selections and reject unassigned integration
+files rather than silently treating non-Bicep filenames as Terraform tests.
+Bicep-specific packaged metadata/compiler acceptance stays in the Bicep jobs.
+A separate, credential-free native compatibility leg runs once per OS, not
+once per Terraform fixture. Package qualification has its own path-filtered
+workflow and reports. Native qualification remains required on authoring
+pull-request/manual runs; it is not a nightly store for redundant matrices.
 Existing integration environment approval and job-specific permissions remain
 in place. Workflow and repository-management CI need no Azure credentials.
 
