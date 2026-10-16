@@ -22,7 +22,8 @@ function Resolve-AvmMapotfConfigDir {
 
     .PARAMETER Profile
         Config profile to resolve: common, module, root, module-call, variable-order, example,
-        provider-cleanup, location-inspect, unit-test-inspect, unit-test, or an optional test override.
+        utility-module, provider-cleanup, location-inspect, unit-test-inspect, unit-test,
+        or an optional test override.
 
     .PARAMETER Optional
         Return $null instead of throwing when the profile does not exist.
@@ -37,7 +38,7 @@ function Resolve-AvmMapotfConfigDir {
         [string] $Root,
 
         [Parameter(Mandatory)]
-        [ValidateSet('common', 'module', 'root', 'module-call', 'variable-order', 'example', 'provider-cleanup', 'test', 'location-inspect', 'unit-test-inspect', 'unit-test')]
+        [ValidateSet('common', 'module', 'root', 'module-call', 'variable-order', 'example', 'utility-module', 'provider-cleanup', 'test', 'location-inspect', 'unit-test-inspect', 'unit-test')]
         [string] $ProfileName,
 
         [switch] $Optional
@@ -92,6 +93,9 @@ function Get-AvmTerraformFile {
     .PARAMETER Root
         The module root to walk.
 
+    .PARAMETER IncludeBackup
+        Include MaPoTF backup files when capturing or restoring a drift check.
+
     .OUTPUTS
         [object[]] of System.IO.FileInfo.
     #>
@@ -99,7 +103,9 @@ function Get-AvmTerraformFile {
     [OutputType([object[]])]
     param(
         [Parameter(Mandatory)]
-        [string] $Root
+        [string] $Root,
+
+        [switch] $IncludeBackup
     )
 
     Set-StrictMode -Version 3.0
@@ -107,8 +113,12 @@ function Get-AvmTerraformFile {
 
     $terraformFiles = @(Get-ChildItem -LiteralPath $Root -Recurse -File -Filter '*.tf' -ErrorAction SilentlyContinue)
     $testFiles = @(Get-ChildItem -LiteralPath $Root -Recurse -File -Filter '*.tftest.hcl' -ErrorAction SilentlyContinue)
+    $backupFiles = @()
+    if ($IncludeBackup) {
+        $backupFiles = @(Get-ChildItem -LiteralPath $Root -Recurse -File -Filter '*.mptfbackup' -ErrorAction SilentlyContinue)
+    }
     return @(
-        @($terraformFiles + $testFiles) |
+        @($terraformFiles + $testFiles + $backupFiles) |
             Where-Object {
                 $rel = [System.IO.Path]::GetRelativePath($Root, $_.FullName)
                 $parts = $rel -split '[\\/]'
@@ -227,6 +237,7 @@ function Test-AvmTerraformProviderInUse {
         [string] $ModulePath,
 
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [object[]] $ModuleTargets,
 
         [Parameter(Mandatory)]
@@ -314,7 +325,8 @@ function Test-AvmTerraformScopedProviderInUse {
         [Parameter(Mandatory)] [object[]] $ModuleTargets,
         [AllowEmptyCollection()] [string[]] $TargetPaths = @(),
         [Parameter(Mandatory)] [hashtable] $Cache,
-        [Parameter(Mandatory)] [ValidateSet('modtm', 'random')] [string] $Provider
+        [Parameter(Mandatory)] [ValidateSet('modtm', 'random')] [string] $Provider,
+        [hashtable] $ProviderSources = @{}
     )
 
     Set-StrictMode -Version 3.0
@@ -325,8 +337,17 @@ function Test-AvmTerraformScopedProviderInUse {
             $_.Profiles -notcontains 'example' -and
             $_.Path.StartsWith($ownerPrefix, [System.StringComparison]::Ordinal)
         } | ForEach-Object { $_.Path })
+    if ($ProviderSources.Count -gt 0 -and
+        (Test-AvmTerraformProviderInUse -ModulePath $testDirectory -ModuleTargets @() `
+            -TestDirectory $testDirectory -Provider $Provider)) {
+        return $true
+    }
     foreach ($path in @($Scope.Owner.Path) + $TargetPaths) {
-        if ($path -cin $ownerScannedPaths) {
+        if ($ProviderSources.ContainsKey($path)) {
+            if (@($ProviderSources[$path] | Where-Object { $_ -match "/$Provider$" }).Count -gt 0) { return $true }
+            continue
+        }
+        if ($path -cin $ownerScannedPaths -and -not $ProviderSources.ContainsKey($Scope.Owner.Path)) {
             continue
         }
         $key = "$Provider|$path|$testDirectory"
@@ -348,11 +369,12 @@ function Test-AvmTerraformScopedRandomProviderInUse {
         [Parameter(Mandatory)] [object] $Scope,
         [Parameter(Mandatory)] [object[]] $ModuleTargets,
         [AllowEmptyCollection()] [string[]] $TargetPaths = @(),
-        [Parameter(Mandatory)] [hashtable] $Cache
+        [Parameter(Mandatory)] [hashtable] $Cache,
+        [hashtable] $ProviderSources = @{}
     )
 
     Test-AvmTerraformScopedProviderInUse -Scope $Scope -ModuleTargets $ModuleTargets `
-        -TargetPaths $TargetPaths -Cache $Cache -Provider random
+        -TargetPaths $TargetPaths -Cache $Cache -Provider random -ProviderSources $ProviderSources
 }
 
 function Remove-AvmLegacyTelemetryTestMock {
@@ -364,7 +386,9 @@ function Remove-AvmLegacyTelemetryTestMock {
         [Parameter(Mandatory)]
         [object[]] $ModuleTargets,
 
-        [object[]] $UnitTestPlans = @()
+        [object[]] $UnitTestPlans = @(),
+
+        [string[]] $UtilityTelemetryPaths = @()
     )
 
     Set-StrictMode -Version 3.0
@@ -393,7 +417,9 @@ function Remove-AvmLegacyTelemetryTestMock {
         $retiredProviderReferences = if ($validatedMocks) { $unitPlan.RetiredProviderReferences } else { @{ modtm = 0; random = 0 } }
         $instrumentedTargets = @($ModuleTargets |
                 Where-Object { $null -ne $unitPlan -and $_.Path -cin $unitPlan.TargetPaths -and $_.Profiles -contains 'root' })
-        if ($owner.Profiles -notcontains 'root' -and $instrumentedTargets.Count -eq 0) {
+        $ownTelemetry = $owner.Profiles -contains 'root' -or $instrumentedTargets.Count -gt 0
+        $utilityTelemetry = $null -ne $unitPlan -and @($unitPlan.TargetPaths | Where-Object { $_ -cin $UtilityTelemetryPaths }).Count -gt 0
+        if (-not $ownTelemetry -and -not $utilityTelemetry) {
             continue
         }
 
@@ -405,7 +431,7 @@ function Remove-AvmLegacyTelemetryTestMock {
             $unitPlan.TelemetryCountMigration.ReferenceCount
         }
         else { 0 }
-        if ($identifierReferences -ne $validatedIdentifierReferences) {
+        if ($ownTelemetry -and $identifierReferences -ne $validatedIdentifierReferences) {
             throw [AvmConfigurationException]::new(
                 "Test file '$($file.FullName)' still references retired random_uuid.telemetry; only complete zero-or-one count assertions, optionally prefixed by a ModTM or AzAPI telemetry-count assertion joined with &&, on instrumented unit-test targets can be migrated automatically. Review other references manually.")
         }
@@ -466,14 +492,21 @@ mock_provider "azapi" {
                 $updated = $updated.Insert($index, $replacementMock)
             }
         }
-        $updated = [regex]::Replace($updated, $legacyReference, 'azapi_resource.telemetry')
+        if ($ownTelemetry) {
+            $updated = [regex]::Replace($updated, $legacyReference, 'azapi_resource.telemetry')
+        }
         if ($isUnitTest -and [regex]::IsMatch($updated, $randomMock)) {
             $targetPaths = @()
             if ($null -ne $unitPlan) {
                 $targetPaths = @($unitPlan.TargetPaths)
             }
-            $randomInUse = Test-AvmTerraformScopedRandomProviderInUse -Scope $scope `
-                -ModuleTargets $ModuleTargets -TargetPaths $targetPaths -Cache $randomUse
+            $randomInUse = if ($validatedMocks -and $null -ne $unitPlan.PSObject.Properties['RetainRandomMock']) {
+                $unitPlan.RetainRandomMock
+            }
+            else {
+                Test-AvmTerraformScopedRandomProviderInUse -Scope $scope `
+                    -ModuleTargets $ModuleTargets -TargetPaths $targetPaths -Cache $randomUse
+            }
             if (-not $randomInUse) {
                 $withoutEmptyMocks = [regex]::Replace($updated, $emptyRandomMock, '')
                 $randomReferences = Get-AvmTerraformRetiredTestProviderReferenceCount -Text $withoutEmptyMocks -Provider random
@@ -744,6 +777,12 @@ function Invoke-AvmTerraformTransform {
         receive a test-only location only when their local target gained a
         required input and neither global nor run variables already set it.
         Unknown run targets are rejected rather than rewritten.
+        After those snapshots, the utility-module profile upgrades older exact
+        Regions and Interfaces pins and migrates legacy naming calls in
+        compatibility mode. A fresh dependency inspection reconciles obsolete
+        ModTM bindings and requirements in affected local callers before test
+        migration, without rewriting downloaded sources or trusting stale
+        initialization data.
         Examples run example, provider-cleanup, common after the module calls
         have settled. Standalone test-module directories run module-call,
         variable-order, provider-cleanup and an optional consumer test profile,
@@ -849,6 +888,7 @@ function Invoke-AvmTerraformTransform {
         'variable-order'    = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'variable-order'
         example             = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'example'
         'provider-cleanup'  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'provider-cleanup'
+        'utility-module'    = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'utility-module'
         'location-inspect'  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'location-inspect'
         'unit-test-inspect' = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'unit-test-inspect'
         'unit-test'         = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'unit-test'
@@ -886,7 +926,9 @@ function Invoke-AvmTerraformTransform {
     $legacyIssues = @()
     if ($CheckDrift) {
         Write-AvmLog ("transform: check-drift mode; snapshotting {0} file(s)" -f $beforeFiles.Count) -Level Verbose | Out-Null
-        $snapshot = Get-AvmFileSnapshot -Path @($beforeFiles | ForEach-Object { $_.FullName })
+        $snapshot = Get-AvmFileSnapshot -Path @(
+            Get-AvmTerraformFile -Root $Context.Root -IncludeBackup | ForEach-Object { $_.FullName }
+        )
     }
 
     $inspectionRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('avm-provider-inspection-' + [guid]::NewGuid().ToString('N'))
@@ -904,6 +946,9 @@ function Invoke-AvmTerraformTransform {
         $mapotfEnv = New-AvmToolPathEnvironment `
             -ToolPath $terraform.Path `
             -ToolName 'terraform'
+        foreach ($name in @('TF_DATA_DIR', 'TF_CLI_ARGS', 'TF_CLI_ARGS_init', 'TF_CLI_ARGS_get', 'TF_CLI_ARGS_providers')) {
+            $mapotfEnv[$name] = $null
+        }
         $mapotfEnv.TF_PLUGIN_CACHE_DIR = $null
         $mapotfEnv.MAPOTF_PROVIDER_SCHEMA_CACHE_DIR = Join-Path (Get-AvmFolder -Kind Cache) 'mapotf-provider-schema'
         $null = New-Item `
@@ -913,16 +958,20 @@ function Invoke-AvmTerraformTransform {
             -ErrorAction Stop
 
         $transformOptions = [pscustomobject]@{
-            ToolPath       = $tool.Path
-            TerraformPath  = $terraform.Path
-            ProfileDirs    = $profileDirs
-            EnvVars        = $mapotfEnv
-            InspectionRoot = $inspectionRoot
+            ToolPath               = $tool.Path
+            TerraformPath          = $terraform.Path
+            ProfileDirs            = $profileDirs
+            EnvVars                = $mapotfEnv
+            InspectionRoot         = $inspectionRoot
+            UtilityTelemetryPaths  = @()
+            UtilityProviderSources = @{}
         }
         $moduleTargets = @($targets | Where-Object { $_.Scope -in @('root', 'module') })
         $testTargets = @($targets | Where-Object { $_.Scope -eq 'test' })
         $exampleTargets = @($targets | Where-Object { $_.Scope -eq 'example' })
         $unitTestTargets = @($moduleTargets + $testTargets + $exampleTargets)
+        $utilityPlans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $unitTestTargets -Options $transformOptions)
+        $transformOptions.UtilityTelemetryPaths = @($utilityPlans | Where-Object Telemetry | ForEach-Object { $_.Target.Path })
         $newLocationTargets = @(
             foreach ($target in $moduleTargets | Where-Object { $_.Profiles -notcontains 'root' }) {
                 if ($null -eq (Get-AvmTerraformLocationInspection -Path $target.Path -Options $transformOptions)) {
@@ -932,6 +981,7 @@ function Invoke-AvmTerraformTransform {
         )
         $unitSnapshots = @(Get-AvmTerraformUnitTestSnapshot -Root $Context.Root `
                 -ModuleTargets $unitTestTargets -Options $transformOptions)
+        Invoke-AvmTerraformUtilityMigration -Plans $utilityPlans -Options $transformOptions
 
         Invoke-AvmParallel `
             -InputObject $moduleTargets `
@@ -975,6 +1025,7 @@ function Invoke-AvmTerraformTransform {
                     -ThrottleLimit $ThrottleLimit
             }
         }
+        Invoke-AvmTerraformUtilityProviderCleanup -Plans $utilityPlans -ModuleTargets $unitTestTargets -Options $transformOptions
         Invoke-AvmTerraformUnitTestMigration -Root $Context.Root -ModuleTargets $unitTestTargets `
             -Snapshots $unitSnapshots -Options $transformOptions
         Set-AvmTelemetryTagLintDirective -Targets $moduleTargets
@@ -1026,7 +1077,7 @@ function Invoke-AvmTerraformTransform {
         try {
             if ($null -ne $snapshot) {
                 Write-AvmLog 'transform: restoring terraform snapshot after drift check' -Level Verbose | Out-Null
-                $current = @(Get-AvmTerraformFile -Root $Context.Root | ForEach-Object { $_.FullName })
+                $current = @(Get-AvmTerraformFile -Root $Context.Root -IncludeBackup | ForEach-Object { $_.FullName })
                 Restore-AvmFileSnapshot -Snapshot $snapshot -CurrentPath $current
             }
         }

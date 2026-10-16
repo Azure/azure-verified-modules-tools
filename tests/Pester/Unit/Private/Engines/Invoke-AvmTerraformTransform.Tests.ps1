@@ -29,6 +29,7 @@ Describe 'Invoke-AvmTerraformTransform' {
         Mock Set-AvmTelemetryTagLintDirective -ModuleName 'Avm.Authoring'
         Mock Get-AvmTerraformLocationInspection -ModuleName 'Avm.Authoring' { $null }
         Mock Get-AvmTerraformUnitTestSnapshot -ModuleName 'Avm.Authoring' { @() }
+        Mock Get-AvmTerraformUtilityMigrationPlan -ModuleName 'Avm.Authoring' { @() }
     }
 
     It 'rejects a non-terraform context' {
@@ -44,6 +45,59 @@ Describe 'Invoke-AvmTerraformTransform' {
                 Invoke-AvmTerraformTransform -Context $C
             }
         } | Should -Throw -ExceptionType ([System.ArgumentException])
+    }
+
+    It 'captures pre-upgrade evidence before utility edits and reconciles providers before mocks' {
+        InModuleScope Avm.Authoring -Parameters @{ C = $script:context } {
+            param($C)
+            $script:utilityPhases = [System.Collections.Generic.List[string]]::new()
+            Mock Resolve-AvmTool { [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" } }
+            Mock Resolve-AvmMapotfConfigDir { "/fake/$ProfileName" }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Mock Get-AvmTerraformUtilityMigrationPlan {
+                $script:utilityPhases.Add('inspect')
+                @([pscustomobject]@{ Target = [pscustomobject]@{ Path = $C.Root }; Telemetry = $true })
+            }
+            Mock Get-AvmTerraformUnitTestSnapshot { $script:utilityPhases.Add('snapshot'); @() }
+            Mock Invoke-AvmTerraformUtilityMigration { $script:utilityPhases.Add('upgrade') }
+            Mock Invoke-AvmParallel { $script:utilityPhases.Add('source') }
+            Mock Invoke-AvmTerraformUtilityProviderCleanup { $script:utilityPhases.Add('providers') }
+            Mock Invoke-AvmTerraformUnitTestMigration {
+                $script:utilityPhases.Add('mocks')
+                $Options.UtilityTelemetryPaths | Should -Be @($C.Root)
+            }
+            $null = Invoke-AvmTerraformTransform -Context $C
+            $script:utilityPhases.ToArray() | Should -Be @('inspect', 'snapshot', 'upgrade', 'source', 'source', 'providers', 'mocks')
+        }
+    }
+
+    It 'restores utility edits and backup bytes after a failed drift check' {
+        $main = Join-Path $script:moduleDir 'main.tf'
+        $backup = Join-Path $script:moduleDir 'main.tf.mptfbackup'
+        $addedBackup = Join-Path $script:moduleDir 'variables.tf.mptfbackup'
+        [byte[]]$backupBytes = @(0, 13, 10, 255)
+        [System.IO.File]::WriteAllBytes($backup, $backupBytes)
+        $before = [System.IO.File]::ReadAllBytes($main)
+        InModuleScope Avm.Authoring -Parameters @{
+            C = $script:context; Main = $main; Backup = $backup; AddedBackup = $addedBackup
+        } {
+            param($C, $Main, $Backup, $AddedBackup)
+            Mock Resolve-AvmTool { [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" } }
+            Mock Resolve-AvmMapotfConfigDir { "/fake/$ProfileName" }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Mock Invoke-AvmTerraformUtilityMigration {
+                [System.IO.File]::WriteAllText($Main, 'module "changed" {}')
+                [System.IO.File]::WriteAllText($Backup, 'rewritten backup')
+                [System.IO.File]::WriteAllText($AddedBackup, 'new backup')
+            }
+            Mock Invoke-AvmTerraformUtilityProviderCleanup {
+                throw [AvmConfigurationException]::new('unproven utility provider dependency')
+            }
+            { Invoke-AvmTerraformTransform -Context $C -CheckDrift } | Should -Throw '*unproven utility provider dependency*'
+        }
+        [System.IO.File]::ReadAllBytes($main) | Should -Be $before
+        [System.IO.File]::ReadAllBytes($backup) | Should -Be $backupBytes
+        Test-Path -LiteralPath $addedBackup | Should -BeFalse
     }
 
     It 'runs root, module, and common profiles for the root then cleans backups' {
@@ -267,8 +321,10 @@ variable "location" {
         InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
             param($C)
             $savedPluginCache = $env:TF_PLUGIN_CACHE_DIR
+            $savedDataDirectory = [Environment]::GetEnvironmentVariable('TF_DATA_DIR', 'Process')
             try {
                 $env:TF_PLUGIN_CACHE_DIR = '/fake/plugin-cache'
+                $env:TF_DATA_DIR = '/fake/source-data'
                 Mock Resolve-AvmTool {
                     [pscustomobject]@{
                         Name = $Name; Version = 'test'; Platform = 'test'
@@ -291,12 +347,18 @@ variable "location" {
 
                 Should -Invoke Invoke-AvmParallel -Exactly 4 -ParameterFilter {
                     $ThrottleLimit -eq 4 -and
-                    [string]::IsNullOrWhiteSpace([string]$Argument.EnvVars.TF_PLUGIN_CACHE_DIR)
+                    [string]::IsNullOrWhiteSpace([string]$Argument.EnvVars.TF_PLUGIN_CACHE_DIR) -and
+                    $Argument.EnvVars.ContainsKey('TF_DATA_DIR') -and
+                    [string]::IsNullOrWhiteSpace([string]$Argument.EnvVars.TF_DATA_DIR) -and
+                    $Argument.EnvVars.ContainsKey('TF_CLI_ARGS')
                 }
                 $env:TF_PLUGIN_CACHE_DIR | Should -Be '/fake/plugin-cache'
+                $env:TF_DATA_DIR | Should -Be '/fake/source-data'
             }
             finally {
                 $env:TF_PLUGIN_CACHE_DIR = $savedPluginCache
+                [Environment]::SetEnvironmentVariable('TF_DATA_DIR',
+                    $(if ($null -eq $savedDataDirectory) { [NullString]::Value } else { $savedDataDirectory }), 'Process')
             }
         }
     }

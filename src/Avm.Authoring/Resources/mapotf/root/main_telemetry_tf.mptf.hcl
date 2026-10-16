@@ -392,6 +392,10 @@ locals {
     for name, call in data.module.modtm_provider_calls.result :
     try(length(regexall("(^|[\\s{,])\"?modtm\"?(?:\\s|#[^\\r\\n]*|//[^\\r\\n]*|/\\*[\\s\\S]*?\\*/)*=", call.providers)) > 0, false)
   ])
+  random_provider_call_used = anytrue([
+    for name, call in data.module.modtm_provider_calls.result :
+    try(length(regexall("(^|[\\s{,])\"?random\"?(?:\\s|#[^\\r\\n]*|//[^\\r\\n]*|/\\*[\\s\\S]*?\\*/)*=", call.providers)) > 0, false)
+  ])
 }
 
 transform "remove_block_element" "drop_modtm_provider" {
@@ -405,7 +409,7 @@ transform "remove_block_element" "drop_modtm_provider" {
 }
 
 transform "remove_block_element" "drop_unused_random_provider" {
-  for_each             = (local.random_uuid_exists || local.legacy_random_id_exists) && local.random_provider_exists && length(local.other_random_resources) == 0 && length(local.other_random_data) == 0 && length(local.other_random_ephemeral) == 0 ? toset([1]) : toset([])
+  for_each             = (local.random_uuid_exists || local.legacy_random_id_exists) && local.random_provider_exists && length(local.other_random_resources) == 0 && length(local.other_random_data) == 0 && length(local.other_random_ephemeral) == 0 && !local.random_provider_call_used ? toset([1]) : toset([])
   target_block_address = "terraform"
   paths                = ["required_providers.random"]
   depends_on = [

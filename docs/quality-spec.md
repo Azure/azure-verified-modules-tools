@@ -678,6 +678,53 @@ example value when another region or cloud is required.
 Variable blocks are sorted after missing location inputs are
 created, so the first transform already satisfies drift checks.
 
+Before telemetry transformation, the `utility-module` profile migrates authored
+registry calls by source, not by module label. Older exact pins of
+`Azure/avm-utl-regions/azurerm` move to `0.13.0`; older exact pins of
+`Azure/avm-utl-interfaces/azure` move to `0.9.0`. Equivalent
+`registry.terraform.io/` addresses are supported. Current pins are preserved;
+newer calls are left alone. Missing pins, ranges, prereleases and computed
+versions on these sources require review, not a guessed version. Custom
+registries, Git sources and local modules are not rewritten as registry calls.
+Root, child, example and discovered test-wrapper scopes share this phase.
+
+Legacy `Azure/naming/azurerm` calls become `Azure/avm-utl-naming/azure` at
+`0.2.0` with `legacy_mode = true`. Preserve labels, authored inputs, deprecated
+named output references and moved blocks. The utility's own compatibility
+renderer and moved blocks preserve naming/state continuity; never opt an
+already-modern naming call into legacy mode. This dependency requires Terraform
+`>= 1.9, < 2.0` and Random `>= 3.3.2, < 4.0`. This phase does not rewrite
+authored Terraform version constraints; Terraform enforces the dependency's
+minimum versions, and existing provider-governance rules still apply.
+
+Regions and Interfaces now require `location` and AzAPI `~> 2.12`; Interfaces
+also retains Random for role assignments. Supply a missing utility location
+from an independent `var.location`, never from that same utility's outputs.
+New reusable inputs remain required; only new example inputs default to
+`eastus`. Preserve authored locations and opt-outs, including existing utility
+example telemetry defaults. Test wrappers receive no new telemetry control.
+Introduce an explicit AzAPI source and binding when a telemetry-free caller
+needs them, without replacing existing bindings or constraints.
+
+Capture native unit-test declarations and original provider evidence before
+utility edits. Inspect upgraded dependencies through fresh private Terraform
+data directories, not the consumer's stale modules manifest. Remove obsolete
+ModTM mappings only with dependency proof and literal same-provider mappings;
+preserve other bindings and their comments. Reconcile affected local callers
+in dependency order after telemetry transforms. Remove provider requirements
+and empty mocks only when resources, data, ephemeral blocks, provider
+configurations, bindings and the fresh dependency trees prove them unused.
+Retain genuine ModTM dependencies, custom mocks, state-only `removed` blocks
+and legitimate Random use. Existing safe mock-review rules still apply.
+An intermediate native missing-provider-configuration warning may be tracked
+while repairing proven source bindings. All other diagnostics remain fatal,
+and a strict dependency recheck must pass before mock migration.
+Never transform downloaded dependency source or initialize a backend for this
+migration. Preserve consumer initialization data and exact lock bytes, including
+failure paths; clear ambient Terraform data/CLI-argument overrides for native
+inspection. Drift checks also restore authored source, tests and original backup
+bytes, removing only newly created backups.
+
 For modules without their own telemetry, a newly generated canonical `location`
 input receives a scoped `terraform_unused_declarations` exemption: the required
 interface also applies to global resources that do not consume a region.
@@ -827,7 +874,7 @@ the inline update and leave source files unchanged; an authored inline
 client-config block retains its precedence. Escaping, linked, missing or JSON
 sources, source overrides, duplicate client defaults, computed defaults and
 nonliteral subscription IDs require review instead of overwriting or guessing.
-Published dependencies and legacy telemetry
+Downloaded dependency source and legacy telemetry
 in scopes without a telemetry prefix are not migrated by the root profile.
 Native MaPoTF inspects each direct `tests/unit/*.tftest.hcl` file before source
 transformation. Root runs and explicitly selected, known local module
@@ -879,9 +926,11 @@ targets, their known local children, and test setup no longer need that
 provider. Unselected examples do not retain an owner's random mock; explicitly
 selected examples are checked for their own provider use. Non-empty mocks or remaining random
 references fail for manual review; mocks for other random use are preserved.
-The owner's inspection already covers its known non-example descendants;
-selected test wrappers reuse that result rather than treating a previously
-inspected ancestor dependency as unknown.
+The conservative owner's inspection already covers its known non-example
+descendants; selected test wrappers reuse that result rather than treating a
+previously inspected ancestor dependency as unknown. Native configuration-tree
+evidence covers only reachable dependencies, so independently selected local
+targets outside that tree still require their own provider-use evidence.
 JSON configurations other than proven locals-only objects and module
 dependencies that cannot be checked locally also retain their random mocks
 rather than assuming the provider is unused.
@@ -1831,8 +1880,9 @@ status aggregation.
 
 Authoring pull-request/manual runs retain both Terraform fixtures per OS and
 one Bicep integration leg per OS. Main pushes skip both integration matrices.
-Terraform telemetry transformations run in the AzureRM fixture leg and telemetry
-mock-safety scenarios in the AzAPI fixture leg, once per OS. Delegated fixture
+Terraform telemetry transformations run in the AzureRM fixture leg; telemetry
+mock-safety and utility-migration scenarios run in the AzAPI fixture leg, once
+per OS. Delegated fixture
 preservation and mocked unit execution follow `AVM_INTEGRATION_FIXTURE`; an
 unset selector runs the complete union. Discovery tests require that the two
 fixture selections have no overlapping telemetry scenarios or missing coverage.

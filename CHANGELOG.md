@@ -21,6 +21,15 @@ section when cutting a release.
 
 ### Added
 
+- Terraform transforms upgrade older exact Regions and Interfaces registry pins
+  to `0.13.0` and `0.9.0` before telemetry migration. Legacy naming calls move
+  to `Azure/avm-utl-naming/azure` `0.2.0` with `legacy_mode = true`, preserving
+  existing names, output references and state migration. Missing utility
+  locations use an independent input, not region-selection outputs. Fresh
+  dependency evidence retires obsolete ModTM bindings and mocks while retaining
+  genuine ModTM dependencies and non-telemetry Random use; newer versions,
+  authored controls and custom module sources remain intact. Ambiguous version
+  constraints require review.
 - `avm test e2e` validates and previews eligible Bicep examples before Create.
   Resource-group cases use tagged disposable groups; a narrow subset of
   subscription, management-group and tenant cases requires explicit targets

@@ -25,6 +25,17 @@ example location inputs default to "eastus"; new reusable-module
 inputs are required without defaults. Authored location declarations
 and per-item regions are preserved.
 
+Before telemetry migration, authored registry calls with older exact
+pins upgrade Regions to 0.13.0 and Interfaces to 0.9.0. Newer versions,
+custom sources and local module sources are not rewritten. Ambiguous
+version constraints require review. Legacy Azure/naming/azurerm calls
+become Azure/avm-utl-naming/azure 0.2.0 with legacy_mode = true,
+preserving labels, inputs, named outputs and the utility's state
+migration. Already-modern naming calls keep their authored mode.
+New utility locations use var.location rather than their own outputs;
+authored utility locations and opt-outs remain unchanged. Dependency
+constraints require Terraform 1.9 or later, below 2.0, for naming.
+
 Generated removed blocks let Terraform forget legacy modtm telemetry
 state without destroying its resources. Existing state may require
 the old providers for one final initialization. Test-module provider
@@ -37,7 +48,11 @@ source-backed client defaults are preserved; unproven, computed or
 cross-provider bindings still require review. Mocked
 unit tests receive location values only for newly required inputs,
 preserving their assertions, targets and telemetry opt-outs.
-Published dependencies and unprefixed legacy telemetry are not migrated.
+Fresh dependency inspection retires proven obsolete utility provider
+bindings without trusting stale installed module manifests. Genuine
+ModTM dependencies and non-telemetry Random use remain supported.
+Downloaded dependency source and unprefixed legacy telemetry are not
+rewritten.
 
 -WhatIf previews the Terraform transformation without changing files.
 A consumer repository can override a profile under

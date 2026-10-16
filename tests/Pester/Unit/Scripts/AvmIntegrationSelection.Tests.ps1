@@ -45,15 +45,20 @@ Describe 'Integration group selection' {
             foreach ($fixture in @('', 'terraform-azure-avm-res-mock', 'terraform-azurerm-avm-res-mock')) {
                 [Environment]::SetEnvironmentVariable('AVM_INTEGRATION_FIXTURE', $fixture, 'Process')
                 $configuration = New-PesterConfiguration
-                $configuration.Run.Path = Join-Path $script:repositoryRoot 'tests' 'Pester' 'Integration' `
-                    'MapotfTelemetryAlignment.Integration.Tests.ps1'
+                $configuration.Run.Path = @(
+                    foreach ($file in @('MapotfTelemetryAlignment.Integration.Tests.ps1', 'MapotfUtilityMigration.Integration.Tests.ps1')) {
+                        Join-Path $script:repositoryRoot 'tests' 'Pester' 'Integration' $file
+                    }
+                )
                 $configuration.Run.SkipRun = $true
                 $configuration.Run.PassThru = $true
                 $configuration.Output.Verbosity = 'None'
                 $discovery = Invoke-Pester -Configuration $configuration
                 $discovery.FailedCount | Should -Be 0
                 $blocks = [System.Collections.Generic.Queue[object]]::new()
-                foreach ($block in $discovery.Containers[0].Blocks) { $blocks.Enqueue($block) }
+                foreach ($container in $discovery.Containers) {
+                    foreach ($block in $container.Blocks) { $blocks.Enqueue($block) }
+                }
                 $tests = @(
                     while ($blocks.Count -gt 0) {
                         $block = $blocks.Dequeue()
