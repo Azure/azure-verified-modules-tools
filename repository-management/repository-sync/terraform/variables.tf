@@ -111,8 +111,14 @@ variable "github_repository_integration_test_environment_name" {
 
 variable "github_repository_examples_test_environment_name" {
   type        = string
-  description = "Name of the approval-gated environment used by the example test jobs."
+  description = "Name of the approval-gated e2e discovery environment, retained for legacy example test jobs."
   default     = "examples-test"
+}
+
+variable "github_repository_examples_test_execution_environment_name" {
+  type        = string
+  description = "Name of the approval-free e2e execution environment used after protected example discovery."
+  default     = "examples-test-execution"
 }
 
 variable "github_repository_no_approval_environment_name" {

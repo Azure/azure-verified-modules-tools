@@ -17,26 +17,27 @@ override_resource {
 }
 
 variables {
-  repository_creation_mode_enabled                    = false
-  arm_client_id                                       = "20000000-0000-4000-8000-000000000001"
-  arm_tenant_id                                       = "20000000-0000-4000-8000-000000000002"
-  test_subscription_ids                               = []
-  github_repository_owner                             = "Azure"
-  github_repository_name                              = "terraform-azurerm-avm-ptn-example-repo"
-  module_id                                           = "avm-ptn-example-repo"
-  module_name                                         = "Example"
-  github_repository_pr_check_environment_name         = "pr-check"
-  github_repository_integration_test_environment_name = "integration-test"
-  github_repository_examples_test_environment_name    = "examples-test"
-  github_repository_no_approval_environment_name      = "no-approval"
-  labels                                              = {}
-  github_teams                                        = {}
-  pull_request_bypass_teams                           = []
-  is_protected_repo                                   = true
-  bypass_ruleset_for_approval_enabled                 = true
-  github_avm_app_id                                   = "1049636"
-  copilot_agent_firewall_allow_list_variable_name     = "COPILOT_AGENT_FIREWALL_ALLOW_LIST_ADDITIONS"
-  copilot_agent_firewall_allow_list                   = []
+  repository_creation_mode_enabled                           = false
+  arm_client_id                                              = "20000000-0000-4000-8000-000000000001"
+  arm_tenant_id                                              = "20000000-0000-4000-8000-000000000002"
+  test_subscription_ids                                      = []
+  github_repository_owner                                    = "Azure"
+  github_repository_name                                     = "terraform-azurerm-avm-ptn-example-repo"
+  module_id                                                  = "avm-ptn-example-repo"
+  module_name                                                = "Example"
+  github_repository_pr_check_environment_name                = "pr-check"
+  github_repository_integration_test_environment_name        = "integration-test"
+  github_repository_examples_test_environment_name           = "examples-test"
+  github_repository_examples_test_execution_environment_name = "examples-test-execution"
+  github_repository_no_approval_environment_name             = "no-approval"
+  labels                                                     = {}
+  github_teams                                               = {}
+  pull_request_bypass_teams                                  = []
+  is_protected_repo                                          = true
+  bypass_ruleset_for_approval_enabled                        = true
+  github_avm_app_id                                          = "1049636"
+  copilot_agent_firewall_allow_list_variable_name            = "COPILOT_AGENT_FIREWALL_ALLOW_LIST_ADDITIONS"
+  copilot_agent_firewall_allow_list                          = []
 }
 
 run "seed_existing_template" {
