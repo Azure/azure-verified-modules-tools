@@ -1830,6 +1830,44 @@ modules fail explicitly; they must not fall back to a release.
 - 70% line coverage on `src/Avm.Authoring/` minimum, enforced via Pester `CodeCoverage`. CI build fails below the floor.
 - Coverage is tracked per file; new files start with the floor and ratchet up as code matures.
 
+### Reusable Terraform module CI
+
+The managed module caller invokes `terraform-module.yml` on pull-request
+`opened`, `reopened`, and `synchronize` events, including draft and fork pull
+requests. Neither the caller nor the automatic checks may add a label,
+manual-approval, or changed-path prerequisite. GitHub's separate approval
+policy for running workflows from external contributors still applies. The
+managed caller remains an unconditional forwarder; fork handling and test-tier
+decisions belong only in the reusable workflow.
+
+Normal Terraform repository sync reconciles that repository-level policy to
+`first_time_contributors` after verified Terraform configuration succeeds.
+The GitHub Terraform provider does not expose this policy, so the existing
+sync driver uses the dedicated GitHub REST endpoint through the shared CLI
+helpers. Read and validate the current policy, write only when different,
+and verify it again before reporting success. Plan-only runs report drift
+without writing; `-WhatIf` makes no API calls. Failed reads, writes, and
+readback stop the repository sync without a write retry or success fallback.
+This does not change workflow token permissions, expose secrets to forks,
+or bypass environment reviewers. Creation-mode bootstrap is unchanged;
+the policy is reconciled when the repository enters normal sync.
+
+One shared `unit-test` job runs independently on every invocation, with only
+`contents: read`, no GitHub environment or subscription-selection dependency,
+empty inherited secret/variable payloads, and OIDC disabled. Unit fixtures
+and hooks must not require configured credentials. Fork `pr-check` uses the
+same restrictions and excludes only `check policy` and its Conftest prerequisite.
+
+Same-repository `pr-check` retains its full checks, subscription selection,
+credentials and `pr-check` environment for Azure OIDC, but that environment
+has no required reviewers. Preserve its Terraform resource address, environment
+name and federated identity subject. Integration and e2e remain non-fork and
+reviewer-gated through `integration-test` and `examples-test`, with their
+existing approval teams and bypass/self-review settings.
+Removing the `pr-check` reviewer gate permits authenticated policy plans and
+repository hooks on each same-repository PR push; the security stance's SFI
+sign-off requirement applies before merge.
+
 ### Scoped CI
 
 Three independent workflows use GitHub's native `on.push.paths` and

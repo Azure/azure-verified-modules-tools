@@ -99,7 +99,7 @@ variable "module_name" {
 
 variable "github_repository_pr_check_environment_name" {
   type        = string
-  description = "Name of the approval-gated environment used by the PR check job."
+  description = "Name of the environment used by the PR check job for OIDC, without required reviewers."
   default     = "pr-check"
 }
 
