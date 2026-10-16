@@ -116,6 +116,10 @@ section when cutting a release.
 
 ### Changed
 
+- Bumped pinned MaPoTF to `0.4.1`, with refreshed SHA256 hashes for all six
+  supported platforms. This release reuses exact-version public module
+  inspections ([Azure/mapotf#136](https://github.com/Azure/mapotf/pull/136));
+  transform rules, test coverage, CI matrix and time limits are unchanged.
 - Pinned MaPoTF 0.3.0 enables native, single-file Terraform test migration.
   Known root and local-child runs receive only newly required location inputs,
   preserving authored global/run values, regions, assertions and telemetry
