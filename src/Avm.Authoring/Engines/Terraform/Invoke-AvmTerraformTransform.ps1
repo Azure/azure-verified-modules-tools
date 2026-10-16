@@ -818,6 +818,8 @@ function Invoke-AvmTerraformTransform {
         pscustomobject with Engine, Tool, ToolPath, ToolSource, Status,
         FilesProcessed, Changed, Issues.
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseLiteralInitializerForHashtable', '',
+        Justification = 'Inspection-cache keys require ordinal, case-sensitive module identities.')]
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([pscustomobject])]
     param(
@@ -913,11 +915,12 @@ function Invoke-AvmTerraformTransform {
             -ErrorAction Stop
 
         $transformOptions = [pscustomobject]@{
-            ToolPath       = $tool.Path
-            TerraformPath  = $terraform.Path
-            ProfileDirs    = $profileDirs
-            EnvVars        = $mapotfEnv
-            InspectionRoot = $inspectionRoot
+            ToolPath              = $tool.Path
+            TerraformPath         = $terraform.Path
+            ProfileDirs           = $profileDirs
+            EnvVars               = $mapotfEnv
+            InspectionRoot        = $inspectionRoot
+            InspectionModuleCache = [hashtable]::new([StringComparer]::Ordinal)
         }
         $moduleTargets = @($targets | Where-Object { $_.Scope -in @('root', 'module') })
         $testTargets = @($targets | Where-Object { $_.Scope -eq 'test' })
