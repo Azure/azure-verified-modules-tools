@@ -926,6 +926,21 @@ on transform success or failure without changing pre-existing initialization dat
 Requirement planning uses the validated immutable
 manifest snapshot captured with the fresh provider tree, not the restored
 on-disk manifest; newly added dependencies need no prior manual initialization.
+Within one transform invocation, completed inspections may seed later private
+data directories with copies of public registry root packages selected at bare,
+stable exact versions. Admit packages only after successful native installation,
+provider-tree inspection and manifest validation; never read them from the
+source tree's existing initialization data. Fingerprint the complete downloaded
+package, reject links, initialization/plan data and unexpected locations, and fail
+if an admitted package changes before reuse. Discover current calls and known local parents through
+native MaPoTF inspection before remapping package keys. Scopes with Terraform
+overrides or JSON other than proven locals-only configuration bypass seeding,
+because native call reflection is not complete for those inputs. Local module
+contents, version ranges, Git/URL/private-registry sources and registry subdirectories are
+not reused. Every target still runs Terraform installation and provider inspection
+to revalidate its graph, and its resulting manifest is captured independently.
+No provider or backend data is copied. Package reuse ends with the invocation's
+inspection-directory cleanup; it is not a persistent or cross-repository cache.
 Validate root/default-directory test targets before module installation can fetch
 them. Inspect every target's direct JSON configuration with the shared
 locals-only validator before installing dependencies. Other JSON configurations,
