@@ -119,6 +119,12 @@ section when cutting a release.
 
 ### Changed
 
+- Acceptance and native qualification explicitly mock Terraform's built-in
+  provider and reject incomplete source/mock/run bindings before test
+  execution. Public commands still run their real initialization and tests;
+  guarded test processes clear credentials and use loopback-only endpoints.
+  Repeat-update qualification composes ordered native plan timestamps with a
+  clock-only override and fully mocked update checks, without a provisioner.
 - Fresh telemetry generation now has deterministic block, local-attribute and
   precondition ordering. Independent migrations produce the same reviewed
   bytes, without moving unrelated owner declarations or controlling headers.

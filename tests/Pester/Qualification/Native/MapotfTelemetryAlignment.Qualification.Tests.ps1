@@ -15,19 +15,31 @@ BeforeAll {
         $env:AVM_MPTF_CONFIG_DIR = $null
         $env:TF_PLUGIN_CACHE_DIR = $null
         Import-Module (Join-Path $moduleRoot 'Avm.Authoring.psd1') -Force
+        . (Join-Path $PSScriptRoot '..' '..' 'Helpers' 'TerraformQualification.ps1')
         $script:mapotfPath = InModuleScope 'Avm.Authoring' { (Resolve-AvmTool -Name mapotf).Path }
         $script:terraformPath = InModuleScope 'Avm.Authoring' { (Resolve-AvmTool -Name terraform).Path }
         $script:processEnvironment = InModuleScope 'Avm.Authoring' -Parameters @{ ToolPath = $script:terraformPath } {
             param($ToolPath)
             New-AvmToolPathEnvironment -ToolPath $ToolPath -ToolName terraform
         }
-        foreach ($name in @('TF_DATA_DIR', 'TF_CLI_ARGS', 'TF_CLI_ARGS_init', 'TF_CLI_ARGS_validate', 'TF_CLI_ARGS_test')) {
+        foreach ($name in @('TF_DATA_DIR', 'TF_CLI_ARGS', 'TF_CLI_ARGS_init', 'TF_CLI_ARGS_validate',
+                'TF_CLI_ARGS_test', 'TF_CLI_ARGS_plan', 'TF_CLI_ARGS_show')) {
             $script:processEnvironment[$name] = $null
         }
+        $script:processEnvironment.CHECKPOINT_DISABLE = '1'
 
         function Invoke-TelemetryProcess {
             param([string] $FilePath, [string[]] $ArgumentList, [string] $Root, [switch] $IgnoreExitCode)
 
+            if ($FilePath -ceq $script:terraformPath) {
+                if ($ArgumentList[0] -cin @('apply', 'destroy', 'import')) {
+                    throw [InvalidOperationException]::new('Qualification forbids direct real-provider mutation commands.')
+                }
+                if ($ArgumentList[0] -ceq 'test') {
+                    return Invoke-MockedTerraformQualification -TerraformPath $FilePath -MapotfPath $script:mapotfPath `
+                        -ProfilesRoot $script:profilesRoot -Root $Root -ArgumentList $ArgumentList -Environment $script:processEnvironment
+                }
+            }
             InModuleScope 'Avm.Authoring' -Parameters @{
                 ToolPath = $FilePath
                 Arguments = $ArgumentList
@@ -115,6 +127,9 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+    terraform = {
+      source = "terraform.io/builtin/terraform"
+    }
   }
 }
 '@
@@ -122,6 +137,11 @@ terraform {
                 $terraform = @'
 terraform {
   required_version = ">= 1.9.0, < 2.0.0"
+  required_providers {
+    terraform = {
+      source = "terraform.io/builtin/terraform"
+    }
+  }
 }
 '@
             }
@@ -418,6 +438,109 @@ output "legacy_instance" {
         Assert-TelemetryTerraformValid -Root $root
     }
 
+It 'proves explicit built-in mock selection during a local plan without applying' {
+    $root = Join-Path $TestDrive 'builtin-mock-contract'
+    $unit = Join-Path $root 'tests' 'unit'
+    $child = Join-Path $root 'child'
+    $null = New-Item -ItemType Directory -Path $unit, $child -Force
+    Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+terraform {
+  required_providers {
+    random = {
+      source = "hashicorp/random"
+      version = "~> 3.6"
+    }
+    terraform = {
+      source = "terraform.io/builtin/terraform"
+    }
+  }
+}
+resource "terraform_data" "contract" {
+  input = "authored-input"
+}
+module "child" {
+  source = "./child"
+  providers = {
+    random = random
+  }
+}
+'@
+    Set-Content -LiteralPath (Join-Path $child 'main.tf') -Encoding utf8NoBOM -Value @'
+terraform {
+  required_providers {
+    random = {
+      source = "hashicorp/random"
+      version = "~> 3.6"
+    }
+  }
+}
+resource "terraform_data" "contract" {
+  input = "child-input"
+}
+output "id" {
+  value = terraform_data.contract.id
+}
+output "input" {
+  value = terraform_data.contract.input
+}
+'@
+    Set-Content -LiteralPath (Join-Path $unit 'mock.tftest.hcl') -Encoding utf8NoBOM -Value @'
+mock_provider "random" {}
+mock_provider "terraform" {
+  override_during = plan
+  mock_resource "terraform_data" {
+    defaults = {
+      id     = "native-qualification-mock"
+      output = "mocked-output"
+    }
+  }
+}
+run "mock_contract" {
+  command = plan
+  providers = {
+    random = random
+    terraform = terraform
+  }
+  assert {
+    condition = (
+      terraform_data.contract.id == "native-qualification-mock" &&
+      terraform_data.contract.output == "mocked-output" &&
+      terraform_data.contract.input == "authored-input" &&
+      module.child.id == "native-qualification-mock" &&
+      module.child.input == "child-input"
+    )
+    error_message = "The built-in provider must use the selected native mock, not a real apply."
+  }
+}
+'@
+    $null = Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $root `
+        -ArgumentList @('init', '-backend=false', '-input=false', '-no-color', '-test-directory=tests/unit')
+    $result = Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $root `
+        -ArgumentList @('test', '-no-color', '-test-directory=tests/unit')
+    $result.StdOut | Should -Match 'Success! 1 passed, 0 failed'
+    $testPath = Join-Path $unit 'mock.tftest.hcl'
+    Set-Content -LiteralPath $testPath -Encoding utf8NoBOM -Value @'
+mock_provider "random" {}
+run "unmocked" { command = plan }
+'@
+    {
+        Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $root `
+            -ArgumentList @('test', '-no-color', '-test-directory=tests/unit')
+    } | Should -Throw "*requires a default mock for 'terraform.io/builtin/terraform'*"
+    Set-Content -LiteralPath $testPath -Encoding utf8NoBOM -Value @'
+mock_provider "terraform" {}
+mock_provider "random" {}
+run "incomplete" {
+  command = plan
+  providers = {}
+}
+'@
+    {
+        Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $root `
+            -ArgumentList @('test', '-no-color', '-test-directory=tests/unit')
+    } | Should -Throw '*requires complete known same-provider mock mappings*'
+}
+
 It 'encodes an unversioned local module in the name and creates no deployment when disabled' {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-TelemetryModule -Root $root -WithLocation
@@ -429,6 +552,7 @@ It 'encodes an unversioned local module in the name and creates no deployment wh
         $testDirectory = Join-Path $root 'tests' 'unit'
         $null = New-Item -ItemType Directory -Path $testDirectory -Force
         Set-Content -LiteralPath (Join-Path $testDirectory 'telemetry.tftest.hcl') -Encoding utf8NoBOM -Value @'
+mock_provider "terraform" {}
 mock_provider "azapi" {
   mock_resource "azapi_resource" {
     defaults = {
@@ -482,7 +606,8 @@ run "disabled" {
         $result.StdOut | Should -Match 'Success! 2 passed, 0 failed\.'
     }
 
-It 'plans an in-place telemetry update on a subsequent normal apply without changing its name' {
+It 'composes native plan clocks with a stable-name in-place mocked telemetry update' {
+        . (Join-Path $PSScriptRoot '..' '..' 'Helpers' 'TerraformTelemetryClock.ps1')
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-TelemetryModule -Root $root
         Invoke-TelemetryProfiles -Root $root
@@ -495,18 +620,94 @@ output "telemetry_apply_id" {
   value = one(azapi_resource.telemetry).body.properties.template.outputs.apply_id.value
 }
 '@
-        Set-Content -LiteralPath (Join-Path $root 'delay.tf') -Encoding utf8NoBOM -Value @'
-resource "terraform_data" "delay" {
-  provisioner "local-exec" {
-    interpreter = ["pwsh", "-NoProfile", "-Command"]
-    command     = "Start-Sleep -Seconds 2"
-  }
+        Assert-TelemetryTerraformValid -Root $root
+        @(Get-ChildItem -LiteralPath $root -File -Filter '*_override.tf*') | Should -HaveCount 0
+        $sourceHashes = @{}
+        foreach ($file in Get-ChildItem -LiteralPath $root -File -Force) {
+            $sourceHashes[$file.Name] = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+        }
+        $bodyResult = Invoke-TelemetryProcess -FilePath $script:mapotfPath -Root $root -ArgumentList @(
+            'debug', '--tf-dir', $root, '--mptf-dir', (Join-Path $script:profilesRoot 'module'),
+            '--eval', 'data.resource.telemetry_order.result.azapi_resource.telemetry.body'
+        )
+        $body = $bodyResult.StdOut | ConvertFrom-Json
+        $body | Should -BeOfType ([string])
+        $overrideJson = New-TerraformTelemetryClockOverride -Body $body
+
+        $clockRoot = Join-Path $TestDrive ('native-clock-' + [guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $clockRoot
+        Set-Content -LiteralPath (Join-Path $clockRoot 'main.tf') -Encoding utf8NoBOM -Value @'
+output "plan_time" {
+  value = plantimestamp()
 }
 '@
-        Assert-TelemetryTerraformValid -Root $root
+        $null = Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $clockRoot -ArgumentList @(
+            'init', '-backend=false', '-input=false', '-no-color'
+        )
+        $nativeTimes = [Collections.Generic.List[string]]::new()
+        $wait = [Diagnostics.Stopwatch]::new()
+        foreach ($phase in @('first', 'second')) {
+            if ($phase -ceq 'second') {
+                $deadline = [DateTimeOffset]::Parse($nativeTimes[0], [Globalization.CultureInfo]::InvariantCulture).AddSeconds(2)
+                $wait.Start()
+                while ([DateTimeOffset]::UtcNow -lt $deadline) {
+                    if ($wait.Elapsed.TotalSeconds -ge 5) {
+                        throw [InvalidOperationException]::new('Native qualification clock did not cross its bounded timing boundary.')
+                    }
+                    Start-Sleep -Milliseconds 50
+                }
+                $wait.Stop()
+            }
+            $planPath = Join-Path $clockRoot "$phase.tfplan"
+            $null = Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $clockRoot -ArgumentList @(
+                'plan', '-refresh=false', '-input=false', '-lock=false', '-no-color', "-out=$planPath"
+            )
+            $clockJson = (Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $clockRoot `
+                    -ArgumentList @('show', '-json', $planPath)).StdOut
+            $clockPlan = [System.Text.Json.JsonDocument]::Parse($clockJson)
+            try {
+                $resourceChanges = [System.Text.Json.JsonElement]::new()
+                $clockPlan.RootElement.TryGetProperty('resource_changes', [ref]$resourceChanges) | Should -BeFalse
+                $nativeTime = $clockPlan.RootElement.GetProperty('planned_values').GetProperty('outputs').
+                    GetProperty('plan_time').GetProperty('value').GetString()
+                $nativeTime | Should -BeExactly $clockPlan.RootElement.GetProperty('timestamp').GetString()
+                $nativeTimes.Add($nativeTime)
+            }
+            finally { $clockPlan.Dispose() }
+        }
+        $firstTime = [DateTimeOffset]::Parse($nativeTimes[0], [Globalization.CultureInfo]::InvariantCulture)
+        $secondTime = [DateTimeOffset]::Parse($nativeTimes[1], [Globalization.CultureInfo]::InvariantCulture)
+        ($secondTime - $firstTime).TotalSeconds | Should -BeGreaterOrEqual 2
+        $wait.Elapsed.TotalSeconds | Should -BeLessThan 6
+
+        $clockVariablePath = Join-Path $root 'qualification_clock.tf'
+        Set-Content -LiteralPath $clockVariablePath -Encoding utf8NoBOM -Value @'
+variable "qualification_plan_time" {
+  type = string
+}
+'@
+        $overridePath = Join-Path $root 'qualification_clock_override.tf.json'
+        [IO.File]::WriteAllText($overridePath, $overrideJson + "`n", [Text.UTF8Encoding]::new($false))
+        $overrideHash = (Get-FileHash -LiteralPath $overridePath -Algorithm SHA256).Hash
+        $clockVariableHash = (Get-FileHash -LiteralPath $clockVariablePath -Algorithm SHA256).Hash
+        $overrideDocument = Get-Content -LiteralPath $overridePath -Raw | ConvertFrom-Json -AsHashtable
+        @($overrideDocument.Keys) | Should -Be @('resource')
+        @($overrideDocument.resource.Keys) | Should -Be @('azapi_resource')
+        @($overrideDocument.resource.azapi_resource.Keys) | Should -Be @('telemetry')
+        @($overrideDocument.resource.azapi_resource.telemetry.Keys) | Should -Be @('body')
+        $overrideDocument.resource.azapi_resource.telemetry.body |
+            Should -BeExactly ('${' + $body.Replace('plantimestamp()', 'var.qualification_plan_time') + '}')
+        foreach ($name in $sourceHashes.Keys) {
+            (Get-FileHash -LiteralPath (Join-Path $root $name) -Algorithm SHA256).Hash | Should -BeExactly $sourceHashes[$name]
+        }
+
         $testDirectory = Join-Path $root 'tests' 'unit'
         $null = New-Item -ItemType Directory -Path $testDirectory -Force
-        Set-Content -LiteralPath (Join-Path $testDirectory 'repeat.tftest.hcl') -Encoding utf8NoBOM -Value @'
+        $testPath = Join-Path $testDirectory 'repeat.tftest.hcl'
+        Set-Content -LiteralPath $testPath -Encoding utf8NoBOM -Value @"
+mock_provider "terraform" {
+  mock_resource "terraform_data" {}
+}
 mock_provider "azapi" {
   mock_resource "azapi_resource" {
     defaults = {
@@ -522,14 +723,32 @@ mock_provider "azapi" {
 
 run "first" {
   command = apply
+  providers = {
+    azapi     = azapi
+    terraform = terraform
+  }
+  variables {
+    qualification_plan_time = "$($nativeTimes[0])"
+  }
   assert {
     condition     = length(azapi_resource.telemetry) == 1
     error_message = "The first apply must create one telemetry deployment."
+  }
+  assert {
+    condition     = output.telemetry_apply_id == var.qualification_plan_time
+    error_message = "The clock-only seam must use the first native timestamp."
   }
 }
 
 run "second" {
   command = plan
+  providers = {
+    azapi     = azapi
+    terraform = terraform
+  }
+  variables {
+    qualification_plan_time = "$($nativeTimes[1])"
+  }
   assert {
     condition = (
       output.telemetry_name == run.first.telemetry_name &&
@@ -537,12 +756,58 @@ run "second" {
     )
     error_message = "The next normal plan must update telemetry without changing its name."
   }
+  assert {
+    condition     = output.telemetry_apply_id == var.qualification_plan_time
+    error_message = "The clock-only seam must use the ordered second native timestamp."
+  }
 }
-'@
+"@
+        $testHash = (Get-FileHash -LiteralPath $testPath -Algorithm SHA256).Hash
         $result = Invoke-TelemetryProcess -FilePath $script:terraformPath `
-            -ArgumentList @('test', '-no-color', '-verbose', '-var=location=eastus', '-test-directory=tests/unit') -Root $root
-        $result.StdOut | Should -Match 'Success! 2 passed, 0 failed\.'
-        $result.StdOut | Should -Match 'azapi_resource\.telemetry\[0\] will be updated in-place'
+            -ArgumentList @('test', '-json', '-verbose', '-var=location=eastus', '-test-directory=tests/unit') -Root $root
+        $records = [Collections.Generic.List[object]]::new()
+        $planJson = [Collections.Generic.List[string]]::new()
+        foreach ($line in $result.StdOut -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) {
+            $record = ConvertFrom-Json -InputObject $line -AsHashtable -ErrorAction Stop
+            $records.Add($record)
+            if ($record.type -ceq 'test_plan') { $planJson.Add($line) }
+        }
+        $completed = @($records | Where-Object {
+                $_.type -ceq 'test_run' -and $_.test_run['status'] -cin @('pass', 'fail', 'error', 'skip')
+            })
+        $completed | Should -HaveCount 2
+        @($completed | Where-Object { $_.test_run.status -cne 'pass' }) | Should -HaveCount 0
+        $plans = @($records | Where-Object { $_.type -ceq 'test_plan' })
+        $plans | Should -HaveCount 1
+        $plans[0]['@testrun'] | Should -BeExactly 'second'
+        $plans[0]['@testfile'].Replace('\', '/') | Should -BeExactly 'tests/unit/repeat.tftest.hcl'
+        $plan = $plans[0].test_plan
+        $planDocument = [System.Text.Json.JsonDocument]::Parse($planJson[0])
+        try {
+            $applyIdChange = $planDocument.RootElement.GetProperty('test_plan').GetProperty('output_changes').
+                GetProperty('telemetry_apply_id')
+            $applyIdChange.GetProperty('before').GetString() | Should -BeExactly $nativeTimes[0]
+            $applyIdChange.GetProperty('after').GetString() |
+                Should -BeExactly $nativeTimes[1]
+        }
+        finally { $planDocument.Dispose() }
+        $changes = @($plan.resource_changes | Where-Object { $_.mode -ceq 'managed' })
+        $telemetry = @($changes | Where-Object { $_.address -ceq 'azapi_resource.telemetry[0]' })
+        $telemetry | Should -HaveCount 1
+        $telemetry[0].change.actions | Should -Be @('update')
+        foreach ($change in $changes | Where-Object { $_.address -cne 'azapi_resource.telemetry[0]' }) {
+            $change.change.actions | Should -Be @('no-op')
+        }
+        $expectedFiles = @(@($sourceHashes.Keys) + @('qualification_clock.tf', 'qualification_clock_override.tf.json') | Sort-Object)
+        @(Get-ChildItem -LiteralPath $root -File -Force | ForEach-Object Name | Sort-Object) | Should -Be $expectedFiles
+        foreach ($name in $sourceHashes.Keys) {
+            (Get-FileHash -LiteralPath (Join-Path $root $name) -Algorithm SHA256).Hash | Should -BeExactly $sourceHashes[$name]
+        }
+        (Get-FileHash -LiteralPath $overridePath -Algorithm SHA256).Hash | Should -BeExactly $overrideHash
+        (Get-FileHash -LiteralPath $clockVariablePath -Algorithm SHA256).Hash | Should -BeExactly $clockVariableHash
+        (Get-FileHash -LiteralPath $testPath -Algorithm SHA256).Hash | Should -BeExactly $testHash
+        Write-Information ("Compositional clock proof: first={0}; second={1}; waitMs={2}; generatedSha256={3}; overrideSha256={4}; actions=update" -f
+            $nativeTimes[0], $nativeTimes[1], $wait.ElapsedMilliseconds, $sourceHashes['main.telemetry.tf'], $overrideHash) -InformationAction Continue
     }
 
 It 'accepts a 36-character version at the 64-character Azure name limit' {
@@ -562,6 +827,7 @@ It 'accepts a 36-character version at the 64-character Azure name limit' {
         $testDirectory = Join-Path $root 'tests' 'unit'
         $null = New-Item -ItemType Directory -Path $testDirectory -Force
         Set-Content -LiteralPath (Join-Path $testDirectory 'name.tftest.hcl') -Encoding utf8NoBOM -Value @"
+mock_provider "terraform" {}
 mock_provider "azapi" {
   mock_data "azapi_client_config" {
     defaults = {
@@ -601,6 +867,7 @@ It 'rejects a 37-character version before creating an overlong deployment' {
         $testDirectory = Join-Path $root 'tests' 'unit'
         $null = New-Item -ItemType Directory -Path $testDirectory -Force
         Set-Content -LiteralPath (Join-Path $testDirectory 'name.tftest.hcl') -Encoding utf8NoBOM -Value @'
+mock_provider "terraform" {}
 mock_provider "azapi" {
   mock_data "azapi_client_config" {
     defaults = {
@@ -644,6 +911,7 @@ It 'classifies <Name> module sources without sending their raw paths' -TestCases
         $testDirectory = Join-Path $root 'tests' 'unit'
         $null = New-Item -ItemType Directory -Path $testDirectory -Force
         Set-Content -LiteralPath (Join-Path $testDirectory 'source.tftest.hcl') -Encoding utf8NoBOM -Value @"
+mock_provider "terraform" {}
 mock_provider "azapi" {
   mock_data "azapi_client_config" {
     defaults = {

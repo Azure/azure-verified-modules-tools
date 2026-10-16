@@ -10,5 +10,8 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+    terraform = {
+      source = "terraform.io/builtin/terraform"
+    }
   }
 }

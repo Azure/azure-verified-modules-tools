@@ -9,6 +9,8 @@ mock_provider "azapi" {
 
 mock_provider "random" {}
 
+mock_provider "terraform" {}
+
 variables {
   location = "eastus"
 }
@@ -19,7 +21,8 @@ run "apply" {
   providers = {
     azapi = azapi
 
-    random = random
+    random    = random
+    terraform = terraform
   }
 
   variables {
@@ -53,7 +56,8 @@ run "current_interface" {
   providers = {
     azapi = azapi
 
-    random = random
+    random    = random
+    terraform = terraform
   }
 
   variables {
@@ -72,7 +76,8 @@ run "safe_defaults" {
   providers = {
     azapi = azapi
 
-    random = random
+    random    = random
+    terraform = terraform
   }
 
   assert {
@@ -87,7 +92,8 @@ run "telemetry_disabled" {
   providers = {
     azapi = azapi
 
-    random = random
+    random    = random
+    terraform = terraform
   }
 
   variables {

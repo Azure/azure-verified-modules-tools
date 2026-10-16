@@ -1886,6 +1886,29 @@ the existing approved OIDC identity. Acceptance and qualification do not deploy
 Azure resources. Qualification may run provider-mocked Terraform applies and
 provider-free local plans, but never real-provider applies.
 
+This mock boundary includes Terraform's built-in provider. Applying fixtures
+that use `terraform_data` declare `terraform.io/builtin/terraform` explicitly,
+provide `mock_provider "terraform" {}`, and include its binding in every
+explicit run mapping that selects such a target. Provider-free setup targets
+do not acquire unrelated bindings. Before a native test process starts,
+inspect every selected local target's provider sources and test declarations.
+Missing mocks, unproven sources, real test-provider configurations and partial,
+unknown or cross-provider mappings fail closed. Root test files outside the
+inspected suite and JSON tests are rejected. Public-command acceptance keeps
+its real initialization and test execution, with the same guard at the test
+subprocess boundary. Runtime credentials are cleared and runtime HTTP proxies
+and ModTM endpoints are loopback-only; dependency inspection may still fetch
+the pinned packages before runtime. Network isolation is not an exception to
+the prohibition on real-provider applies.
+
+Telemetry repeat-update qualification is bounded compositional proof, not an
+unmodified end-to-end runtime test. Guard the generated `plantimestamp()`
+expression and file hashes, obtain two distinct ordered timestamps from
+provider-free native plans with a bounded harness-owned wait, and substitute
+only that clock dependency in a temporary override. Preserve the stable-name
+and changed-apply-ID assertions and require the native plan's exact `update`
+action; reject creation, deletion, replacement and unexpected source changes.
+
 Keep source/version matching, native response/argument contracts, provider
 mapping decisions and safety predicates in unit tests. Real filesystem,
 manifest, lock, cache, environment, rollback and subprocess-failure contracts

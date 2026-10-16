@@ -1,3 +1,5 @@
+. (Join-Path $PSScriptRoot 'TerraformQualification.ps1')
+
 function Get-TerraformAcceptanceFiles {
     param(
         [Parameter(Mandatory)] [string] $Root,
@@ -177,7 +179,49 @@ function Invoke-TerraformAcceptanceUnit {
         $env:ARM_USE_OIDC = 'false'
         $env:ARM_USE_CLI = 'false'
         $env:ARM_USE_MSI = 'false'
-        $result = avm test unit --path $Context.Root --ecosystem terraform --passthru -SkipModuleVersionCheck
+        $result = InModuleScope Avm.Authoring -Parameters @{
+            Root = $Context.Root
+            Guard = ${function:Invoke-MockedTerraformQualification}
+        } {
+            param($Root, $Guard)
+            $script:qualificationOriginalProcess = (Get-Command Invoke-AvmProcess).ScriptBlock
+            $script:qualificationGuard = $Guard
+            $script:qualificationTerraform = (Resolve-AvmTool -Name terraform -ModuleRoot $Root).Path
+            $script:qualificationMapotf = (Resolve-AvmTool -Name mapotf -ModuleRoot $Root).Path
+            $script:qualificationProfiles = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Resources' 'mapotf'
+            $script:qualificationRuntimeCount = 0
+            $paths = @($Root) + @(Get-AvmTerraformFile -Root $Root |
+                    Where-Object Extension -CEQ '.tf' | ForEach-Object DirectoryName)
+            $script:qualificationTargets = @(
+                foreach ($path in @($paths | Sort-Object -Unique)) {
+                    [pscustomobject]@{ Path = $path; Scope = if ($path -ceq $Root) { 'root' } else { 'test' } }
+                }
+            )
+            Mock Invoke-AvmProcess {
+                if ([IO.Path]::GetFileNameWithoutExtension($FilePath) -ceq 'terraform' -and
+                    $ArgumentList[0] -cin @('test', 'apply', 'destroy', 'import')) {
+                    throw [InvalidOperationException]::new('Acceptance refuses an unguarded Terraform execution path.')
+                }
+                & $script:qualificationOriginalProcess @PesterBoundParameters
+            }
+            Mock Invoke-AvmProcess {
+                if ($ArgumentList[0] -cin @('apply', 'destroy', 'import')) {
+                    throw [InvalidOperationException]::new('Acceptance forbids direct real-provider mutation commands.')
+                }
+                $forward = @{} + $PesterBoundParameters
+                if ($ArgumentList[0] -ceq 'test') {
+                    $forward.EnvVars = & $script:qualificationGuard -TerraformPath $FilePath `
+                        -MapotfPath $script:qualificationMapotf -ProfilesRoot $script:qualificationProfiles `
+                        -Root $WorkingDirectory -ArgumentList $ArgumentList -Environment (@{} + $EnvVars) `
+                        -ModuleTargets $script:qualificationTargets -InspectOnly
+                    $script:qualificationRuntimeCount++
+                }
+                & $script:qualificationOriginalProcess @forward
+            } -ParameterFilter { $FilePath -ceq $script:qualificationTerraform }
+            $unit = avm test unit --path $Root --ecosystem terraform --passthru -SkipModuleVersionCheck
+            $script:qualificationRuntimeCount | Should -BeGreaterThan 0
+            return $unit
+        }
         $result.Status | Should -BeExactly 'pass'
         $result.RunsTotal | Should -Be $Runs
         $result.RunsPassed | Should -Be $Runs

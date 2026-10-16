@@ -5,6 +5,8 @@ Describe 'Qualification: MAPOTF utility module migration' -Tag Qualification {
 BeforeAll {
         $moduleRoot = Join-Path $PSScriptRoot '..' '..' '..' '..' 'src' 'Avm.Authoring'
         Import-Module (Join-Path $moduleRoot 'Avm.Authoring.psd1') -Force
+        . (Join-Path $PSScriptRoot '..' '..' 'Helpers' 'TerraformQualification.ps1')
+        $script:profilesRoot = Join-Path $moduleRoot 'Resources' 'mapotf'
         $script:options = InModuleScope Avm.Authoring -Parameters @{ ModuleRoot = $moduleRoot; InspectionRoot = (Join-Path $TestDrive 'inspection') } {
             param($ModuleRoot, $InspectionRoot)
             $terraform = Resolve-AvmTool -Name terraform
@@ -28,6 +30,14 @@ BeforeAll {
         }
         function Invoke-UtilityProcess {
             param([string] $Root, [string[]] $Arguments)
+            if ($Arguments[0] -cin @('apply', 'destroy', 'import')) {
+                throw [InvalidOperationException]::new('Qualification forbids direct real-provider mutation commands.')
+            }
+            if ($Arguments[0] -ceq 'test') {
+                return Invoke-MockedTerraformQualification -TerraformPath $script:options.TerraformPath `
+                    -MapotfPath $script:options.ToolPath -ProfilesRoot $script:profilesRoot `
+                    -Root $Root -ArgumentList $Arguments -Environment $script:options.EnvVars
+            }
             InModuleScope Avm.Authoring -Parameters @{ Root = $Root; Arguments = $Arguments; Options = $script:options } {
                 param($Root, $Arguments, $Options)
                 Invoke-AvmProcess -FilePath $Options.TerraformPath -ArgumentList $Arguments `

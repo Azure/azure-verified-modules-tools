@@ -8,6 +8,7 @@ mock_provider "azapi" {
 }
 mock_provider "modtm" {}
 mock_provider "random" {}
+mock_provider "terraform" {}
 
 variables {
   location = "eastus"
@@ -17,9 +18,10 @@ run "apply" {
   command = apply
 
   providers = {
-    azapi  = azapi
-    modtm  = modtm
-    random = random
+    azapi     = azapi
+    modtm     = modtm
+    random    = random
+    terraform = terraform
   }
 
   variables {
@@ -51,9 +53,10 @@ run "current_interface" {
   command = plan
 
   providers = {
-    azapi  = azapi
-    modtm  = modtm
-    random = random
+    azapi     = azapi
+    modtm     = modtm
+    random    = random
+    terraform = terraform
   }
 
   variables {
@@ -70,9 +73,10 @@ run "safe_defaults" {
   command = plan
 
   providers = {
-    azapi  = azapi
-    modtm  = modtm
-    random = random
+    azapi     = azapi
+    modtm     = modtm
+    random    = random
+    terraform = terraform
   }
 
   assert {
@@ -85,9 +89,10 @@ run "telemetry_disabled" {
   command = plan
 
   providers = {
-    azapi  = azapi
-    modtm  = modtm
-    random = random
+    azapi     = azapi
+    modtm     = modtm
+    random    = random
+    terraform = terraform
   }
 
   variables {
