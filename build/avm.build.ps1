@@ -618,8 +618,8 @@ task 'test-tenant-terraform' {
                     $candidatePlan = ConvertFrom-AvmTestTerraformPlan -Plan $plan -AddressPrefix 'module.azure.' `
                         -GroupContracts @{ 'module.azure' = $plan['output_changes']['test_group_contract']['after'] }
                     $managed = @($candidatePlan.resource_changes | Where-Object { $_['mode'] -ceq 'managed' })
-                    if ($managed.Count -ne 7 -or @($managed | Where-Object { (@($_['change']['actions']) -join ',') -cne 'create' }).Count -gt 0) {
-                        throw [System.IO.InvalidDataException]::new('Recovery after legacy deletion must only create the seven missing identity resources.')
+                    if ($managed.Count -ne 8 -or @($managed | Where-Object { (@($_['change']['actions']) -join ',') -cne 'create' }).Count -gt 0) {
+                        throw [System.IO.InvalidDataException]::new('Recovery after legacy deletion must only create the eight missing identity resources.')
                     }
                     Assert-AvmBamiIdentityPlan -Plan $candidatePlan -Settings $settings `
                         -Repository 'Azure/terraform-azurerm-avm-ptn-azuremonitorwindowsagent' -RepositoryId '1234' `

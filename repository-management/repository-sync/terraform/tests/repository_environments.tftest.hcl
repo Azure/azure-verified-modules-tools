@@ -38,25 +38,26 @@ override_resource {
 }
 
 variables {
-  repository_creation_mode_enabled                    = false
-  arm_client_id                                       = "20000000-0000-4000-8000-000000000001"
-  arm_tenant_id                                       = "20000000-0000-4000-8000-000000000002"
-  test_subscription_ids                               = []
-  github_repository_owner                             = "Azure"
-  github_repository_name                              = "terraform-azurerm-avm-ptn-example-repo"
-  module_id                                           = "avm-ptn-example-repo"
-  module_name                                         = "Example"
-  github_repository_pr_check_environment_name         = "pr-check"
-  github_repository_integration_test_environment_name = "integration-test"
-  github_repository_examples_test_environment_name    = "examples-test"
-  github_repository_no_approval_environment_name      = "no-approval"
-  labels                                              = {}
-  pull_request_bypass_teams                           = []
-  is_protected_repo                                   = true
-  bypass_ruleset_for_approval_enabled                 = true
-  github_avm_app_id                                   = "1049636"
-  copilot_agent_firewall_allow_list_variable_name     = "COPILOT_AGENT_FIREWALL_ALLOW_LIST_ADDITIONS"
-  copilot_agent_firewall_allow_list                   = []
+  repository_creation_mode_enabled                           = false
+  arm_client_id                                              = "20000000-0000-4000-8000-000000000001"
+  arm_tenant_id                                              = "20000000-0000-4000-8000-000000000002"
+  test_subscription_ids                                      = []
+  github_repository_owner                                    = "Azure"
+  github_repository_name                                     = "terraform-azurerm-avm-ptn-example-repo"
+  module_id                                                  = "avm-ptn-example-repo"
+  module_name                                                = "Example"
+  github_repository_pr_check_environment_name                = "pr-check"
+  github_repository_integration_test_environment_name        = "integration-test"
+  github_repository_examples_test_environment_name           = "examples-test"
+  github_repository_examples_test_execution_environment_name = "examples-test-execution"
+  github_repository_no_approval_environment_name             = "no-approval"
+  labels                                                     = {}
+  pull_request_bypass_teams                                  = []
+  is_protected_repo                                          = true
+  bypass_ruleset_for_approval_enabled                        = true
+  github_avm_app_id                                          = "1049636"
+  copilot_agent_firewall_allow_list_variable_name            = "COPILOT_AGENT_FIREWALL_ALLOW_LIST_ADDITIONS"
+  copilot_agent_firewall_allow_list                          = []
   github_teams = {
     approvers = {
       slug                         = "avm-approvers"
@@ -84,8 +85,8 @@ run "pr_check_retains_its_environment_without_reviewers" {
   }
 
   assert {
-    condition     = toset(keys(github_repository_environment.approval)) == toset(["examples_test", "integration_test", "pr_check"])
-    error_message = "The three existing test environment resource addresses must remain unchanged."
+    condition     = toset(keys(github_repository_environment.approval)) == toset(["examples_test", "examples_test_execution", "integration_test", "pr_check"])
+    error_message = "Only the execution environment may be added; the three existing test environment resource addresses must remain unchanged."
   }
 
   assert {
@@ -105,7 +106,16 @@ run "pr_check_retains_its_environment_without_reviewers" {
         !github_repository_environment.approval[key].prevent_self_review
       )
     ])
-    error_message = "Integration and e2e must retain exactly the configured approval teams and existing bypass/self-review settings."
+    error_message = "Integration and e2e discovery must retain exactly the configured approval teams and existing bypass/self-review settings."
+  }
+
+  assert {
+    condition = (
+      github_repository_environment.approval["examples_test"].environment == "examples-test" &&
+      github_repository_environment.approval["examples_test_execution"].environment == "examples-test-execution" &&
+      length(github_repository_environment.approval["examples_test_execution"].reviewers) == 0
+    )
+    error_message = "E2e execution must use a separate environment without reviewers, leaving discovery and legacy callers protected."
   }
 
   assert {
@@ -120,7 +130,7 @@ run "pr_check_retains_its_environment_without_reviewers" {
     condition = github_actions_repository_oidc_subject_claim_customization_template.this[0].include_claim_keys == tolist([
       "repository_owner_id", "repository_id", "context", "job_workflow_ref"
     ])
-    error_message = "The OIDC subject contract must not change when removing PR check reviewers."
+    error_message = "The OIDC subject contract must retain its immutable repository, environment, and reusable-workflow binding."
   }
 }
 
@@ -132,9 +142,10 @@ run "custom_names_preserve_the_same_approval_split" {
   }
 
   variables {
-    github_repository_pr_check_environment_name         = "custom-pr-check"
-    github_repository_integration_test_environment_name = "custom-integration"
-    github_repository_examples_test_environment_name    = "custom-e2e"
+    github_repository_pr_check_environment_name                = "custom-pr-check"
+    github_repository_integration_test_environment_name        = "custom-integration"
+    github_repository_examples_test_environment_name           = "custom-e2e"
+    github_repository_examples_test_execution_environment_name = "custom-e2e-execution"
   }
 
   assert {
@@ -143,6 +154,8 @@ run "custom_names_preserve_the_same_approval_split" {
       length(github_repository_environment.approval["pr_check"].reviewers) == 0 &&
       github_repository_environment.approval["integration_test"].environment == "custom-integration" &&
       github_repository_environment.approval["examples_test"].environment == "custom-e2e" &&
+      github_repository_environment.approval["examples_test_execution"].environment == "custom-e2e-execution" &&
+      length(github_repository_environment.approval["examples_test_execution"].reviewers) == 0 &&
       alltrue([
         for key in ["integration_test", "examples_test"] :
         toset(one(github_repository_environment.approval[key].reviewers).teams) == toset([501, 502])
@@ -150,6 +163,34 @@ run "custom_names_preserve_the_same_approval_split" {
     )
     error_message = "Approval must follow each job's role, not a hard-coded environment name."
   }
+}
+
+run "execution_cannot_reuse_the_discovery_environment" {
+  command = plan
+
+  module {
+    source = "./modules/github"
+  }
+
+  variables {
+    github_repository_examples_test_execution_environment_name = "examples-test"
+  }
+
+  expect_failures = [var.github_repository_examples_test_execution_environment_name]
+}
+
+run "execution_cannot_reuse_the_integration_environment_with_different_casing" {
+  command = plan
+
+  module {
+    source = "./modules/github"
+  }
+
+  variables {
+    github_repository_examples_test_execution_environment_name = "INTEGRATION-TEST"
+  }
+
+  expect_failures = [var.github_repository_examples_test_execution_environment_name]
 }
 
 run "creation_mode_still_omits_test_environments" {

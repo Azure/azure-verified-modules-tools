@@ -9,6 +9,9 @@ Describe 'terraform-module reusable workflow' {
         $jobMatch = [regex]::Match($script:workflow, '(?ms)^  e2e-test:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
         if (-not $jobMatch.Success) { throw 'Could not isolate the e2e-test job block.' }
         $script:e2eJob = $jobMatch.Value
+        $discoveryMatch = [regex]::Match($script:workflow, '(?ms)^  discover-examples:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        if (-not $discoveryMatch.Success) { throw 'Could not isolate the discover-examples job block.' }
+        $script:discoveryJob = $discoveryMatch.Value
     }
 
     It 'uses the shared retrying installer and version input in <Job>' -ForEach @(
@@ -57,26 +60,21 @@ Describe 'terraform-module reusable workflow' {
         $script:workflow | Should -Match "needs\.discover-examples\.outputs\.hasExamples == 'true'"
     }
 
-    It 'keeps the e2e environment static so one approval releases every matrix leg' {
-        $script:workflow | Should -Match 'environment:\s*examples-test'
+    It 'keeps e2e execution on a static environment separate from discovery approval' {
+        $script:e2eJob | Should -Match '(?m)^    environment: examples-test-execution\r?$'
         $script:workflow | Should -Not -Match 'environment:\s*.*\$\{\{\s*matrix\.'
     }
 
-    It 'gates the whole e2e matrix behind a single pending deployment' {
-        # Environment protection is evaluated when a job becomes ready to dispatch,
-        # not when the run starts. max-parallel releases the legs in waves, and each
-        # wave raises a fresh pending deployment - so N legs become ceil(N/limit)
-        # approvals. It is exactly the lever someone reaches for when the
-        # subscription round-robin is not enough to stay inside Azure quota.
-        $script:e2eJob | Should -Not -Match '(?m)^\s*max-parallel\s*:'
-        ([regex]::Matches($script:e2eJob, '(?m)^\s*strategy:\s*$')).Count | Should -Be 1
+    It 'keeps the whole e2e matrix dependent on successful protected discovery' {
+        $script:e2eJob | Should -Match 'needs:\s*\[subscriptions, discover-examples\]'
+        $script:e2eJob | Should -Not -Match 'always\(\)|cancelled\(\)|failure\(\)|continue-on-error:'
+        $script:discoveryJob | Should -Not -Match 'continue-on-error:'
     }
 
-    It 'declares the e2e approval gate on exactly one job' {
-        # A second job on examples-test would become ready at a different time and
-        # raise its own pending deployment, which one approval would not release.
+    It 'declares the e2e approval gate only on non-matrix discovery without OIDC write permission' {
         ([regex]::Matches($script:workflow, '(?m)^\s*environment:\s*examples-test\s*$')).Count | Should -Be 1
-        $script:e2eJob | Should -Match 'needs:\s*\[subscriptions, discover-examples\]'
+        $script:discoveryJob | Should -Match '(?m)^    environment: examples-test\r?$'
+        $script:discoveryJob | Should -Not -Match 'strategy:|id-token:'
     }
 
     It 'round-robins the subscription across matrix legs using strategy.job-index' {
@@ -470,7 +468,7 @@ Describe 'terraform-module required Azure feature registration' {
         ([regex]::Matches($script:workflow, 'uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c')).Count |
             Should -Be 2
         $script:jobs['integration-test'] | Should -Match '(?m)^    environment: integration-test\r?$'
-        $script:jobs['e2e-test'] | Should -Match '(?m)^    environment: examples-test\r?$'
+        $script:jobs['e2e-test'] | Should -Match '(?m)^    environment: examples-test-execution\r?$'
         $script:workflow | Should -Not -Match '(?i)feature unregister|provider unregister'
     }
 

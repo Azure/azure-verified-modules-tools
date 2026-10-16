@@ -1862,11 +1862,31 @@ Same-repository `pr-check` retains its full checks, subscription selection,
 credentials and `pr-check` environment for Azure OIDC, but that environment
 has no required reviewers. Preserve its Terraform resource address, environment
 name and federated identity subject. Integration and e2e remain non-fork and
-reviewer-gated through `integration-test` and `examples-test`, with their
-existing approval teams and bypass/self-review settings.
+reviewer-gated, with their existing approval teams and bypass/self-review
+settings. Integration keeps its `integration-test` environment unchanged.
+E2e approval belongs to the non-matrix `discover-examples` job on `examples-test`,
+which has no OIDC write permission. Every e2e matrix leg requires successful
+subscription selection and protected discovery, plus a nonempty example list.
+The legs use the distinct, approval-free `examples-test-execution` environment.
+Preserve the template exclusion, subscription round-robin, required-feature
+registration and cleanup. Discovery approval occurs before the example count is
+known, so an empty matrix still needs that approval but executes no e2e legs.
+
+Normal repository sync provisions the execution environment and its exact
+repository/environment/reusable-workflow-bound federation on the existing test
+identity. The execution environment name must not collide with any existing
+environment, including case-insensitive names. Keep the existing environment
+resource addresses, `examples-test` reviewers and legacy federation for older
+workflow callers. Creation-mode bootstrap still omits test environments.
+Reconcile the new environment and credential before relying on e2e execution;
+missing federation must fail authentication, never fall back to another
+environment or bypass discovery approval.
+
 Removing the `pr-check` reviewer gate permits authenticated policy plans and
 repository hooks on each same-repository PR push; the security stance's SFI
-sign-off requirement applies before merge.
+sign-off requirement applies before merge. Moving e2e approval from individual
+execution jobs to their prerequisite and adding approval-free execution trust
+also requires recorded SFI sign-off before merge.
 
 ### Scoped CI
 
