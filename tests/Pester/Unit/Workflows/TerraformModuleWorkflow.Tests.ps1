@@ -290,12 +290,16 @@ Describe 'Terraform General subscription selection' {
     }
 }
 
-Describe 'terraform-module fork isolation' {
+Describe 'terraform-module automatic checks and fork isolation' {
     BeforeAll {
-        $workflowPath = Join-Path $PSScriptRoot '..' '..' '..' '..' '.github' 'workflows' 'terraform-module.yml'
+        $root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..')).Path
+        $workflowPath = Join-Path $root '.github' 'workflows' 'terraform-module.yml'
         $script:workflow = Get-Content -LiteralPath $workflowPath -Raw
+        $module = Import-Module (Join-Path $root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -PassThru
+        $null = & $module { Import-AvmPowerShellModule -Name powershell-yaml -Global }
+        $script:definition = ConvertFrom-Yaml -Yaml $script:workflow
         $script:jobs = @{}
-        foreach ($name in @('subscriptions', 'unit-test', 'unit-test-fork', 'pr-check', 'pr-check-fork', 'integration-test', 'discover-examples', 'e2e-test')) {
+        foreach ($name in @('subscriptions', 'unit-test', 'pr-check', 'pr-check-fork', 'integration-test', 'discover-examples', 'e2e-test')) {
             $pattern = '(?ms)^  ' + [regex]::Escape($name) + ':\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)'
             $block = [regex]::Match($script:workflow, $pattern)
             if (-not $block.Success) { throw "Could not isolate the $name job block." }
@@ -311,34 +315,61 @@ Describe 'terraform-module fork isolation' {
     }
 
     It 'runs <Job> independently with read-only permissions and no protected environment' -ForEach @(
-        @{ Job = 'unit-test-fork' }
+        @{ Job = 'unit-test' }
         @{ Job = 'pr-check-fork' }
     ) {
         $block = $script:jobs[$Job]
-        $block | Should -Match '(?m)^    if: github\.event\.pull_request\.head\.repo\.fork == true\r?$'
         $block | Should -Match '(?m)^    runs-on: ubuntu-latest\r?$'
         $block | Should -Match '(?m)^    permissions:\r?\n      contents: read\r?\n    env:'
         $block | Should -Not -Match 'environment:|needs:|id-token:|azure/login@|SELECTED_SUBSCRIPTION|register-features'
         $block | Should -Not -Match '\$\{\{\s*(?:secrets|vars)\.'
+        @($script:definition.jobs[$Job].permissions.Keys) | Should -Be @('contents')
+        $script:definition.jobs[$Job].permissions.contents | Should -BeExactly 'read'
     }
 
-    It 'overrides inherited credential contexts and disables OIDC in both fork jobs' {
-        $script:jobs['unit-test-fork'] | Should -Match (
-            '(?m)^    env: &fork-environment\r?\n' +
-            "      SECRETS_CONTEXT: '\{\}'\r?\n" +
-            "      VARS_CONTEXT: '\{\}'\r?\n" +
-            "      ARM_USE_OIDC: 'false'\r?$")
-        $script:jobs['pr-check-fork'] | Should -Match '(?m)^    env: \*fork-environment\r?$'
+    It 'overrides inherited credential contexts and disables OIDC in <Job>' -ForEach @(
+        @{ Job = 'unit-test' }
+        @{ Job = 'pr-check-fork' }
+    ) {
+        $environment = $script:definition.jobs[$Job].env
+        @($environment.Keys | Sort-Object) | Should -Be @('ARM_USE_OIDC', 'SECRETS_CONTEXT', 'VARS_CONTEXT')
+        $environment.SECRETS_CONTEXT | Should -BeExactly '{}'
+        $environment.VARS_CONTEXT | Should -BeExactly '{}'
+        $environment.ARM_USE_OIDC | Should -BeExactly 'false'
     }
 
-    It 'shares the unit-test steps but never prepares the environment on a fork' {
-        $script:jobs['unit-test'] | Should -Match '(?m)^    steps: &unit-test-steps\r?$'
-        $script:jobs['unit-test-fork'] | Should -Match '(?m)^    steps: \*unit-test-steps\r?$'
-        $script:jobs['unit-test'] | Should -Match (
-            '(?m)^      - name: Prepare test environment\r?\n' +
-            '        if: github\.event\.pull_request\.head\.repo\.fork == false\r?$')
+    It 'runs exactly one unit-test job on every invocation without branch, draft, or event gates' {
+        @($script:definition.jobs.Keys | Where-Object { $_ -like 'unit-test*' }) | Should -Be @('unit-test')
+        $job = $script:definition.jobs['unit-test']
+        foreach ($key in @('if', 'needs', 'environment', 'continue-on-error')) {
+            $job.Contains($key) | Should -BeFalse
+        }
+        $job.steps | Should -HaveCount 4
+        foreach ($step in $job.steps) {
+            $step.Contains('if') | Should -BeFalse
+            $step.Contains('continue-on-error') | Should -BeFalse
+        }
+        $script:jobs['unit-test'] | Should -Not -Match 'Prepare test environment|ConvertFrom-Context|github\.event'
         $script:jobs['unit-test'] | Should -Match '(?m)^          avm test unit\r?$'
         $script:jobs['unit-test'] | Should -Match '(?m)^          persist-credentials: false\r?$'
+    }
+
+    It 'selects the appropriate PR check using only the fork status' {
+        $script:definition.jobs['pr-check-fork']['if'] |
+            Should -BeExactly 'github.event.pull_request.head.repo.fork == true'
+        $script:definition.jobs['pr-check']['if'] |
+            Should -BeExactly 'github.event.pull_request.head.repo.fork == false'
+        $script:definition.jobs.subscriptions['if'] |
+            Should -BeExactly 'github.event.pull_request.head.repo.fork == false'
+        $script:definition.jobs['pr-check'].needs | Should -BeExactly 'subscriptions'
+        $script:definition.jobs.subscriptions.environment | Should -BeExactly 'no-approval'
+        $script:definition.jobs.subscriptions.Contains('needs') | Should -BeFalse
+        foreach ($job in @('pr-check', 'pr-check-fork')) {
+            foreach ($step in $script:definition.jobs[$job].steps) {
+                $step.Contains('if') | Should -BeFalse
+                $step.Contains('continue-on-error') | Should -BeFalse
+            }
+        }
     }
 
     It 'uses the existing cache setup and non-persistent checkout for fork pr-check' {
@@ -393,7 +424,6 @@ Describe 'terraform-module fork isolation' {
 
     It 'retains the non-fork gate for <Job>' -ForEach @(
         @{ Job = 'subscriptions' }
-        @{ Job = 'unit-test' }
         @{ Job = 'pr-check' }
         @{ Job = 'integration-test' }
         @{ Job = 'discover-examples' }
@@ -402,17 +432,14 @@ Describe 'terraform-module fork isolation' {
         $script:jobs[$Job] | Should -Match 'github\.event\.pull_request\.head\.repo\.fork == false'
     }
 
-    It 'preserves normal-branch credentials, environments, and the full pr-check command' {
-        $script:jobs['unit-test'] | Should -Match '(?m)^    environment: no-approval\r?$'
+    It 'preserves normal-branch pr-check credentials, OIDC environment, and the full command' {
         $script:jobs['pr-check'] | Should -Match '(?m)^    environment: pr-check\r?$'
         $script:jobs['pr-check'] | Should -Match '(?m)^    needs: subscriptions\r?$'
         $script:jobs['pr-check'] | Should -Match '(?m)^      id-token: write\r?$'
         $script:jobs['pr-check'] | Should -Match '(?m)^          avm pr-check\r?$'
-        $script:jobs['pr-check'] | Should -Not -Match 'ExcludeSteps|fork-environment'
-        foreach ($job in @('unit-test', 'pr-check')) {
-            $script:jobs[$job] | Should -Match 'ConvertFrom-Context \$env:SECRETS_CONTEXT'
-            $script:jobs[$job] | Should -Match 'ConvertFrom-Context \$env:VARS_CONTEXT'
-        }
+        $script:jobs['pr-check'] | Should -Not -Match 'ExcludeSteps|unprivileged-environment'
+        $script:jobs['pr-check'] | Should -Match 'ConvertFrom-Context \$env:SECRETS_CONTEXT'
+        $script:jobs['pr-check'] | Should -Match 'ConvertFrom-Context \$env:VARS_CONTEXT'
     }
 }
 

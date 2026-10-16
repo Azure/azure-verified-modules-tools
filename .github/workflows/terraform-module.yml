@@ -165,10 +165,14 @@ jobs:
 
   unit-test:
     name: Unit tests
-    if: github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
-    environment: no-approval
-    steps: &unit-test-steps
+    permissions:
+      contents: read
+    env: &unprivileged-environment
+      SECRETS_CONTEXT: '{}'
+      VARS_CONTEXT: '{}'
+      ARM_USE_OIDC: 'false'
+    steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -183,51 +187,6 @@ jobs:
           New-Item -ItemType Directory -Force -Path $avmHome, $cache | Out-Null
           "AVM_HOME=$avmHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "TF_PLUGIN_CACHE_DIR=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Prepare test environment
-        if: github.event.pull_request.head.repo.fork == false
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          # Runner-critical names that must never be overwritten by exposed
-          # secrets/variables.
-          $protected = @(
-              'PATH','HOME','USER','PWD','SHELL','LANG','LC_ALL','TMPDIR','TEMP','TMP',
-              'CI','GITHUB_ACTIONS','GITHUB_ENV','GITHUB_PATH','GITHUB_OUTPUT',
-              'GITHUB_STATE','GITHUB_STEP_SUMMARY','GITHUB_WORKSPACE','GITHUB_TOKEN',
-              'RUNNER_TEMP','RUNNER_TOOL_CACHE','RUNNER_WORKSPACE','RUNNER_OS',
-              'RUNNER_ARCH','RUNNER_NAME','RUNNER_DEBUG',
-              'ACTIONS_ID_TOKEN_REQUEST_TOKEN','ACTIONS_ID_TOKEN_REQUEST_URL',
-              'ACTIONS_RUNTIME_TOKEN','ACTIONS_RUNTIME_URL','ACTIONS_CACHE_URL',
-              'AVM_HOME','TF_PLUGIN_CACHE_DIR'
-          )
-
-          function ConvertFrom-Context {
-              param([string] $Json)
-              if ([string]::IsNullOrWhiteSpace($Json)) { return @{} }
-              return ($Json | ConvertFrom-Json -AsHashtable)
-          }
-
-          $secretsMap = ConvertFrom-Context $env:SECRETS_CONTEXT
-          $varsMap = ConvertFrom-Context $env:VARS_CONTEXT
-
-          # Expose variables first, then secrets, so a secret wins when both
-          # define the same name.
-          $combined = @{}
-          foreach ($k in $varsMap.Keys) { $combined[$k] = $varsMap[$k] }
-          foreach ($k in $secretsMap.Keys) { $combined[$k] = $secretsMap[$k] }
-
-          foreach ($key in $combined.Keys) {
-              if ($key -eq 'github_token') { continue }
-              if ($protected -contains $key.ToUpperInvariant()) {
-                  Write-Host "Skipping protected name '$key'."
-                  continue
-              }
-              $value = [string] $combined[$key]
-              $delim = "AVM_ENV_$([guid]::NewGuid().ToString('N'))"
-              "$key<<$delim`n$value`n$delim" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          }
 
       - name: Install Avm.Authoring
         shell: pwsh
@@ -275,25 +234,13 @@ jobs:
           Import-Module Avm.Authoring
           avm test unit
 
-  unit-test-fork:
-    name: Unit tests (fork)
-    if: github.event.pull_request.head.repo.fork == true
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env: &fork-environment
-      SECRETS_CONTEXT: '{}'
-      VARS_CONTEXT: '{}'
-      ARM_USE_OIDC: 'false'
-    steps: *unit-test-steps
-
   pr-check-fork:
     name: PR check (fork)
     if: github.event.pull_request.head.repo.fork == true
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env: *fork-environment
+    env: *unprivileged-environment
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
