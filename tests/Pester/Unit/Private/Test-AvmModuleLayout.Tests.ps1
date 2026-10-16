@@ -195,7 +195,6 @@ Describe 'Module Resources packaging' {
                 'ensure_location_variable.mptf.hcl'
                 'move_misplaced_blocks.mptf.hcl'
                 'required_provider_versions.mptf.hcl'
-                'retain_modtm_test_provider.mptf.hcl'
                 'sort_outputs.mptf.hcl'
             )
             'module-call' = @(
@@ -213,6 +212,9 @@ Describe 'Module Resources packaging' {
             )
             'provider-cleanup' = @(
                 'remove_modtm_provider.mptf.hcl'
+            )
+            'provider-restore' = @(
+                'retain_modtm_test_provider.mptf.hcl'
             )
             'unit-test-inspect' = @(
                 'inspect.mptf.hcl'

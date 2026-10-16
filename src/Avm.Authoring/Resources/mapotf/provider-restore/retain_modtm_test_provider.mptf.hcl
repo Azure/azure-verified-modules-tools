@@ -10,6 +10,12 @@ variable "unit_test_modtm_bindings" {
 
 data "module" "unit_test_modtm_calls" {}
 
+data "terraform" "unit_test_modtm" {}
+
+locals {
+  provider_terraform_block_exists = try(data.terraform.unit_test_modtm.block != null, false)
+}
+
 transform "update_in_place" "unit_test_modtm_requirement" {
   for_each                = length(var.unit_test_modtm_requirement) > 0 && local.provider_terraform_block_exists ? toset(["1"]) : toset([])
   target_block_address    = "terraform"

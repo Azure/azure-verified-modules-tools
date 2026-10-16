@@ -22,7 +22,7 @@ function Resolve-AvmMapotfConfigDir {
 
     .PARAMETER Profile
         Config profile to resolve: common, module, root, module-call, variable-order, example,
-        provider-cleanup, location-inspect, unit-test-inspect, unit-test, or an optional test override.
+        provider-cleanup, provider-restore, location-inspect, unit-test-inspect, unit-test, or an optional test override.
 
     .PARAMETER Optional
         Return $null instead of throwing when the profile does not exist.
@@ -37,7 +37,7 @@ function Resolve-AvmMapotfConfigDir {
         [string] $Root,
 
         [Parameter(Mandatory)]
-        [ValidateSet('common', 'module', 'root', 'module-call', 'variable-order', 'example', 'provider-cleanup', 'test', 'location-inspect', 'unit-test-inspect', 'unit-test')]
+        [ValidateSet('common', 'module', 'root', 'module-call', 'variable-order', 'example', 'provider-cleanup', 'provider-restore', 'test', 'location-inspect', 'unit-test-inspect', 'unit-test')]
         [string] $ProfileName,
 
         [switch] $Optional
@@ -849,6 +849,7 @@ function Invoke-AvmTerraformTransform {
         'variable-order'    = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'variable-order'
         example             = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'example'
         'provider-cleanup'  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'provider-cleanup'
+        'provider-restore'  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'provider-restore'
         'location-inspect'  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'location-inspect'
         'unit-test-inspect' = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'unit-test-inspect'
         'unit-test'         = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'unit-test'

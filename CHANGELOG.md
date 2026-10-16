@@ -374,6 +374,12 @@ section when cutting a release.
 
 ### Fixed
 
+- Telemetry unit-test migration preserves proven existing ALZ local-library
+  provider bindings and implicit Random/Time defaults alongside required Azure
+  and legacy dependency mocks. Generated mappings keep real library assertions
+  meaningful without accepting unknown, cross-provider, or real-Azure bindings.
+  Dependency-provider restoration no longer reapplies module conventions to
+  example callers, preserving authored locations without unused inputs.
 - TFLint uses attested AVM ruleset v1.2.0 and requires `resource_id` only
   for resource roots. Validated pattern and utility roots receive their
   module class automatically; child and example scopes are excluded.

@@ -62,6 +62,7 @@ BeforeAll {
                 TerraformPath  = Join-Path $TestDrive 'terraform'
                 ProfileDirs    = @{
                     module              = Join-Path $TestDrive 'module-profile'
+                    'provider-restore'  = Join-Path $TestDrive 'provider-restore'
                     'unit-test-inspect' = Join-Path $TestDrive 'inspection'
                     'unit-test'         = Join-Path $TestDrive 'location'
                 }
@@ -1014,6 +1015,8 @@ Providers required by state:
                 }
                 else {
                     $plan = Get-AvmTerraformUnitTestModtmRequirementPlan @Parameters
+                    $plan.Arguments | Should -Contain $Parameters.Options.ProfileDirs['provider-restore']
+                    $plan.Arguments | Should -Not -Contain $Parameters.Options.ProfileDirs.module
                     $encoded = @($plan.Arguments | Where-Object { $_ -like 'unit_test_modtm_requirement=*' })[0].
                         Substring('unit_test_modtm_requirement='.Length)
                     $body = ConvertFrom-Json -InputObject $encoded
@@ -1611,6 +1614,240 @@ Providers required by state:
                 $ArgumentList[0] -eq 'transform' -and
                 @($ArgumentList | Where-Object { $_ -like 'retired_mock_provider_names=*' }).Count -eq 1 -and
                 @($ArgumentList | Where-Object { $_ -like 'telemetry_subscription_resource_ids=*' }).Count -eq 0
+            }
+        }
+
+        Context 'preserved local provider bindings' {
+            BeforeEach {
+                $requirements = @{}
+                $sources = @{}
+                foreach ($target in $script:fixture.Targets) {
+                    $script:fixture.Before.modules[$target.Path].variables.location = @{ required = $true }
+                    $requirements[$target.Path] = @{
+                        alz = @{ source = 'azure/alz'; version = '~> 0.21' }
+                        azapi = @{ source = 'Azure/azapi'; version = '~> 2.12' }
+                        modtm = @{ source = 'azure/modtm'; version = '~> 0.3' }
+                        random = @{ source = 'hashicorp/random'; version = '~> 3.6' }
+                        time = @{ source = 'hashicorp/time'; version = '~> 0.9' }
+                    }
+                    $sources[$target.Path] = @(
+                        'registry.terraform.io/azure/alz', 'registry.terraform.io/azure/azapi',
+                        'registry.terraform.io/azure/modtm', 'registry.terraform.io/hashicorp/random',
+                        'registry.terraform.io/hashicorp/time'
+                    )
+                }
+                foreach ($test in @($script:fixture.Before.test, $script:fixture.After.test)) {
+                    $test.providers.alz = @{
+                        mptf = @{
+                            is_empty = $false
+                            attributes = @{ library_references = @(@{ custom_url = './tests/unit/library' }) }
+                            block_type = 'provider'
+                            block_labels = @('alz')
+                            block_address = 'provider.alz'
+                        }
+                    }
+                    $test.mock_providers.modtm = @{ mptf = @{ is_empty = $true } }
+                }
+                $script:fixture.Snapshots[0] | Add-Member -NotePropertyName ProviderRequirements -NotePropertyValue $requirements
+                $script:fixture.Snapshots[0] | Add-Member -NotePropertyName ProviderSources -NotePropertyValue $sources
+                $script:fixture.Options.EnvVars['AVM_TEST_LIBRARY_SOURCE'] = 'azure/alz'
+                Mock Get-AvmTerraformUnitTestRequiredProvider -ModuleName Avm.Authoring {
+                    @{
+                        alz = @{ source = $Options.EnvVars['AVM_TEST_LIBRARY_SOURCE']; version = '~> 0.21' }
+                        azapi = @{ source = 'Azure/azapi'; version = '~> 2.12' }
+                        time = @{ source = 'hashicorp/time'; version = '~> 0.9' }
+                    }
+                }
+                Mock Get-AvmTerraformUnitTestProviderSource -ModuleName Avm.Authoring {
+                    @(
+                        "registry.terraform.io/$($Options.EnvVars['AVM_TEST_LIBRARY_SOURCE'])", 'registry.terraform.io/azure/azapi',
+                        'registry.terraform.io/azure/modtm', 'registry.terraform.io/hashicorp/random',
+                        'registry.terraform.io/hashicorp/time'
+                    )
+                }
+                Mock Get-AvmTerraformUnitTestModtmRequirementPlan -ModuleName Avm.Authoring {
+                    $RequiredProviders[$Path].modtm = @{ source = 'azure/modtm'; version = '~> 0.3' }
+                }
+                Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
+                    [pscustomobject]@{ ExitCode = 0; StdOut = 'true'; StdErr = '' }
+                }
+            }
+
+            It 'snapshots configuration sources before adding mappings to implicit mixed-provider runs' {
+                InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {
+                    param($Fixture)
+                    Mock Get-AvmTerraformTestFileScope { $Fixture.Scope }
+                    $snapshots = @(Get-AvmTerraformUnitTestSnapshot -Root $Fixture.Root `
+                            -ModuleTargets $Fixture.Targets -Options $Fixture.Options)
+                    $snapshots[0].ProviderSources.Keys | Should -HaveCount 2
+                    $snapshots[0].ProviderSources[$Fixture.Root] | Should -Contain 'registry.terraform.io/azure/alz'
+                    Should -Invoke Get-AvmTerraformUnitTestProviderSource -Exactly 2
+                }
+            }
+
+            It 'preserves the real library configuration and implicit local defaults when generating mappings' {
+                $before = $script:fixture.After.test | ConvertTo-Json -Depth 20 -Compress
+                Invoke-UnitMigrationFixture -Fixture $script:fixture
+                ($script:fixture.After.test | ConvertTo-Json -Depth 20 -Compress) | Should -BeExactly $before
+                Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                    $UnitTestPlans[0].RetainModtmMock -and
+                    $UnitTestPlans[0].ProviderMockBindings.Count -eq 2 -and
+                    $UnitTestPlans[0].ProviderMockBindings.root -ceq "{`n  alz = alz`n  azapi = azapi`n  modtm = modtm`n}" -and
+                    $UnitTestPlans[0].ProviderMockBindings.child -ceq "{`n  alz = alz`n  azapi = azapi`n  modtm = modtm`n}"
+                }
+            }
+
+            It 'preserves implicit dependency defaults without restoring unused root requirements' {
+                foreach ($target in $script:fixture.Targets) {
+                    $script:fixture.Snapshots[0].ProviderRequirements[$target.Path].Remove('random')
+                }
+                Invoke-UnitMigrationFixture -Fixture $script:fixture
+                Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                    $UnitTestPlans[0].ProviderMockBindings.root -ceq "{`n  alz = alz`n  azapi = azapi`n  modtm = modtm`n}"
+                }
+            }
+
+            It 'preserves an authored same-provider <Binding> library mapping without rewriting it' -TestCases @(
+                @{ Binding = 'default'; Alias = $false }
+                @{ Binding = 'literal alias'; Alias = $true }
+            ) {
+                param($Alias)
+                $reference = if ($Alias) { 'alz.library' } else { 'alz' }
+                foreach ($test in @($script:fixture.Before.test, $script:fixture.After.test)) {
+                    if ($Alias) {
+                        $test.providers[$reference] = $test.providers.alz
+                        $test.providers.Remove('alz')
+                        $test.providers[$reference].mptf.attributes.alias = 'library'
+                        $test.providers[$reference].mptf.block_address = 'provider.alz.library'
+                    }
+                    foreach ($run in $test.runs.Values) {
+                        $run.mptf.attributes.providers = "{ alz = $reference /* local fixture */, azapi = azapi, modtm = modtm }"
+                    }
+                }
+                Invoke-UnitMigrationFixture -Fixture $script:fixture
+                Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                    $UnitTestPlans[0].ProviderMockBindings.Count -eq 0 -and $UnitTestPlans[0].MockMigrationValidated
+                }
+                Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+            }
+
+            It 'adds only the introduced AzAPI binding to a proven mixed-provider mapping' {
+                foreach ($target in $script:fixture.Targets) {
+                    $script:fixture.Snapshots[0].ProviderRequirements[$target.Path].Remove('azapi')
+                    $script:fixture.Snapshots[0].ProviderSources[$target.Path] =
+                        @($script:fixture.Snapshots[0].ProviderSources[$target.Path] | Where-Object { $_ -notlike '*/azapi' })
+                }
+                foreach ($test in @($script:fixture.Before.test, $script:fixture.After.test)) {
+                    foreach ($run in $test.runs.Values) {
+                        $run.mptf.attributes.providers = '{ alz = alz /* local fixture */, modtm = modtm }'
+                    }
+                }
+                Invoke-UnitMigrationFixture -Fixture $script:fixture
+                Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                    $UnitTestPlans[0].ProviderMockBindings.root -ceq
+                    "{ alz = alz /* local fixture */, modtm = modtm `n  azapi = azapi`n}"
+                }
+            }
+
+            It 'rejects <Unsafe> without changing any test or relaxing Azure mock coverage' -TestCases @(
+                @{ Unsafe = 'an unknown library source' }
+                @{ Unsafe = 'an unapproved real provider implementation' }
+                @{ Unsafe = 'missing original configuration proof' }
+                @{ Unsafe = 'source proof belonging only to another run' }
+                @{ Unsafe = 'a newly declared real library provider' }
+                @{ Unsafe = 'an unknown real alias' }
+                @{ Unsafe = 'inconsistent real provider identity' }
+                @{ Unsafe = 'incomplete native real provider metadata' }
+                @{ Unsafe = 'an aliased provider requirement' }
+                @{ Unsafe = 'a remote library reference' }
+                @{ Unsafe = 'parent traversal in a library reference' }
+                @{ Unsafe = 'a computed library reference' }
+                @{ Unsafe = 'a changed library provider version' }
+                @{ Unsafe = 'a real Azure provider' }
+                @{ Unsafe = 'a real Azure provider under a library name' }
+                @{ Unsafe = 'an aliased target key' }
+                @{ Unsafe = 'a cross-provider binding' }
+                @{ Unsafe = 'an omitted required Azure mock' }
+                @{ Unsafe = 'an omitted required dependency mock' }
+                @{ Unsafe = 'an originally omitted library binding' }
+                @{ Unsafe = 'a mocked provider changed to real' }
+                @{ Unsafe = 'a newly introduced unmocked local provider' }
+            ) {
+                param($Unsafe)
+                $snapshot = $script:fixture.Snapshots[0]
+                switch ($Unsafe) {
+                    'an unknown library source' {
+                        $snapshot.ProviderRequirements[$script:fixture.Root].alz.source = 'untrusted/alz'
+                    }
+                    'an unapproved real provider implementation' {
+                        $snapshot.ProviderRequirements[$script:fixture.Root].alz.source = 'untrusted/alz'
+                        $snapshot.ProviderSources[$script:fixture.Root] += 'registry.terraform.io/untrusted/alz'
+                        $script:fixture.Options.EnvVars['AVM_TEST_LIBRARY_SOURCE'] = 'untrusted/alz'
+                    }
+                    'missing original configuration proof' { $snapshot.ProviderSources.Clear() }
+                    'source proof belonging only to another run' { $snapshot.ProviderSources.Remove($script:fixture.Root) }
+                    'a newly declared real library provider' { $script:fixture.Before.test.providers.Clear() }
+                    'an unknown real alias' {
+                        $script:fixture.After.test.runs.root.mptf.attributes.providers =
+                            '{ alz = alz.unknown, azapi = azapi, modtm = modtm }'
+                    }
+                    'inconsistent real provider identity' {
+                        $script:fixture.Before.test.providers.alz.mptf.block_labels = @('azapi')
+                    }
+                    'incomplete native real provider metadata' {
+                        $script:fixture.Before.test.providers.alz.mptf.Remove('is_empty')
+                    }
+                    'an aliased provider requirement' {
+                        $snapshot.ProviderRequirements[$script:fixture.Root].alz.configuration_aliases = @('alz.other')
+                    }
+                    'a remote library reference' {
+                        $script:fixture.Before.test.providers.alz.mptf.attributes.library_references[0].custom_url = 'https://example.test/library'
+                    }
+                    'parent traversal in a library reference' {
+                        $script:fixture.Before.test.providers.alz.mptf.attributes.library_references[0].custom_url = './../library'
+                    }
+                    'a computed library reference' {
+                        $script:fixture.Before.test.providers.alz.mptf.attributes.library_references[0].custom_url = './${var.library}'
+                    }
+                    'a changed library provider version' {
+                        $snapshot.ProviderRequirements[$script:fixture.Root].alz.version = '~> 0.20'
+                    }
+                    'a real Azure provider' { $script:fixture.After.test.providers.azapi = @{} }
+                    'a real Azure provider under a library name' {
+                        $snapshot.ProviderRequirements[$script:fixture.Root].alz.source = 'Azure/azapi'
+                        $script:fixture.Options.EnvVars['AVM_TEST_LIBRARY_SOURCE'] = 'Azure/azapi'
+                    }
+                    'an aliased target key' {
+                        $script:fixture.After.test.runs.root.mptf.attributes.providers =
+                            '{ alz.library = alz, azapi = azapi, modtm = modtm }'
+                    }
+                    'a cross-provider binding' {
+                        $script:fixture.After.test.runs.root.mptf.attributes.providers =
+                            '{ alz = azapi, azapi = azapi, modtm = modtm }'
+                    }
+                    'an omitted required Azure mock' {
+                        $script:fixture.After.test.runs.root.mptf.attributes.providers = '{ alz = alz, modtm = modtm }'
+                    }
+                    'an omitted required dependency mock' {
+                        $script:fixture.After.test.runs.root.mptf.attributes.providers = '{ alz = alz, azapi = azapi }'
+                    }
+                    'an originally omitted library binding' {
+                        foreach ($test in @($script:fixture.Before.test, $script:fixture.After.test)) {
+                            $test.runs.root.mptf.attributes.providers = '{ azapi = azapi, modtm = modtm }'
+                        }
+                    }
+                    'a mocked provider changed to real' {
+                        $script:fixture.Before.test.mock_providers.alz = @{ mptf = @{ is_empty = $true } }
+                    }
+                    'a newly introduced unmocked local provider' {
+                        $snapshot.ProviderSources[$script:fixture.Root] =
+                            @($snapshot.ProviderSources[$script:fixture.Root] | Where-Object { $_ -notlike '*/time' })
+                    }
+                }
+                { Invoke-UnitMigrationFixture -Fixture $script:fixture } |
+                    Should -Throw '*introduced providers need default mocks or complete known alias bindings*'
+                Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 0
+                Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
             }
         }
 
