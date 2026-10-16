@@ -21,7 +21,6 @@ module "names" {
   source  = "Azure/avm-utl-naming/azure"
   version = "0.2.0"
 
-  legacy_mode   = true
   suffix        = ["compatibility"]
   unique-length = 8
 }
@@ -39,7 +38,7 @@ module "test" {
 }
 
 output "legacy_name" {
-  description = "The original naming output remains supported through legacy mode."
+  description = "The deprecated named output remains supported in modern mode."
   value       = module.names.resource_group.name
 }
 
@@ -95,7 +94,7 @@ The following outputs are exported:
 
 ### <a name="output_legacy_name"></a> [legacy\_name](#output\_legacy\_name)
 
-Description: The original naming output remains supported through legacy mode.
+Description: The deprecated named output remains supported in modern mode.
 
 ### <a name="output_resource_ids"></a> [resource\_ids](#output\_resource\_ids)
 

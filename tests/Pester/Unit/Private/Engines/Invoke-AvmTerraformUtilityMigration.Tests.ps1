@@ -67,17 +67,50 @@ Describe 'Terraform utility migration planning' {
         }
     }
 
-    It 'requires compatibility mode only for legacy naming and preserves modern callers' {
-        InModuleScope Avm.Authoring {
-            $script:utilityInspection.calls.old = @{ source = 'Azure/naming/azurerm'; version = '0.4.2'; legacy_mode = $true }
-            $script:utilityInspection.calls.modern = @{ source = 'Azure/avm-utl-naming/azure'; version = '0.2.0'; legacy_mode = $false }
+    It 'limits the naming conversion to old sources and preserves AVM version/mode: <Version>, <Mode>' -ForEach @(
+        @{ Version = '0.2.0'; Mode = $true }
+        @{ Version = '0.2.0'; Mode = $false }
+        @{ Version = '99.0.0'; Mode = $true }
+        @{ Version = '>= 0.2.0'; Mode = $false }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Version = $Version; Mode = $Mode } {
+            param($Version, $Mode)
+            $script:utilityInspection.calls.old = @{ source = 'Azure/naming/azurerm'; version = '0.4.2' }
+            $script:utilityInspection.calls.modern = @{ source = 'Azure/avm-utl-naming/azure'; version = $Version; legacy_mode = $Mode }
             $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets -Options $script:utilityOptions)
             $plans[0].Calls.Count | Should -Be 1
             $plans[0].Calls.old.Source | Should -BeExactly 'Azure/avm-utl-naming/azure'
+            $plans[0].Calls.old.Version | Should -BeExactly '0.2.0'
             $plans[0].Calls.old.LegacyNaming | Should -BeTrue
-            $script:utilityInspection.calls.old.legacy_mode = $false
-            { Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets -Options $script:utilityOptions } |
-                Should -Throw '*legacy_mode = true*'
+            Mock Invoke-AvmTerraformUtilityPatch {
+                $Updates.Keys | Should -Be @('old')
+                $Updates.old | Should -BeExactly "version = `"0.2.0`"`nsource = `"Azure/avm-utl-naming/azure`"`n"
+            }
+            Invoke-AvmTerraformUtilityMigration -Plans $plans -Options $script:utilityOptions
+            Should -Invoke Invoke-AvmTerraformUtilityPatch -Exactly 1
+            $script:utilityInspection.calls.modern.version | Should -BeExactly $Version
+            $script:utilityInspection.calls.modern.legacy_mode | Should -Be $Mode
+        }
+    }
+
+    It 'selects modern mode when an old-source call already contains a mode input: <Mode>' -ForEach @(
+        @{ Mode = $true }
+        @{ Mode = $false }
+        @{ Mode = 'var.use_legacy' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Mode = $Mode } {
+            param($Mode)
+            $script:utilityInspection.calls.names = @{
+                source = 'Azure/naming/azurerm'; version = '0.4.2'; legacy_mode = $Mode
+            }
+            $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets -Options $script:utilityOptions)
+            Mock Invoke-AvmTerraformUtilityPatch {
+                $Updates.names | Should -BeExactly (
+                    "version = `"0.2.0`"`nsource = `"Azure/avm-utl-naming/azure`"`nlegacy_mode = false`n"
+                )
+            }
+            Invoke-AvmTerraformUtilityMigration -Plans $plans -Options $script:utilityOptions
+            Should -Invoke Invoke-AvmTerraformUtilityPatch -Exactly 1
         }
     }
 
@@ -163,7 +196,7 @@ Describe 'Terraform utility migration planning' {
         }
     }
 
-    It 'reuses authored input declarations and patches only the legacy naming compatibility fields' {
+    It 'reuses authored input declarations and selects default modern naming without rewriting compatible inputs' {
         InModuleScope Avm.Authoring {
             $script:utilityInspection.calls.regions = @{ source = 'Azure/avm-utl-regions/azurerm'; version = '0.12.0' }
             $script:utilityInspection.calls.names = @{
@@ -176,7 +209,7 @@ Describe 'Terraform utility migration planning' {
             Mock Invoke-AvmTerraformUtilityPatch {
                 $Inputs.Count | Should -Be 0
                 $Updates.names | Should -BeExactly ("version = `"0.2.0`"`n" +
-                    "source = `"Azure/avm-utl-naming/azure`"`nlegacy_mode = true`n")
+                    "source = `"Azure/avm-utl-naming/azure`"`n")
                 $Updates.regions | Should -BeExactly ("version = `"0.13.0`"`n" +
                     "location = var.location`nenable_telemetry = var.enable_telemetry`n")
             }

@@ -23,8 +23,11 @@ section when cutting a release.
 
 - Terraform transforms upgrade older exact Regions and Interfaces registry pins
   to `0.13.0` and `0.9.0` before telemetry migration. Legacy naming calls move
-  to `Azure/avm-utl-naming/azure` `0.2.0` with `legacy_mode = true`, preserving
-  existing names, output references and state migration. Missing utility
+  to `Azure/avm-utl-naming/azure` `0.2.0` in its default modern mode, preserving
+  labels, compatible inputs and supported named output references. Generated
+  names and random seeds may change; review the plan for resource replacement.
+  These are fixed one-off targets; existing AVM naming calls retain their
+  owner-selected versions and modes. Missing utility
   locations use an independent input, not region-selection outputs. Fresh
   dependency evidence retires obsolete ModTM bindings and mocks while retaining
   genuine ModTM dependencies and non-telemetry Random use; newer versions,

@@ -73,11 +73,6 @@ function Get-AvmTerraformUtilityMigrationPlan {
             $legacyNaming = $source -ceq 'azure/naming/azurerm'
             if (-not $legacyNaming -and $parsedVersion -gt [version]$versions[$source]) { continue }
             $upgrade = $legacyNaming -or $parsedVersion -lt [version]$versions[$source]
-            if ($legacyNaming -and $call.Contains('legacy_mode') -and
-                ($call.legacy_mode -isnot [bool] -or -not $call.legacy_mode)) {
-                throw [AvmConfigurationException]::new(
-                    "Legacy naming module '$name' in '$($target.Path)' has a conflicting legacy_mode; preserving existing names requires legacy_mode = true.")
-            }
             $calls[$name] = [pscustomobject]@{
                 Source       = if ($legacyNaming) { 'Azure/avm-utl-naming/azure' } else { $call.source }
                 Version      = if ($upgrade) { $versions[$source] } else { $version }
@@ -282,7 +277,7 @@ function Invoke-AvmTerraformUtilityMigration {
             if ($plan.Upgrade) { $body.Add('version = "' + $plan.Version + '"') }
             if ($plan.LegacyNaming) {
                 $body.Add('source = "' + $plan.Source + '"')
-                $body.Add('legacy_mode = true')
+                if ($call.Contains('legacy_mode')) { $body.Add('legacy_mode = false') }
             }
             if ($plan.Telemetry) {
                 if (-not $call.Contains('location')) {

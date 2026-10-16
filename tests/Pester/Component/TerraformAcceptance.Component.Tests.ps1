@@ -30,7 +30,7 @@ Describe 'Terraform acceptance byte inventory' -Tag Component {
         [IO.File]::WriteAllText($path, "changed`n")
         { Assert-TerraformAcceptanceFiles -Context $script:context -Expected $script:before } |
             Should -Throw "*modified: $Name*"
-        Remove-Item -LiteralPath $path
+        Remove-Item -LiteralPath $path -Force
         { Assert-TerraformAcceptanceFiles -Context $script:context -Expected $script:before } |
             Should -Throw "*deleted: $Name*"
         $after = Get-TerraformAcceptanceFiles -Root $script:root

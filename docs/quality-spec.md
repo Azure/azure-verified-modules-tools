@@ -687,12 +687,19 @@ newer calls are left alone. Missing pins, ranges, prereleases and computed
 versions on these sources require review, not a guessed version. Custom
 registries, Git sources and local modules are not rewritten as registry calls.
 Root, child, example and discovered test-wrapper scopes share this phase.
+These are fixed one-off migration targets, not latest-release lookups or an
+automatic progression to future utility versions.
 
 Legacy `Azure/naming/azurerm` calls become `Azure/avm-utl-naming/azure` at
-`0.2.0` with `legacy_mode = true`. Preserve labels, authored inputs, deprecated
-named output references and moved blocks. The utility's own compatibility
-renderer and moved blocks preserve naming/state continuity; never opt an
-already-modern naming call into legacy mode. This dependency requires Terraform
+`0.2.0` in modern mode. Omit `legacy_mode` to use its false default; if an
+old-source call already contains that input, set it to false. Preserve labels
+and compatible authored inputs, including deprecated hyphenated inputs.
+The pinned utility exposes deprecated named outputs as aliases of its modern
+catalog results, so those references remain valid without rewriting callers.
+Generated names and random seeds may change and consumer resources may be
+replaced; review the Terraform plan. Do not delete state. Existing
+`Azure/avm-utl-naming/azure` calls remain outside this conversion, preserving
+all owner-selected versions and modes. This dependency requires Terraform
 `>= 1.9, < 2.0` and Random `>= 3.3.2, < 4.0`. This phase does not rewrite
 authored Terraform version constraints; Terraform enforces the dependency's
 minimum versions, and existing provider-governance rules still apply.
@@ -1863,8 +1870,8 @@ are not substitutes for byte inventories.
 
 One legacy user-flow fixture permits reviewed first-pass changes only, compared
 with checked-in expected output independent of the transform executed by the
-test. It covers utility upgrades, current telemetry, provider cleanup, naming
-compatibility, owner headers, authored locations and telemetry opt-outs. The
+test. It covers utility upgrades, current telemetry, provider cleanup, modern
+naming with compatible output references, owner headers, authored locations and telemetry opt-outs. The
 second full public pre-commit must be byte-identical. Provider-mocked consumer
 tests run without Azure authentication and with a loopback ModTM endpoint; the
 temporary repository alone is committed before full pr-check. Keep tracked
@@ -1884,7 +1891,7 @@ mapping decisions and safety predicates in unit tests. Real filesystem,
 manifest, lock, cache, environment, rollback and subprocess-failure contracts
 belong in component tests with stub processes. Do not move real native calls
 into these tiers. Native HCL/token behavior, provider-schema selection,
-downloaded inspection reuse and Terraform naming-state continuity require a
+downloaded inspection reuse and Terraform modern-naming output behavior require a
 small native compatibility suite; mocks or duplicated formulas are not proof
 of those semantics. Consolidate upstream permutations rather than rebuilding
 whole transform fixtures for each decision. Install/download/attestation and

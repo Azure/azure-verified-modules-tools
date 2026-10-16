@@ -22,12 +22,15 @@ function Invoke-AvmTransform {
         and per-item regions are preserved.
 
         Before telemetry migration, authored registry calls with older exact
-        pins upgrade Regions to 0.13.0 and Interfaces to 0.9.0. Newer versions,
+        pins upgrade Regions to 0.13.0 and Interfaces to 0.9.0. Equal/newer versions,
         custom sources and local module sources are not rewritten. Ambiguous
         version constraints require review. Legacy Azure/naming/azurerm calls
-        become Azure/avm-utl-naming/azure 0.2.0 with legacy_mode = true,
-        preserving labels, inputs, named outputs and the utility's state
-        migration. Already-modern naming calls keep their authored mode.
+        become Azure/avm-utl-naming/azure 0.2.0 in its default modern mode,
+        preserving labels, compatible inputs and supported named output references.
+        An existing legacy_mode input on an old-source call is set to false.
+        Generated names and random seeds can change; review the consumer plan
+        for resource replacement. Existing AVM naming calls keep their authored
+        version and mode. These are fixed one-off targets, not latest-release lookups.
         New utility locations use var.location rather than their own outputs;
         authored utility locations and opt-outs remain unchanged. Dependency
         constraints require Terraform 1.9 or later, below 2.0, for naming.

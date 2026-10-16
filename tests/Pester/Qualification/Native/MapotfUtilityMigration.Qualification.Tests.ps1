@@ -66,72 +66,77 @@ AfterAll {
         Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
     }
 
-It 'preserves naming outputs and random state across the source migration' {
-        $before = Join-Path $script:root 'modules' 'before'
-        $after = Join-Path $script:root 'modules' 'after'
+It 'uses modern naming through existing output references without changing owner-selected AVM modes' {
         $unit = Join-Path $script:root 'tests' 'unit'
-        $null = New-Item -ItemType Directory -Path $before, $after, $unit -Force
+        $null = New-Item -ItemType Directory -Path $unit -Force
         Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value @'
 terraform {
   required_providers {
     random = { source = "hashicorp/random", version = ">= 3.3.2, < 4.0" }
   }
 }
-'@
-        $configuration = @'
 module "names" {
   source = "Azure/naming/azurerm"
   version = "0.4.2"
   prefix = ["existing"]
   suffix = ["safe"]
   unique-length = 8
+  unique-seed = "modernseed123"
 }
-output "name" {
-  value = module.names.resource_group.name
-}
-output "name_unique" {
-  value = module.names.resource_group.name_unique
+module "owner_mode" {
+  source = "Azure/avm-utl-naming/azure"
+  version = "0.2.0"
+  legacy_mode = true
+  prefix = ["existing"]
+  suffix = ["safe"]
 }
 '@
-        foreach ($path in @($before, $after)) {
-            Set-Content -LiteralPath (Join-Path $path 'main.tf') -Value $configuration -Encoding utf8NoBOM
-        }
-        $null = Invoke-UtilityMigration -Root $after
-        Set-Content -LiteralPath (Join-Path $unit 'continuity.tftest.hcl') -Encoding utf8NoBOM -Value @'
+        $inspection = Invoke-UtilityMigration -Root $script:root
+        $inspection.calls.names.source | Should -BeExactly 'Azure/avm-utl-naming/azure'
+        $inspection.calls.names.version | Should -BeExactly '0.2.0'
+        $inspection.calls.names.Contains('legacy_mode') | Should -BeFalse
+        $inspection.calls.names.'unique-length' | Should -Be 8
+        $inspection.calls.names.'unique-seed' | Should -BeExactly 'modernseed123'
+        $inspection.calls.owner_mode.legacy_mode | Should -BeTrue
+        $first = [IO.File]::ReadAllBytes($script:main)
+        $null = Invoke-UtilityMigration -Root $script:root
+        [IO.File]::ReadAllBytes($script:main) | Should -Be $first
+        Set-Content -LiteralPath (Join-Path $unit 'modern.tftest.hcl') -Encoding utf8NoBOM -Value @'
 mock_provider "random" {
   mock_resource "random_string" {
-    defaults = { result = "originalrandomseed" }
+    defaults = { result = "mockedseed" }
   }
 }
-mock_provider "random" {
-  alias = "after"
-  mock_resource "random_string" {
-    defaults = { result = "mustnotregenerate" }
-  }
-}
-run "legacy" {
+run "modern" {
   command = apply
-  state_key = "naming"
-  module {
-    source = "./modules/before"
-  }
   providers = { random = random }
-}
-run "upgraded" {
-  command = plan
-  state_key = "naming"
-  module {
-    source = "./modules/after"
-  }
-  providers = { random = random.after }
+
   assert {
-    condition = output.name == run.legacy.name && output.name_unique == run.legacy.name_unique
-    error_message = "The compatibility migration must preserve names and existing random state."
+    condition = (
+      length(module.names.names) > 0 &&
+      module.names.names.resource_group.name_available &&
+      module.names.names.resource_group.name_unique_available &&
+      module.names.names.resource_group.unique_seed == "modernseed123"
+    )
+    error_message = "The old library must migrate into the fixed utility's modern renderer with compatible inputs intact."
+  }
+  assert {
+    condition = (
+      module.names.resource_group.name == module.names.names.resource_group.name &&
+      module.names.resource_group.name_unique == module.names.names.resource_group.name_unique &&
+      module.names.storage_account.name == module.names.names.storage_account.name &&
+      module.names.storage_account.name_unique == module.names.names.storage_account.name_unique
+    )
+    error_message = "Existing named output references must expose modern results without requiring caller rewrites."
+  }
+  assert {
+    condition = length(module.owner_mode.names) == 0
+    error_message = "An existing AVM naming call must retain its owner-selected legacy mode."
   }
 }
 '@
         $null = Invoke-UtilityProcess -Root $script:root -Arguments @('init', '-backend=false', '-input=false', '-no-color', '-test-directory=tests/unit')
         $result = Invoke-UtilityProcess -Root $script:root -Arguments @('test', '-no-color', '-test-directory=tests/unit')
-        $result.StdOut | Should -Match 'Success! 2 passed'
+        $result.StdOut | Should -Match 'Success! 1 passed'
     }
 }

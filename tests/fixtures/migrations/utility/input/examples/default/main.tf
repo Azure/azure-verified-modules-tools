@@ -30,7 +30,7 @@ module "test" {
 }
 
 output "legacy_name" {
-  description = "The original naming output remains supported through legacy mode."
+  description = "The deprecated named output remains supported in modern mode."
   value       = module.names.resource_group.name
 }
 
