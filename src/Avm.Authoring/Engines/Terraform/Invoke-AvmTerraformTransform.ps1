@@ -393,6 +393,7 @@ function Remove-AvmLegacyTelemetryTestMock {
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
+    $utilityPaths = $UtilityTelemetryPaths
 
     $changes = [System.Collections.Generic.List[object]]::new()
     $emptyMock = '(?m)^[ \t]*mock_provider[ \t]+"modtm"[ \t]*\{[ \t\r\n]*\}[ \t]*(?:\r?\n)?'
@@ -418,7 +419,7 @@ function Remove-AvmLegacyTelemetryTestMock {
         $instrumentedTargets = @($ModuleTargets |
                 Where-Object { $null -ne $unitPlan -and $_.Path -cin $unitPlan.TargetPaths -and $_.Profiles -contains 'root' })
         $ownTelemetry = $owner.Profiles -contains 'root' -or $instrumentedTargets.Count -gt 0
-        $utilityTelemetry = $null -ne $unitPlan -and @($unitPlan.TargetPaths | Where-Object { $_ -cin $UtilityTelemetryPaths }).Count -gt 0
+        $utilityTelemetry = $null -ne $unitPlan -and @($unitPlan.TargetPaths | Where-Object { $_ -cin $utilityPaths }).Count -gt 0
         if (-not $ownTelemetry -and -not $utilityTelemetry) {
             continue
         }
