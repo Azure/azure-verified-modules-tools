@@ -848,6 +848,13 @@ Native MaPoTF inspects each direct `tests/unit/*.tftest.hcl` file before source
 transformation. Root runs and explicitly selected, known local module
 targets, including discovered examples and standalone test setup and wrapper modules,
 are supported; remote or unknown targets fail without fetching them.
+Load pre-transform provider trees only when preserving existing local bindings
+or augmenting an introduced provider mapping needs their evidence. Conservative
+local-provider usage checks select those inspections; they never establish
+binding coverage. Fully mocked templates can reference inputs that instrumentation
+has not created yet, so their native dependency loading waits until after the
+source transforms. Every selected post-transform provider tree still requires
+complete mock or proven preserved-binding coverage.
 Only root and child modules establish test-file ownership; example and
 standalone test targets do not change which files are direct unit tests.
 After source transformation, only a target that gained a previously absent,
@@ -856,9 +863,21 @@ provider-mocked tests. Existing global and per-run values, including nulls
 and expressions, remain authored. This test-only value is not a production
 default and never replaces per-hub regions or repairs unrelated pre-existing
 missing inputs. Assertions, targets and telemetry opt-outs are preserved.
-Real-provider declarations, unproven aliases and partial or cross-provider
-bindings still require review rather than being silently changed; an AzureRM
-mock alone cannot cover new AzAPI telemetry. AzAPI aliases must have consistent
+New or unproven real-provider declarations, unproven aliases and partial or
+cross-provider bindings still require review rather than being silently changed;
+an AzureRM mock alone cannot cover new AzAPI telemetry. Preserve an existing
+`azure/alz` library provider only with literal relative library paths without
+parent traversal, and existing unmocked `hashicorp/random` and `hashicorp/time`
+bindings, when each run's pre- and post-transform native configuration trees prove
+the same provider source. Preserve retained declared versions and literal native
+provider identities. A generated mapping must retain the selected real library
+configuration rather than invent mock outputs or fall back to an unconfigured
+library. Unconfigured Random/Time defaults remain implicit; a dependency's proven
+HashiCorp source does not require an otherwise unused root declaration.
+Never replace an existing mock with a real binding, infer other real provider
+implementations, or use another run's source or alias proof. Azure operation
+providers and ModTM still require known same-provider mocks.
+AzAPI aliases must have consistent
 literal native names, labels and addresses; the same identity checks apply to
 every provider alias. Local source-backed aliases retain the source checks
 above. An alias is never treated as an unaliased default.
@@ -872,8 +891,9 @@ A valid, explicitly empty native run collection needs no mocks. Missing,
 malformed or incomplete native collections still fail inspection.
 When an instrumented target introduces AzAPI, add its existing default mock
 binding only if a pre-transform configuration provider tree proves the old
-mapping covered every selected provider. Preserve the original aliases and
-comments; incomplete or unmocked prior coverage still fails.
+mapping covered every selected provider through mocks or the preserved local
+bindings above. Preserve the original aliases and comments; incomplete or
+unproven prior coverage still fails.
 Preserve safe authored bindings; remove only bindings to an empty ModTM or
 random mock whose provider is absent from that target's
 configuration dependency tree. Preserve all remaining expression text and
@@ -974,6 +994,9 @@ unchanged. Default and complete example-wrapper regressions must check both
 required-provider and unused-provider lint as well as independent validation,
 exact dependency selections and lock/manifest bytes. Finish the normal
 ordering profile on restored scopes so the first pass is already drift-free.
+Restore requirements and bindings through the isolated `provider-restore`
+profile, not the full module profile: example and test callers must not acquire
+unrelated module inputs or changed provider constraints during this repair.
 Published dependencies remain untouched. An inspected target's or dependency's
 direct `.tf.json` files may contain only `locals` blocks in strict JSON objects,
 including arrays of locals objects; empty configuration objects are also safe.
@@ -989,6 +1012,10 @@ Unrelated selected targets still retire their unused bindings and requirements.
 Native regression fixtures use loopback-only ModTM endpoints and verify mocked
 resource values, full original locks, installed selections, repeat stability
 and failure-path drift restoration without production collector access.
+Real ALZ library regressions clear inherited identities and keep CLI, MSI and
+OIDC disabled. Supply only synthetic credential-constructor values with custom
+Entra/ARM endpoints and HTTP proxies restricted to loopback; local library
+assertions must pass without authentication or Azure access.
 
 `avm pre-commit` and `avm pr-check` resolve their required tools before the
 first step, which validates metadata for the selected root and its module

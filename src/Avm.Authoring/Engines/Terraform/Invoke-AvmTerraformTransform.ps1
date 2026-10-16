@@ -22,7 +22,7 @@ function Resolve-AvmMapotfConfigDir {
 
     .PARAMETER Profile
         Config profile to resolve: common, module, root, module-call, variable-order, example,
-        provider-cleanup, location-inspect, unit-test-inspect, unit-test, or an optional test override.
+        provider-cleanup, provider-restore, location-inspect, unit-test-inspect, unit-test, or an optional test override.
 
     .PARAMETER Optional
         Return $null instead of throwing when the profile does not exist.
@@ -37,7 +37,7 @@ function Resolve-AvmMapotfConfigDir {
         [string] $Root,
 
         [Parameter(Mandatory)]
-        [ValidateSet('common', 'module', 'root', 'module-call', 'variable-order', 'example', 'provider-cleanup', 'test', 'location-inspect', 'unit-test-inspect', 'unit-test')]
+        [ValidateSet('common', 'module', 'root', 'module-call', 'variable-order', 'example', 'provider-cleanup', 'provider-restore', 'test', 'location-inspect', 'unit-test-inspect', 'unit-test')]
         [string] $ProfileName,
 
         [switch] $Optional
@@ -233,8 +233,11 @@ function Test-AvmTerraformProviderInUse {
         [string] $TestDirectory,
 
         [Parameter(Mandatory)]
-        [ValidateSet('modtm', 'random')]
-        [string] $Provider
+        [ValidateSet('modtm', 'random', 'time')]
+        [string] $Provider,
+
+        [AllowEmptyCollection()]
+        [string[]] $IncludeExamplePath = @()
     )
 
     Set-StrictMode -Version 3.0
@@ -243,7 +246,8 @@ function Test-AvmTerraformProviderInUse {
     $modulePrefix = $ModulePath + [System.IO.Path]::DirectorySeparatorChar
     $directories = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($target in $ModuleTargets) {
-        if ($target.Profiles -contains 'example' -and $target.Path -cne $ModulePath) {
+        if ($target.Profiles -contains 'example' -and $target.Path -cne $ModulePath -and
+            $target.Path -cnotin $IncludeExamplePath) {
             continue
         }
         if ($target.Path -cne $ModulePath -and
@@ -314,7 +318,8 @@ function Test-AvmTerraformScopedProviderInUse {
         [Parameter(Mandatory)] [object[]] $ModuleTargets,
         [AllowEmptyCollection()] [string[]] $TargetPaths = @(),
         [Parameter(Mandatory)] [hashtable] $Cache,
-        [Parameter(Mandatory)] [ValidateSet('modtm', 'random')] [string] $Provider
+        [Parameter(Mandatory)] [ValidateSet('modtm', 'random', 'time')] [string] $Provider,
+        [switch] $IncludeSelectedExamples
     )
 
     Set-StrictMode -Version 3.0
@@ -322,7 +327,7 @@ function Test-AvmTerraformScopedProviderInUse {
     $testDirectory = Split-Path -Parent $Scope.File.FullName
     $ownerPrefix = $Scope.Owner.Path + [System.IO.Path]::DirectorySeparatorChar
     $ownerScannedPaths = @($ModuleTargets | Where-Object {
-            $_.Profiles -notcontains 'example' -and
+            ($_.Profiles -notcontains 'example' -or ($IncludeSelectedExamples -and $_.Path -cin $TargetPaths)) -and
             $_.Path.StartsWith($ownerPrefix, [System.StringComparison]::Ordinal)
         } | ForEach-Object { $_.Path })
     foreach ($path in @($Scope.Owner.Path) + $TargetPaths) {
@@ -330,9 +335,14 @@ function Test-AvmTerraformScopedProviderInUse {
             continue
         }
         $key = "$Provider|$path|$testDirectory"
+        if ($IncludeSelectedExamples) {
+            $key += '|' + (ConvertTo-Json -InputObject @($TargetPaths | Sort-Object -Unique) -Compress)
+        }
         if (-not $Cache.ContainsKey($key)) {
+            $examples = if ($IncludeSelectedExamples) { $TargetPaths } else { @() }
             $Cache[$key] = Test-AvmTerraformProviderInUse `
-                -ModulePath $path -ModuleTargets $ModuleTargets -TestDirectory $testDirectory -Provider $Provider
+                -ModulePath $path -ModuleTargets $ModuleTargets -TestDirectory $testDirectory -Provider $Provider `
+                -IncludeExamplePath $examples
         }
         if ($Cache[$key]) {
             return $true
@@ -853,6 +863,7 @@ function Invoke-AvmTerraformTransform {
         'variable-order'    = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'variable-order'
         example             = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'example'
         'provider-cleanup'  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'provider-cleanup'
+        'provider-restore'  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'provider-restore'
         'location-inspect'  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'location-inspect'
         'unit-test-inspect' = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'unit-test-inspect'
         'unit-test'         = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'unit-test'
