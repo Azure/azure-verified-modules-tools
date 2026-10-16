@@ -1922,6 +1922,13 @@ guard. Changes to shared build scripts, dependency installers, module bootstrap,
 pinned dependencies or runtime helpers can trigger multiple workflows.
 Keep these filters aligned when adding shared dependencies or test families.
 
+The reusable `terraform-module.yml` is covered by Workflows and Repos CI, not
+Authoring CI. Repository-only mocked Terraform validation lives in
+`repository-management/repository-management.build.ps1`; the shared task graph
+dot-sources its registration and preserves `./build.ps1 test-tenant-terraform`.
+Keep repository-only task implementation changes outside `build/`. The
+`build/**` filters remain intact for genuine shared-build changes.
+
 Each workflow uploads and reports its own test artifacts. Unrelated
 documentation-only changes intentionally skip the workflows; generated
 `docs/reference/` changes still trigger authoring for drift validation.
