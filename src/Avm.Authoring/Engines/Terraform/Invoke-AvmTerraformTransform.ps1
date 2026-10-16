@@ -789,6 +789,8 @@ function Invoke-AvmTerraformTransform {
         scheduler. Mapotf uses each target's working-directory providers rather
         than TF_PLUGIN_CACHE_DIR, allowing independent targets and separate AVM
         processes to run without racing Terraform's shared provider cache.
+        Provider-schema and supported module-source caches use AVM cache
+        directories, honoring AVM_HOME.
 
         mapotf exit codes: 0 = success. A transform failure caused by a
         transient network error, such as a provider download timeout, is retried
@@ -906,6 +908,7 @@ function Invoke-AvmTerraformTransform {
             -ToolName 'terraform'
         $mapotfEnv.TF_PLUGIN_CACHE_DIR = $null
         $mapotfEnv.MAPOTF_PROVIDER_SCHEMA_CACHE_DIR = Join-Path (Get-AvmFolder -Kind Cache) 'mapotf-provider-schema'
+        $mapotfEnv.MAPOTF_MODULE_SOURCE_CACHE_DIR = Join-Path (Get-AvmFolder -Kind Cache) 'mapotf-module-source'
         $null = New-Item `
             -ItemType Directory `
             -Path $mapotfEnv.MAPOTF_PROVIDER_SCHEMA_CACHE_DIR `
