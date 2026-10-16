@@ -728,7 +728,15 @@ function Get-AvmTerraformUnitTestProviderSource {
         $lockContent = [System.IO.File]::ReadAllBytes($lockPath)
     }
     $manifestPath = Join-Path -Path $environment.TF_DATA_DIR -ChildPath 'modules' -AdditionalChildPath 'modules.json'
+    $inspectionCache = $Options.PSObject.Properties['InspectionModuleCache']
+    if ($null -ne $inspectionCache -and $inspectionCache.Value -isnot [hashtable]) {
+        throw [AvmConfigurationException]::new('InspectionModuleCache must be an invocation-owned hashtable.')
+    }
     try {
+        if ($null -ne $inspectionCache) {
+            $null = Initialize-AvmTerraformInspectionModule -Path $Path -DataDirectory $environment.TF_DATA_DIR `
+                -ModuleTargets $ModuleTargets -Options $Options -Cache $inspectionCache.Value -Confirm:$false
+        }
         $providerDirectory = Join-Path -Path $Path -ChildPath '.terraform' -AdditionalChildPath 'providers'
         if ($lockExists -and -not (Test-Path -LiteralPath $providerDirectory -PathType Container)) {
             $null = Invoke-AvmTerraformInit -TerraformPath $Options.TerraformPath -WorkingDirectory $Path `
@@ -750,10 +758,17 @@ function Get-AvmTerraformUnitTestProviderSource {
             -WorkingDirectory $Path -EnvVars $environment
         $sources = @(ConvertFrom-AvmTerraformProviderTree -Text $result.StdOut -Path $Path -ModuleProviderSources $ModuleProviderSources `
                 -AllowMissingProviderConfiguration:$AllowMissingProviderConfiguration -ProviderWarnings $ProviderWarnings)
-        if ($null -ne $ModuleManifests -and (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        if (($null -ne $ModuleManifests -or $null -ne $inspectionCache) -and
+            (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
             $payload = [System.IO.File]::ReadAllText($manifestPath)
             $null = ConvertFrom-AvmTerraformModuleManifest -Payload $payload -WorkingDirectory $Path
-            $ModuleManifests[$Path] = $payload
+            if ($null -ne $ModuleManifests) { $ModuleManifests[$Path] = $payload }
+            if ($null -ne $inspectionCache -and
+                (-not $AllowMissingProviderConfiguration -or -not $ProviderWarnings.ContainsKey($Path))) {
+                Register-AvmTerraformInspectionModule -Manifest (ConvertFrom-Json -InputObject $payload -AsHashtable) `
+                    -WorkingDirectory $Path -DataDirectory $environment.TF_DATA_DIR `
+                    -InspectionRoot $Options.InspectionRoot -Cache $inspectionCache.Value
+            }
         }
         return $sources
     }

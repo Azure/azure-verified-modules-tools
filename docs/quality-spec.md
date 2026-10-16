@@ -733,6 +733,21 @@ ranges; authored declarations are not annotated. Other unused declarations
 remain lint findings. The inline-ignore audit exempts only the exact directive
 on the canonical required declaration in a module's `variables.tf`.
 
+The common MaPoTF ordering profile loads AzureRM, AzAPI and Random schemas only
+when the current scope contains matching resource or data-source type prefixes.
+Provider declarations, aliases, custom local provider names and resources in
+called modules do not independently require a schema. Empty and ephemeral-only
+scopes need none. Preserve required/optional ordering, promoted AzAPI attributes,
+head/foot meta-arguments and source-order fallback for unknown types/providers.
+Required schema failures remain errors; unused schemas must not be fetched or
+materialized, including on cache hits.
+Transform subprocesses receive `MAPOTF_PROVIDER_SCHEMA_CACHE_DIR` and
+`MAPOTF_MODULE_SOURCE_CACHE_DIR` under the AVM cache as `mapotf-provider-schema`
+and `mapotf-module-source`, respectively, so both honor `AVM_HOME`. Cache
+enablement and TTL controls remain inherited. The module-source directory is
+used only by MaPoTF versions supporting that cache; forwarding it does not
+change the pinned tool version.
+
 Instrumented roots and children run the `root,module,common` profiles; other
 module scopes run `module,common`. Profiles execute sequentially so module
 provider rules see the generated telemetry. A second `module-call,variable-order,common`
@@ -960,6 +975,22 @@ on transform success or failure without changing pre-existing initialization dat
 Requirement planning uses the validated immutable
 manifest snapshot captured with the fresh provider tree, not the restored
 on-disk manifest; newly added dependencies need no prior manual initialization.
+Within one transform invocation, completed inspections may seed later private
+data directories with copies of public registry root packages selected at bare,
+stable exact versions. Admit packages only after successful native installation,
+provider-tree inspection and manifest validation; never read them from the
+source tree's existing initialization data. Repair-mode diagnostic trees are not
+cache-admission evidence; strict reinspection must succeed first. Fingerprint the complete downloaded
+package, reject links, initialization/plan data and unexpected locations, and fail
+if an admitted package changes before reuse. Discover current calls and known local parents through
+native MaPoTF inspection before remapping package keys. Scopes with Terraform
+overrides or JSON other than proven locals-only configuration bypass seeding,
+because native call reflection is not complete for those inputs. Local module
+contents, version ranges, Git/URL/private-registry sources and registry subdirectories are
+not reused. Every target still runs Terraform installation and provider inspection
+to revalidate its graph, and its resulting manifest is captured independently.
+No provider or backend data is copied. Package reuse ends with the invocation's
+inspection-directory cleanup; it is not a persistent or cross-repository cache.
 Validate root/default-directory test targets before module installation can fetch
 them. Inspect every target's direct JSON configuration with the shared
 locals-only validator before installing dependencies. Other JSON configurations,
@@ -1864,6 +1895,64 @@ modules fail explicitly; they must not fall back to a release.
 - 70% line coverage on `src/Avm.Authoring/` minimum, enforced via Pester `CodeCoverage`. CI build fails below the floor.
 - Coverage is tracked per file; new files start with the floor and ratchet up as code matures.
 
+### Reusable Terraform module CI
+
+The managed module caller invokes `terraform-module.yml` on pull-request
+`opened`, `reopened`, and `synchronize` events, including draft and fork pull
+requests. Neither the caller nor the automatic checks may add a label,
+manual-approval, or changed-path prerequisite. GitHub's separate approval
+policy for running workflows from external contributors still applies. The
+managed caller remains an unconditional forwarder; fork handling and test-tier
+decisions belong only in the reusable workflow.
+
+Normal Terraform repository sync reconciles that repository-level policy to
+`first_time_contributors` after verified Terraform configuration succeeds.
+The GitHub Terraform provider does not expose this policy, so the existing
+sync driver uses the dedicated GitHub REST endpoint through the shared CLI
+helpers. Read and validate the current policy, write only when different,
+and verify it again before reporting success. Plan-only runs report drift
+without writing; `-WhatIf` makes no API calls. Failed reads, writes, and
+readback stop the repository sync without a write retry or success fallback.
+This does not change workflow token permissions, expose secrets to forks,
+or bypass environment reviewers. Creation-mode bootstrap is unchanged;
+the policy is reconciled when the repository enters normal sync.
+
+One shared `unit-test` job runs independently on every invocation, with only
+`contents: read`, no GitHub environment or subscription-selection dependency,
+empty inherited secret/variable payloads, and OIDC disabled. Unit fixtures
+and hooks must not require configured credentials. Fork `pr-check` uses the
+same restrictions and excludes only `check policy` and its Conftest prerequisite.
+
+Same-repository `pr-check` retains its full checks, subscription selection,
+credentials and `pr-check` environment for Azure OIDC, but that environment
+has no required reviewers. Preserve its Terraform resource address, environment
+name and federated identity subject. Integration and e2e remain non-fork and
+reviewer-gated, with their existing approval teams and bypass/self-review
+settings. Integration keeps its `integration-test` environment unchanged.
+E2e approval belongs to the non-matrix `discover-examples` job on `examples-test`,
+which has no OIDC write permission. Every e2e matrix leg requires successful
+subscription selection and protected discovery, plus a nonempty example list.
+The legs use the distinct, approval-free `examples-test-execution` environment.
+Preserve the template exclusion, subscription round-robin, required-feature
+registration and cleanup. Discovery approval occurs before the example count is
+known, so an empty matrix still needs that approval but executes no e2e legs.
+
+Normal repository sync provisions the execution environment and its exact
+repository/environment/reusable-workflow-bound federation on the existing test
+identity. The execution environment name must not collide with any existing
+environment, including case-insensitive names. Keep the existing environment
+resource addresses, `examples-test` reviewers and legacy federation for older
+workflow callers. Creation-mode bootstrap still omits test environments.
+Reconcile the new environment and credential before relying on e2e execution;
+missing federation must fail authentication, never fall back to another
+environment or bypass discovery approval.
+
+Removing the `pr-check` reviewer gate permits authenticated policy plans and
+repository hooks on each same-repository PR push; the security stance's SFI
+sign-off requirement applies before merge. Moving e2e approval from individual
+execution jobs to their prerequisite and adding approval-free execution trust
+also requires recorded SFI sign-off before merge.
+
 ### Scoped CI
 
 Three independent workflows use GitHub's native `on.push.paths` and
@@ -1898,6 +1987,13 @@ component filename families and the shared `TerraformInitUpgrade.Tests.ps1`
 guard. Changes to shared build scripts, dependency installers, module bootstrap,
 pinned dependencies or runtime helpers can trigger multiple workflows.
 Keep these filters aligned when adding shared dependencies or test families.
+
+The reusable `terraform-module.yml` is covered by Workflows and Repos CI, not
+Authoring CI. Repository-only mocked Terraform validation lives in
+`repository-management/repository-management.build.ps1`; the shared task graph
+dot-sources its registration and preserves `./build.ps1 test-tenant-terraform`.
+Keep repository-only task implementation changes outside `build/`. The
+`build/**` filters remain intact for genuine shared-build changes.
 
 Each workflow uploads and reports its own test artifacts. Unrelated
 documentation-only changes intentionally skip the workflows; generated

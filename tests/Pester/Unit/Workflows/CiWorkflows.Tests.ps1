@@ -55,7 +55,7 @@ Describe 'Independent CI workflows' {
     It 'includes source, tests and shared dependencies in the static filters for <File>' -ForEach @(
         @{ File = 'ci-authoring.yml'; Required = @(
             'src/Avm.Authoring/**', 'build/**', 'build.ps1', 'scripts/**', 'tests/**', 'docs/reference/**',
-            '.github/workflows/ci-authoring.yml', '.github/workflows/terraform-module.yml', '.github/workflows/release.yml'
+            '.github/workflows/ci-authoring.yml', '.github/workflows/release.yml'
         ) }
         @{ File = 'ci-workflows.yml'; Required = @(
             '.github/workflows/**', '.github/dependabot.yml', 'tests/Pester/Unit/Workflows/**',
@@ -105,6 +105,7 @@ Describe 'Independent CI workflows' {
         $paths | Should -Not -Contain 'repository-management/shared/TestTenant.ps1'
         $paths | Should -Not -Contain 'repository-management/shared/GroupSettings.ps1'
         $paths | Should -Not -Contain 'infra/**'
+        $paths | Should -Not -Contain '.github/workflows/terraform-module.yml'
         foreach ($file in @('ci-workflows.yml', 'repository-management-config-test.yml')) {
             $script:definitions[$file]['on'].push.paths | Should -Not -Contain 'tests/**'
         }
