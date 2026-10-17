@@ -55,12 +55,15 @@ Describe 'Independent CI workflows' {
     It 'includes source, tests and shared dependencies in the static filters for <File>' -ForEach @(
         @{ File = 'ci-authoring.yml'; Required = @(
             'src/Avm.Authoring/**', 'build/**', 'build.ps1', 'scripts/**', 'tests/**', 'docs/reference/**',
+            'repository-management/shared/TestTenant.ps1', 'repository-management/shared/GroupSettings.ps1',
             '.github/workflows/ci-authoring.yml', '.github/workflows/release.yml'
         ) }
         @{ File = 'ci-workflows.yml'; Required = @(
             '.github/workflows/**', '.github/dependabot.yml', 'tests/Pester/Unit/Workflows/**',
             'tests/Pester/Import-AvmTestModule.ps1', 'build/**', 'build.ps1',
             'scripts/Install-AvmBuildPrerequisites.ps1', 'scripts/Import-AvmNetworkRetry.ps1',
+            'scripts/bicep-workflows/**', 'repository-management/shared/TestTenant.ps1',
+            'repository-management/shared/GroupSettings.ps1',
             'src/Avm.Authoring/Avm.Authoring.psd1', 'src/Avm.Authoring/Avm.Authoring.psm1',
             'src/Avm.Authoring/Resources/**', 'src/Avm.Authoring/Private/Tools/**',
             'src/Avm.Authoring/Private/Network/**', 'src/Avm.Authoring/Private/Process/**',
@@ -102,8 +105,8 @@ Describe 'Independent CI workflows' {
             $paths.IndexOf("!$excluded") | Should -BeGreaterThan $paths.IndexOf('tests/**')
         }
         $paths | Should -Not -Contain 'repository-management/**'
-        $paths | Should -Not -Contain 'repository-management/shared/TestTenant.ps1'
-        $paths | Should -Not -Contain 'repository-management/shared/GroupSettings.ps1'
+        @($paths | Where-Object { $_ -like 'repository-management/*' } | Sort-Object) |
+            Should -Be @('repository-management/shared/GroupSettings.ps1', 'repository-management/shared/TestTenant.ps1')
         $paths | Should -Not -Contain 'infra/**'
         $paths | Should -Not -Contain '.github/workflows/terraform-module.yml'
         foreach ($file in @('ci-workflows.yml', 'repository-management-config-test.yml')) {

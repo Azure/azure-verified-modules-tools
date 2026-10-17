@@ -78,4 +78,35 @@ Describe 'Invoke-AvmCheckPolicy' {
         $result.AdvisoryBaselines.Count | Should -Be 2
         $result.Issues.Code | Should -Contain 'avm.bicep.psrule-input-missing'
     }
+
+    It 'forwards Bicep selectors through both the public command and CLI' {
+        InModuleScope Avm.Authoring {
+            Mock Get-AvmModuleContextInternal {
+                [pscustomobject]@{ Root = $TestDrive; Ecosystem = 'bicep' }
+            }
+            Mock Invoke-AvmBicepCheckPolicy {
+                [pscustomobject]@{ Status = 'pass'; Engine = 'bicep'; Issues = @() }
+            }
+            $example = 'tests/e2e/defaults/main.test.bicep'
+            $null = Invoke-AvmCheckPolicy -Path $TestDrive -Example $example -Baseline Azure.Default -SkipModuleVersionCheck
+            $null = Invoke-Avm check policy --path $TestDrive --example $example --baseline Azure.Default --passthru -SkipModuleVersionCheck
+            Should -Invoke Invoke-AvmBicepCheckPolicy -Exactly 2 -ParameterFilter {
+                $Example.Count -eq 1 -and $Example[0] -ceq 'tests/e2e/defaults/main.test.bicep' -and
+                $Baseline.Count -eq 1 -and $Baseline[0] -ceq 'Azure.Default'
+            }
+            Should -Invoke Get-AvmModuleContextInternal -Exactly 2
+        }
+    }
+
+    It 'rejects Bicep selectors for Terraform instead of ignoring them' {
+        InModuleScope Avm.Authoring {
+            Mock Get-AvmModuleContextInternal {
+                [pscustomobject]@{ Root = $TestDrive; Ecosystem = 'terraform' }
+            }
+            Mock Invoke-AvmTerraformCheckPolicy { throw 'Must not evaluate.' }
+            { Invoke-AvmCheckPolicy -Path $TestDrive -Baseline Azure.Default -SkipModuleVersionCheck } |
+                Should -Throw '*only supported for Bicep*'
+            Should -Invoke Invoke-AvmTerraformCheckPolicy -Exactly 0
+        }
+    }
 }

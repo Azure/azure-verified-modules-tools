@@ -141,6 +141,19 @@ override_resource {
   }
 }
 
+override_resource {
+  target = module.bicep["avm/res/fabric/capacity"].azapi_resource.bicep_registry_federated_credential[0]
+  values = {
+    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-fabric-capacity/federatedIdentityCredentials/id-test-bicep-avm-res-fabric-capacity-registry-avm-validation"
+  }
+}
+override_resource {
+  target = module.bicep["avm/res/storage/storage-account"].azapi_resource.bicep_registry_federated_credential[0]
+  values = {
+    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-storage-storage-account/federatedIdentityCredentials/id-test-bicep-avm-res-storage-storage-account-registry-avm-validation"
+  }
+}
+
 run "module_plan_binds_identities_groups_and_workflows" {
   command = plan
 

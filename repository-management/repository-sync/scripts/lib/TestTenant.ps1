@@ -153,6 +153,7 @@ function Assert-AvmBamiIdentityPlan {
         [string] $ModuleAddress = 'module.azure',
         [string] $IdentityName,
         [string] $WorkflowRef,
+        [switch] $BicepRegistryFederation,
         [ValidatePattern('^[a-z][a-z0-9-]*$')]
         [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test', 'examples-test-execution'),
         [switch] $PassThru
@@ -160,6 +161,11 @@ function Assert-AvmBamiIdentityPlan {
 
     $Settings = Get-AvmBamiSettings -Values $Settings
     $EntraGroupNames = ConvertTo-AvmEntraGroupNames -Names $EntraGroupNames
+    $moduleMatch = [regex]::Match($ModuleAddress, '^module\.bicep\["([^"]+)"\]$')
+    if ($BicepRegistryFederation -and (-not $moduleMatch.Success -or $Repository -cne 'Azure/bicep-registry-modules' -or
+        $Environments.Count -ne 1 -or $Environments[0] -cne 'avm-validation')) {
+        throw [System.ArgumentException]::new('Registry environment federation is restricted to dedicated Bicep module identities in avm-validation.')
+    }
     if ($RepositoryId -cnotmatch '^[1-9][0-9]*$' -or $RepositoryOwnerId -cnotmatch '^[1-9][0-9]*$' -or
         $RepositorySyncRepositoryId -cnotmatch '^[1-9][0-9]*$') {
         throw [System.ArgumentException]::new('Candidate federation requires positive GitHub repository, organization, and tools repository IDs.')
@@ -175,12 +181,14 @@ function Assert-AvmBamiIdentityPlan {
     $resources = @(Get-AvmTerraformPlannedResource -Module $Plan['planned_values']['root_module'])
     $identityAddress = "$ModuleAddress.azapi_resource.identity"
     $validationCredentialAddress = "$ModuleAddress.azapi_resource.validation_federated_credential"
+    $registryCredentialAddress = "$ModuleAddress.azapi_resource.bicep_registry_federated_credential[0]"
     $membershipNames = @{}
     foreach ($groupName in $EntraGroupNames) {
         $key = ConvertTo-Json -InputObject $groupName -Compress
         $membershipNames["$ModuleAddress.azuread_group_member.test_permissions[$key]"] = $groupName
     }
     $allowed = @($identityAddress, $validationCredentialAddress)
+    if ($BicepRegistryFederation) { $allowed += $registryCredentialAddress }
     foreach ($environment in $Environments) {
         $allowed += "$ModuleAddress.azapi_resource.identity_federated_credentials[`"$environment`"]"
     }
@@ -200,7 +208,6 @@ function Assert-AvmBamiIdentityPlan {
         $changes[$change['address']] = $change
     }
     $nameArguments = @{ Repository = $Repository }
-    $moduleMatch = [regex]::Match($ModuleAddress, '^module\.bicep\["([^"]+)"\]$')
     if ($moduleMatch.Success) {
         if ($Repository -cne 'Azure/bicep-registry-modules') {
             throw [System.ArgumentException]::new('Bicep module identities must belong to the registry repository.')
@@ -393,6 +400,12 @@ function Assert-AvmBamiIdentityPlan {
         Name = "$name-avm-validation"
         Subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
     }
+    if ($BicepRegistryFederation) {
+        $federation[$registryCredentialAddress] = @{
+            Name = "$name-registry-avm-validation"
+            Subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:avm-validation"
+        }
+    }
     $previousModuleCredentials = 0
     foreach ($address in $federation.Keys) {
         $credential = @($managed | Where-Object { $_['address'] -ceq $address })[0]['values']
@@ -413,7 +426,7 @@ function Assert-AvmBamiIdentityPlan {
             @{ Values = $credentialChange['after']; Name = $federation[$address].Name; Parent = $identityId; Previous = $false }
         )
         if ($null -ne $beforeCredential) {
-            if ($address -cne $validationCredentialAddress) { $previousModuleCredentials++ }
+            if ($address -cnotin @($validationCredentialAddress, $registryCredentialAddress)) { $previousModuleCredentials++ }
             $oldName = if ($renaming) { $previousName + $federation[$address].Name.Substring($name.Length) } else { $federation[$address].Name }
             $sides += @{ Values = $beforeCredential; Name = $oldName; Parent = $previousIdentityId; Previous = $true }
         }

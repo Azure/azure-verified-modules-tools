@@ -95,6 +95,7 @@ function New-AvmTestBamiPlan {
         [string] $ClientId = '10000000-0000-4000-8000-000000000006',
         [string] $PrincipalId = '10000000-0000-4000-8000-000000000007',
         [string] $WorkflowRef,
+        [switch] $BicepRegistryFederation,
         [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test', 'examples-test-execution')
     )
 
@@ -158,6 +159,13 @@ AND
         $number++
     }
     $credentials = @(
+        if ($BicepRegistryFederation) {
+            @{
+                Address = 'module.azure.azapi_resource.bicep_registry_federated_credential[0]'
+                Name = "$IdentityName-registry-avm-validation"
+                Subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:avm-validation"
+            }
+        }
         foreach ($environment in $Environments) {
             $subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:${environment}:job_workflow_ref:$JobWorkflowRef"
             if ($WorkflowRef) { $subject += ":workflow_ref:$WorkflowRef" }
@@ -277,7 +285,7 @@ AND
         $previous = New-AvmTestBamiPlan -KnownClient -IdentityName $PreviousIdentityName -ModuleAddress $ModuleAddress `
             -ClientId $PreviousClientId -PrincipalId $PreviousPrincipalId -GroupNames $GroupNames `
             -RepositoryOwnerId $RepositoryOwnerId -RepositoryId $RepositoryId -RepositorySyncRepositoryId $RepositorySyncRepositoryId `
-            -JobWorkflowRef $JobWorkflowRef -WorkflowRef $WorkflowRef -Environments $Environments `
+            -JobWorkflowRef $JobWorkflowRef -WorkflowRef $WorkflowRef -Environments $Environments -BicepRegistryFederation:$BicepRegistryFederation `
             -OwnerMigration:$OwnerMigration -LegacyMembershipMigration:$LegacyMembershipMigration -RemovedGroup $RemovedGroup
         foreach ($change in $changes) {
             $old = @($previous.resource_changes | Where-Object { $_.address -ceq $change.address })[0]

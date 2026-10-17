@@ -63,6 +63,24 @@ variable "github_workflow_ref" {
   }
 }
 
+variable "bicep_registry_federation_enabled" {
+  type        = bool
+  description = "Add the registry's owner/repository/environment subject while retaining staged workflow-bound credentials."
+  default     = false
+  nullable    = false
+
+  validation {
+    condition = !var.bicep_registry_federation_enabled || (
+      var.identity_name != null &&
+      var.github_repository_owner == "Azure" &&
+      var.github_repository_name == "bicep-registry-modules" &&
+      var.github_repository_environment_names == toset(["avm-validation"]) &&
+      can(regex("^[A-Za-z0-9][A-Za-z0-9_-]{2,119}$", "${local.owner_repo_name}-registry-avm-validation"))
+    )
+    error_message = "Registry federation requires a named Azure/bicep-registry-modules identity, only avm-validation, and a credential name within 120 characters."
+  }
+}
+
 variable "github_repository_owner" {
   type        = string
   description = "Owner of the GitHub repositories."

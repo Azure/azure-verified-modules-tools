@@ -36,7 +36,8 @@ function New-AvmTestBicepIdentityPlan {
             -ClientId ('10000000-0000-4000-8000-{0:d12}' -f (6 + $number)) `
             -PrincipalId ('10000000-0000-4000-8000-{0:d12}' -f (7 + $number)) `
             -JobWorkflowRef 'Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml@refs/heads/main' `
-            -WorkflowRef "Azure/bicep-registry-modules/.github/workflows/$($path.Replace('/', '.')).yml@refs/heads/main"
+            -WorkflowRef "Azure/bicep-registry-modules/.github/workflows/$($path.Replace('/', '.')).yml@refs/heads/main" `
+            -BicepRegistryFederation
         $plan.resource_changes += $slice.resource_changes
         $plan.planned_values.root_module.child_modules += $slice.planned_values.root_module.child_modules
         $plan.prior_state.values.root_module.child_modules += $slice.prior_state.values.root_module.child_modules

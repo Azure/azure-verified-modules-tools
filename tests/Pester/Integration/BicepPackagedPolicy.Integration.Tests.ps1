@@ -40,9 +40,12 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
         $rules | Should -HaveCount 8
         @($rules | Where-Object { $_.Name -cnotmatch '\.Rule\.yaml$' }) | Should -HaveCount 0
         Import-Module (Join-Path $script:package 'Avm.Authoring.psd1') -Force
+        . (Join-Path $repoRoot 'scripts' 'bicep-workflows' 'Validation.ps1')
         $script:fixture = Join-Path $repoRoot 'tests' 'fixtures' 'modules' 'bicep-storage'
-        foreach ($name in @('TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_ID', 'VALIDATE_TENANT_ID', 'TOKEN_NAMEPREFIX')) {
+        foreach ($name in @('TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_ID',
+                'VALIDATE_TENANT_ID', 'TOKEN_NAMEPREFIX', 'AVM_CI_VARIABLES', 'AVM_CI_SECRETS', 'GITHUB_STEP_SUMMARY')) {
             $script:savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+            [Environment]::SetEnvironmentVariable($name, [NullString]::Value)
         }
         $env:TEST_SUBSCRIPTION_IDS = '[{"id":"11111111-1111-4111-8111-111111111111","name":"compile-only"}]'
         $env:VALIDATE_SUBSCRIPTION_ID = '11111111-1111-4111-8111-111111111111'
@@ -102,6 +105,39 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
             }).Count | Should -Be 2
     }
 
+    It 'runs the workflow policy selectors against the independent package and General pool' {
+        $pool = $env:TEST_SUBSCRIPTION_IDS
+        try {
+            $env:TEST_SUBSCRIPTION_IDS = '[{"id":"33333333-3333-4333-8333-333333333333","name":"Reserved","tag":"Azure Local"},{"id":"11111111-1111-4111-8111-111111111111","name":"General"}]'
+            $results = Join-Path $TestDrive 'workflow-policy'
+            Invoke-AvmWorkflowPolicyValidation -Root $script:consumer -ModulePath 'avm/res/storage/storage-account' `
+                -Example 'tests/e2e/defaults/main.test.bicep' -Baseline Azure.Default -ResultDirectory $results
+            $result = Get-Content -LiteralPath (Join-Path $results 'policy.json') -Raw | ConvertFrom-Json
+            $result.Status | Should -BeExactly 'pass'
+            $result.TestsSelected | Should -Be 1
+            $result.BaselinesExecuted | Should -Be 1
+            $env:VALIDATE_SUBSCRIPTION_ID | Should -BeExactly '11111111-1111-4111-8111-111111111111'
+        }
+        finally { $env:TEST_SUBSCRIPTION_IDS = $pool }
+    }
+
+    It 'fails the workflow advisory policy leg when native General selection has no eligible subscription' {
+        $pool = $env:TEST_SUBSCRIPTION_IDS
+        try {
+            $env:TEST_SUBSCRIPTION_IDS = '[{"id":"33333333-3333-4333-8333-333333333333","name":"Reserved","tag":"Azure Local"}]'
+            $results = Join-Path $TestDrive 'rejected-workflow-policy'
+            { Invoke-AvmWorkflowPolicyValidation -Root $script:consumer -ModulePath 'avm/res/storage/storage-account' `
+                    -Example 'tests/e2e/defaults/main.test.bicep' -Baseline Azure.Default -ResultDirectory $results } |
+                Should -Throw '*did not pass*'
+            $result = Get-Content -LiteralPath (Join-Path $results 'policy.json') -Raw | ConvertFrom-Json
+            $result.Status | Should -BeExactly 'fail'
+            $result.BaselinesExecuted | Should -Be 0
+            @($result.Issues | Where-Object Message -Like "*no 'General' subscriptions*").Count | Should -Be 1
+            $env:VALIDATE_SUBSCRIPTION_ID | Should -BeExactly '11111111-1111-4111-8111-111111111111'
+        }
+        finally { $env:TEST_SUBSCRIPTION_IDS = $pool }
+    }
+
     It 'rejects insecure storage with the actual packaged security baseline' {
         $sourcePath = Join-Path $script:modulePath 'main.bicep'
         $source = [System.IO.File]::ReadAllText($sourcePath).Replace(
@@ -114,5 +150,35 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
                 $_.Baseline -eq 'CB.AVM.WAF.Security' -and $_.Severity -eq 'error'
             }).Count | Should -BeGreaterThan 0
         $result.BaselinesExecuted | Should -Be 8
+    }
+
+    It 'supplies the static principal default without changing required consumer parameters' {
+        $sourcePath = Join-Path $script:modulePath 'tests' 'e2e' 'defaults' 'main.test.bicep'
+        $source = [System.IO.File]::ReadAllText($sourcePath).Replace(
+            'param resourceLocation string = deployment().location',
+            "param resourceLocation string = deployment().location`nparam builtInServicePrincipalObjectId string").Replace(
+            '  location: resourceLocation',
+            "  location: resourceLocation`n  tags: {`n    principal: builtInServicePrincipalObjectId`n  }")
+        [System.IO.File]::WriteAllText($sourcePath, $source, [System.Text.UTF8Encoding]::new($false))
+        $result = Invoke-AvmCheckPolicy -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'pass' -Because (@($result.Issues | ForEach-Object Message) -join '; ')
+        $result.BaselinesExecuted | Should -Be 8
+        @($result.Evaluations | Where-Object { $_.ProcessedRules -gt 0 }).Count | Should -Be 8
+        [System.IO.File]::ReadAllText($sourcePath) | Should -BeExactly $source
+        $source | Should -Not -Match '00000000-0000-4000-8000-000000000001'
+
+        $optionPath = Join-Path $script:package 'Resources' 'bicep' 'psrule' 'ps-rule.yaml'
+        $original = [System.IO.File]::ReadAllText($optionPath)
+        $withoutDefault = $original -replace '(?m)^  AZURE_PARAMETER_DEFAULTS:\r?\n    builtInServicePrincipalObjectId: "[^"]+"\r?\n', ''
+        $withoutDefault | Should -Not -BeExactly $original
+        try {
+            [System.IO.File]::WriteAllText($optionPath, $withoutDefault, [System.Text.UTF8Encoding]::new($false))
+            $missing = Invoke-AvmCheckPolicy -Path $script:modulePath -SkipModuleVersionCheck
+            $missing.Status | Should -Be 'fail'
+            $missing.BaselinesExecuted | Should -BeLessThan 8
+        }
+        finally {
+            [System.IO.File]::WriteAllText($optionPath, $original, [System.Text.UTF8Encoding]::new($false))
+        }
     }
 }

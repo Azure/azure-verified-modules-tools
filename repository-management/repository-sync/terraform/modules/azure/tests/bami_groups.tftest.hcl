@@ -87,6 +87,11 @@ run "configured_names_create_only_individual_group_edges" {
   command = plan
 
   assert {
+    condition     = length(azapi_resource.bicep_registry_federated_credential) == 0
+    error_message = "Terraform repository identities must not gain the registry-only federation subject."
+  }
+
+  assert {
     condition = (
       toset(keys(azuread_group_member.test_permissions)) == var.entra_group_names &&
       alltrue([for name, membership in azuread_group_member.test_permissions :
@@ -106,6 +111,16 @@ run "configured_names_create_only_individual_group_edges" {
     )
     error_message = "Observed evidence must contain only provider identifiers and allow-listed group metadata."
   }
+}
+
+run "registry_environment_federation_rejects_terraform_repositories" {
+  command = plan
+
+  variables {
+    bicep_registry_federation_enabled = true
+  }
+
+  expect_failures = [var.bicep_registry_federation_enabled]
 }
 
 run "additional_configured_name_accumulates_an_edge" {
@@ -424,6 +439,7 @@ run "rename_legacy_bicep_identity" {
 
   variables {
     identity_name                       = "id-test-bicep-avm-res-fabric-capacity"
+    bicep_registry_federation_enabled   = true
     github_repository_name              = "bicep-registry-modules"
     github_repository_id                = "447791597"
     github_repository_environment_names = ["avm-validation"]
@@ -461,8 +477,10 @@ run "rename_legacy_bicep_identity" {
       azapi_resource.identity.name == "id-test-bicep-avm-res-fabric-capacity" &&
       output.client_id == "10000000-0000-4000-8000-000000000006" &&
       azapi_resource.identity_federated_credentials["avm-validation"].name ==
-      "id-test-bicep-avm-res-fabric-capacity-module-avm-validation"
+      "id-test-bicep-avm-res-fabric-capacity-module-avm-validation" &&
+      azapi_resource.bicep_registry_federated_credential[0].body.properties.subject ==
+      "repository_owner_id:6844498:repository_id:447791597:environment:avm-validation"
     )
-    error_message = "The old hashed Bicep identity must transition to its full hash-free name while preserving separate caller-bound federation."
+    error_message = "Renaming must preserve staged caller-bound federation and add the current three-claim registry subject separately."
   }
 }

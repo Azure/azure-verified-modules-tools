@@ -140,6 +140,77 @@ Describe 'Bicep PSRule policy checks' -Tag 'Component' {
         $result.Evaluations.File | Should -Contain 'modules/nested/tests/e2e/defaults/main.test.bicep'
     }
 
+    It 'limits a workflow leg to one exact example and baseline without changing advisory classification' {
+        $result = Invoke-AvmCheckPolicy -Path $script:modulePath `
+            -Example 'tests/e2e/defaults/main.test.bicep' -Baseline Azure.Default -SkipModuleVersionCheck
+        $result.Status | Should -Be 'pass'
+        $result.TestsSelected | Should -Be 1
+        $result.BaselinesExecuted | Should -Be 1
+        $result.RequiredBaselines.Count | Should -Be 0
+        $result.AdvisoryBaselines | Should -Be @('Azure.Default')
+        $result.Evaluations[0].Required | Should -BeFalse
+        $result.Evaluations[0].File | Should -BeExactly 'tests/e2e/defaults/main.test.bicep'
+        InModuleScope Avm.Authoring {
+            Should -Invoke Invoke-AvmBicepPolicyBaseline -Exactly 1 -ParameterFilter { $Baseline -ceq 'Azure.Default' }
+        }
+    }
+
+    It 'deduplicates repeated selectors without rerunning policy' {
+        $result = Invoke-AvmCheckPolicy -Path $script:modulePath `
+            -Example @('tests/e2e/defaults/main.test.bicep', 'tests/e2e/defaults/main.test.bicep') `
+            -Baseline @('Azure.Pillar.Reliability', 'Azure.Pillar.Reliability') -SkipModuleVersionCheck
+        $result.Status | Should -Be 'pass'
+        $result.TestsSelected | Should -Be 1
+        $result.BaselinesExecuted | Should -Be 1
+        $result.Evaluations[0].Required | Should -BeTrue
+    }
+
+    It 'accepts an explicitly filtered custom example without changing default discovery' {
+        $folder = Join-Path $script:modulePath 'tests/e2e/custom-policy'
+        $null = New-Item -ItemType Directory -Path $folder -Force
+        Copy-Item -LiteralPath (Join-Path $script:modulePath 'tests/e2e/defaults/main.test.bicep') `
+            -Destination (Join-Path $folder 'main.test.bicep')
+        . (Join-Path $script:repoRoot 'scripts' 'bicep-workflows' 'Discovery.ps1')
+        $discovery = Get-AvmWorkflowTestFiles -Root $script:workingRoot `
+            -ModulePath 'avm/res/mock/widget' -PsRuleFilterRegex 'custom-policy'
+        $selection = ConvertFrom-Json -InputObject $discovery.psRuleModuleTestFilePaths -NoEnumerate
+        $selection.Count | Should -Be 1
+        $default = Invoke-AvmCheckPolicy -Path $script:modulePath -SkipModuleVersionCheck
+        $default.Status | Should -Be 'pass'
+        $default.TestsSelected | Should -Be 2
+        $result = Invoke-AvmCheckPolicy -Path $script:modulePath `
+            -Example $selection[0].path -Baseline Azure.Default -SkipModuleVersionCheck
+        $result.Status | Should -Be 'pass'
+        $result.TestsSelected | Should -Be 1
+        $result.BaselinesExecuted | Should -Be 1
+        $result.Evaluations[0].File | Should -BeExactly 'tests/e2e/custom-policy/main.test.bicep'
+    }
+
+    It 'rejects invalid or unmatched policy examples before staging (<Selection>)' -ForEach @(
+        @{ Selection = '../defaults/main.test.bicep' }
+        @{ Selection = 'tests/e2e/*/main.test.bicep' }
+        @{ Selection = 'tests/e2e/unknown/main.test.bicep' }
+        @{ Selection = 'TESTS/e2e/defaults/main.test.bicep' }
+        @{ Selection = 'defaults' }
+    ) {
+        { Invoke-AvmCheckPolicy -Path $script:modulePath -Example $Selection -SkipModuleVersionCheck } |
+            Should -Throw
+        InModuleScope Avm.Authoring {
+            Should -Invoke Invoke-AvmBicepPolicyBaseline -Exactly 0
+            Should -Invoke Import-AvmBicepPolicyModule -Exactly 0
+        }
+    }
+
+    It 'rejects unsupported or incorrectly cased baselines before evaluation (<Selection>)' -ForEach @(
+        @{ Selection = 'Azure.Unknown' }
+        @{ Selection = 'azure.default' }
+        @{ Selection = '*' }
+    ) {
+        { Invoke-AvmCheckPolicy -Path $script:modulePath -Baseline $Selection -SkipModuleVersionCheck } |
+            Should -Throw '*exact supported*'
+        InModuleScope Avm.Authoring { Should -Invoke Invoke-AvmBicepPolicyBaseline -Exactly 0 }
+    }
+
     It 'replaces local tokens in a referenced module and follows transitive local modules' {
         $sourcePath = Join-Path $script:modulePath 'main.bicep'
         $source = [System.IO.File]::ReadAllText($sourcePath)
