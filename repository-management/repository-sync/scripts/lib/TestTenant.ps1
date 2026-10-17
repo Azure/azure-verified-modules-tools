@@ -154,7 +154,7 @@ function Assert-AvmBamiIdentityPlan {
         [string] $IdentityName,
         [string] $WorkflowRef,
         [ValidatePattern('^[a-z][a-z0-9-]*$')]
-        [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test'),
+        [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test', 'examples-test-execution'),
         [switch] $PassThru
     )
 

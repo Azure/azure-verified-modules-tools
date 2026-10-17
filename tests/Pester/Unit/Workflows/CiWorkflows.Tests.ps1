@@ -19,7 +19,7 @@ BeforeAll {
     $module = Import-Module (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -PassThru
     $null = & $module { Import-AvmPowerShellModule -Name powershell-yaml -Global }
     $script:definitions = @{}
-    foreach ($workflowFile in @('ci-authoring.yml', 'ci-workflows.yml', 'repository-management-config-test.yml')) {
+    foreach ($workflowFile in @('ci-authoring.yml', 'ci-package-qualification.yml', 'ci-workflows.yml', 'repository-management-config-test.yml')) {
         $text = Get-Content -LiteralPath (Join-Path $script:repoRoot '.github' 'workflows' $workflowFile) -Raw
         $script:definitions[$workflowFile] = ConvertFrom-Yaml -Yaml $text
     }
@@ -55,7 +55,7 @@ Describe 'Independent CI workflows' {
     It 'includes source, tests and shared dependencies in the static filters for <File>' -ForEach @(
         @{ File = 'ci-authoring.yml'; Required = @(
             'src/Avm.Authoring/**', 'build/**', 'build.ps1', 'scripts/**', 'tests/**', 'docs/reference/**',
-            '.github/workflows/ci-authoring.yml', '.github/workflows/terraform-module.yml', '.github/workflows/release.yml'
+            '.github/workflows/ci-authoring.yml', '.github/workflows/release.yml'
         ) }
         @{ File = 'ci-workflows.yml'; Required = @(
             '.github/workflows/**', '.github/dependabot.yml', 'tests/Pester/Unit/Workflows/**',
@@ -105,6 +105,7 @@ Describe 'Independent CI workflows' {
         $paths | Should -Not -Contain 'repository-management/shared/TestTenant.ps1'
         $paths | Should -Not -Contain 'repository-management/shared/GroupSettings.ps1'
         $paths | Should -Not -Contain 'infra/**'
+        $paths | Should -Not -Contain '.github/workflows/terraform-module.yml'
         foreach ($file in @('ci-workflows.yml', 'repository-management-config-test.yml')) {
             $script:definitions[$file]['on'].push.paths | Should -Not -Contain 'tests/**'
         }
@@ -134,21 +135,52 @@ Describe 'Independent CI workflows' {
             Should -Contain './build.ps1 test-workflows'
     }
 
-    It 'preserves only the existing authoring unit, component and integration matrices' {
+    It 'preserves cross-platform acceptance and separates native compatibility from fixture matrices' {
         $jobs = $script:definitions['ci-authoring.yml'].jobs
-        @($jobs.Keys | Sort-Object) | Should -Be @('bicep-integration', 'component', 'integration', 'lint', 'report', 'unit')
+        @($jobs.Keys | Sort-Object) | Should -Be @('bicep-integration', 'component', 'integration', 'lint', 'native-qualification', 'report', 'unit')
         @($jobs.unit.strategy.matrix.include.os) | Should -Be @('ubuntu-latest', 'windows-latest', 'macos-latest')
         @($jobs.unit.strategy.matrix.include.task) | Should -Be @('ci-coverage', 'ci-unit', 'ci-unit')
-        foreach ($jobName in @('component', 'integration', 'bicep-integration')) {
+        foreach ($jobName in @('component', 'integration', 'bicep-integration', 'native-qualification')) {
             $jobs[$jobName].strategy.matrix.os | Should -Be @('ubuntu-latest', 'windows-latest', 'macos-latest')
             $jobs[$jobName]['runs-on'] | Should -BeExactly '${{ matrix.os }}'
         }
-        foreach ($jobName in @('integration', 'bicep-integration')) {
+        foreach ($jobName in @('integration', 'bicep-integration', 'native-qualification')) {
             $jobs[$jobName]['if'] | Should -BeExactly "github.event_name != 'push'"
         }
         $jobs.integration.strategy.matrix.fixture |
             Should -Be @('terraform-azure-avm-res-mock', 'terraform-azurerm-avm-res-mock')
         $jobs.lint['runs-on'] | Should -BeExactly 'ubuntu-latest'
+        $jobs.integration['timeout-minutes'] | Should -Be 30
+        $native = $jobs['native-qualification']
+        $native.strategy.matrix.Contains('fixture') | Should -BeFalse
+        $native.Contains('environment') | Should -BeFalse
+        $native.env.ARM_USE_OIDC | Should -BeExactly 'false'
+        $native.env.MODTM_ENDPOINT | Should -BeExactly 'http://127.0.0.1:1'
+        @($native.steps | Where-Object { $_.Contains('run') } | ForEach-Object { $_.run }) |
+            Should -Contain './build.ps1 qualification -QualificationGroup Native'
+    }
+
+    It 'qualifies packages on relevant changes without Azure access or a module fixture matrix' {
+        $workflow = $script:definitions['ci-package-qualification.yml']
+        $paths = $workflow['on'].pull_request.paths
+        foreach ($path in @(
+                'src/Avm.Authoring/Resources/avm.pins.jsonc',
+                'src/Avm.Authoring/Private/Tools/**',
+                'src/Avm.Authoring/Private/Network/**',
+                'tests/Pester/Qualification/Package/**',
+                '.github/workflows/release.yml', 'build.ps1', 'build/**'
+            )) {
+            $paths | Should -Contain $path
+        }
+        $paths | Should -Not -Contain 'src/Avm.Authoring/**'
+        $package = $workflow.jobs.package
+        $package.strategy.matrix.os | Should -Be @('ubuntu-latest', 'windows-latest', 'macos-latest')
+        $package.strategy.matrix.Contains('fixture') | Should -BeFalse
+        $package.Contains('environment') | Should -BeFalse
+        $package.Contains('permissions') | Should -BeFalse
+        $package.env.ARM_USE_OIDC | Should -BeExactly 'false'
+        ($package.steps | Where-Object { $_.Contains('run') } | ForEach-Object { $_.run }) -join "`n" |
+            Should -Match 'build[.]ps1 qualification -QualificationGroup Package'
     }
 
     It 'uses the repository-sync executor <Variable> in both provider and login settings' -ForEach @(
@@ -183,7 +215,8 @@ Describe 'Independent CI workflows' {
 
     It 'keeps reports and artifacts inside their own independent workflow' {
         $reports = @{
-            'ci-authoring.yml' = @{ Needs = @('unit', 'component', 'integration', 'bicep-integration'); Name = 'Authoring test results' }
+            'ci-authoring.yml' = @{ Needs = @('unit', 'component', 'integration', 'bicep-integration', 'native-qualification'); Name = 'Authoring test results' }
+            'ci-package-qualification.yml' = @{ Needs = @('package'); Name = 'Package qualification results' }
             'ci-workflows.yml' = @{ Needs = @('workflows'); Name = 'Workflow test results' }
             'repository-management-config-test.yml' = @{ Needs = @('pester'); Name = 'Repository test results' }
         }

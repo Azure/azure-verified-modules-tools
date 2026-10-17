@@ -22,7 +22,6 @@ on:
       - '!tests/fixtures/repository-candidate-process.ps1'
       - 'docs/reference/**'
       - '.github/workflows/ci-authoring.yml'
-      - '.github/workflows/terraform-module.yml'
       - '.github/workflows/release.yml'
       - '.github/actions/**'
       - '.gitattributes'
@@ -50,7 +49,6 @@ on:
       - '!tests/fixtures/repository-candidate-process.ps1'
       - 'docs/reference/**'
       - '.github/workflows/ci-authoring.yml'
-      - '.github/workflows/terraform-module.yml'
       - '.github/workflows/release.yml'
       - '.github/actions/**'
       - '.gitattributes'
@@ -303,9 +301,61 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  native-qualification:
+    name: Native compatibility (${{ matrix.os }})
+    if: github.event_name != 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      ARM_USE_OIDC: 'false'
+      ARM_USE_CLI: 'false'
+      ARM_USE_MSI: 'false'
+      MODTM_ENDPOINT: 'http://127.0.0.1:1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Configure native tool cache
+        shell: pwsh
+        run: |
+          $avmHome = Join-Path $env:RUNNER_TEMP 'avm-native-home'
+          New-Item -ItemType Directory -Force -Path $avmHome | Out-Null
+          "AVM_HOME=$avmHome" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Exclude AVM tools from Windows Defender
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath $env:AVM_HOME -ErrorAction Stop
+          Add-MpPreference -ExclusionProcess 'mapotf.exe' -ErrorAction Stop
+
+      - name: Install build prerequisites
+        shell: pwsh
+        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -Confirm:$false
+
+      - name: Qualify native compatibility
+        shell: pwsh
+        run: ./build.ps1 qualification -QualificationGroup Native
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-native-${{ matrix.os }}
+          path: out/test-results/*.xml
+          if-no-files-found: error
+          retention-days: 7
+
   report:
     name: Report authoring tests
-    needs: [unit, component, integration, bicep-integration]
+    needs: [unit, component, integration, bicep-integration, native-qualification]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

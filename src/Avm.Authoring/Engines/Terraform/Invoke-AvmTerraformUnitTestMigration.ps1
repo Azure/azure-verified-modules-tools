@@ -131,6 +131,7 @@ function Get-AvmTerraformUnitTestSnapshot {
     $ErrorActionPreference = 'Stop'
     $requirements = @{}
     $originalProviderSources = @{}
+    $utilityPaths = if ($null -ne $Options.PSObject.Properties['UtilityTelemetryPaths']) { $Options.UtilityTelemetryPaths } else { @() }
     $providerUse = @{}
     $localProviderSources = @(
         'registry.terraform.io/azure/alz'
@@ -159,12 +160,13 @@ function Get-AvmTerraformUnitTestSnapshot {
             }
             foreach ($name in $inspection.test.run_modules.Keys) {
                 $targetPath = $inspection.test.run_modules[$name].dir
+                $instrumented = $targetPath -cin $utilityPaths -or
+                @($ModuleTargets | Where-Object { $_.Path -ceq $targetPath -and $_.Profiles -contains 'root' }).Count -gt 0
                 $unmockedNames = @($requirements[$targetPath].Keys | Where-Object { $_ -cnotin $mockedNames })
                 $localNames = @(Get-AvmTerraformUnitTestMockProviderName -ProviderNames $unmockedNames `
                         -RequiredProviders $requirements[$targetPath] -ProviderSources $localProviderSources)
                 $introducesMapping = $inspection.test.runs[$name].mptf.attributes.Contains('providers') -and
-                -not $requirements[$targetPath].Contains('azapi') -and
-                @($ModuleTargets | Where-Object { $_.Path -ceq $targetPath -and $_.Profiles -contains 'root' }).Count -gt 0
+                -not $requirements[$targetPath].Contains('azapi') -and $instrumented
                 if (($preservationProof -or $localNames.Count -gt 0 -or $introducesMapping) -and
                     -not $originalProviderSources.ContainsKey($targetPath)) {
                     $originalProviderSources[$targetPath] = @(Get-AvmTerraformUnitTestProviderSource `
@@ -556,10 +558,15 @@ function ConvertFrom-AvmTerraformProviderTree {
     param(
         [Parameter(Mandatory)] [AllowEmptyString()] [string] $Text,
         [Parameter(Mandatory)] [string] $Path,
-        [hashtable] $ModuleProviderSources
+        [hashtable] $ModuleProviderSources,
+        [switch] $AllowMissingProviderConfiguration,
+        [hashtable] $ProviderWarnings
     )
 
     Set-StrictMode -Version 3.0
+    if ($AllowMissingProviderConfiguration -and $null -eq $ProviderWarnings) {
+        throw [System.ArgumentException]::new('Repair-mode provider inspection requires diagnostic tracking and a subsequent strict inspection.')
+    }
     $sources = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $inConfiguration = $false
     $rootSeen = $false
@@ -574,6 +581,14 @@ function ConvertFrom-AvmTerraformProviderTree {
         }
         if ($line -ceq 'Providers required by state:') { break }
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        if ($rootSeen -and $AllowMissingProviderConfiguration -and
+            $line -ceq 'Warning: Missing required provider configuration' -and
+            @([regex]::Matches($Text, '(?m)^(?:Warning|Error):[^\r\n]*') |
+                    Where-Object { $_.Value -cne 'Warning: Missing required provider configuration' }).Count -eq 0) {
+            $ProviderWarnings[$Path] = $true
+            Write-AvmLog "Provider source bindings in '$Path' need repair and a strict dependency recheck before mock migration." -Level Verbose | Out-Null
+            break
+        }
         if ($line -ceq '.' -and -not $rootSeen) {
             $rootSeen = $true
             continue
@@ -666,7 +681,9 @@ function Get-AvmTerraformUnitTestProviderSource {
         [Parameter(Mandatory)] [object[]] $ModuleTargets,
         [Parameter(Mandatory)] [object] $Options,
         [hashtable] $ModuleProviderSources,
-        [hashtable] $ModuleManifests
+        [hashtable] $ModuleManifests,
+        [switch] $AllowMissingProviderConfiguration,
+        [hashtable] $ProviderWarnings
     )
 
     Set-StrictMode -Version 3.0
@@ -726,7 +743,15 @@ function Get-AvmTerraformUnitTestProviderSource {
         $lockContent = [System.IO.File]::ReadAllBytes($lockPath)
     }
     $manifestPath = Join-Path -Path $environment.TF_DATA_DIR -ChildPath 'modules' -AdditionalChildPath 'modules.json'
+    $inspectionCache = $Options.PSObject.Properties['InspectionModuleCache']
+    if ($null -ne $inspectionCache -and $inspectionCache.Value -isnot [hashtable]) {
+        throw [AvmConfigurationException]::new('InspectionModuleCache must be an invocation-owned hashtable.')
+    }
     try {
+        if ($null -ne $inspectionCache) {
+            $null = Initialize-AvmTerraformInspectionModule -Path $Path -DataDirectory $environment.TF_DATA_DIR `
+                -ModuleTargets $ModuleTargets -Options $Options -Cache $inspectionCache.Value -Confirm:$false
+        }
         $providerDirectory = Join-Path -Path $Path -ChildPath '.terraform' -AdditionalChildPath 'providers'
         if ($lockExists -and -not (Test-Path -LiteralPath $providerDirectory -PathType Container)) {
             $null = Invoke-AvmTerraformInit -TerraformPath $Options.TerraformPath -WorkingDirectory $Path `
@@ -746,11 +771,19 @@ function Get-AvmTerraformUnitTestProviderSource {
         $result = Invoke-AvmProcess -FilePath $Options.TerraformPath `
             -ArgumentList @('providers', '-no-color', '-test-directory=tests') `
             -WorkingDirectory $Path -EnvVars $environment
-        $sources = @(ConvertFrom-AvmTerraformProviderTree -Text $result.StdOut -Path $Path -ModuleProviderSources $ModuleProviderSources)
-        if ($null -ne $ModuleManifests -and (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        $sources = @(ConvertFrom-AvmTerraformProviderTree -Text $result.StdOut -Path $Path -ModuleProviderSources $ModuleProviderSources `
+                -AllowMissingProviderConfiguration:$AllowMissingProviderConfiguration -ProviderWarnings $ProviderWarnings)
+        if (($null -ne $ModuleManifests -or $null -ne $inspectionCache) -and
+            (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
             $payload = [System.IO.File]::ReadAllText($manifestPath)
             $null = ConvertFrom-AvmTerraformModuleManifest -Payload $payload -WorkingDirectory $Path
-            $ModuleManifests[$Path] = $payload
+            if ($null -ne $ModuleManifests) { $ModuleManifests[$Path] = $payload }
+            if ($null -ne $inspectionCache -and
+                (-not $AllowMissingProviderConfiguration -or -not $ProviderWarnings.ContainsKey($Path))) {
+                Register-AvmTerraformInspectionModule -Manifest (ConvertFrom-Json -InputObject $payload -AsHashtable) `
+                    -WorkingDirectory $Path -DataDirectory $environment.TF_DATA_DIR `
+                    -InspectionRoot $Options.InspectionRoot -Cache $inspectionCache.Value
+            }
         }
         return $sources
     }
@@ -783,6 +816,16 @@ function Get-AvmTerraformUnitTestMockProviderName {
                     'Cannot bind a ModTM mock without its proven explicit Azure/modtm source requirement.')
             }
             continue
+        }
+        if ($baseName -ceq 'terraform' -and [string]::IsNullOrWhiteSpace($source) -and
+            $ProviderSources -contains 'terraform.io/builtin/terraform') {
+            if (@($ProviderSources | Where-Object {
+                        $_ -match '/terraform$' -and $_ -ine 'terraform.io/builtin/terraform'
+                    }).Count -gt 0) {
+                throw [AvmConfigurationException]::new(
+                    'Cannot infer a Terraform mock source from ambiguous built-in and registry provider evidence. Declare the source explicitly.')
+            }
+            $source = 'terraform.io/builtin/terraform'
         }
         if ([string]::IsNullOrWhiteSpace($source)) {
             $source = "hashicorp/$baseName"
@@ -963,7 +1006,7 @@ function Get-AvmTerraformUnitTestModtmRequirementPlan {
         }
         $bindings = @{}
         $dependencyVersions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-        foreach ($name in $ModuleProviderSources[$Path].Keys) {
+        foreach ($name in $ModuleProviderSources[$Path].psbase.Keys) {
             if (-not $ModuleProviderSources[$Path][$name].Contains($source)) { continue }
             $record = @($manifest.Modules | Where-Object { $_.Key -ceq $name })
             if ($record.Count -ne 1 -or -not $calls.Contains($name)) {
@@ -1075,7 +1118,7 @@ function Get-AvmTerraformUnitTestModtmRequirementPlan {
             "try(transform.update_in_place.unit_test_modtm_requirement[`"1`"].merge_object_attributes && " +
             "transform.update_in_place.unit_test_modtm_requirement[`"1`"].dynamic_block_body == $bodyJson, " +
             "try(transform.new_block.unit_test_modtm_requirement[`"1`"].body == $bodyJson, false))")
-        foreach ($name in $bindings.Keys) {
+        foreach ($name in $bindings.psbase.Keys) {
             $nameJson = ConvertTo-Json -InputObject $name -Compress
             $bindingJson = ConvertTo-Json -InputObject "providers = $($bindings[$name])`n" -Compress
             $capabilities.Add(
@@ -1157,6 +1200,8 @@ function Invoke-AvmTerraformUnitTestMigration {
     $moduleManifests = @{}
     $modtmRequirementPlans = @{}
     $planningPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $utilityPaths = if ($null -ne $Options.PSObject.Properties['UtilityTelemetryPaths']) { $Options.UtilityTelemetryPaths } else { @() }
+    $utilityProviderSources = if ($null -ne $Options.PSObject.Properties['UtilityProviderSources']) { $Options.UtilityProviderSources } else { @{} }
     foreach ($snapshot in $Snapshots) {
         $scope = $snapshot.Scope
         if ((Get-FileHash -LiteralPath $scope.File.FullName -Algorithm SHA256).Hash -cne $snapshot.Hash) {
@@ -1193,7 +1238,8 @@ function Invoke-AvmTerraformUnitTestMigration {
         }
         $instrumentedTargets = @($ModuleTargets |
                 Where-Object { $targetPaths.Contains($_.Path) -and $_.Profiles -contains 'root' })
-        $migratesTelemetry = $scope.Owner.Profiles -contains 'root' -or $instrumentedTargets.Count -gt 0
+        $migratesTelemetry = $scope.Owner.Profiles -contains 'root' -or $instrumentedTargets.Count -gt 0 -or
+        @($targetPaths | Where-Object { $_ -cin $utilityPaths }).Count -gt 0
         $telemetryCounts = Get-AvmTerraformTelemetryTestCountMigration -Test $after.test -ModuleTargets $ModuleTargets
         $telemetryResourceIds = @{}
         $sourceClientDefaults = @{}
@@ -1248,7 +1294,7 @@ function Invoke-AvmTerraformUnitTestMigration {
         $hasRandomMock = @($after.test.mock_providers.Keys | Where-Object { $_ -cmatch '^random(\.|$)' }).Count -gt 0
         $randomMockRetained = $hasRandomMock -and (-not $migratesTelemetry -or
             (Test-AvmTerraformScopedRandomProviderInUse -Scope $scope -ModuleTargets $ModuleTargets `
-                -TargetPaths @($targetPaths) -Cache $randomUse))
+                -TargetPaths @($targetPaths) -Cache $randomUse -ProviderSources $utilityProviderSources))
         $missingRandomRequirements = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
         if ($migratesTelemetry -and $randomMockRetained) {
             foreach ($target in $instrumentedTargets) {
@@ -1495,6 +1541,7 @@ function Invoke-AvmTerraformUnitTestMigration {
                 MockMigrationValidated           = $validateMocks
                 AddDefaultAzapiMock              = $addDefaultAzapiMock
                 RetainModtmMock                  = $modtmMockRetained
+                RetainRandomMock                 = $randomMockRetained
                 RetiredAliasNames                = $retiredAliasNames
                 RetiredProviderReferences        = $retiredProviderReferences
                 RetainedProviderReferences       = $retainedProviderReferences
@@ -1702,7 +1749,8 @@ function Invoke-AvmTerraformUnitTestMigration {
                     -WorkingDirectory $plan.Path -EnvVars $Options.EnvVars
             }
         }
-        Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets $ModuleTargets -UnitTestPlans $plans.ToArray()
+        Remove-AvmLegacyTelemetryTestMock -Root $Root -ModuleTargets $ModuleTargets -UnitTestPlans $plans.ToArray() `
+            -UtilityTelemetryPaths $utilityPaths
         foreach ($plan in $plans |
                 Where-Object {
                     $_.NewLocationPaths.Count -gt 0 -or $_.TelemetrySubscriptionResourceIds.Count -gt 0 -or

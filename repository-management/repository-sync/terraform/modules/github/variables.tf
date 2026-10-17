@@ -43,7 +43,7 @@ variable "module_name" {
 
 variable "github_repository_pr_check_environment_name" {
   type        = string
-  description = "Name of the approval-gated environment used by the PR check job."
+  description = "Name of the environment used by the PR check job for OIDC, without required reviewers."
 }
 
 variable "github_repository_integration_test_environment_name" {
@@ -53,7 +53,25 @@ variable "github_repository_integration_test_environment_name" {
 
 variable "github_repository_examples_test_environment_name" {
   type        = string
-  description = "Name of the approval-gated environment used by the example test jobs."
+  description = "Name of the approval-gated e2e discovery environment, retained for legacy example test jobs."
+}
+
+variable "github_repository_examples_test_execution_environment_name" {
+  type        = string
+  description = "Name of the approval-free e2e execution environment used after protected example discovery."
+  nullable    = false
+
+  validation {
+    condition = !contains([
+      for name in [
+        var.github_repository_pr_check_environment_name,
+        var.github_repository_integration_test_environment_name,
+        var.github_repository_examples_test_environment_name,
+        var.github_repository_no_approval_environment_name
+      ] : lower(name)
+    ], lower(var.github_repository_examples_test_execution_environment_name))
+    error_message = "The e2e execution environment must be distinct from every existing environment, including case-insensitive names."
+  }
 }
 
 variable "github_repository_no_approval_environment_name" {

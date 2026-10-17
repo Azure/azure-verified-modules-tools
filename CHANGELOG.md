@@ -21,6 +21,18 @@ section when cutting a release.
 
 ### Added
 
+- Terraform transforms upgrade older exact Regions and Interfaces registry pins
+  to `0.13.0` and `0.9.0` before telemetry migration. Legacy naming calls move
+  to `Azure/avm-utl-naming/azure` `0.2.0` in its default modern mode, preserving
+  labels, compatible inputs and supported named output references. Generated
+  names and random seeds may change; review the plan for resource replacement.
+  These are fixed one-off targets; existing AVM naming calls retain their
+  owner-selected versions and modes. Missing utility
+  locations use an independent input, not region-selection outputs. Fresh
+  dependency evidence retires obsolete ModTM bindings and mocks while retaining
+  genuine ModTM dependencies and non-telemetry Random use; newer versions,
+  authored controls and custom module sources remain intact. Ambiguous version
+  constraints require review.
 - `avm test e2e` validates and previews eligible Bicep examples before Create.
   Resource-group cases use tagged disposable groups; a narrow subset of
   subscription, management-group and tenant cases requires explicit targets
@@ -107,6 +119,28 @@ section when cutting a release.
 
 ### Changed
 
+- Acceptance and native qualification explicitly mock Terraform's built-in
+  provider and reject incomplete source/mock/run bindings before test
+  execution. Public commands still run their real initialization and tests;
+  guarded test processes clear credentials and use loopback-only endpoints.
+  Repeat-update qualification composes ordered native plan timestamps with a
+  clock-only override and fully mocked update checks, without a provisioner.
+- Fresh telemetry generation now has deterministic block, local-attribute and
+  precondition ordering. Independent migrations produce the same reviewed
+  bytes, without moving unrelated owner declarations or controlling headers.
+- AzAPI request headers and their helper locals are module-owner managed.
+  Terraform transforms preserve authored headers, including historical AVM
+  names and merged delete preconditions, instead of retiring them.
+- Terraform integration now exercises packaged public pre-commit twice and
+  full pr-check against unchanged canonical fixtures and one reviewed legacy
+  migration. Byte inventories include docs, tests, dotfiles and tracked locks.
+  Decision and filesystem coverage lives in unit/component suites; minimal
+  native compatibility and package/bootstrap qualification run separately
+  without repeating exhaustive matrices in every fixture job. Bicep metadata
+  acceptance runs only in the Bicep selection.
+- Bumped pinned MaPoTF to `0.4.1`, with refreshed SHA256 hashes for all six
+  supported platforms. This release reuses exact-version public module
+  inspections ([Azure/mapotf#136](https://github.com/Azure/mapotf/pull/136)).
 - Pinned MaPoTF 0.3.0 enables native, single-file Terraform test migration.
   Known root and local-child runs receive only newly required location inputs,
   preserving authored global/run values, regions, assertions and telemetry
@@ -174,9 +208,6 @@ section when cutting a release.
   install it. Automation can explicitly pass `-SkipModuleVersionCheck`. Source
   builds identify themselves with manifest version `0.0.0`; release packaging
   stamps the tag version into the distributed manifest.
-- Retired the completed AzAPI request-header cleanup from the Mapotf common
-  profile, reducing work performed for every root, local-module, and example
-  transform.
 - Bumped pinned `mapotf` to 0.2.2 (was 0.2.1), which adds a persistent
   provider-schema cache shared across mapotf processes. Warm runs of the full
   transform stage against the `terraform-azure-avm-res-mock` fixture dropped
@@ -250,15 +281,6 @@ section when cutting a release.
   Terraform's module manifest so Git and registry subdirectory sources use
   the correct required and optional inputs. It retains batched provider-schema
   retrieval from 0.1.11.
-- The packaged MaPoTF rules now remove AVM telemetry contributions from AzAPI
-  headers and nested-module tracing chains while preserving unrelated custom
-  headers. Cleanup removes the associated forwarding arguments, helper locals,
-  and input variables. MaPoTF rules are split into common, module, root, and
-  example profiles: root modules run root, module, and common, submodules run
-  module plus common, and examples run example plus common. Examples receive
-  in-place telemetry opt-out and ordering but never
-  module file-layout transforms. Telemetry continues through the root
-  `modtm_telemetry` resource.
 - The packaged AVM TFLint plugin now pins 1.0.0 and every AVM rule reference
   uses its canonical `avm_*` name. Built-in Terraform rule names remain
   unchanged. The previously deferred rule families now receive native
@@ -382,6 +404,12 @@ section when cutting a release.
   example callers, preserving authored locations without unused inputs.
   Fully mocked wrappers and examples defer native dependency loading until
   instrumentation has created their required module inputs.
+  Existing built-in Terraform mocks are retained in generated maps only with
+  unambiguous native source proof; incomplete authored maps still require
+  review. Native qualification separates ALZ fixture preservation from guarded,
+  fully mocked binding execution rather than claiming original runtime coverage.
+  Retained dependency restoration also preserves module labels such as `keys`
+  that shadow PowerShell dictionary members.
 - TFLint uses attested AVM ruleset v1.2.0 and requires `resource_id` only
   for resource roots. Validated pattern and utility roots receive their
   module class automatically; child and example scopes are excluded.
