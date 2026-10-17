@@ -13,9 +13,9 @@ Describe 'Integration group selection' {
         $bicep = @(Get-AvmIntegrationTestFile -Path $path -Group Bicep)
         $terraform = @(Get-AvmIntegrationTestFile -Path $path -Group Terraform)
         $all.Count | Should -BeGreaterThan 0
-        $bicep.Count | Should -Be 6
+        $bicep.Count | Should -Be 8
         $bicep | Should -Contain (Join-Path $path 'BicepTestSubscriptionSelection.Integration.Tests.ps1')
-        $terraform.Count | Should -BeGreaterThan 0
+        $terraform.Count | Should -Be 2
         @($bicep | Where-Object { $_ -in $terraform }) | Should -HaveCount 0
         @(Compare-Object $all @($bicep + $terraform)) | Should -HaveCount 0
         foreach ($file in $bicep) {
@@ -25,11 +25,13 @@ Describe 'Integration group selection' {
 
     It 'automatically includes a new Bicep file without title-based selection' {
         [IO.File]::WriteAllText((Join-Path $TestDrive 'BicepFuture.Tests.ps1'), '')
-        [IO.File]::WriteAllText((Join-Path $TestDrive 'Shared.Tests.ps1'), '')
+        [IO.File]::WriteAllText((Join-Path $TestDrive 'Invoke-AvmTerraform.RealBinaries.Integration.Tests.ps1'), '')
         @(Get-AvmIntegrationTestFile -Path "$TestDrive" -Group Bicep | Split-Path -Leaf) |
             Should -Be @('BicepFuture.Tests.ps1')
         @(Get-AvmIntegrationTestFile -Path "$TestDrive" -Group Terraform | Split-Path -Leaf) |
-            Should -Be @('Shared.Tests.ps1')
+            Should -Be @('Invoke-AvmTerraform.RealBinaries.Integration.Tests.ps1')
+        [IO.File]::WriteAllText((Join-Path $TestDrive 'Shared.Tests.ps1'), '')
+        { Get-AvmIntegrationTestFile -Path "$TestDrive" } | Should -Throw '*Unassigned integration test*'
     }
 
     It 'fails when a selected group is empty or unknown' {
@@ -39,48 +41,16 @@ Describe 'Integration group selection' {
         { Get-AvmIntegrationTestFile -Path $empty -Group Wrong } | Should -Throw
     }
 
-    It 'partitions telemetry scenarios across fixture jobs without losing or duplicating coverage' {
-        $previous = [Environment]::GetEnvironmentVariable('AVM_INTEGRATION_FIXTURE', 'Process')
-        try {
-            $inventories = @{}
-            foreach ($fixture in @('', 'terraform-azure-avm-res-mock', 'terraform-azurerm-avm-res-mock')) {
-                [Environment]::SetEnvironmentVariable('AVM_INTEGRATION_FIXTURE', $fixture, 'Process')
-                $configuration = New-PesterConfiguration
-                $configuration.Run.Path = Join-Path $script:repositoryRoot 'tests' 'Pester' 'Integration' `
-                    'MapotfTelemetryAlignment.Integration.Tests.ps1'
-                $configuration.Run.SkipRun = $true
-                $configuration.Run.PassThru = $true
-                $configuration.Output.Verbosity = 'None'
-                $discovery = Invoke-Pester -Configuration $configuration
-                $discovery.FailedCount | Should -Be 0
-                $blocks = [System.Collections.Generic.Queue[object]]::new()
-                foreach ($block in $discovery.Containers[0].Blocks) { $blocks.Enqueue($block) }
-                $tests = @(
-                    while ($blocks.Count -gt 0) {
-                        $block = $blocks.Dequeue()
-                        foreach ($test in $block.Tests) {
-                            ($test.Path -join '.') + ':' + (ConvertTo-Json -InputObject $test.Data -Compress -Depth 10)
-                        }
-                        foreach ($child in $block.Blocks) { $blocks.Enqueue($child) }
-                    }
-                )
-                $tests.Count | Should -BeGreaterThan 0
-                $inventories[$fixture] = $tests
-            }
-            $azure = $inventories['terraform-azure-avm-res-mock']
-            $azurerm = $inventories['terraform-azurerm-avm-res-mock']
-            @($azure | Where-Object { $_ -in $azurerm }) | Should -HaveCount 0
-            @(Compare-Object $inventories[''] @($azure + $azurerm)) | Should -HaveCount 0
-            foreach ($fixture in @('terraform-azure-avm-res-mock', 'terraform-azurerm-avm-res-mock')) {
-                @($inventories[$fixture] | Where-Object { $_ -like '*preserves existing delegated fixture tests*' }) |
-                    Should -HaveCount 1
-                @($inventories[$fixture] | Where-Object { $_ -like '*fixture unit suite isolated*' }) |
-                    Should -HaveCount 1
-            }
-        }
-        finally {
-            [Environment]::SetEnvironmentVariable('AVM_INTEGRATION_FIXTURE',
-                $(if ($null -eq $previous) { [NullString]::Value } else { $previous }), 'Process')
+    It 'keeps native and package qualification out of module fixture jobs' {
+        $path = Join-Path $script:repositoryRoot 'tests' 'Pester' 'Qualification'
+        $native = @(Get-ChildItem -LiteralPath (Join-Path $path 'Native') -Filter '*.Tests.ps1' -File)
+        $package = @(Get-ChildItem -LiteralPath (Join-Path $path 'Package') -Filter '*.Tests.ps1' -File)
+        $native.Name | Should -Contain 'MapotfInspectionCache.Qualification.Tests.ps1'
+        $native.Name | Should -Contain 'MapotfProviderSelection.Qualification.Tests.ps1'
+        $package.Name | Should -Contain 'Http.Qualification.Tests.ps1'
+        $package.Name | Should -Contain 'RuntimePrerequisites.Qualification.Tests.ps1'
+        foreach ($file in @($native + $package)) {
+            Get-Content -LiteralPath $file.FullName -Raw | Should -Not -Match 'AVM_INTEGRATION_FIXTURE'
         }
     }
 }

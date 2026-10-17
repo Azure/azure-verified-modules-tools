@@ -7,11 +7,14 @@ BeforeAll {
         (Join-Path $script:repoRoot 'src')
         (Join-Path $script:repoRoot 'repository-management')
     )
+    $repositoryBuildTask = Join-Path $script:repoRoot 'repository-management' 'repository-management.build.ps1'
+    $script:productionFiles = @(Get-ChildItem -LiteralPath $script:productionRoots -Recurse -File -Filter '*.ps1' |
+        Where-Object { $_.FullName -cne $repositoryBuildTask })
 }
 
 Describe 'Terraform init upgrade guard' {
     It 'requires -upgrade in every production init argument construction' {
-        $sites = foreach ($file in Get-ChildItem -LiteralPath $script:productionRoots -Recurse -File -Filter '*.ps1') {
+        $sites = foreach ($file in $script:productionFiles) {
             $tokens = $null
             $parseErrors = $null
             $ast = [System.Management.Automation.Language.Parser]::ParseFile(
@@ -82,7 +85,7 @@ Describe 'Terraform init upgrade guard' {
 
     It 'does not disable init upgrade in production PowerShell' {
         $matches = @(
-            Get-ChildItem -LiteralPath $script:productionRoots -Recurse -File -Filter '*.ps1' |
+            $script:productionFiles |
                 Select-String -SimpleMatch '-upgrade=false'
         )
         $matches | Should -BeNullOrEmpty

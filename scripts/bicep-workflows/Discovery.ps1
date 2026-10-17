@@ -12,10 +12,7 @@ function Get-AvmWorkflowInput {
     $path = Resolve-AvmWorkflowPath -Root $Root -RelativePath $WorkflowPath
     $parameters = @{}
     if ($EventName -eq 'workflow_dispatch') {
-        $parameters = ConvertFrom-Json -InputObject $EventInputs -AsHashtable -NoEnumerate
-        if ($parameters -isnot [Collections.IDictionary]) {
-            throw [ArgumentException]::new('Workflow dispatch inputs must be a JSON object.')
-        }
+        $parameters = ConvertFrom-AvmWorkflowScalarInput -Json $EventInputs
     }
     else {
         Import-Module -FullyQualifiedName @{ ModuleName = 'powershell-yaml'; RequiredVersion = '0.4.12' }

@@ -6,11 +6,23 @@ function script:Get-AvmIntegrationTestFile {
         [ValidateSet('All', 'Bicep', 'Terraform')] [string] $Group = 'All'
     )
 
-    $files = @(Get-ChildItem -LiteralPath $Path -Filter '*.Tests.ps1' -File -Recurse |
-            Where-Object {
-                $bicep = $_.Name.StartsWith('Bicep', [StringComparison]::OrdinalIgnoreCase)
-                $Group -eq 'All' -or ($Group -eq 'Bicep' -and $bicep) -or ($Group -eq 'Terraform' -and -not $bicep)
-            } | Sort-Object -Property FullName)
+    $terraformNames = @(
+        'Invoke-AvmTerraform.RealBinaries.Integration.Tests.ps1'
+        'Invoke-AvmTerraform.UtilityMigration.Integration.Tests.ps1'
+    )
+    $files = @(
+        foreach ($file in Get-ChildItem -LiteralPath $Path -Filter '*.Tests.ps1' -File -Recurse) {
+            $bicep = $file.Name.StartsWith('Bicep', [StringComparison]::Ordinal)
+            $terraform = $file.Name -cin $terraformNames
+            if (-not $bicep -and -not $terraform) {
+                throw "Unassigned integration test '$($file.Name)': select an explicit acceptance group or the qualification tier."
+            }
+            if ($Group -ceq 'All' -or ($Group -ceq 'Bicep' -and $bicep) -or ($Group -ceq 'Terraform' -and $terraform)) {
+                $file
+            }
+        }
+    )
+    $files = @($files | Sort-Object -Property FullName)
     if ($files.Count -eq 0) {
         throw "No integration test files found for group '$Group' in '$Path'."
     }

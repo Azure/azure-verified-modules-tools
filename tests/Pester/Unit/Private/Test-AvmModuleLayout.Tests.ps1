@@ -194,6 +194,7 @@ Describe 'Module Resources packaging' {
             module = @(
                 'ensure_location_variable.mptf.hcl'
                 'move_misplaced_blocks.mptf.hcl'
+                'order_telemetry_attrs.mptf.hcl'
                 'required_provider_versions.mptf.hcl'
                 'retain_modtm_test_provider.mptf.hcl'
                 'sort_outputs.mptf.hcl'
@@ -220,6 +221,9 @@ Describe 'Module Resources packaging' {
             'unit-test' = @(
                 'location.mptf.hcl'
                 'telemetry.mptf.hcl'
+            )
+            'utility-module' = @(
+                'migration.mptf.hcl'
             )
         }
 

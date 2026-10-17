@@ -269,7 +269,7 @@ Describe 'Candidate plan and output safety' {
             -RepositorySyncRepositoryId '1239632211' -EntraGroupNames $script:planArguments.EntraGroupNames } |
             Should -Not -Throw
         $credentials = @($plan.resource_changes | Where-Object { $_.address -like '*federated_credential*' })
-        $credentials | Should -HaveCount 4
+        $credentials | Should -HaveCount 5
         foreach ($credential in $credentials) {
             $credential.change.after.name | Should -BeLike 'id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent-*'
             $credential.change.after.body.properties.subject | Should -Match '^repository_owner_id:6844498:repository_id:'
@@ -362,9 +362,9 @@ Describe 'Candidate plan and output safety' {
             Should -Throw '*requires completed plan-time data reads*'
     }
 
-    It 'requires exactly the tools validation credential alongside the existing three environment credentials' {
+    It 'requires the tools validation credential alongside all four environment credentials' {
         $addresses = @($script:plan.planned_values.root_module.child_modules[0].resources | ForEach-Object { $_.address })
-        @($addresses | Where-Object { $_ -like '*federated_credential*' }).Count | Should -Be 4
+        @($addresses | Where-Object { $_ -like '*federated_credential*' }).Count | Should -Be 5
         $addresses | Should -Contain 'module.azure.azapi_resource.validation_federated_credential'
         $script:plan.planned_values.root_module.child_modules[0].resources =
             @($script:plan.planned_values.root_module.child_modules[0].resources | Where-Object {
@@ -372,6 +372,59 @@ Describe 'Candidate plan and output safety' {
                 })
         { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } |
             Should -Throw '*scope*'
+    }
+
+    It 'allows the execution credential to be added without replacing existing identity or federation' {
+        $plan = New-AvmTestBamiPlan -KnownClient
+        $address = 'module.azure.azapi_resource.identity_federated_credentials["examples-test-execution"]'
+        $credential = @($plan.resource_changes | Where-Object { $_.address -ceq $address })[0]
+        $credential.change.before = $null
+        $credential.change.actions = @('create')
+
+        { Assert-AvmBamiIdentityPlan -Plan $plan @script:planArguments } | Should -Not -Throw
+        $changed = @($plan.resource_changes | Where-Object { $_.change.actions -cne 'no-op' })
+        $changed | Should -HaveCount 1
+        $changed[0].address | Should -BeExactly $address
+    }
+
+    It 'rejects a plan missing <Environment> federation rather than accepting a partial rollout' -ForEach @(
+        @{ Environment = 'examples-test' }
+        @{ Environment = 'examples-test-execution' }
+    ) {
+        $address = "module.azure.azapi_resource.identity_federated_credentials[`"$Environment`"]"
+        $script:plan.planned_values.root_module.child_modules[0].resources =
+            @($script:plan.planned_values.root_module.child_modules[0].resources | Where-Object { $_.address -cne $address })
+        $script:plan.resource_changes = @($script:plan.resource_changes | Where-Object { $_.address -cne $address })
+
+        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } | Should -Throw '*scope*'
+    }
+
+    It 'rejects execution federation changes on <Side>: <Case>' -ForEach @(
+        foreach ($side in @('planned', 'before', 'after')) {
+            foreach ($mutation in @(
+                @{ Case = 'another environment'; Field = 'subject'; Value = 'repository_owner_id:6844498:repository_id:1234:environment:no-approval:job_workflow_ref:Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main' }
+                @{ Case = 'another repository'; Field = 'subject'; Value = 'repository_owner_id:6844498:repository_id:9876:environment:examples-test-execution:job_workflow_ref:Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main' }
+                @{ Case = 'missing workflow binding'; Field = 'subject'; Value = 'repository_owner_id:6844498:repository_id:1234:environment:examples-test-execution' }
+                @{ Case = 'untrusted workflow ref'; Field = 'subject'; Value = 'repository_owner_id:6844498:repository_id:1234:environment:examples-test-execution:job_workflow_ref:Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/untrusted' }
+                @{ Case = 'another issuer'; Field = 'issuer'; Value = 'https://example.invalid' }
+                @{ Case = 'additional audience'; Field = 'audiences'; Value = @('api://AzureADTokenExchange', 'untrusted') }
+                @{ Case = 'alternative trust'; Field = 'claimsMatchingExpression'; Value = @{ languageVersion = 1; value = '*' } }
+            )) {
+                @{ Side = $side; Case = $mutation.Case; Field = $mutation.Field; Value = $mutation.Value }
+            }
+        }
+    ) {
+        $plan = New-AvmTestBamiPlan -KnownClient
+        $address = 'module.azure.azapi_resource.identity_federated_credentials["examples-test-execution"]'
+        $credential = if ($Side -ceq 'planned') {
+            @($plan.planned_values.root_module.child_modules[0].resources | Where-Object { $_.address -ceq $address })[0].values
+        }
+        else {
+            @($plan.resource_changes | Where-Object { $_.address -ceq $address })[0].change[$Side]
+        }
+        $credential.body.properties[$Field] = $Value
+
+        { Assert-AvmBamiIdentityPlan -Plan $plan @script:planArguments } | Should -Throw '*federation*'
     }
 
     It 'rejects changed validation federation claims, identity scope, or audiences' {
@@ -603,7 +656,7 @@ Describe 'Candidate plan and output safety' {
     }
 
     It 'requires every existing federation binding and never widens module execution trust' {
-        foreach ($index in @(3, 4, 5)) {
+        foreach ($index in @(3, 4, 5, 6)) {
             $invalid = New-AvmTestBamiPlan -KnownClient
             $invalid.planned_values.root_module.child_modules[0].resources[$index].values.body.properties.subject =
                 'repository_owner_id:6844498:repository_id:1239632211:environment:avm-validation'

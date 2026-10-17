@@ -67,7 +67,7 @@ variables {
   identity_resource_group_name        = "rg-bami-test"
   github_repository_owner             = "Azure"
   github_repository_name              = "terraform-azurerm-avm-ptn-example-repo"
-  github_repository_environment_names = ["pr-check", "integration-test", "examples-test"]
+  github_repository_environment_names = ["pr-check", "integration-test", "examples-test", "examples-test-execution"]
   location                            = "eastus2"
   is_protected_repo                   = true
   github_job_workflow_ref             = "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main"
@@ -263,8 +263,9 @@ run "seed_legacy_terraform_identity" {
   state_key = "terraform-name-migration"
 
   variables {
-    identity_name          = "Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent"
-    github_repository_name = "terraform-azurerm-avm-ptn-azuremonitorwindowsagent"
+    identity_name                       = "Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent"
+    github_repository_name              = "terraform-azurerm-avm-ptn-azuremonitorwindowsagent"
+    github_repository_environment_names = ["pr-check", "integration-test", "examples-test"]
   }
 
   override_resource {

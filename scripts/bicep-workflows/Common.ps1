@@ -37,6 +37,35 @@ function Resolve-AvmWorkflowPath {
     return $path
 }
 
+function ConvertFrom-AvmWorkflowScalarInput {
+    [CmdletBinding()]
+    [OutputType([System.Collections.IDictionary])]
+    param([Parameter(Mandatory)] [AllowEmptyString()] [string] $Json)
+
+    try {
+        $values = [System.Text.Json.JsonSerializer]::Deserialize[
+            System.Collections.Generic.Dictionary[string, System.Text.Json.JsonElement]]($Json)
+    }
+    catch [System.Text.Json.JsonException] {
+        throw [ArgumentException]::new('Workflow inputs must be a JSON object containing scalar values.', $_.Exception)
+    }
+    if ($null -eq $values) {
+        throw [ArgumentException]::new('Workflow inputs must be a JSON object containing scalar values.')
+    }
+    $result = [ordered]@{}
+    foreach ($entry in $values.GetEnumerator()) {
+        $result[$entry.Key] = switch ($entry.Value.ValueKind) {
+            String { $entry.Value.GetString() }
+            Number { $entry.Value.GetRawText() }
+            True { $true }
+            False { $false }
+            Null { $null }
+            default { throw [ArgumentException]::new('Workflow input values must be strings, numbers, booleans or null.') }
+        }
+    }
+    return $result
+}
+
 function ConvertTo-AvmWorkflowBoolean {
     [CmdletBinding()]
     param(

@@ -17,10 +17,11 @@ provider "azapi" {}
 
 module "regions" {
   source  = "Azure/avm-utl-regions/azurerm"
-  version = "0.12.0"
+  version = "0.13.0"
 
   enable_telemetry = var.enable_telemetry
   is_recommended   = true
+  location         = var.location
 }
 
 resource "random_integer" "region_index" {

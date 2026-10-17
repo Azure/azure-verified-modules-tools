@@ -96,7 +96,7 @@ function New-AvmTestBamiPlan {
         [string] $PrincipalId = '10000000-0000-4000-8000-000000000007',
         [string] $WorkflowRef,
         [switch] $BicepRegistryFederation,
-        [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test')
+        [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test', 'examples-test-execution')
     )
 
     $condition = @'
@@ -355,7 +355,7 @@ function New-AvmTestRepositorySyncPlan {
 
 function New-AvmTestRetiredIdentityChanges {
     $plan = New-AvmTestBamiPlan -KnownClient -OwnerMigration -LegacyMembershipMigration -GroupNames @() -ModuleAddress 'module.azure[0]' `
-        -IdentityName 'Azure-terraform-azurerm-avm-ptn-example-repo'
+        -IdentityName 'Azure-terraform-azurerm-avm-ptn-example-repo' -Environments @('pr-check', 'integration-test', 'examples-test')
     $plan = ($plan | ConvertTo-Json -Depth 100).Replace('10000000-', '20000000-').Replace('rg-bami-test', 'rg-retired-test') |
         ConvertFrom-Json -AsHashtable -Depth 100
     foreach ($change in $plan.resource_changes) {

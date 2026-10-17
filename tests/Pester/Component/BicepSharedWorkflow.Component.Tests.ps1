@@ -96,6 +96,68 @@ on:
         $result.ContainsKey('empty') | Should -BeFalse
     }
 
+    It 'preserves exact date-looking dispatch strings rather than formatting DateTime values' {
+        [IO.File]::WriteAllText((Join-Path $script:root 'workflow.yml'), '')
+        $date = '2026-10-17T11:22:33.1234567+05:30'
+        $inputJson = '{"customLocation":"' + $date + '","removeDeployment":false}'
+        $result = Get-AvmWorkflowInput -Root $script:root -WorkflowPath workflow.yml `
+            -EventName workflow_dispatch -EventInputs $inputJson
+        $document = [Text.Json.JsonDocument]::Parse($result)
+        try {
+            $document.RootElement.GetProperty('customLocation').GetString() | Should -BeExactly $date
+            $document.RootElement.GetProperty('removeDeployment').GetString() | Should -BeExactly 'false'
+        }
+        finally { $document.Dispose() }
+    }
+
+    It 'preserves flat phase-control values and duplicate scalar precedence through both native phases' {
+        $date = '2026-10-17T11:22:33.1234567+05:30'
+        $json = '{"customLocation":"' + $date + '","removeDeployment":true,"removeDeployment":false,"empty":"","unset":null,"zero":0}'
+        $values = ConvertFrom-AvmWorkflowScalarInput -Json $json
+        $values.customLocation | Should -BeExactly $date
+        $values.removeDeployment | Should -BeFalse
+        $values.empty | Should -BeExactly ''
+        $values.unset | Should -BeNullOrEmpty
+        $values.zero | Should -BeExactly '0'
+        Import-Module -FullyQualifiedName @{ ModuleName = 'powershell-yaml'; RequiredVersion = '0.4.12' }
+        $action = ConvertFrom-Yaml (Get-Content -LiteralPath (
+                Join-Path $script:repoRoot '.github' 'actions' 'bicep-deployment' 'action.yml') -Raw)
+        $previous = [Environment]::GetEnvironmentVariable('WORKFLOW_INPUT')
+        try {
+            $env:WORKFLOW_INPUT = $json
+            foreach ($phase in @('deploy', 'complete')) {
+                $step = $action.runs.steps | Where-Object { $_['id'] -ceq $phase }
+                $tokens = $null
+                $errors = $null
+                $ast = [Management.Automation.Language.Parser]::ParseInput($step.run, [ref]$tokens, [ref]$errors)
+                $assignment = @($ast.EndBlock.Statements | Where-Object {
+                        $_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+                        $_.Left -is [Management.Automation.Language.VariableExpressionAst] -and
+                        $_.Left.VariablePath.UserPath -ceq 'workflowInput'
+                    })
+                $assignment | Should -HaveCount 1
+                $read = & ([scriptblock]::Create($assignment[0].Extent.Text + "`n" + '$workflowInput'))
+                $read.customLocation | Should -BeExactly $date
+                (ConvertTo-AvmWorkflowBoolean -Value $read.removeDeployment) | Should -BeFalse
+            }
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('WORKFLOW_INPUT',
+                $(if ($null -eq $previous) { [NullString]::Value } else { $previous }))
+        }
+    }
+
+    It 'rejects invalid flat workflow input <Kind> rather than coercing structured values' -ForEach @(
+        @{ Kind = 'malformed JSON'; Json = '{' }
+        @{ Kind = 'null root'; Json = 'null' }
+        @{ Kind = 'array root'; Json = '[]' }
+        @{ Kind = 'scalar root'; Json = '"2026-10-17T00:00:00Z"' }
+        @{ Kind = 'nested object'; Json = '{"customLocation":{}}' }
+        @{ Kind = 'nested array'; Json = '{"customLocation":[]}' }
+    ) {
+        { ConvertFrom-AvmWorkflowScalarInput -Json $Json } | Should -Throw '*Workflow input*'
+    }
+
     It 'normalizes changed children and excludes README and push-only metadata changes' {
         $changes = @("$script:modulePath/child/main.bicep", "$script:modulePath/README.md", "$script:modulePath/metadata.json")
         $matrix = Get-AvmWorkflowModuleMatrix -Root $script:root -ChangedFiles $changes -ExcludeMetadataChanges

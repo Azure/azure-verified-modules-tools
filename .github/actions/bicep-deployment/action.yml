@@ -130,7 +130,7 @@ runs:
         $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Validation.ps1')
         Import-AvmWorkflowPackage
-        $workflowInput = ConvertFrom-Json -InputObject $env:WORKFLOW_INPUT -AsHashtable
+        $workflowInput = ConvertFrom-AvmWorkflowScalarInput -Json $env:WORKFLOW_INPUT
         $parameters = @{
           Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH; Phase = 'Deploy'; Example = $env:SELECTED_EXAMPLE
           SubscriptionId = $env:ARM_SUBSCRIPTION_ID; TenantId = $env:ARM_TENANT_ID; ClientId = $env:ARM_CLIENT_ID
@@ -164,7 +164,7 @@ runs:
         $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Validation.ps1')
         Import-AvmWorkflowPackage
-        $workflowInput = ConvertFrom-Json -InputObject $env:WORKFLOW_INPUT -AsHashtable
+        $workflowInput = ConvertFrom-AvmWorkflowScalarInput -Json $env:WORKFLOW_INPUT
         $parameters = @{
           Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH; Phase = 'Complete'
           SubscriptionId = $env:ARM_SUBSCRIPTION_ID; TenantId = $env:ARM_TENANT_ID; ClientId = $env:ARM_CLIENT_ID

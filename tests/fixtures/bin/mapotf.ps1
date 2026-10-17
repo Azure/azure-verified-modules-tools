@@ -20,6 +20,11 @@ switch ($args[0]) {
         exit 0
     }
     'debug' {
+        $evalIndex = [array]::IndexOf($args, '--eval')
+        if ($evalIndex -ge 0 -and $args[$evalIndex + 1].Contains('data.module.utility.result')) {
+            Write-Output '{"calls":{},"variables":{},"requirements":{},"resources":{},"data_sources":{},"ephemeral":{}}'
+            exit 0
+        }
         $fileIndex = [array]::IndexOf($args, '--test-file')
         $rootIndex = [array]::IndexOf($args, '--tf-dir')
         if ($fileIndex -lt 0 -or $rootIndex -lt 0 -or

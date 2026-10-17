@@ -147,7 +147,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    if: fromJSON(inputs.workflowInput).deploymentValidation == 'true'
+    if: inputs.moduleTestFilePaths != '' && inputs.moduleTestFilePaths != '[]' && fromJSON(inputs.workflowInput).deploymentValidation == 'true'
     outputs:
       deploymentMatrix: ${{ steps.selection.outputs.deploymentMatrix }}
       sharedScope: ${{ steps.selection.outputs.sharedScope }}

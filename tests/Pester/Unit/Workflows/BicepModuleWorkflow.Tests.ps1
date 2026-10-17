@@ -439,7 +439,7 @@ Describe 'Bicep required checks and deployment guards' {
         foreach ($name in @('bicep-module', 'bicep-module-preview', 'bicep-module-publish')) {
             $jobs = $script:workflows[$name].jobs
             $jobs.job_initialize_subscription_selection.if |
-                Should -BeExactly "fromJSON(inputs.workflowInput).deploymentValidation == 'true'"
+                Should -Match "deploymentValidation == 'true'"
             $jobs.job_module_deploy_validation.if |
                 Should -Match "deploymentValidation == 'true'"
             $jobs.job_module_deploy_validation.if |
@@ -454,6 +454,22 @@ Describe 'Bicep required checks and deployment guards' {
             $script:workflows.ContainsKey($name) | Should -BeTrue
             ($script:workflows[$name] | ConvertTo-Json -Depth 30) |
                 Should -Not -Match 'VALIDATE_MODULE_CLIENT_IDS|moduleClientIds|azure/login@|id-token'
+        }
+    }
+
+    It 'skips protected generic selection for <Scenario>' -ForEach @(
+        @{ Scenario = 'empty tests'; Files = '[]'; Enabled = 'true'; Expected = $false }
+        @{ Scenario = 'missing tests'; Files = ''; Enabled = 'true'; Expected = $false }
+        @{ Scenario = 'disabled deployment'; Files = '[{"path":"tests/e2e/defaults/main.test.bicep","e2eIgnore":false}]'; Enabled = 'false'; Expected = $false }
+        @{ Scenario = 'active tests'; Files = '[{"path":"tests/e2e/defaults/main.test.bicep","e2eIgnore":false}]'; Enabled = 'true'; Expected = $true }
+        @{ Scenario = 'ignored test records'; Files = '[{"path":"tests/e2e/defaults/main.test.bicep","e2eIgnore":true}]'; Enabled = 'true'; Expected = $true }
+    ) {
+        foreach ($name in @('bicep-module-preview', 'bicep-module-publish')) {
+            $expression = $script:workflows[$name].jobs.job_initialize_subscription_selection.if.
+                Replace('fromJSON(inputs.workflowInput).deploymentValidation', '$Enabled').
+                Replace('inputs.moduleTestFilePaths', '$Files').
+                Replace('!=', '-cne').Replace('==', '-ceq').Replace('&&', '-and')
+            & ([scriptblock]::Create($expression)) | Should -Be $Expected
         }
     }
 

@@ -2,7 +2,7 @@ BeforeAll {
     $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
     $script:driver = Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'Invoke-RepositorySync.ps1'
     $lib = Join-Path (Split-Path $script:driver -Parent) 'lib'
-    foreach ($name in @('Logging', 'RetryHelpers', 'RepositoryConfig', 'RepoTree', 'AvmPreCommit', 'RepositoryCandidate', 'BranchProtection', 'UnmanagedRulesets', 'CodeQlDefaultSetup', 'TeamsAndUsers', 'TestTenant')) {
+    foreach ($name in @('Logging', 'RetryHelpers', 'RepositoryConfig', 'RepoTree', 'AvmPreCommit', 'RepositoryCandidate', 'BranchProtection', 'UnmanagedRulesets', 'CodeQlDefaultSetup', 'ForkApprovalPolicy', 'TeamsAndUsers', 'TestTenant')) {
         . (Join-Path $lib "$name.ps1")
     }
     . (Join-Path $script:root 'tests' 'fixtures' 'TestTenant.ps1')
@@ -97,6 +97,11 @@ Describe 'Repository sync unified driver' -Tag Component {
             if ($Arguments[0] -ceq 'output') { return $fixture.CandidatePlan.planned_values.outputs }
             throw 'Unexpected Terraform operation in candidate preparation.'
         }.GetNewClosure())
+        Mock Set-RepositoryForkApprovalPolicy ({
+            $fixture.Events.Add('fork-approval')
+            if ($fixture.FailAt -ceq 'fork-approval') { throw 'fork workflow approval configuration failed' }
+            [pscustomobject]@{ Status = 'Unchanged' }
+        }.GetNewClosure())
         Mock Remove-LegacyBranchProtection ({
             param($issueLog)
             $fixture.Events.Add('protection')
@@ -136,7 +141,7 @@ Describe 'Repository sync unified driver' -Tag Component {
             'api:repos/Azure/azure-verified-modules-tools',
             'api:repos/Azure/terraform-azurerm-avm-ptn-example-repo',
             'tree', 'teams', 'cleanup', 'init', 'terraform',
-            'protection', 'rulesets', 'codeql', 'collaborators', 'unmanaged-teams', 'files'
+            'fork-approval', 'protection', 'rulesets', 'codeql', 'collaborators', 'unmanaged-teams', 'files'
         )
         $variables = Get-Content -Raw -LiteralPath (Join-Path $script:terraformRoot 'terraform.tfvars.json') | ConvertFrom-Json -AsHashtable
         $variables.bami_test_settings.ContainsKey('client_id') | Should -BeFalse
@@ -146,6 +151,9 @@ Describe 'Repository sync unified driver' -Tag Component {
         $variables.entra_group_names | Should -Be @('avm-test-entra-readers', 'avm-test-management-group-owners')
         $expected = $PlanOnly
         Should -Invoke Invoke-TerraformPlanAndApply -Exactly 1 -ParameterFilter { $planOnly -eq $expected }
+        Should -Invoke Set-RepositoryForkApprovalPolicy -Exactly 1 -ParameterFilter {
+            $PlanOnly -eq $expected -and $Repository -ceq 'Azure/terraform-azurerm-avm-ptn-example-repo'
+        }
         Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 1 -ParameterFilter { $planOnly -eq $expected }
         Should -Invoke Invoke-TerraformInit -Exactly 1 -ParameterFilter {
             $stateTenantId -ceq '44444444-4444-4444-8444-444444444444' -and
@@ -228,6 +236,7 @@ Describe 'Repository sync unified driver' -Tag Component {
         $result = & $script:driver @script:arguments -WhatIf
         $result.Status | Should -Be 'Preview'
         $script:fixture.Events | Should -HaveCount 0
+        Should -Invoke Set-RepositoryForkApprovalPolicy -Exactly 0
         Test-Path -LiteralPath (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeFalse
         Test-Path -LiteralPath $candidateDirectory | Should -BeFalse
     }
@@ -346,6 +355,7 @@ Describe 'Repository sync unified driver' -Tag Component {
         $candidate.hasChanges | Should -BeFalse
         Should -Invoke Invoke-TerraformPlanAndApply -Exactly 1 -ParameterFilter { $planOnly }
         Should -Invoke Invoke-RepositorySyncTerraform -Exactly 0 -ParameterFilter { $Arguments[0] -in @('apply', 'output') }
+        Should -Invoke Set-RepositoryForkApprovalPolicy -Exactly 0
         Should -Invoke Remove-LegacyBranchProtection -Exactly 0
         Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 0
         Test-Path -LiteralPath (Join-Path $script:arguments.candidateOutputDirectory 'test-settings.json') | Should -BeFalse
@@ -363,6 +373,7 @@ Describe 'Repository sync unified driver' -Tag Component {
         $script:arguments.candidateOutputDirectory = Join-Path $script:terraformRoot 'candidate'
         & $Mutate $script:fixture.CandidatePlan.planned_values.outputs
         { & $script:driver @script:arguments } | Should -Throw $Message
+        Should -Invoke Set-RepositoryForkApprovalPolicy -Exactly 0
         Should -Invoke Remove-LegacyBranchProtection -Exactly 0
         Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 0
         Test-Path -LiteralPath (Join-Path $script:arguments.candidateOutputDirectory 'test-settings.json') | Should -BeFalse
@@ -405,6 +416,7 @@ Describe 'Repository sync unified driver' -Tag Component {
             -not $stateTenantId -and -not $stateClientId -and -not $stateSubscriptionId -and
             -not $stateStorageAccountName -and -not $stateContainerName
         }
+        Should -Invoke Set-RepositoryForkApprovalPolicy -Exactly 0
         Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 0
     }
 
@@ -423,6 +435,16 @@ Describe 'Repository sync unified driver' -Tag Component {
     It 'does not mutate GitHub policies or files after rejected Terraform' {
         $script:fixture.FailAt = 'terraform'
         { & $script:driver @script:arguments } | Should -Throw '*verified Terraform operation failed*'
+        Should -Invoke Set-RepositoryForkApprovalPolicy -Exactly 0
+        Should -Invoke Remove-LegacyBranchProtection -Exactly 0
+        Should -Invoke Remove-DirectCollaborators -Exactly 0
+        Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 0
+    }
+
+    It 'stops policy cleanup and file publication after failed fork approval reconciliation' {
+        $script:fixture.FailAt = 'fork-approval'
+        { & $script:driver @script:arguments } | Should -Throw '*fork workflow approval configuration failed*'
+        Should -Invoke Set-RepositoryForkApprovalPolicy -Exactly 1
         Should -Invoke Remove-LegacyBranchProtection -Exactly 0
         Should -Invoke Remove-DirectCollaborators -Exactly 0
         Should -Invoke Invoke-AvmPreCommitForRepository -Exactly 0

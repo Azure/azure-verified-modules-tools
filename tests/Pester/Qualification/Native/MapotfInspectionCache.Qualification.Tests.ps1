@@ -1,0 +1,99 @@
+#Requires -Version 7.4
+#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.5.0' }
+
+Describe 'Qualification: Terraform invocation-owned module reuse' -Tag Qualification {
+BeforeAll {
+        $moduleRoot = Join-Path $PSScriptRoot '..' '..' '..' '..' 'src' 'Avm.Authoring'
+        Import-Module -Name (Join-Path $moduleRoot 'Avm.Authoring.psd1') -Force
+        $root = Join-Path $TestDrive 'inspection reuse with spaces'
+        $script:first = Join-Path $root 'first'
+        $script:second = Join-Path $root 'second'
+        $script:child = Join-Path $script:second 'child'
+        $null = New-Item -ItemType Directory -Path $script:first, $script:second, $script:child -Force
+        $script:source = @'
+module "shared" {
+  source = "Azure/naming/azurerm"
+  version = "0.4.2"
+}
+'@
+        [System.IO.File]::WriteAllText((Join-Path $script:first 'main.tf'), $script:source)
+        $script:targets = @(
+            [pscustomobject]@{ Path = $script:first }
+            [pscustomobject]@{ Path = $script:second }
+            [pscustomobject]@{ Path = $script:child }
+        )
+        $script:options = InModuleScope Avm.Authoring -Parameters @{ Root = $root } {
+            param($Root)
+            [pscustomobject]@{
+                TerraformPath = (Resolve-AvmTool -Name terraform).Path
+                ToolPath = (Resolve-AvmTool -Name mapotf).Path
+                EnvVars = @{}
+                InspectionRoot = Join-Path $Root 'inspection'
+                InspectionModuleCache = [hashtable]::new([StringComparer]::Ordinal)
+            }
+        }
+        InModuleScope Avm.Authoring {
+            $script:reuseOriginalProcess = (Get-Command Invoke-AvmProcess).ScriptBlock
+        }
+        $script:initial = InModuleScope Avm.Authoring -Parameters @{
+            Path = $script:first; Targets = $script:targets; Options = $script:options
+        } {
+            param($Path, $Targets, $Options)
+            $manifests = @{}
+            $sources = @(Get-AvmTerraformUnitTestProviderSource -Path $Path -ModuleTargets $Targets `
+                    -Options $Options -ModuleManifests $manifests)
+            @{ Sources = $sources; Manifest = $manifests[$Path] }
+        }
+        $script:options.InspectionModuleCache.Count | Should -BeGreaterThan 0
+    }
+
+AfterAll {
+        Remove-Module -Name Avm.Authoring -Force
+    }
+
+It 'revalidates a fresh native graph without downloading the same exact package: <Nested>' -ForEach (@(
+        @{ Nested = $false }
+        @{ Nested = $true }
+    ) | Where-Object { $_.Nested }) {
+        param($Nested)
+        $path = if ($Nested) { $script:child } else { $script:second }
+        if ($Nested) {
+            [System.IO.File]::WriteAllText((Join-Path $script:second 'main.tf'), 'module "wrapper" { source = "./child" }')
+        }
+        [System.IO.File]::WriteAllText((Join-Path $path 'main.tf'), $script:source.Replace('"shared"', '"renamed"'))
+        $before = @{}
+        foreach ($file in Get-ChildItem -LiteralPath $script:second -Recurse -File) {
+            $before[$file.FullName] = (Get-FileHash -LiteralPath $file.FullName).Hash
+        }
+        $observed = InModuleScope Avm.Authoring -Parameters @{
+            Path = $script:second; Targets = $script:targets; Options = $script:options
+        } {
+            param($Path, $Targets, $Options)
+            $script:reuseGetOutput = [System.Collections.Generic.List[string]]::new()
+            Mock Invoke-AvmProcess {
+                $result = & $script:reuseOriginalProcess @PesterBoundParameters
+                if ($ArgumentList[0] -ceq 'get' -and -not $RetryNetworkFailure) { $script:reuseGetOutput.Add($result.StdOut) }
+                $result
+            }
+            $manifests = @{}
+            $sources = @(Get-AvmTerraformUnitTestProviderSource -Path $Path -ModuleTargets $Targets `
+                    -Options $Options -ModuleManifests $manifests)
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList -join '|' -ceq 'get|-no-color' -and [bool]$RetryNetworkFailure
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -ceq 'providers' }
+            @{ Sources = $sources; Manifest = $manifests[$Path]; Output = $script:reuseGetOutput.ToArray() -join "`n" }
+        }
+        $observed.Sources | Sort-Object | Should -Be @($script:initial.Sources | Sort-Object)
+        $observed.Output | Should -Not -Match 'Downloading'
+        $records = ($observed.Manifest | ConvertFrom-Json -AsHashtable).Modules
+        $key = if ($Nested) { 'wrapper.renamed' } else { 'renamed' }
+        @($records | Where-Object Key -ceq $key) | Should -HaveCount 1
+        @($records | Where-Object Key -ceq 'shared') | Should -HaveCount 0
+        foreach ($file in $before.Keys) {
+            (Get-FileHash -LiteralPath $file).Hash | Should -BeExactly $before[$file]
+        }
+        Test-Path -LiteralPath (Join-Path $script:second '.terraform') | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $script:second '.terraform.lock.hcl') | Should -BeFalse
+    }
+}
