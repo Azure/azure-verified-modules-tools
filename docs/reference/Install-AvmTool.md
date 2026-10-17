@@ -19,6 +19,14 @@ by Install-AvmToolFromPins: SHA256 verified before extraction, version
 directory renamed atomically into place, and a '.verified' marker
 written last so that interrupted installs are re-tried automatically.
 
+PowerShell module packages and pinned dependencies additionally validate
+their ZIP entries, root manifest and exact NuGet package identity.
+A locally detected InvalidDataException while reading or extracting
+a module ZIP permits one new download into a fresh staging directory.
+Checksum, download, permission, metadata and import failures do not
+qualify for this archive retry. Pins and source restrictions remain
+unchanged; no floating or prerelease package selection is introduced.
+
 ## CLI commands
 
 - `avm tool install`
@@ -47,8 +55,8 @@ and tab-completion so it does not appear in the production surface.
 
 ### -Force
 
-Delete and reinstall, even if the cache already has a '.verified'
-entry for the requested version.
+Reinstall even if the cache already has a '.verified' entry for the
+requested version. The replacement is validated before removing that entry.
 
 | Property | Value |
 | --- | --- |
@@ -114,6 +122,21 @@ newer Avm.Authoring version is available. Writes a warning once.
 | Accept pipeline input | false |
 | Accept wildcard characters | false |
 
+## Examples
+
+### EXAMPLE 1
+
+```powershell
+avm tool install terraform bicep
+```
+
+### EXAMPLE 2
+
+```powershell
+Install-AvmTool -Name PSRule, PSRule.Rules.Azure -Path $modulePath
+```
+
 ## Outputs
 
-- `System.Management.Automation.PSObject`
+- `One pscustomobject per tool or dependency with Name, Version, Platform,
+Path and Action. Action identifies installation or reuse of the cache.`

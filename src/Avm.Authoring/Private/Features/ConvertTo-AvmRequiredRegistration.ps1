@@ -1,11 +1,11 @@
-function ConvertTo-AvmRequiredFeature {
+function ConvertTo-AvmRequiredRegistration {
     <#
     .SYNOPSIS
-        Validate one list of required Azure feature names from .required-features.json.
+        Validate one list of required Azure features or resource providers.
 
     .DESCRIPTION
         Every entry must be a unique (case-insensitive) ASCII Namespace/FeatureName
-        string with no whitespace or extra segments. ModulePath only labels errors
+        string, or provider namespace, with no whitespace or extra segments. ModulePath only labels errors
         for the repository-root manifest format.
     #>
     [CmdletBinding()]
@@ -15,43 +15,50 @@ function ConvertTo-AvmRequiredFeature {
         [AllowEmptyCollection()]
         [object[]] $Entries,
 
-        [string] $ModulePath
+        [string] $ModulePath,
+
+        [ValidateSet('Feature', 'Provider')]
+        [string] $Kind = 'Feature'
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
     $where = if ($ModulePath) { " entry [$ModulePath]" } else { '' }
+    $filename = if ($Kind -eq 'Feature') { '.required-features.json' } else { '.required-resource-providers.json' }
+    $format = if ($Kind -eq 'Feature') { 'Namespace/FeatureName' } else { 'provider namespace' }
     if ($Entries.Count -gt 32) {
         throw [AvmConfigurationException]::new(
-            ".required-features.json$where must contain no more than 32 features.")
+            "$filename$where must contain no more than 32 $($Kind.ToLowerInvariant())s.")
     }
 
     $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    $features = [System.Collections.Generic.List[pscustomobject]]::new()
-    $pattern = '\A(?<namespace>[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)+)/(?<name>[A-Za-z][A-Za-z0-9]*(?:[._-][A-Za-z0-9]+)*)\z'
+    $requirements = [System.Collections.Generic.List[pscustomobject]]::new()
+    $pattern = '\A(?<namespace>[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)+)'
+    if ($Kind -eq 'Feature') { $pattern += '/(?<name>[A-Za-z][A-Za-z0-9]*(?:[._-][A-Za-z0-9]+)*)' }
+    $pattern += '\z'
     foreach ($entry in $Entries) {
         if ($entry -isnot [string]) {
             throw [AvmConfigurationException]::new(
-                ".required-features.json$where entries must all be strings in Namespace/FeatureName form.")
+                "$filename$where entries must all be strings in $format form.")
         }
         $match = [regex]::Match($entry, $pattern)
         if (-not $match.Success -or
             $match.Groups['namespace'].Value.Length -gt 128 -or
             $match.Groups['name'].Value.Length -gt 128) {
             throw [AvmConfigurationException]::new(
-                ".required-features.json$where entries must use ASCII Namespace/FeatureName without whitespace, extra path segments, or command arguments (128 characters per part maximum).")
+                "$filename$where entries must use ASCII $format without whitespace, extra path segments, or command arguments (128 characters per part maximum).")
         }
         if (-not $seen.Add($entry)) {
             throw [AvmConfigurationException]::new(
-                "Duplicate feature '$entry' in .required-features.json$where (case-insensitive).")
+                "Duplicate $($Kind.ToLowerInvariant()) '$entry' in $filename$where (case-insensitive).")
         }
-        $features.Add([pscustomobject]@{
+        $requirements.Add([pscustomobject]@{
                 Namespace = $match.Groups['namespace'].Value
                 Name      = $match.Groups['name'].Value
                 FullName  = $entry
             })
     }
 
-    return $features.ToArray()
+    return $requirements.ToArray()
 }

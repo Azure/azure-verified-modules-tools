@@ -68,7 +68,7 @@ function Register-AvmFeature {
         Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
         $context = Get-AvmModuleContextInternal -Path $Path
-        $features = @(Get-AvmContextRequiredFeature -Context $context)
+        $features = @(Get-AvmContextRequiredRegistration -Context $context -Kind Feature)
         $subscription = [guid]::Empty
         if (-not [guid]::TryParseExact($SubscriptionId, 'D', [ref]$subscription) -or
             $subscription -eq [guid]::Empty) {
@@ -113,11 +113,11 @@ function Register-AvmFeature {
                 'AVM1070')
         }
 
-        $outcome = Invoke-AvmFeatureRegistration -Cli $cli -Root $context.Root -SubscriptionId $subscriptionId `
-            -Feature $features -MaximumPolls $MaximumPolls -PollIntervalSeconds $PollIntervalSeconds
+        $outcome = Invoke-AvmSubscriptionRegistration -Cli $cli -Root $context.Root -SubscriptionId $subscriptionId `
+            -Kind Feature -Requirement $features -MaximumPolls $MaximumPolls -PollIntervalSeconds $PollIntervalSeconds -Confirm:$false
         $result.Status = 'pass'
-        $result.RegisteredFeatures = $outcome.RegisteredFeatures
-        $result.AlreadyRegisteredFeatures = $outcome.AlreadyRegisteredFeatures
+        $result.RegisteredFeatures = $outcome.Registered
+        $result.AlreadyRegisteredFeatures = $outcome.AlreadyRegistered
         $result.Reason = ''
         return $result
     }

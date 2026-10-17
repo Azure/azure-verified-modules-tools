@@ -37,6 +37,7 @@
         'Invoke-AvmTransform',
         'Get-AvmModuleMetadata',
         'Register-AvmFeature',
+        'Select-AvmTestSubscription',
         'Test-AvmModuleMetadata',
         'Update-AvmAuthoring'
     )
@@ -45,7 +46,10 @@
     AliasesToExport      = @('avm')
     PrivateData          = @{
         AvmCapabilities = @{
-            BicepPackagedCompliance = 1
+            BicepTestSubscriptionSelection  = 1
+            BicepPackagedCompliance         = 1
+            BicepRequiredResourceProviders  = 1
+            PowerShellModuleArchiveRecovery = 1
         }
         PSData          = @{
             Tags         = @('Azure', 'AVM', 'AzureVerifiedModules', 'Bicep', 'Terraform', 'Authoring', 'CLI', 'PSEdition_Core')

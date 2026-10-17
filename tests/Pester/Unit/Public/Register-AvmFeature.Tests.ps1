@@ -43,7 +43,7 @@ Describe 'Register-AvmFeature unit orchestration without filesystem or Azure acc
         }
         Mock Get-ChildItem -ModuleName Avm.Authoring {
             [pscustomobject]@{
-                Name = '.required-features.json'; FullName = 'virtual-feature-manifest'; Length = 128
+                Name = '.required-features.json'; FullName = 'virtual-feature-manifest'; Length = 128; PSIsContainer = $false
             }
         }
         Mock Get-Content -ModuleName Avm.Authoring -MockWith ({
@@ -206,6 +206,29 @@ Describe 'Register-AvmFeature unit orchestration without filesystem or Azure acc
                 -MaximumPolls 2 -PollIntervalSeconds 1 } |
             Should -Throw '*Provider Microsoft.Compute did not reach Registered*'
         Should -Invoke Start-Sleep -ModuleName Avm.Authoring -Exactly 1
+    }
+
+    It 'preserves the public feature polling maximum for feature and provider propagation' {
+        $script:scenario.FeatureStates.Clear()
+        $script:scenario.FeatureStates.Enqueue('Registering')
+        1..119 | ForEach-Object { $script:scenario.FeatureStates.Enqueue('Registering') }
+        $script:scenario.FeatureStates.Enqueue('Registered')
+        $script:scenario.ProviderStates.Clear()
+        1..119 | ForEach-Object { $script:scenario.ProviderStates.Enqueue('Registering') }
+        $script:scenario.ProviderStates.Enqueue('Registered')
+        $result = Register-AvmFeature -Path 'virtual-module-root' -SubscriptionId $script:subscription `
+            -MaximumPolls 120 -PollIntervalSeconds 1
+        $result.Status | Should -BeExactly 'pass'
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 121 -ParameterFilter {
+            $ArgumentList[0] -eq 'feature' -and $ArgumentList[1] -eq 'show'
+        }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 120 -ParameterFilter {
+            $ArgumentList[0] -eq 'provider' -and $ArgumentList[1] -eq 'show'
+        }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter {
+            $ArgumentList[0] -eq 'feature' -and $ArgumentList[1] -eq 'register'
+        }
+        Should -Invoke Start-Sleep -ModuleName Avm.Authoring -Exactly 238
     }
 
     It 'surfaces feature registration permission failures with scope guidance' {

@@ -13,6 +13,28 @@ function Invoke-AvmTestE2e {
         and cross-scope module deployments. Select authorized test targets:
         resources created or updated by the test can be removed afterwards.
 
+        Bicep registry modules read repository-root .required-features.json and
+        .required-resource-providers.json maps using the exact module Path.
+        Validate each whole map before dependency preparation or Azure calls.
+        After compilation and identity verification, register features and
+        propagate their providers, then register required provider namespaces,
+        before token replacement, validation or deployment. Missing, empty or
+        unrelated maps skip registration. WhatIf validates configuration without
+        Azure access. Complete and cleanup never register prerequisites, and
+        registrations are never undone. No additional caller input is needed.
+
+        Packaged Resources/bicep/retry-policy.json selects bounded retries
+        from complete structured failure evidence. InPlace reuses the exact
+        deployment, template and parameters. Fresh generates a new external
+        naming context and deployment identity, using another eligible region
+        by default. Fixed caller inputs and names authored inside Bicep are
+        not rewritten, so Fresh does not guarantee all resource names differ.
+        No resources are deleted between attempts. Resource evidence is saved
+        before another attempt can overwrite deployment-operation history.
+        Status recovery shares one configured four-hour deadline across all
+        attempts in a case; it never starts a read or accepts a terminal result
+        at or after that deadline.
+
         Successful deployments run their case-local Pester assertions, then
         post.ps1, then native cleanup adapted from the registry workflow.
         Assertions and hooks run in the same PowerShell process to retain
@@ -24,14 +46,15 @@ function Invoke-AvmTestE2e {
 
         Cleanup follows recorded Create deployment operations recursively,
         not Read references or a subscription-wide inventory. Resource-group
-        cases use a unique group and verified ownership tag. Attempt IDs and
+        cases use unique groups and verified ownership tags. All attempt IDs and
         required post-removal metadata are saved in an atomic local JSON file
         before submission or removal. The state contains no credentials,
         parameters or outputs, and survives temporary-template removal.
+        Final cleanup covers every attempt, including failed attempts.
         Incomplete cleanup reports pending IDs and stops subsequent cases.
         The reaper is a fallback, not the normal cleanup mechanism.
 
-        All runs the complete lifecycle. Deploy retains resources and state
+        All runs the complete lifecycle. Deploy retains all attempts and state
         for a separate Complete call after caller-owned sign-in renewal.
         Complete requires matching direct case/module source, assertion files
         and post hook, plus explicit subscription/tenant. It rereads outputs by
@@ -42,7 +65,8 @@ function Invoke-AvmTestE2e {
         recovery requires that the upload finished before runner loss.
 
         KeepResources runs assertions but deliberately skips post.ps1 and
-        cleanup. The saved file can later be passed to avm test cleanup,
+        cleanup for every attempt. This is an explicit debugging exception.
+        The saved file can later be passed to avm test cleanup,
         which does not need the checkout and never runs assertions or hooks.
 
         Terraform runs init, apply, idempotency plan and destroy for runnable
@@ -53,6 +77,8 @@ function Invoke-AvmTestE2e {
 
     .PARAMETER Path
         Module directory, or an enclosing context. Defaults to the current location.
+        Required provider declarations use only the exact Bicep registry module
+        key in the root .required-resource-providers.json, without inheritance.
     .PARAMETER Ecosystem
         Explicit ecosystem, or auto-detection.
     .PARAMETER AllowPathFallback
@@ -72,6 +98,9 @@ function Invoke-AvmTestE2e {
         Bicep-only: explicit tenant GUID required for every deployment scope.
     .PARAMETER ManagementGroupId
         Bicep-only: existing target management-group name for that scope.
+        With UseCiInputs, omitting this parameter uses the configured CI target.
+        An explicitly supplied value always takes precedence and is validated;
+        an invalid or empty explicit value is never replaced by a CI fallback.
     .PARAMETER Location
         Bicep deployment-metadata location, fixed across regional retries.
         Also the placement fallback for explicitly global resource types.
@@ -84,7 +113,8 @@ function Invoke-AvmTestE2e {
         Mutually exclusive with Tokens. Explicit scope parameters own scope tokens.
     .PARAMETER Tokens
         Bicep token dictionary instead of TokenFile. Generated avmE2eRunId and
-        avmE2eSuffix tokens provide a unique default namePrefix.
+        avmE2eSuffix tokens provide a unique default namePrefix per fresh context.
+        In-place retries preserve these values; explicit caller values stay fixed.
     .PARAMETER ParameterFile
         ARM JSON parameter file, preserving values and vault references.
         Mutually exclusive with Parameters; source is not changed.
@@ -98,6 +128,9 @@ function Invoke-AvmTestE2e {
         Missing explicit IDs may use VALIDATE_SUBSCRIPTION_ID and
         VALIDATE_TENANT_ID. Pools resolve VALIDATE_SUBSCRIPTION_IDS then
         TEST_SUBSCRIPTION_IDS from variables, then secrets, then environment.
+        When ManagementGroupId is omitted, the same source order resolves
+        VALIDATE_MANAGEMENT_GROUP_ID before ARM_MGMTGROUP_ID within each source.
+        Management-group cases still require a valid resolved target.
         Nothing logs in.
     .PARAMETER TestSubscriptionIds
         Optional Bicep JSON array of id/name objects with an optional tag.
@@ -116,14 +149,16 @@ function Invoke-AvmTestE2e {
         Optional new state file for one selected case. Complete requires an
         existing file and the explicitly matching subscription and tenant.
     .PARAMETER KeepResources
-        Bicep-only: run assertions but retain resources, skipping post and cleanup.
+        Bicep-only: run assertions but retain every attempt, skipping post and cleanup.
     .PARAMETER DeploymentRetryLimit
-        Bicep total submission attempts, one to three. Only confirmed failure
-        or exact preflight rejection can retry; unknown outcomes never resubmit.
+        Bicep total submission attempts, one to three, capped by packaged policy.
+        Only exact Failed deployments with complete eligible evidence can retry;
+        unknown outcomes and preflight rejection alone never authorize resubmission.
     .PARAMETER ValidationRetryLimit
-        Bicep total regional validation attempts, one to three. Only wholly
-        regional failures relocate; explicit pins, global resources and
-        resource-group cases do not relocate. Deployment stays in the validated region.
+        Bicep regional validation budget, one to three, capped by packaged policy.
+        Only wholly regional validation failures move an unpinned, non-global,
+        non-resource-group case. Fresh deployment retries share the region budget
+        and validate their new context; in-place retries reuse prior validation.
     .PARAMETER SkipModuleVersionCheck
         Skip the advisory module-version check.
 

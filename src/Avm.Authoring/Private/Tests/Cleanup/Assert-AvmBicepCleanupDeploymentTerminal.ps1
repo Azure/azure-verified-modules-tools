@@ -1,11 +1,11 @@
 function Assert-AvmBicepCleanupDeploymentTerminal {
     <#
     .SYNOPSIS
-        Throws unless a deployment record has finished, so relocation never removes resources that are still changing.
+        Requires terminal, exact deployment history before preserving retry evidence.
     .DESCRIPTION
-        Attempted root deployments must be Failed because relocation only follows a failed regional
-        deployment. Nested deployments may be Succeeded or Failed. An absent record is left to the
-        operations lookup, which classifies it.
+        Attempted root deployments must be Failed because retries only follow a failed
+        deployment. Nested deployments may be Succeeded or Failed. Only a proven preflight
+        rejection and explicit absence of that exact record can bypass discovery.
     #>
     [CmdletBinding()]
     param(
@@ -16,24 +16,18 @@ function Assert-AvmBicepCleanupDeploymentTerminal {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    $response = Invoke-AzRestMethod -Method GET -Path ($Record.Id + '?api-version=2021-04-01') -ErrorAction Stop
-    $document = $response.Content | ConvertFrom-Json -AsHashtable -ErrorAction Stop
-    if ([int]$response.StatusCode -eq 404) {
-        $errorCode = [string](Get-AvmPropertyValue -InputObject (
-                Get-AvmPropertyValue -InputObject $document -Name 'error') -Name 'code')
-        if ($errorCode -cin @('DeploymentNotFound', 'ResourceGroupNotFound')) {
-            return
-        }
+    $response = Invoke-AvmBicepRead -Activity 'Read terminal deployment history' -Read {
+        Invoke-AzRestMethod -Method GET -Path ($Record.Id + '?api-version=2021-04-01') -ErrorAction Stop
     }
-    if ([int]$response.StatusCode -ne 200) {
-        throw [AvmProcessException]::new(
-            "Deployment lookup failed: HTTP $($response.StatusCode), deployment '$($Record.Id)'.")
+    $state = ConvertFrom-AvmBicepDeploymentRecordResponse -Response $response -DeploymentId $Record.Id
+    if ($Record.PreflightRejected -and $state -ceq 'DeploymentNotFound') {
+        $Record.Status = 'RejectedWithoutRecord'
+        return
     }
-    $state = [string](Get-AvmPropertyValue -InputObject (
-            Get-AvmPropertyValue -InputObject $document -Name 'properties') -Name 'provisioningState')
     $allowed = if ($Record.Required -and -not $Record.PreflightRejected) { @('Failed') } else { @('Succeeded', 'Failed') }
     if ($state -cnotin $allowed) {
         throw [AvmProcessException]::new(
-            "Deployment is not in an allowed terminal state for relocation ('$state'): $($Record.Id)")
+            "Deployment is not in an allowed terminal state for retry evidence ('$state'): $($Record.Id)")
     }
+    $Record.ProvisioningState = $state
 }

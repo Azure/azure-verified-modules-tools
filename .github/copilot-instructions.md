@@ -40,8 +40,9 @@ on every exported cmdlet. Run it whenever an exported function, parameter, or
 help block changes, then commit the generated Markdown.
 
 `./build.ps1 docs-check` is non-writing and fails when generated pages are
-missing, stale, or unexpected. It runs as part of `pre-commit`, `ci`, and
-`ci-tests`, so pull-request checks fail until the reference is regenerated.
+missing, stale, or unexpected. It runs as part of `pre-commit`, `ci`, `ci-tests`,
+`ci-unit`, and `ci-coverage`, so pull-request checks fail until the reference is
+regenerated.
 Never hand-edit generated reference pages.
 
 Run `./build.ps1 pre-commit` before committing code changes. Documentation-only

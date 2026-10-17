@@ -29,12 +29,16 @@ function Get-AvmBicepPendingDeployment {
             $id = $entry['id']
             if (-not $pending.ContainsKey($id)) { continue }
             try {
-                $response = Invoke-AzRestMethod -Method GET -Path ($id + '?api-version=2021-04-01') -ErrorAction Stop
-                $body = ConvertFrom-Json -InputObject $response.Content -AsHashtable -ErrorAction Stop
-                if ([int]$response.StatusCode -eq 200 -and $body['id'] -ieq $id) {
-                    $properties = Get-AvmPropertyValue -InputObject $body -Name 'properties'
-                    $status = Get-AvmPropertyValue -InputObject $properties -Name 'provisioningState'
-                    if ($status -in @('Succeeded', 'Failed', 'Canceled')) {
+                $response = Invoke-AvmBicepRead -Activity 'Read pending deployment state' -Read {
+                    Invoke-AzRestMethod -Method GET -Path ($id + '?api-version=2021-04-01') -ErrorAction Stop
+                }
+                $body = ConvertFrom-AvmBicepRestResponse -Response $response -Activity 'Read pending deployment state' -AllowedStatus @(200, 404)
+                $errorBody = $body['error']
+                if ($response.StatusCode -eq 200 -and $body['id'] -is [string] -and $body['id'] -ieq $id -and
+                    -not $body.Contains('error') -and $body['properties'] -is [System.Collections.IDictionary]) {
+                    $properties = Get-AvmPropertyValue -InputObject $body -Name 'properties' -NoEnumerate
+                    $status = Get-AvmPropertyValue -InputObject $properties -Name 'provisioningState' -NoEnumerate
+                    if ($status -is [string] -and $status -cin @('Succeeded', 'Failed', 'Canceled')) {
                         $entry['status'] = if ($status -eq 'Succeeded') { 'Succeeded' } else { 'Failed' }
                         $null = $pending.Remove($id)
                         continue
@@ -44,8 +48,11 @@ function Get-AvmBicepPendingDeployment {
                 }
                 elseif ([int]$response.StatusCode -eq 404 -and
                     $id -match '^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Resources/deployments/[^/]+$' -and
-                    (Get-AvmPropertyValue -InputObject (
-                        Get-AvmPropertyValue -InputObject $body -Name 'error') -Name 'code') -ceq 'ResourceGroupNotFound') {
+                    $body.psbase.Count -eq 1 -and $errorBody -is [System.Collections.IDictionary] -and
+                    $errorBody['code'] -is [string] -and $errorBody['code'] -ceq 'ResourceGroupNotFound' -and
+                    @($errorBody.psbase.Keys | Where-Object { $_ -cnotin @('code', 'message', 'target') }).Count -eq 0 -and
+                    (-not $errorBody.Contains('message') -or $errorBody['message'] -is [string]) -and
+                    (-not $errorBody.Contains('target') -or $errorBody['target'] -is [string])) {
                     $entry['status'] = 'Failed'
                     $null = $pending.Remove($id)
                 }

@@ -15,7 +15,9 @@ function New-AvmBicepTestParameterFile {
 
         [System.Collections.IDictionary] $Parameters = @{},
 
-        [switch] $DeferResourceLocation
+        [switch] $DeferResourceLocation,
+
+        [switch] $DeferTokens
     )
 
     Set-StrictMode -Version 3.0
@@ -62,9 +64,16 @@ function New-AvmBicepTestParameterFile {
         $path = '<PowerShell parameters>'
     }
 
-    $content = Resolve-AvmBicepTestToken -Content $content -SourcePath $path `
-        -Tokens $Tokens -DeferResourceLocation:$DeferResourceLocation
-    $parsed = $content | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+    if (-not $DeferTokens) {
+        $content = Resolve-AvmBicepTestToken -Content $content -SourcePath $path `
+            -Tokens $Tokens -DeferResourceLocation:$DeferResourceLocation
+    }
+    try {
+        $parsed = ConvertFrom-AvmStrictJson -Json $content
+    }
+    catch [System.ArgumentException] {
+        throw [AvmConfigurationException]::new("Bicep test parameter file must contain a valid JSON ARM parameters object: $path")
+    }
     if ($parsed -isnot [System.Collections.IDictionary] -or
         $parsed['parameters'] -isnot [System.Collections.IDictionary]) {
         throw [AvmConfigurationException]::new(
