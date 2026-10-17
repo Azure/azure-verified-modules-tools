@@ -98,6 +98,9 @@ function Invoke-AvmTestE2e {
         Bicep-only: explicit tenant GUID required for every deployment scope.
     .PARAMETER ManagementGroupId
         Bicep-only: existing target management-group name for that scope.
+        With UseCiInputs, omitting this parameter uses the configured CI target.
+        An explicitly supplied value always takes precedence and is validated;
+        an invalid or empty explicit value is never replaced by a CI fallback.
     .PARAMETER Location
         Bicep deployment-metadata location, fixed across regional retries.
         Also the placement fallback for explicitly global resource types.
@@ -125,6 +128,9 @@ function Invoke-AvmTestE2e {
         Missing explicit IDs may use VALIDATE_SUBSCRIPTION_ID and
         VALIDATE_TENANT_ID. Pools resolve VALIDATE_SUBSCRIPTION_IDS then
         TEST_SUBSCRIPTION_IDS from variables, then secrets, then environment.
+        When ManagementGroupId is omitted, the same source order resolves
+        VALIDATE_MANAGEMENT_GROUP_ID before ARM_MGMTGROUP_ID within each source.
+        Management-group cases still require a valid resolved target.
         Nothing logs in.
     .PARAMETER TestSubscriptionIds
         Optional Bicep JSON array of id/name objects with an optional tag.

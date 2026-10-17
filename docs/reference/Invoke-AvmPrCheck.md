@@ -39,7 +39,7 @@ directories. Initialization is not an additional public step.
 The 'validate' step is a build-validation
 pass ('terraform validate' / 'bicep build'), not a test run. Unit tests remain a
 separate CI job so a failure produces one actionable signal and
-fork contributors receive results without environment approval.
+all contributors receive results without environment approval.
 The convention step requires a tests/unit/*.tftest.hcl fixture,
 preventing an empty unit tier from reading as a green gauntlet.
 
@@ -235,17 +235,24 @@ with 'avm test unit'.
 
 ## Notes
 
-The reusable Terraform workflow runs fork pr-check and unit tests in
-independent jobs. Fork pr-check excludes only check policy and its
-Conftest prerequisite. Both jobs omit GitHub environments, subscription
-selection, Azure OIDC permissions, and secret/variable preparation.
-Inherited secret and variable payloads are replaced with empty objects.
-Only GitHub's automatically provided read-only token remains available;
-no configured secrets are required. Unit fixtures and repository hooks
-must work without Azure credentials.
+The reusable Terraform workflow runs one shared unit-test job for fork
+and same-repository pull requests, independently of pr-check. Unit tests
+and fork pr-check omit GitHub environments, subscription selection,
+Azure OIDC permissions, and secret/variable preparation. Inherited secret
+and variable payloads are replaced with empty objects. Only GitHub's
+automatically provided read-only token remains available; no configured
+secrets are required. Unit fixtures and repository hooks must work
+without Azure credentials. Fork pr-check excludes only check policy and
+its Conftest prerequisite.
 
-Normal branch jobs retain their full checks, credentials, environments,
-and integration/end-to-end tests. Publish a compatible Avm.Authoring
-release containing -ExcludeSteps before adopting this workflow revision.
+Normal branch pr-check retains the full checks and credentials, using
+the pr-check environment for OIDC without required reviewers.
+Integration and end-to-end tests remain non-fork and approval-gated.
+Callers run the checks on pull-request opened, reopened, and synchronize
+events without a fork or draft exclusion. GitHub's separate fork-workflow
+approval policy still applies.
+
+Publish a compatible Avm.Authoring release containing -ExcludeSteps
+before adopting this workflow revision.
 Older releases fail with upgrade guidance rather than running policy
 or silently omitting the other checks.

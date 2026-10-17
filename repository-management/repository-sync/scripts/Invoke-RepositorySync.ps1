@@ -48,6 +48,7 @@ $libDir = Join-Path $PSScriptRoot "lib"
 . (Join-Path $libDir "BranchProtection.ps1")
 . (Join-Path $libDir "UnmanagedRulesets.ps1")
 . (Join-Path $libDir "CodeQlDefaultSetup.ps1")
+. (Join-Path $libDir "ForkApprovalPolicy.ps1")
 . (Join-Path $libDir "TeamsAndUsers.ps1")
 . (Join-Path $libDir "TerraformOperations.ps1")
 . (Join-Path $libDir "TestTenant.ps1")
@@ -250,6 +251,7 @@ if (-not $repositoryCreationModeEnabled -and $candidateOutputDirectory) {
 
 if (!$repositoryCreationModeEnabled) {
     $issueLog = @(Invoke-RepositorySyncLogGroup -Name 'GitHub policy and access cleanup' -Action {
+        $null = Set-RepositoryForkApprovalPolicy -Repository $orgAndRepoName -PlanOnly $planOnly -Confirm:$false
         $issues = @((Remove-LegacyBranchProtection `
             -orgAndRepoName $orgAndRepoName -defaultBranch $repoTree.DefaultBranch `
             -planOnly $planOnly -issueLog $issueLog).IssueLog)

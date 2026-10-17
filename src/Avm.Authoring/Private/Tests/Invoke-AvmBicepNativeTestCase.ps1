@@ -63,7 +63,7 @@ function Invoke-AvmBicepNativeTestCase {
             $preparedInput.TemplateContent = Resolve-AvmBicepTestToken -Content $preparedInput.TemplateContent `
                 -SourcePath $Item.Case.Path -Tokens $preparedInput.Tokens -DeferResourceLocation
         }
-        $Item.Template = ConvertFrom-Json -InputObject $Item.AttemptInputs[0].TemplateContent -AsHashtable -ErrorAction Stop
+        $Item.Template = ConvertFrom-AvmStrictJson -Json $Item.AttemptInputs[0].TemplateContent
         $environment = Get-AvmPropertyValue -InputObject (Get-AzContext -ErrorAction Stop) -Name 'Environment'
         $environmentName = [string](Get-AvmPropertyValue -InputObject $environment -Name 'Name')
         $handle = New-AvmBicepCleanupState -SubscriptionId $Item.SubscriptionId -TenantId $TenantId `

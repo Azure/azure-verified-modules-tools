@@ -1,6 +1,6 @@
 function ConvertFrom-AvmStrictJson {
     [CmdletBinding()]
-    [OutputType([System.Collections.IDictionary], [object[]])]
+    [OutputType([System.Collections.IDictionary], [object[]], [string], [long], [double], [bool])]
     param(
         [Parameter(Mandatory)]
         [AllowEmptyString()]
@@ -10,7 +10,9 @@ function ConvertFrom-AvmStrictJson {
 
         [switch] $RejectCaseInsensitiveDuplicates,
 
-        [switch] $AllowArray
+        [switch] $AllowArray,
+
+        [switch] $AllowScalar
     )
 
     Set-StrictMode -Version 3.0
@@ -21,9 +23,17 @@ function ConvertFrom-AvmStrictJson {
         $options = [System.Text.Json.JsonDocumentOptions]::new()
         $options.MaxDepth = 100
         $document = [System.Text.Json.JsonDocument]::Parse($Json, $options)
-        if ($document.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object -and
-            (-not $AllowArray -or $document.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Array)) {
-            $expected = if ($AllowArray) { 'object or array' } else { 'object' }
+        $kind = $document.RootElement.ValueKind
+        $scalar = $kind -in @(
+            [System.Text.Json.JsonValueKind]::String, [System.Text.Json.JsonValueKind]::Number,
+            [System.Text.Json.JsonValueKind]::True, [System.Text.Json.JsonValueKind]::False,
+            [System.Text.Json.JsonValueKind]::Null)
+        if ($kind -ne [System.Text.Json.JsonValueKind]::Object -and
+            (-not $AllowArray -or $kind -ne [System.Text.Json.JsonValueKind]::Array) -and
+            (-not $AllowScalar -or -not $scalar)) {
+            $expected = 'object'
+            if ($AllowArray) { $expected += ' or array' }
+            if ($AllowScalar) { $expected += ' or scalar' }
             throw [System.ArgumentException]::new("$Description must be a JSON $expected.")
         }
 

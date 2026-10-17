@@ -12,8 +12,12 @@ function Get-AvmBicepNativeParameter {
 
     $result = @{}
     if (-not [string]::IsNullOrWhiteSpace($ParameterPath)) {
-        $document = Get-Content -LiteralPath $ParameterPath -Raw -Encoding utf8 |
-            ConvertFrom-Json -AsHashtable -ErrorAction Stop
+        try {
+            $document = ConvertFrom-AvmStrictJson -Json (Get-Content -LiteralPath $ParameterPath -Raw -Encoding utf8)
+        }
+        catch [System.ArgumentException] {
+            throw [AvmConfigurationException]::new('The ARM parameter file must contain a valid JSON parameters object.')
+        }
         if ($document -isnot [System.Collections.IDictionary] -or
             $document['parameters'] -isnot [System.Collections.IDictionary]) {
             throw [AvmConfigurationException]::new('The ARM parameter file must contain a parameters object.')
@@ -30,7 +34,7 @@ function Get-AvmBicepNativeParameter {
             else {
                 $result[$name] = $entry['value']
                 if ($result[$name] -is [hashtable] -and $result[$name].ContainsKey('reference')) {
-                    $value = [ordered]@{}
+                    $value = [System.Collections.Specialized.OrderedDictionary]::new([System.StringComparer]::Ordinal)
                     foreach ($key in $result[$name].psbase.Keys) { $value[$key] = $result[$name][$key] }
                     $result[$name] = $value
                 }
@@ -43,7 +47,7 @@ function Get-AvmBicepNativeParameter {
         }
         $result[$name] = $Parameters[$name]
         if ($result[$name] -is [hashtable] -and $result[$name].ContainsKey('reference')) {
-            $value = [ordered]@{}
+            $value = [System.Collections.Specialized.OrderedDictionary]::new([System.StringComparer]::Ordinal)
             foreach ($key in $result[$name].psbase.Keys) { $value[$key] = $result[$name][$key] }
             $result[$name] = $value
         }

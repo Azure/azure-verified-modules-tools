@@ -9,6 +9,9 @@ Describe 'terraform-module reusable workflow' {
         $jobMatch = [regex]::Match($script:workflow, '(?ms)^  e2e-test:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
         if (-not $jobMatch.Success) { throw 'Could not isolate the e2e-test job block.' }
         $script:e2eJob = $jobMatch.Value
+        $discoveryMatch = [regex]::Match($script:workflow, '(?ms)^  discover-examples:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        if (-not $discoveryMatch.Success) { throw 'Could not isolate the discover-examples job block.' }
+        $script:discoveryJob = $discoveryMatch.Value
     }
 
     It 'uses the shared retrying installer and version input in <Job>' -ForEach @(
@@ -57,26 +60,21 @@ Describe 'terraform-module reusable workflow' {
         $script:workflow | Should -Match "needs\.discover-examples\.outputs\.hasExamples == 'true'"
     }
 
-    It 'keeps the e2e environment static so one approval releases every matrix leg' {
-        $script:workflow | Should -Match 'environment:\s*examples-test'
+    It 'keeps e2e execution on a static environment separate from discovery approval' {
+        $script:e2eJob | Should -Match '(?m)^    environment: examples-test-execution\r?$'
         $script:workflow | Should -Not -Match 'environment:\s*.*\$\{\{\s*matrix\.'
     }
 
-    It 'gates the whole e2e matrix behind a single pending deployment' {
-        # Environment protection is evaluated when a job becomes ready to dispatch,
-        # not when the run starts. max-parallel releases the legs in waves, and each
-        # wave raises a fresh pending deployment - so N legs become ceil(N/limit)
-        # approvals. It is exactly the lever someone reaches for when the
-        # subscription round-robin is not enough to stay inside Azure quota.
-        $script:e2eJob | Should -Not -Match '(?m)^\s*max-parallel\s*:'
-        ([regex]::Matches($script:e2eJob, '(?m)^\s*strategy:\s*$')).Count | Should -Be 1
+    It 'keeps the whole e2e matrix dependent on successful protected discovery' {
+        $script:e2eJob | Should -Match 'needs:\s*\[subscriptions, discover-examples\]'
+        $script:e2eJob | Should -Not -Match 'always\(\)|cancelled\(\)|failure\(\)|continue-on-error:'
+        $script:discoveryJob | Should -Not -Match 'continue-on-error:'
     }
 
-    It 'declares the e2e approval gate on exactly one job' {
-        # A second job on examples-test would become ready at a different time and
-        # raise its own pending deployment, which one approval would not release.
+    It 'declares the e2e approval gate only on non-matrix discovery without OIDC write permission' {
         ([regex]::Matches($script:workflow, '(?m)^\s*environment:\s*examples-test\s*$')).Count | Should -Be 1
-        $script:e2eJob | Should -Match 'needs:\s*\[subscriptions, discover-examples\]'
+        $script:discoveryJob | Should -Match '(?m)^    environment: examples-test\r?$'
+        $script:discoveryJob | Should -Not -Match 'strategy:|id-token:'
     }
 
     It 'round-robins the subscription across matrix legs using strategy.job-index' {
@@ -290,12 +288,16 @@ Describe 'Terraform General subscription selection' {
     }
 }
 
-Describe 'terraform-module fork isolation' {
+Describe 'terraform-module automatic checks and fork isolation' {
     BeforeAll {
-        $workflowPath = Join-Path $PSScriptRoot '..' '..' '..' '..' '.github' 'workflows' 'terraform-module.yml'
+        $root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..')).Path
+        $workflowPath = Join-Path $root '.github' 'workflows' 'terraform-module.yml'
         $script:workflow = Get-Content -LiteralPath $workflowPath -Raw
+        $module = Import-Module (Join-Path $root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -PassThru
+        $null = & $module { Import-AvmPowerShellModule -Name powershell-yaml -Global }
+        $script:definition = ConvertFrom-Yaml -Yaml $script:workflow
         $script:jobs = @{}
-        foreach ($name in @('subscriptions', 'unit-test', 'unit-test-fork', 'pr-check', 'pr-check-fork', 'integration-test', 'discover-examples', 'e2e-test')) {
+        foreach ($name in @('subscriptions', 'unit-test', 'pr-check', 'pr-check-fork', 'integration-test', 'discover-examples', 'e2e-test')) {
             $pattern = '(?ms)^  ' + [regex]::Escape($name) + ':\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)'
             $block = [regex]::Match($script:workflow, $pattern)
             if (-not $block.Success) { throw "Could not isolate the $name job block." }
@@ -311,34 +313,61 @@ Describe 'terraform-module fork isolation' {
     }
 
     It 'runs <Job> independently with read-only permissions and no protected environment' -ForEach @(
-        @{ Job = 'unit-test-fork' }
+        @{ Job = 'unit-test' }
         @{ Job = 'pr-check-fork' }
     ) {
         $block = $script:jobs[$Job]
-        $block | Should -Match '(?m)^    if: github\.event\.pull_request\.head\.repo\.fork == true\r?$'
         $block | Should -Match '(?m)^    runs-on: ubuntu-latest\r?$'
         $block | Should -Match '(?m)^    permissions:\r?\n      contents: read\r?\n    env:'
         $block | Should -Not -Match 'environment:|needs:|id-token:|azure/login@|SELECTED_SUBSCRIPTION|register-features'
         $block | Should -Not -Match '\$\{\{\s*(?:secrets|vars)\.'
+        @($script:definition.jobs[$Job].permissions.Keys) | Should -Be @('contents')
+        $script:definition.jobs[$Job].permissions.contents | Should -BeExactly 'read'
     }
 
-    It 'overrides inherited credential contexts and disables OIDC in both fork jobs' {
-        $script:jobs['unit-test-fork'] | Should -Match (
-            '(?m)^    env: &fork-environment\r?\n' +
-            "      SECRETS_CONTEXT: '\{\}'\r?\n" +
-            "      VARS_CONTEXT: '\{\}'\r?\n" +
-            "      ARM_USE_OIDC: 'false'\r?$")
-        $script:jobs['pr-check-fork'] | Should -Match '(?m)^    env: \*fork-environment\r?$'
+    It 'overrides inherited credential contexts and disables OIDC in <Job>' -ForEach @(
+        @{ Job = 'unit-test' }
+        @{ Job = 'pr-check-fork' }
+    ) {
+        $environment = $script:definition.jobs[$Job].env
+        @($environment.Keys | Sort-Object) | Should -Be @('ARM_USE_OIDC', 'SECRETS_CONTEXT', 'VARS_CONTEXT')
+        $environment.SECRETS_CONTEXT | Should -BeExactly '{}'
+        $environment.VARS_CONTEXT | Should -BeExactly '{}'
+        $environment.ARM_USE_OIDC | Should -BeExactly 'false'
     }
 
-    It 'shares the unit-test steps but never prepares the environment on a fork' {
-        $script:jobs['unit-test'] | Should -Match '(?m)^    steps: &unit-test-steps\r?$'
-        $script:jobs['unit-test-fork'] | Should -Match '(?m)^    steps: \*unit-test-steps\r?$'
-        $script:jobs['unit-test'] | Should -Match (
-            '(?m)^      - name: Prepare test environment\r?\n' +
-            '        if: github\.event\.pull_request\.head\.repo\.fork == false\r?$')
+    It 'runs exactly one unit-test job on every invocation without branch, draft, or event gates' {
+        @($script:definition.jobs.Keys | Where-Object { $_ -like 'unit-test*' }) | Should -Be @('unit-test')
+        $job = $script:definition.jobs['unit-test']
+        foreach ($key in @('if', 'needs', 'environment', 'continue-on-error')) {
+            $job.Contains($key) | Should -BeFalse
+        }
+        $job.steps | Should -HaveCount 4
+        foreach ($step in $job.steps) {
+            $step.Contains('if') | Should -BeFalse
+            $step.Contains('continue-on-error') | Should -BeFalse
+        }
+        $script:jobs['unit-test'] | Should -Not -Match 'Prepare test environment|ConvertFrom-Context|github\.event'
         $script:jobs['unit-test'] | Should -Match '(?m)^          avm test unit\r?$'
         $script:jobs['unit-test'] | Should -Match '(?m)^          persist-credentials: false\r?$'
+    }
+
+    It 'selects the appropriate PR check using only the fork status' {
+        $script:definition.jobs['pr-check-fork']['if'] |
+            Should -BeExactly 'github.event.pull_request.head.repo.fork == true'
+        $script:definition.jobs['pr-check']['if'] |
+            Should -BeExactly 'github.event.pull_request.head.repo.fork == false'
+        $script:definition.jobs.subscriptions['if'] |
+            Should -BeExactly 'github.event.pull_request.head.repo.fork == false'
+        $script:definition.jobs['pr-check'].needs | Should -BeExactly 'subscriptions'
+        $script:definition.jobs.subscriptions.environment | Should -BeExactly 'no-approval'
+        $script:definition.jobs.subscriptions.Contains('needs') | Should -BeFalse
+        foreach ($job in @('pr-check', 'pr-check-fork')) {
+            foreach ($step in $script:definition.jobs[$job].steps) {
+                $step.Contains('if') | Should -BeFalse
+                $step.Contains('continue-on-error') | Should -BeFalse
+            }
+        }
     }
 
     It 'uses the existing cache setup and non-persistent checkout for fork pr-check' {
@@ -393,7 +422,6 @@ Describe 'terraform-module fork isolation' {
 
     It 'retains the non-fork gate for <Job>' -ForEach @(
         @{ Job = 'subscriptions' }
-        @{ Job = 'unit-test' }
         @{ Job = 'pr-check' }
         @{ Job = 'integration-test' }
         @{ Job = 'discover-examples' }
@@ -402,17 +430,14 @@ Describe 'terraform-module fork isolation' {
         $script:jobs[$Job] | Should -Match 'github\.event\.pull_request\.head\.repo\.fork == false'
     }
 
-    It 'preserves normal-branch credentials, environments, and the full pr-check command' {
-        $script:jobs['unit-test'] | Should -Match '(?m)^    environment: no-approval\r?$'
+    It 'preserves normal-branch pr-check credentials, OIDC environment, and the full command' {
         $script:jobs['pr-check'] | Should -Match '(?m)^    environment: pr-check\r?$'
         $script:jobs['pr-check'] | Should -Match '(?m)^    needs: subscriptions\r?$'
         $script:jobs['pr-check'] | Should -Match '(?m)^      id-token: write\r?$'
         $script:jobs['pr-check'] | Should -Match '(?m)^          avm pr-check\r?$'
-        $script:jobs['pr-check'] | Should -Not -Match 'ExcludeSteps|fork-environment'
-        foreach ($job in @('unit-test', 'pr-check')) {
-            $script:jobs[$job] | Should -Match 'ConvertFrom-Context \$env:SECRETS_CONTEXT'
-            $script:jobs[$job] | Should -Match 'ConvertFrom-Context \$env:VARS_CONTEXT'
-        }
+        $script:jobs['pr-check'] | Should -Not -Match 'ExcludeSteps|unprivileged-environment'
+        $script:jobs['pr-check'] | Should -Match 'ConvertFrom-Context \$env:SECRETS_CONTEXT'
+        $script:jobs['pr-check'] | Should -Match 'ConvertFrom-Context \$env:VARS_CONTEXT'
     }
 }
 
@@ -443,7 +468,7 @@ Describe 'terraform-module required Azure feature registration' {
         ([regex]::Matches($script:workflow, 'uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c')).Count |
             Should -Be 2
         $script:jobs['integration-test'] | Should -Match '(?m)^    environment: integration-test\r?$'
-        $script:jobs['e2e-test'] | Should -Match '(?m)^    environment: examples-test\r?$'
+        $script:jobs['e2e-test'] | Should -Match '(?m)^    environment: examples-test-execution\r?$'
         $script:workflow | Should -Not -Match '(?i)feature unregister|provider unregister'
     }
 
@@ -586,7 +611,7 @@ Describe 'CI workflow' {
     It 'uses the prerequisite installer in every CI test job type' {
         ([regex]::Matches(
                 $script:ci,
-                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 5
+                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 6
         ([regex]::Matches(
                 $script:workflowCi,
                 '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 1
@@ -610,7 +635,7 @@ Describe 'CI workflow' {
         $bicep | Should -Not -Match 'environment:|id-token:|azure/login|Add-MpPreference|fixture:'
         $bicep | Should -Match 'if: always\(\)'
         $bicep | Should -Match 'test-results-bicep-integration-'
-        $script:ci | Should -Match 'needs: \[unit, component, integration, bicep-integration\]'
+        $script:ci | Should -Match 'needs: \[unit, component, integration, bicep-integration, native-qualification\]'
     }
 }
 

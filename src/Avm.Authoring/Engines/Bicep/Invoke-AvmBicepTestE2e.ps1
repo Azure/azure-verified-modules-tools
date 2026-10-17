@@ -96,6 +96,9 @@ function Invoke-AvmBicepTestE2e {
         if ([string]::IsNullOrEmpty($TestSubscriptionIds)) { $TestSubscriptionIds = $ci.PoolJson }
     }
     if ([string]::IsNullOrWhiteSpace($TenantId)) { $TenantId = $ci.TenantId }
+    if ($UseCiInputs -and -not $PSBoundParameters.ContainsKey('ManagementGroupId')) {
+        $ManagementGroupId = $ci.ManagementGroupId
+    }
     $tenant = [guid]::Empty
     if (-not [guid]::TryParseExact($TenantId, 'D', [ref]$tenant) -or $tenant -eq [guid]::Empty) {
         throw [AvmConfigurationException]::new('Bicep e2e requires an explicit, nonempty GUID -TenantId.')

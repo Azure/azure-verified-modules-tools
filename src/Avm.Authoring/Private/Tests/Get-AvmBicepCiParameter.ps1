@@ -98,7 +98,7 @@ function Get-AvmBicepCiParameter {
             }
             { $_ -in @('int', 'bool', 'array', 'object', 'secureObject') } {
                 try {
-                    $converted = ConvertFrom-Json -InputObject $value -AsHashtable -NoEnumerate -ErrorAction Stop
+                    $converted = ConvertFrom-AvmStrictJson -Json $value -AllowArray -AllowScalar
                 }
                 catch [System.ArgumentException] {
                     throw [AvmConfigurationException]::new("CI parameter '$name' must be JSON of type '$type'.")

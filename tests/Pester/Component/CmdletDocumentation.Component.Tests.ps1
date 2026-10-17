@@ -38,7 +38,11 @@ Describe 'Cmdlet documentation generation' -Tag 'Component' {
         $prCheckPage | Should -Match ([regex]::Escape("avm pr-check -Ecosystem terraform -ExcludeSteps 'check policy'"))
         $prCheckPage | Should -Match "Excluding every step returns overall Status='skipped', not 'pass'"
         $prCheckPage | Should -Match '## Notes'
-        $prCheckPage | Should -Match 'no configured secrets are required'
+        $prCheckText = $prCheckPage -replace '\s+', ' '
+        $prCheckText | Should -Match 'no configured secrets are required'
+        $prCheckText | Should -Match 'one shared unit-test job for fork and same-repository pull requests'
+        $prCheckText | Should -Match 'pr-check environment for OIDC without required reviewers'
+        $prCheckText | Should -Match 'Integration and end-to-end tests remain non-fork and approval-gated'
         $prCheckPage | Should -Match 'Older releases fail with upgrade guidance'
 
         $index = Get-Content -LiteralPath (Join-Path $outputPath 'README.md') -Raw

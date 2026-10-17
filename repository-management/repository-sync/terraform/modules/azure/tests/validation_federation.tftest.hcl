@@ -37,7 +37,7 @@ variables {
   identity_resource_group_name        = "rg-bami-test"
   github_repository_owner             = "Azure"
   github_repository_name              = "terraform-azurerm-avm-ptn-example-repo"
-  github_repository_environment_names = ["pr-check", "integration-test", "examples-test"]
+  github_repository_environment_names = ["pr-check", "integration-test", "examples-test", "examples-test-execution"]
   location                            = "eastus2"
   is_protected_repo                   = true
   github_job_workflow_ref             = "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main"
@@ -51,18 +51,23 @@ variables {
   }
 }
 
-run "existing_environments_keep_their_module_trust" {
+run "execution_federation_preserves_existing_environment_trust" {
   command = plan
 
   assert {
     condition = (
-      length(azapi_resource.identity_federated_credentials) == 3 &&
+      toset(keys(azapi_resource.identity_federated_credentials)) == toset(["pr-check", "integration-test", "examples-test", "examples-test-execution"]) &&
       alltrue([for environment in var.github_repository_environment_names :
         azapi_resource.identity_federated_credentials[environment].body.properties.subject ==
-        "repository_owner_id:6844498:repository_id:1234:environment:${environment}:job_workflow_ref:${var.github_job_workflow_ref}"
+        "repository_owner_id:6844498:repository_id:1234:environment:${environment}:job_workflow_ref:${var.github_job_workflow_ref}" &&
+        azapi_resource.identity_federated_credentials[environment].body.properties.issuer == "https://token.actions.githubusercontent.com" &&
+        tolist(azapi_resource.identity_federated_credentials[environment].body.properties.audiences) == tolist(["api://AzureADTokenExchange"]) &&
+        azapi_resource.identity_federated_credentials[environment].name == "${local.owner_repo_name}-${environment}" &&
+        azapi_resource.identity_federated_credentials[environment].parent_id == azapi_resource.identity.id &&
+        toset(azapi_resource.identity_federated_credentials[environment].locks) == toset([azapi_resource.identity.id])
       ])
     )
-    error_message = "All three module environments must retain their existing reusable-workflow trust."
+    error_message = "The new execution credential and all three existing credentials must bind only the same repository, reusable workflow, audience, issuer and dedicated identity."
   }
 }
 

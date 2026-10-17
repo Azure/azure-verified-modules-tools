@@ -768,7 +768,7 @@ output registrationToken string? = 'token'
         $outputGap = [regex]::Match($scoped,
             '(?s)### Parameter: `zzDocumentedSettings`.*?  ```(?<gap>\n+)## Outputs')
         $outputGap.Groups['gap'].Value.Length | Should -Be 2
-        $scoped | Should -Match '(?s)### Parameter: `sampleTags`.*?- Default: `\{\}`\n- Example:\n  ```Bicep\n  \{\n    Application: ''MyApp''\n    CostCenter: ''IT''\n    Environment: ''Production''\n    Owner: ''TeamName''\n  \}\n  ```'
+        $scoped | Should -Match '(?s)### Parameter: `sampleTags`.*?- Default: `\{\}`\n- Example:\n  ```Bicep\n  \{\n      Application: ''MyApp''\n      CostCenter: ''IT''\n      Environment: ''Production''\n      Owner: ''TeamName''\n  \}\n  ```'
         $scoped | Should -Match '(?s)### Parameter: `documentedRules`.*?- Default:\n  ```Bicep\n  \[\n    \{\n      details: \{\n        alpha: ''a''\n        zeta: ''z''\n      \}\n      name: ''outer''\n    \}\n  \]\n  ```'
         $scoped | Should -Match '(?s)### Parameter: `image`.*?- Example:\n  ```Bicep\n  mcr.microsoft.com/k8se/quickstart-jobs:latest\n  docker.io/library/image:latest\n  docker.io/hello-world:latest\n  ```'
         $scoped | Should -Match "(?s)### Parameter: ``featureEnabled``.*?- Default: ``\[equals\(parameters\('kind'\), 'linux'\)\]``"

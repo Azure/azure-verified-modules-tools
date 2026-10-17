@@ -153,13 +153,16 @@ The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it thr
 ./build.ps1 layout            # casing + manifest-shape guard (Test-AvmModuleLayout)
 ./build.ps1 lint              # PSScriptAnalyzer with repo settings + custom rules
 ./build.ps1 test              # Pester unit tests (excludes Component + Integration)
-./build.ps1 coverage          # unit tests + coverage gate (fails below the 70% line floor)
+./build.ps1 coverage          # unit/component tests + coverage gate (70% line floor)
 ./build.ps1 component         # Pester Component tier (real FS + real subprocess, stub binaries, no network)
 ./build.ps1 test,component -TestGroup Authoring
 ./build.ps1 test,component -TestGroup RepositoryManagement
 ./build.ps1 test-workflows    # workflow definitions, installation behavior and CI contracts
-./build.ps1 integration       # Pester Integration tier (real network + real binaries; not part of ci/pre-commit)
+./build.ps1 integration       # public acceptance (real network + real binaries; not part of ci/pre-commit)
+./build.ps1 integration -IntegrationGroup Terraform # Full pre-commit twice, mocked units and pr-check
 ./build.ps1 integration -IntegrationGroup Bicep # Compiler, docs and native policy; no deployment
+./build.ps1 qualification -QualificationGroup Native # Focused HCL/provider/state compatibility
+./build.ps1 qualification -QualificationGroup Package # Downloads, attestation and cold/offline bootstrap
 ./build.ps1 build             # stage a publishable tree under ./out/Avm.Authoring + verify exports
 ./build.ps1 clean             # remove ./out
 ./build.ps1 ?                 # list every task
@@ -168,12 +171,14 @@ The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it thr
 Notes:
 
 - `test` runs the **unit** tier only. The `Component` and `Integration` tiers are separate tasks (and separate `-Tag`s) so routine local runs stay fast and offline.
-- `integration` is the only task that touches the network (it also runs the real pinned binaries) and is deliberately excluded from `pre-commit` and `ci`; run it on demand.
-- Integration defaults to all files. `-IntegrationGroup Bicep` selects `Bicep*.Tests.ps1`; `Terraform` selects the remaining shared/Terraform files. CI runs Bicep once per OS and retains both Terraform fixture legs per OS.
+- `integration` and `qualification` use real pinned tools and network downloads; neither runs in `pre-commit` or `ci`.
+- Terraform acceptance requires authorized policy-plan credentials for full pr-check. Do not exclude steps to manufacture a local pass. Canonical input must remain byte-identical on both public pre-commit runs; the migration fixture allows only its reviewed first-pass changes. Both compare authored files, docs, tests, dotfiles and tracked locks again after pr-check.
+- Integration defaults to both ecosystems. Bicep has its own compiler/metadata/policy selection; Terraform selects only the public user flows. Native compatibility runs once per OS outside the two Terraform fixture legs. Package qualification runs independently for pin/bootstrap/release-related changes. Unknown integration files fail selection until assigned.
 - `build` stages the module as-committed. Version stamping is a release-time concern and lives in the ADO pipeline, so the in-repo `src/Avm.Authoring/Avm.Authoring.psd1` is never rewritten by the build.
 - A first run installs nothing for you — make sure the prerequisites in [§1](#1-prerequisites) (InvokeBuild, Pester, PSScriptAnalyzer) are present.
 
-`Authoring: CI`, `Workflows: CI` and `Repos: CI` run independently using native
+`Authoring: CI`, `Authoring: Package qualification`, `Workflows: CI` and
+`Repos: CI` run independently using native
 GitHub path filters on pull requests and main pushes. Each includes its tests
 and relevant shared dependencies and can be dispatched manually on its own.
 Only authoring retains the cross-platform matrix; workflow and

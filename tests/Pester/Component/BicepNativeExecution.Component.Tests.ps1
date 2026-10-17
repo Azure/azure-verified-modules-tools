@@ -423,6 +423,8 @@ Describe 'authored output contract' {
         $TestInputData.DeploymentOutputs.object.Value['upper'] | Should -BeExactly 'second'
         $TestInputData.DeploymentOutputs.resourceId.value | Should -BeExactly 'fixture-only'
         $TestInputData.DeploymentOutputs.resourceId.Type | Should -BeExactly 'String'
+        $TestInputData.DeploymentOutputs.timestamp.Value | Should -BeOfType ([string])
+        $TestInputData.DeploymentOutputs.timestamp.Value | Should -BeExactly '2026-10-17T10:30:00.1234567+05:45'
         $TestInputData.ModuleTestFolderPath | Should -BeExactly $PSScriptRoot
     }
 }
@@ -436,7 +438,7 @@ Import-Module $Manifest
 $result = & (Get-Module Avm.Authoring) {
     param($DirectoryPath, $InProcess)
     $issues = [Collections.Generic.List[object]]::new()
-    $outputJson = '{"properties":{"outputs":{"resourceId":{"type":"String","value":"fixture-only"},"configurations":{"type":"Array","value":[{"name":"first","value":"one"},{"name":"second","value":"two"}]},"keys":{"type":"Array","value":["authored"]},"count":{"type":"Int","value":0},"boolean":{"type":"Bool","value":false},"nil":{"type":"Object","value":null},"empty":{"type":"Array","value":[]},"nested":{"type":"Array","value":[["one"]]},"object":{"type":"Object","value":{"Upper":"first","upper":"second"}}}}}'
+    $outputJson = '{"properties":{"outputs":{"resourceId":{"type":"String","value":"fixture-only"},"timestamp":{"type":"String","value":"2026-10-17T10:30:00.1234567+05:45"},"configurations":{"type":"Array","value":[{"name":"first","value":"one"},{"name":"second","value":"two"}]},"keys":{"type":"Array","value":["authored"]},"count":{"type":"Int","value":0},"boolean":{"type":"Bool","value":false},"nil":{"type":"Object","value":null},"empty":{"type":"Array","value":[]},"nested":{"type":"Array","value":[["one"]]},"object":{"type":"Object","value":{"Upper":"first","upper":"second"}}}}}'
     $item = [pscustomobject]@{
         Case = [pscustomobject]@{
             Path = Join-Path $DirectoryPath 'main.test.bicep'

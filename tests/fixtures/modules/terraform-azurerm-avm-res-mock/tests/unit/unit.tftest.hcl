@@ -8,6 +8,7 @@ mock_provider "azapi" {
   }
 }
 mock_provider "random" {}
+mock_provider "terraform" {}
 
 variables {
   create_example_resources = true

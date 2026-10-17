@@ -223,6 +223,103 @@ Describe 'Component: Bicep native reserved execution boundary' -Tag Component {
         $script:mapPath = Join-Path $script:registry '.reserved-test-subscriptions.json'
         [IO.File]::WriteAllText($script:mapPath, '{}')
     }
+
+    Describe 'Component: Bicep native CI management-group target' -Tag Component {
+        BeforeEach {
+            $script:fixture = New-NativeBicepWorkflowFixture -TestRoot $TestDrive
+            $script:fixture.Schema = 'managementGroupDeploymentTemplate'
+            $script:options = Get-NativeBicepWorkflowOptions -Fixture $script:fixture
+            $script:environment = @{}
+            foreach ($name in @('AVM_CI_VARIABLES', 'AVM_CI_SECRETS', 'VALIDATE_MANAGEMENT_GROUP_ID', 'ARM_MGMTGROUP_ID')) {
+                $script:environment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+                [Environment]::SetEnvironmentVariable($name, [NullString]::Value, 'Process')
+            }
+        }
+        AfterEach {
+            foreach ($name in $script:environment.Keys) {
+                $value = if ($null -eq $script:environment[$name]) { [NullString]::Value } else { $script:environment[$name] }
+                [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+            }
+            Remove-NativeBicepWorkflowFixture -Fixture $script:fixture
+        }
+
+        It 'uses the opted-in canonical variable target ahead of aliases, secrets and environment' {
+            $env:AVM_CI_VARIABLES = '{"VALIDATE_MANAGEMENT_GROUP_ID":"ci-target","ARM_MGMTGROUP_ID":"legacy-variable"}'
+            $env:AVM_CI_SECRETS = '{"VALIDATE_MANAGEMENT_GROUP_ID":"secret-target"}'
+            $env:VALIDATE_MANAGEMENT_GROUP_ID = 'environment-target'
+
+            (Invoke-AvmTestE2e @script:options -UseCiInputs).Status | Should -Be 'pass'
+
+            $state = Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json
+            $state.case.managementGroupId | Should -BeExactly 'ci-target'
+            $state.deployments[0].id | Should -BeLike '/providers/Microsoft.Management/managementGroups/ci-target/providers/Microsoft.Resources/deployments/*'
+        }
+
+        It 'uses an opted-in <Source> legacy target without duplicating alias resolution' -ForEach @(
+            @{ Source = 'variable' }
+            @{ Source = 'environment' }
+        ) {
+            if ($Source -eq 'variable') {
+                $env:AVM_CI_VARIABLES = '{"ARM_MGMTGROUP_ID":"legacy-target"}'
+                $env:AVM_CI_SECRETS = '{"VALIDATE_MANAGEMENT_GROUP_ID":"secret-target"}'
+            }
+            else { $env:ARM_MGMTGROUP_ID = 'legacy-target' }
+
+            (Invoke-AvmTestE2e @script:options -UseCiInputs).Status | Should -Be 'pass'
+            (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).case.managementGroupId |
+                Should -BeExactly 'legacy-target'
+        }
+
+        It 'retains a valid explicit target instead of a different invalid CI target' {
+            $script:options.ManagementGroupId = 'explicit-target'
+            $env:AVM_CI_VARIABLES = '{"VALIDATE_MANAGEMENT_GROUP_ID":"invalid/ci/target"}'
+
+            (Invoke-AvmTestE2e @script:options -UseCiInputs).Status | Should -Be 'pass'
+            (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).case.managementGroupId |
+                Should -BeExactly 'explicit-target'
+        }
+
+        It 'does not replace an invalid explicit target with valid CI: <Target>' -ForEach @(
+            @{ Target = 'invalid/explicit' }
+            @{ Target = '../group' }
+            @{ Target = ' ' }
+            @{ Target = '' }
+        ) {
+            $script:options.ManagementGroupId = $Target
+            $env:AVM_CI_VARIABLES = '{"VALIDATE_MANAGEMENT_GROUP_ID":"ci-target"}'
+
+            { Invoke-AvmTestE2e @script:options -UseCiInputs } | Should -Throw
+            InModuleScope Avm.Authoring { Should -Invoke Invoke-AvmBicepAzureContext -Exactly 0 }
+            $script:fixture.NativeInputs.Count | Should -Be 0
+            Test-Path -LiteralPath $script:fixture.StatePath | Should -BeFalse
+        }
+
+        It 'rejects <Case> before authenticated execution or deployment' -ForEach @(
+            @{ Case = 'a CI target without opt-in'; Json = '{"VALIDATE_MANAGEMENT_GROUP_ID":"ci-target"}'; Enabled = $false }
+            @{ Case = 'a missing opted-in target'; Json = '{}'; Enabled = $true }
+            @{ Case = 'an invalid opted-in target'; Json = '{"VALIDATE_MANAGEMENT_GROUP_ID":"invalid/ci"}'; Enabled = $true }
+            @{ Case = 'a nonstring opted-in target'; Json = '{"VALIDATE_MANAGEMENT_GROUP_ID":42}'; Enabled = $true }
+        ) {
+            $env:AVM_CI_VARIABLES = $Json
+
+            { Invoke-AvmTestE2e @script:options -UseCiInputs:$Enabled } | Should -Throw
+            InModuleScope Avm.Authoring { Should -Invoke Invoke-AvmBicepAzureContext -Exactly 0 }
+            $script:fixture.NativeInputs.Count | Should -Be 0
+            Test-Path -LiteralPath $script:fixture.StatePath | Should -BeFalse
+        }
+
+        It 'does not require a management-group target for <Scope> scope' -ForEach @(
+            @{ Scope = 'subscription'; Schema = 'subscriptionDeploymentTemplate' }
+            @{ Scope = 'tenant'; Schema = 'tenantDeploymentTemplate' }
+        ) {
+            $script:fixture.Schema = $Schema
+            $env:AVM_CI_VARIABLES = '{}'
+
+            (Invoke-AvmTestE2e @script:options -UseCiInputs).Status | Should -Be 'pass'
+            (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).case.managementGroupId |
+                Should -BeNullOrEmpty
+        }
+    }
     AfterEach { Remove-NativeBicepWorkflowFixture -Fixture $script:fixture }
 
     It 'rejects a reserved <Phase> before compilation, features, preparation or deployment' -ForEach @(
