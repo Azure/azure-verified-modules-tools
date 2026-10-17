@@ -11,13 +11,17 @@ data "variable" "example_telemetry" {
 }
 
 locals {
+  example_utility_calls = {
+    for name, call in data.module.example_telemetry.result : name => call
+    if contains(["azure/avm-utl-regions/azurerm", "azure/avm-utl-interfaces/azure"], lower(trimprefix(call.source, "registry.terraform.io/")))
+  }
   example_telemetry_modules = {
     for name, source in try(data.module_source.example_telemetry, {}) : name => data.module.example_telemetry.result[name]
     if contains(keys(source.variables), "enable_telemetry")
   }
   example_telemetry_variables_to_update = {
     for name, variable in data.variable.example_telemetry.result : name => variable
-    if name == "enable_telemetry" && length(local.example_telemetry_modules) > 0 && try(variable.default != true, true)
+    if name == "enable_telemetry" && length(local.example_telemetry_modules) > 0 && length(local.example_utility_calls) == 0 && try(variable.default != true, true)
   }
 }
 
@@ -69,7 +73,10 @@ transform "reorder_attributes" "expand_example_telemetry_modules" {
 }
 
 transform "update_in_place" "disable_example_telemetry" {
-  for_each             = local.example_telemetry_modules
+  for_each = {
+    for name, call in local.example_telemetry_modules : name => call
+    if !contains(keys(local.example_utility_calls), name) || !contains(keys(call), "enable_telemetry")
+  }
   target_block_address = "module.${each.key}"
   asraw {
     enable_telemetry = var.enable_telemetry

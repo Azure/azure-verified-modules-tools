@@ -24,7 +24,9 @@
 .EXAMPLE
     ./build.ps1 ?      # list tasks
 .EXAMPLE
-    ./build.ps1 integration -TestName 'Integration: module metadata*'
+    ./build.ps1 integration -IntegrationGroup Terraform
+.EXAMPLE
+    ./build.ps1 qualification -QualificationGroup Native
 .EXAMPLE
     ./build.ps1 test,component -TestGroup RepositoryManagement
 #>
@@ -42,7 +44,10 @@ param(
     [string] $TestGroup = 'All',
 
     [ValidateSet('All', 'Bicep', 'Terraform')]
-    [string] $IntegrationGroup = 'All'
+    [string] $IntegrationGroup = 'All',
+
+    [ValidateSet('All', 'Native', 'Package')]
+    [string] $QualificationGroup = 'All'
 )
 
 Set-StrictMode -Version 3.0
@@ -65,6 +70,9 @@ if (-not (Test-Path -LiteralPath $buildScript)) {
     throw "Build script not found: $buildScript"
 }
 
-$buildArgs = @{ Task = $Tasks; File = $buildScript; TestName = $TestName; TestGroup = $TestGroup; IntegrationGroup = $IntegrationGroup }
+$buildArgs = @{
+    Task = $Tasks; File = $buildScript; TestName = $TestName; TestGroup = $TestGroup
+    IntegrationGroup = $IntegrationGroup; QualificationGroup = $QualificationGroup
+}
 
 Invoke-Build @buildArgs

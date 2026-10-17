@@ -25,6 +25,20 @@ example location inputs default to "eastus"; new reusable-module
 inputs are required without defaults. Authored location declarations
 and per-item regions are preserved.
 
+Before telemetry migration, authored registry calls with older exact
+pins upgrade Regions to 0.13.0 and Interfaces to 0.9.0. Equal/newer versions,
+custom sources and local module sources are not rewritten. Ambiguous
+version constraints require review. Legacy Azure/naming/azurerm calls
+become Azure/avm-utl-naming/azure 0.2.0 in its default modern mode,
+preserving labels, compatible inputs and supported named output references.
+An existing legacy_mode input on an old-source call is set to false.
+Generated names and random seeds can change; review the consumer plan
+for resource replacement. Existing AVM naming calls keep their authored
+version and mode. These are fixed one-off targets, not latest-release lookups.
+New utility locations use var.location rather than their own outputs;
+authored utility locations and opt-outs remain unchanged. Dependency
+constraints require Terraform 1.9 or later, below 2.0, for naming.
+
 Generated removed blocks let Terraform forget legacy modtm telemetry
 state without destroying its resources. Existing state may require
 the old providers for one final initialization. Test-module provider
@@ -37,7 +51,11 @@ source-backed client defaults are preserved; unproven, computed or
 cross-provider bindings still require review. Mocked
 unit tests receive location values only for newly required inputs,
 preserving their assertions, targets and telemetry opt-outs.
-Published dependencies and unprefixed legacy telemetry are not migrated.
+Fresh dependency inspection retires proven obsolete utility provider
+bindings without trusting stale installed module manifests. Genuine
+ModTM dependencies and non-telemetry Random use remain supported.
+Downloaded dependency source and unprefixed legacy telemetry are not
+rewritten.
 
 -WhatIf previews the Terraform transformation without changing files.
 A consumer repository can override a profile under

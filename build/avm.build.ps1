@@ -12,12 +12,13 @@
       test        - Run Pester unit tests (excludes Component and Integration).
                     By default this tier shards across up to 6 pwsh child
                     processes. Set AVM_UNIT_SHARD_COUNT to override.
-      coverage    - Run unit tests with coverage; fails below the spec §18 floor.
+      coverage    - Run unit and component tests with coverage; fails below the spec §18 floor.
       test-workflows - Run workflow-definition unit tests.
       component   - Run Pester tests under tests/Pester/Component/ (real FS + real subprocess, stub binaries, no network).
                     By default this tier shards across up to 6 pwsh child
                     processes. Set AVM_COMPONENT_SHARD_COUNT to override.
-      integration - Run Pester tests under tests/Pester/Integration/ (real FS + REAL NETWORK + real binaries). Not part of ci/pre-commit; PR/on-demand only.
+      integration - Run packaged public-command acceptance with real binaries.
+      qualification - Run focused native compatibility or package/bootstrap qualification.
       build       - Stage a publishable module tree under ./out/Avm.Authoring.
                     Version stamping and release notes are applied by the ADO
                     release pipeline, not here; the in-repo manifest is never
@@ -57,7 +58,10 @@ param(
     [string] $TestGroup = 'All',
 
     [ValidateSet('All', 'Bicep', 'Terraform')]
-    [string] $IntegrationGroup = 'All'
+    [string] $IntegrationGroup = 'All',
+
+    [ValidateSet('All', 'Native', 'Package')]
+    [string] $QualificationGroup = 'All'
 )
 
 Set-StrictMode -Version 3.0
@@ -460,12 +464,20 @@ task coverage {
             $relative = [System.IO.Path]::GetRelativePath($unitPath, $_.FullName).Replace('\', '/')
             $relative -cnotlike 'Workflows/*'
         })
+    $componentCoverage = @(
+        'TerraformCheckPolicy.Component.Tests.ps1'
+        'TerraformTransform.Component.Tests.ps1'
+        'TerraformUnitTestMigration.Component.Tests.ps1'
+        'TerraformUtilityMigration.Component.Tests.ps1'
+    )
+    $componentFiles = @(Get-AvmScopedTestFile -Path (Join-Path $script:testsRoot 'Component') -Tier Component -Group $TestGroup |
+        Where-Object Name -CIn $componentCoverage)
     $config = New-PesterConfiguration
-    $config.Run.Path                           = @($unitFiles.FullName)
+    $config.Run.Path                           = @($unitFiles.FullName) + @($componentFiles.FullName)
     $config.Run.PassThru                       = $true
     $config.Run.Exit                           = $false
     $config.Output.Verbosity                   = if ($env:AVM_COVERAGE_VERBOSE -eq '1') { 'Detailed' } else { 'Minimal' }
-    $config.Filter.ExcludeTag                  = @('Integration', 'Component')
+    $config.Filter.ExcludeTag                  = @('Integration', 'Qualification')
     $config.TestResult.Enabled                 = $true
     $config.TestResult.OutputFormat            = 'NUnitXml'
     $config.TestResult.OutputPath              = script:Get-AvmTestResultPath -Tier 'unit'
@@ -642,12 +654,6 @@ task component {
     Write-Build Green "  component OK: $($result.PassedCount) passed, $($result.SkippedCount) skipped"
 }
 
-# Spec section 18 Integration tier: real FS + REAL NETWORK + real binaries.
-# Tests live under tests/Pester/Integration/ and are tagged `Integration`. The
-# integration task is the only entry point that runs them; it is NOT part of
-# `pre-commit` or `ci` so routine builds never touch the network. Wire this into
-# a PR / on-demand workflow or invoke on demand. Honours `$env:AVM_OFFLINE`
-# indirectly -- the tests themselves Skip when offline rather than fail.
 task integration build, {
     script:Import-AvmBuildPester
 
@@ -675,6 +681,31 @@ task integration build, {
         throw "$($result.FailedCount) Integration test(s) failed."
     }
     Write-Build Green "  integration OK: $($result.PassedCount) passed, $($result.SkippedCount) skipped"
+}
+
+task qualification build, {
+    script:Import-AvmBuildPester
+    if ($env:AVM_OFFLINE -eq '1') {
+        throw 'Qualification requires verified native tools and package downloads; do not run it with AVM_OFFLINE=1.'
+    }
+    $path = Join-Path $script:testsRoot 'Qualification'
+    if ($QualificationGroup -cne 'All') { $path = Join-Path $path $QualificationGroup }
+    $files = @(Get-ChildItem -LiteralPath $path -Filter '*.Tests.ps1' -File -Recurse)
+    if ($files.Count -eq 0) { throw "No qualification tests found in '$path'." }
+    $config = New-PesterConfiguration
+    $config.Run.Path = @($files.FullName)
+    $config.Run.PassThru = $true
+    $config.Run.Exit = $false
+    $config.Output.Verbosity = 'Detailed'
+    $config.TestResult.Enabled = $true
+    $config.TestResult.OutputFormat = 'NUnitXml'
+    $config.TestResult.OutputPath = script:Get-AvmTestResultPath -Tier 'qualification'
+    $config.Filter.Tag = @('Qualification')
+    $result = script:Invoke-AvmPester -Configuration $config
+    if ($result.TotalCount -eq 0 -or $result.FailedCount -gt 0 -or $result.SkippedCount -gt 0) {
+        throw "Qualification did not fully pass: $($result.PassedCount) passed, $($result.FailedCount) failed, $($result.SkippedCount) skipped."
+    }
+    Write-Build Green "  qualification OK: $($result.PassedCount) passed"
 }
 
 task 'pre-commit' 'docs-check', layout, lint, test, component

@@ -283,6 +283,7 @@ Describe 'Component: invocation-owned inspection packages' -Tag Component {
         @{ Failure = 'get' }
         @{ Failure = 'providers' }
         @{ Failure = 'manifest' }
+        @{ Failure = 'provider warning' }
     ) {
         $script:fixture.Options | Add-Member -NotePropertyName InspectionModuleCache -NotePropertyValue $script:fixture.Cache
         $script:fixture.Options | Add-Member -NotePropertyName TerraformPath -NotePropertyValue 'fixture-terraform'
@@ -306,18 +307,30 @@ Describe 'Component: invocation-owned inspection packages' -Tag Component {
             }
             if ($ArgumentList[0] -ceq 'providers') {
                 if ($EnvVars.Failure -ceq 'providers') { throw [System.InvalidOperationException]::new('fixture providers failed') }
+                if ($EnvVars.Failure -ceq 'provider warning') {
+                    return [pscustomobject]@{ StdOut = "Providers required by configuration:`n.`n`nWarning: Missing required provider configuration`n" }
+                }
                 return [pscustomobject]@{ StdOut = "Providers required by configuration:`n." }
             }
             throw 'Unexpected dependency inspection command.'
         }
         InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture; Failure = $Failure } {
             param($Fixture, $Failure)
+            $warnings = @{}
+            $manifests = @{}
             $inspect = {
-                Get-AvmTerraformUnitTestProviderSource -Path $Fixture.Owner -ModuleTargets $Fixture.Targets -Options $Fixture.Options
+                Get-AvmTerraformUnitTestProviderSource -Path $Fixture.Owner -ModuleTargets $Fixture.Targets -Options $Fixture.Options `
+                    -ModuleManifests $manifests -AllowMissingProviderConfiguration:($Failure -ceq 'provider warning') -ProviderWarnings $warnings
             }
             if ($Failure -ceq 'none') {
                 & $inspect
                 $Fixture.Cache.Count | Should -Be 1
+            }
+            elseif ($Failure -ceq 'provider warning') {
+                & $inspect
+                $Fixture.Cache.Count | Should -Be 0
+                $warnings.ContainsKey($Fixture.Owner) | Should -BeTrue
+                $manifests.ContainsKey($Fixture.Owner) | Should -BeTrue
             }
             else {
                 $expected = if ($Failure -ceq 'manifest') { '*not valid JSON*' } else { "*fixture $Failure failed*" }

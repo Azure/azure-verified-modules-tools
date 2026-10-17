@@ -678,6 +678,60 @@ example value when another region or cloud is required.
 Variable blocks are sorted after missing location inputs are
 created, so the first transform already satisfies drift checks.
 
+Before telemetry transformation, the `utility-module` profile migrates authored
+registry calls by source, not by module label. Older exact pins of
+`Azure/avm-utl-regions/azurerm` move to `0.13.0`; older exact pins of
+`Azure/avm-utl-interfaces/azure` move to `0.9.0`. Equivalent
+`registry.terraform.io/` addresses are supported. Current pins are preserved;
+newer calls are left alone. Missing pins, ranges, prereleases and computed
+versions on these sources require review, not a guessed version. Custom
+registries, Git sources and local modules are not rewritten as registry calls.
+Root, child, example and discovered test-wrapper scopes share this phase.
+These are fixed one-off migration targets, not latest-release lookups or an
+automatic progression to future utility versions.
+
+Legacy `Azure/naming/azurerm` calls become `Azure/avm-utl-naming/azure` at
+`0.2.0` in modern mode. Omit `legacy_mode` to use its false default; if an
+old-source call already contains that input, set it to false. Preserve labels
+and compatible authored inputs, including deprecated hyphenated inputs.
+The pinned utility exposes deprecated named outputs as aliases of its modern
+catalog results, so those references remain valid without rewriting callers.
+Generated names and random seeds may change and consumer resources may be
+replaced; review the Terraform plan. Do not delete state. Existing
+`Azure/avm-utl-naming/azure` calls remain outside this conversion, preserving
+all owner-selected versions and modes. This dependency requires Terraform
+`>= 1.9, < 2.0` and Random `>= 3.3.2, < 4.0`. This phase does not rewrite
+authored Terraform version constraints; Terraform enforces the dependency's
+minimum versions, and existing provider-governance rules still apply.
+
+Regions and Interfaces now require `location` and AzAPI `~> 2.12`; Interfaces
+also retains Random for role assignments. Supply a missing utility location
+from an independent `var.location`, never from that same utility's outputs.
+New reusable inputs remain required; only new example inputs default to
+`eastus`. Preserve authored locations and opt-outs, including existing utility
+example telemetry defaults. Test wrappers receive no new telemetry control.
+Introduce an explicit AzAPI source and binding when a telemetry-free caller
+needs them, without replacing existing bindings or constraints.
+
+Capture native unit-test declarations and original provider evidence before
+utility edits. Inspect upgraded dependencies through fresh private Terraform
+data directories, not the consumer's stale modules manifest. Remove obsolete
+ModTM mappings only with dependency proof and literal same-provider mappings;
+preserve other bindings and their comments. Reconcile affected local callers
+in dependency order after telemetry transforms. Remove provider requirements
+and empty mocks only when resources, data, ephemeral blocks, provider
+configurations, bindings and the fresh dependency trees prove them unused.
+Retain genuine ModTM dependencies, custom mocks, state-only `removed` blocks
+and legitimate Random use. Existing safe mock-review rules still apply.
+An intermediate native missing-provider-configuration warning may be tracked
+while repairing proven source bindings. All other diagnostics remain fatal,
+and a strict dependency recheck must pass before mock migration.
+Never transform downloaded dependency source or initialize a backend for this
+migration. Preserve consumer initialization data and exact lock bytes, including
+failure paths; clear ambient Terraform data/CLI-argument overrides for native
+inspection. Drift checks also restore authored source, tests and original backup
+bytes, removing only newly created backups.
+
 For modules without their own telemetry, a newly generated canonical `location`
 input receives a scoped `terraform_unused_declarations` exemption: the required
 interface also applies to global resources that do not consume a region.
@@ -736,6 +790,17 @@ The module catalog maps the metadata prefix to its canonical type. A
 precondition rejects a version with unsupported name characters or a
 combined name longer than 64 characters; neither is silently truncated.
 
+Independent fresh telemetry migrations must produce identical file bytes, not
+just equivalent Terraform. Conditional append operations explicitly depend on
+all preceding potential writers so an absent earlier transform cannot break
+the order. The metadata locals use a literal native block body to preserve
+attribute order. The module profile orders the generated telemetry precondition
+before the common profile orders its resource body; the pinned native tool
+cannot compose those two ordering modes in one profile. Match the generated
+resource identity and leave owner deployments, headers and expressions intact.
+The first-pass golden remains byte-exact, followed by a second full public
+pre-commit byte check and a non-writing pr-check.
+
 The empty template contains the Bicep-style information output and a
 non-reporting `apply_id` output set to `plantimestamp()`. This changes the
 resource body once per normal plan, forcing an in-place deployment PUT even
@@ -781,21 +846,14 @@ and the helper's gate and four-byte length; matching resource names alone
 must not remove other authored deployments or random resources.
 Retain the helper and its provider if any Terraform source still references
 it or the scope contains JSON configuration that needs review.
-For an undeclared legacy `avm_azapi_header` local, retire the standard
-telemetry-only AzAPI operation headers and preserve a wildcard `If-Match`
-delete precondition when it is merged with that header. Match the complete
-known expression, not just the local name. Retire the complete canonical
-`avm_azapi_header`, `avm_azapi_headers`, `fork_avm` and
-`valid_module_source_regex` helper bundle only when its declaration and
-reference counts prove that no source or Terraform test uses it outside the
-bundle. Check HCL tests at the root and under `tests/`; retain the bundle
-when JSON configuration or JSON tests prevent that proof. Native metadata
-must identify one source directory, even after earlier resource retirement.
-Remove only those local attributes, not neighboring authored values.
-Preserve duplicate declarations, other declared header locals, custom gates
-and mixed headers for review; never invent a fallback header or remove
-unrelated request headers. Commented-out resources are not active header
-usages.
+AzAPI request headers belong to the module owner. Tools must not remove,
+retire or rewrite operation headers or their helper locals, including former
+AVM header names, conditional expressions, literal strings and merged
+`If-Match` preconditions. Adding headers alone must not cause a check failure.
+Ordinary Terraform schema and reference validation still applies: owners
+must reconcile any references to retired resources themselves. Migrate
+standard telemetry output expressions rather than globally replacing text
+inside owner-authored expressions.
 Terraform must still install their former
 providers once when an existing state references them; after the state
 forgets those addresses, migrated source does not require `modtm` unless an
@@ -806,7 +864,7 @@ or data sources remain in the module. The transform also removes obsolete
 they have no remaining `modtm` resources, data sources or explicit module
 provider bindings. Empty `modtm` test mocks are retired only when the selected
 targets' configuration dependency trees prove the provider is unused.
-Standard references to the old telemetry resource are migrated. Direct unit
+Standard output references to the old telemetry resource are migrated. Direct unit
 assertions whose complete condition is `length(random_uuid.telemetry) == 0`
 or `== 1` are migrated to `terraform_data.telemetry` only when their selected
 target is instrumented. The condition may also prefix that comparison with
@@ -842,7 +900,7 @@ the inline update and leave source files unchanged; an authored inline
 client-config block retains its precedence. Escaping, linked, missing or JSON
 sources, source overrides, duplicate client defaults, computed defaults and
 nonliteral subscription IDs require review instead of overwriting or guessing.
-Published dependencies and legacy telemetry
+Downloaded dependency source and legacy telemetry
 in scopes without a telemetry prefix are not migrated by the root profile.
 Native MaPoTF inspects each direct `tests/unit/*.tftest.hcl` file before source
 transformation. Root runs and explicitly selected, known local module
@@ -894,9 +952,11 @@ targets, their known local children, and test setup no longer need that
 provider. Unselected examples do not retain an owner's random mock; explicitly
 selected examples are checked for their own provider use. Non-empty mocks or remaining random
 references fail for manual review; mocks for other random use are preserved.
-The owner's inspection already covers its known non-example descendants;
-selected test wrappers reuse that result rather than treating a previously
-inspected ancestor dependency as unknown.
+The conservative owner's inspection already covers its known non-example
+descendants; selected test wrappers reuse that result rather than treating a
+previously inspected ancestor dependency as unknown. Native configuration-tree
+evidence covers only reachable dependencies, so independently selected local
+targets outside that tree still require their own provider-use evidence.
 JSON configurations other than proven locals-only objects and module
 dependencies that cannot be checked locally also retain their random mocks
 rather than assuming the provider is unused.
@@ -930,7 +990,8 @@ Within one transform invocation, completed inspections may seed later private
 data directories with copies of public registry root packages selected at bare,
 stable exact versions. Admit packages only after successful native installation,
 provider-tree inspection and manifest validation; never read them from the
-source tree's existing initialization data. Fingerprint the complete downloaded
+source tree's existing initialization data. Repair-mode diagnostic trees are not
+cache-admission evidence; strict reinspection must succeed first. Fingerprint the complete downloaded
 package, reject links, initialization/plan data and unexpected locations, and fail
 if an admitted package changes before reuse. Discover current calls and known local parents through
 native MaPoTF inspection before remapping package keys. Scopes with Terraform
@@ -1792,10 +1853,72 @@ This section is the implementation-level expression of the **Security stance** p
 | ----------- | ---------------------------- | ---------------------------------- | ------- | --------------- |
 | Unit        | `tests/Pester/Unit/`         | Pure logic; mocks only             | No      | No              |
 | Component   | `tests/Pester/Component/`    | Real FS under `TestDrive`; stub binaries via fixture scripts in `tests/fixtures/bin/` | No | Real            |
-| Integration | `tests/Pester/Integration/`  | Pulls and runs the real managed tools from the resolver against the on-disk fixtures | Yes | Real |
+| Integration | `tests/Pester/Integration/`  | Packaged public-command acceptance against canonical and representative migration fixtures | Yes | Real |
+| Qualification | `tests/Pester/Qualification/` | Minimal native compatibility and separately selected package/download/bootstrap proof | Yes | Real |
 
 - Integration tests are tagged `-Tag Integration` and excluded from default local runs. Selected authoring pull-request and manual CI runs include them; main pushes do not.
 - A stub-binary harness in `tests/fixtures/bin/` provides PowerShell scripts named `terraform.ps1`, `tflint.ps1`, etc. that emit pre-canned output. The resolver is hooked at test time to point at the stubs.
+
+Terraform acceptance uses the built `out/Avm.Authoring` package and the public
+`avm` dispatcher. Both canonical AzureRM and AzAPI fixtures must be correct
+before execution: the first full `avm pre-commit` changes no authored bytes.
+Snapshot that output, run the full public pre-commit a second time, and require
+zero added, deleted or modified authored/managed source, docs, tests and tracked
+lock/pin files. Then full `avm pr-check` must pass every expected step and leave
+the same tree unchanged. Returned `Changed` arrays and Git's ignored-file status
+are not substitutes for byte inventories.
+
+One legacy user-flow fixture permits reviewed first-pass changes only, compared
+with checked-in expected output independent of the transform executed by the
+test. It covers utility upgrades, current telemetry, provider cleanup, modern
+naming with compatible output references, owner headers, authored locations and telemetry opt-outs. The
+second full public pre-commit must be byte-identical. Provider-mocked consumer
+tests run without Azure authentication and with a loopback ModTM endpoint; the
+temporary repository alone is committed before full pr-check. Keep tracked
+Terraform locks in the before/after inventories. Only root Git metadata, new
+Terraform working caches, and initially absent lock files created during
+initialization in known configuration directories are transient. Do not ignore
+all dotfiles, all ignored Git paths, or authored files under tool-like paths.
+
+Missing policy-plan credentials block full local acceptance; do not skip a
+required step, exclude a policy, or turn missing evidence into a pass. CI uses
+the existing approved OIDC identity. Acceptance and qualification do not deploy
+Azure resources. Qualification may run provider-mocked Terraform applies and
+provider-free local plans, but never real-provider applies.
+
+This mock boundary includes Terraform's built-in provider. Applying fixtures
+that use `terraform_data` declare `terraform.io/builtin/terraform` explicitly,
+provide `mock_provider "terraform" {}`, and include its binding in every
+explicit run mapping that selects such a target. Provider-free setup targets
+do not acquire unrelated bindings. Before a native test process starts,
+inspect every selected local target's provider sources and test declarations.
+Missing mocks, unproven sources, real test-provider configurations and partial,
+unknown or cross-provider mappings fail closed. Root test files outside the
+inspected suite and JSON tests are rejected. Public-command acceptance keeps
+its real initialization and test execution, with the same guard at the test
+subprocess boundary. Runtime credentials are cleared and runtime HTTP proxies
+and ModTM endpoints are loopback-only; dependency inspection may still fetch
+the pinned packages before runtime. Network isolation is not an exception to
+the prohibition on real-provider applies.
+
+Telemetry repeat-update qualification is bounded compositional proof, not an
+unmodified end-to-end runtime test. Guard the generated `plantimestamp()`
+expression and file hashes, obtain two distinct ordered timestamps from
+provider-free native plans with a bounded harness-owned wait, and substitute
+only that clock dependency in a temporary override. Preserve the stable-name
+and changed-apply-ID assertions and require the native plan's exact `update`
+action; reject creation, deletion, replacement and unexpected source changes.
+
+Keep source/version matching, native response/argument contracts, provider
+mapping decisions and safety predicates in unit tests. Real filesystem,
+manifest, lock, cache, environment, rollback and subprocess-failure contracts
+belong in component tests with stub processes. Do not move real native calls
+into these tiers. Native HCL/token behavior, provider-schema selection,
+downloaded inspection reuse and Terraform modern-naming output behavior require a
+small native compatibility suite; mocks or duplicated formulas are not proof
+of those semantics. Consolidate upstream permutations rather than rebuilding
+whole transform fixtures for each decision. Install/download/attestation and
+cold/offline package qualification run separately from module fixture jobs.
 
 Repository-sync candidate validation uses the `static-unit-v1` acceptance
 profile: all `pr-check` steps except `check policy` must pass, matching the
@@ -1844,6 +1967,10 @@ modules fail explicitly; they must not fall back to a release.
 
 - 70% line coverage on `src/Avm.Authoring/` minimum, enforced via Pester `CodeCoverage`. CI build fails below the floor.
 - Coverage is tracked per file; new files start with the floor and ratchet up as code matures.
+- The coverage gate retains the unit inventory plus the filesystem suites
+  relocated from it, so tier corrections do not remove production coverage.
+  The complete component suite still runs independently on each OS; do not
+  duplicate all component execution merely to move a test between tiers.
 
 ### Reusable Terraform module CI
 
@@ -1905,7 +2032,7 @@ also requires recorded SFI sign-off before merge.
 
 ### Scoped CI
 
-Three independent workflows use GitHub's native `on.push.paths` and
+Four independent workflows use GitHub's native `on.push.paths` and
 `on.pull_request.paths` filters for pushes to `main` and pull requests targeting
 `main`. Each also has `workflow_dispatch` to run its own suite without a file
 change. There is no dispatcher, custom changed-file detection or cross-workflow
@@ -1914,16 +2041,22 @@ status aggregation.
 | Workflow | File | Coverage |
 | --- | --- | --- |
 | `Authoring: CI` | `ci-authoring.yml` | Lint once on Ubuntu; authoring unit and component tests on Ubuntu, Windows and macOS; the Ubuntu unit leg enforces the 70% coverage floor. |
+| `Authoring: Package qualification` | `ci-package-qualification.yml` | Cold/offline runtime dependencies, release downloads, checksums and ruleset attestation on all three operating systems when package/pin/bootstrap dependencies change. |
 | `Workflows: CI` | `ci-workflows.yml` | Workflow definitions, embedded installation behavior and CI contract tests on Ubuntu only. |
 | `Repos: CI` | `repository-management-config-test.yml` | Repository-management unit/component tests, configuration checks and mocked Terraform validation on Ubuntu only. |
 
 Authoring pull-request/manual runs retain both Terraform fixtures per OS and
 one Bicep integration leg per OS. Main pushes skip both integration matrices.
-Terraform telemetry transformations run in the AzureRM fixture leg and telemetry
-mock-safety scenarios in the AzAPI fixture leg, once per OS. Delegated fixture
-preservation and mocked unit execution follow `AVM_INTEGRATION_FIXTURE`; an
-unset selector runs the complete union. Discovery tests require that the two
-fixture selections have no overlapping telemetry scenarios or missing coverage.
+Both Terraform legs run canonical public-command acceptance; the AzAPI leg
+also runs the single legacy utility migration. Selection follows
+`AVM_INTEGRATION_FIXTURE`; an unset selector runs the complete union. Discovery
+tests require disjoint fixture selections and reject unassigned integration
+files rather than silently treating non-Bicep filenames as Terraform tests.
+Bicep-specific packaged metadata/compiler acceptance stays in the Bicep jobs.
+A separate, credential-free native compatibility leg runs once per OS, not
+once per Terraform fixture. Package qualification has its own path-filtered
+workflow and reports. Native qualification remains required on authoring
+pull-request/manual runs; it is not a nightly store for redundant matrices.
 Existing integration environment approval and job-specific permissions remain
 in place. Workflow and repository-management CI need no Azure credentials.
 

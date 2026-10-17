@@ -604,7 +604,7 @@ Describe 'CI workflow' {
     It 'uses the prerequisite installer in every CI test job type' {
         ([regex]::Matches(
                 $script:ci,
-                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 5
+                '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 6
         ([regex]::Matches(
                 $script:workflowCi,
                 '\./scripts/Install-AvmBuildPrerequisites\.ps1')).Count | Should -Be 1
@@ -628,7 +628,7 @@ Describe 'CI workflow' {
         $bicep | Should -Not -Match 'environment:|id-token:|azure/login|Add-MpPreference|fixture:'
         $bicep | Should -Match 'if: always\(\)'
         $bicep | Should -Match 'test-results-bicep-integration-'
-        $script:ci | Should -Match 'needs: \[unit, component, integration, bicep-integration\]'
+        $script:ci | Should -Match 'needs: \[unit, component, integration, bicep-integration, native-qualification\]'
     }
 }
 

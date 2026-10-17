@@ -1,0 +1,121 @@
+name: 'Authoring: Package qualification'
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/Avm.Authoring/Avm.Authoring.ps*1'
+      - 'src/Avm.Authoring/Resources/avm.pins.jsonc'
+      - 'src/Avm.Authoring/Resources/tflint/**'
+      - 'src/Avm.Authoring/Private/Tools/**'
+      - 'src/Avm.Authoring/Private/Version/**'
+      - 'src/Avm.Authoring/Private/Assets/**'
+      - 'src/Avm.Authoring/Private/Network/**'
+      - 'src/Avm.Authoring/Private/Process/**'
+      - 'src/Avm.Authoring/Engines/Terraform/Invoke-AvmTerraformLint.ps1'
+      - 'tests/Pester/Qualification/Package/**'
+      - 'tests/fixtures/tools/Invoke-RuntimePrerequisites.ps1'
+      - 'tests/fixtures/modules/terraform-azure-avm-res-mock/**'
+      - 'build/**'
+      - 'build.ps1'
+      - 'scripts/Install-Avm*.ps1'
+      - 'scripts/Update-AvmPins.ps1'
+      - '.github/workflows/ci-package-qualification.yml'
+      - '.github/workflows/release.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/Avm.Authoring/Avm.Authoring.ps*1'
+      - 'src/Avm.Authoring/Resources/avm.pins.jsonc'
+      - 'src/Avm.Authoring/Resources/tflint/**'
+      - 'src/Avm.Authoring/Private/Tools/**'
+      - 'src/Avm.Authoring/Private/Version/**'
+      - 'src/Avm.Authoring/Private/Assets/**'
+      - 'src/Avm.Authoring/Private/Network/**'
+      - 'src/Avm.Authoring/Private/Process/**'
+      - 'src/Avm.Authoring/Engines/Terraform/Invoke-AvmTerraformLint.ps1'
+      - 'tests/Pester/Qualification/Package/**'
+      - 'tests/fixtures/tools/Invoke-RuntimePrerequisites.ps1'
+      - 'tests/fixtures/modules/terraform-azure-avm-res-mock/**'
+      - 'build/**'
+      - 'build.ps1'
+      - 'scripts/Install-Avm*.ps1'
+      - 'scripts/Update-AvmPins.ps1'
+      - '.github/workflows/ci-package-qualification.yml'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_MultiCoreJitMinNumCpus: '7fffffff'
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  package:
+    name: Package compatibility (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      ARM_USE_OIDC: 'false'
+      ARM_USE_CLI: 'false'
+      ARM_USE_MSI: 'false'
+      MODTM_ENDPOINT: 'http://127.0.0.1:1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build prerequisites
+        shell: pwsh
+        run: ./scripts/Install-AvmBuildPrerequisites.ps1 -Confirm:$false
+
+      - name: Qualify installed packages
+        shell: pwsh
+        run: |
+          $env:AVM_HOME = Join-Path $env:RUNNER_TEMP 'avm-package-home'
+          ./build.ps1 qualification -QualificationGroup Package
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-package-${{ matrix.os }}
+          path: out/test-results/*.xml
+          if-no-files-found: error
+          retention-days: 7
+
+  report:
+    name: Report package qualification
+    needs: package
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      checks: write
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Download test results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: test-results-package-*
+          path: artifacts
+
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@d0a4676d0e0b938bc201470d88276b7c74c712b3 # v2.24.0
+        with:
+          check_name: Package qualification results
+          comment_title: Package qualification results
+          files: artifacts/**/*.xml
+          report_individual_runs: "true"
