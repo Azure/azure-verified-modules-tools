@@ -1558,6 +1558,18 @@ suppress nested `Info` and `Pass` narration. `-Verbose`, `AVM_VERBOSE=1`, and
 GitHub Actions runner debug mode restore all nested narration. Warnings and
 errors are never suppressed.
 
+Terraform lint presents every finding at or above its failure threshold through
+the shared error logger when lint completes, before subsequent composition
+steps. This produces source-linked GitHub error annotations and visible local
+error diagnostics even when the underlying issue is a blocking warning.
+Preserve the original issue severity, threshold/status semantics and complete
+scope collection. Below-threshold canonical AVM notices remain advisory
+warnings. Final dispatcher and composition rendering must not repeat already
+presented findings; every finding remains in the structured result.
+
+Internal transform dependency copies suppress filesystem-provider progress
+bars; inspection-cache diagnostics remain available through verbose logging.
+
 Sensitive-output consumers can use `Invoke-AvmProcess -StreamOutput` with
 `OnStdOutLine` and `OnStdErrLine` callbacks to own both streams' incremental
 rendering. A handled stream is not echoed or replayed unfiltered on failure.
@@ -2145,12 +2157,20 @@ including workflow and repository-management tests.
   satisfy `PSUseProcessBlockForPipelineCommand`.
 - Consumers wrap `Invoke-ScriptAnalyzer` results in `@(...)`; a no-finding
   result can otherwise be `$AutomationNull` on non-Windows hosts.
+- The build invokes publicly discovered builtin rules serially through
+  `IncludeRule`, retaining the original full inputs, settings, severities and
+  custom-rule discovery arguments. A final custom-only partition excludes
+  those builtins without enabling otherwise undiscovered custom rules.
+  Parser `DiagnosticRecord` findings are identified by `ParseError` severity,
+  not rule name, and retained once from the first full-input partition.
+  All non-parser findings, including duplicates, remain intact.
 - The build retry wrapper may retry only PSScriptAnalyzer's known transient
   `NullReferenceException` or a `CommandNotFoundException` whose `CommandName`
   is exactly `Get-Command`, including either failure inside an exception chain.
   Matching message text alone does not qualify a command-resolution failure.
   Both share the `AVM_LINT_MAX_ATTEMPTS` budget (eight total attempts by default)
-  and the existing 500 ms incremental backoff. Exhaustion rethrows the original
+  and the existing 500 ms incremental backoff. Each attempt covers the entire
+  serial pass; failed attempts emit no partial findings. Exhaustion rethrows the original
   final error; unrelated exceptions fail immediately. The wrapper must never
   retry or hide analyzer findings.
 - A `pre-commit` Pester suite runs:

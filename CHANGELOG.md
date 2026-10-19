@@ -396,6 +396,19 @@ section when cutting a release.
 
 ### Fixed
 
+- Build lint runs unchanged effective analyzer rules serially through the public
+  API to avoid concurrent dynamic command-metadata access. Original settings and
+  discovery remain unchanged, parser findings are retained once, and the retry
+  budget applies to complete passes rather than individual rules.
+
+- Terraform lint reports blocking findings immediately as source-linked GitHub
+  errors and visible local diagnostics, including warnings that fail the
+  configured threshold. Structured severities and collect-all behavior remain
+  unchanged; advisory notices remain warnings and final output avoids repeats.
+
+- Terraform transform dependency-cache copies no longer render file-copy
+  progress bars. Copy diagnostics remain available with verbose logging.
+
 - Telemetry unit-test migration preserves proven existing ALZ local-library
   provider bindings and implicit Random/Time defaults alongside required Azure
   and legacy dependency mocks. Generated mappings keep real library assertions

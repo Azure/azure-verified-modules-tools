@@ -498,7 +498,9 @@ Describe 'Component: resumable Terraform avm init' -Tag Component {
 
         $result = Initialize-AvmModule @init
 
-        $result.Status | Should -Be 'pass'
+        $result.Status | Should -Be 'pass' -Because (
+            $result.Steps | Where-Object Status -eq 'fail' | Select-Object Step, Error | ConvertTo-Json -Compress
+        )
         @($result.Steps | Where-Object { $_.Step -like 'organization rulesets*' }).Step |
             Should -Be 'organization rulesets: no earlier change to restore'
         $fake.OptOut | Should -Be 'true'

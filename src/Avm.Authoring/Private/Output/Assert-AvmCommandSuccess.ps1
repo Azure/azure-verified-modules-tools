@@ -15,11 +15,10 @@ function Assert-AvmCommandSuccess {
         The error remains a script-terminating throw so the hosting process
         still exits non-zero (F02).
 
-        F41: exactly one GitHub Actions annotation is emitted per failed
-        command, anchored on the failing file when the diagnostic carries a
-        position. Annotations are capped at 10 per step, so every other line the
-        CLI writes about the failure stays plain narration and cannot crowd the
-        actionable one out.
+        F41: an unpresented command failure emits one GitHub Actions annotation,
+        anchored on the failing file when the diagnostic carries a position.
+        An inline-presented headline is not annotated again; its full detail
+        remains in the typed exception and structured result.
     #>
     [CmdletBinding()]
     param(
@@ -40,7 +39,25 @@ function Assert-AvmCommandSuccess {
     $exception = [AvmCommandException]::new($Verb, $Status, $Result, $detail)
     $summary = 'avm {0} failed ({1}).' -f $Verb, $Status
 
-    if ([string]::IsNullOrWhiteSpace($detail)) {
+    $issueResult = $Result
+    $step = Get-AvmFailureStep -Result $Result
+    if ($null -ne $step) {
+        $issueResult = $null
+        $errorProperty = $step.PSObject.Properties['Error']
+        $resultProperty = $step.PSObject.Properties['Result']
+        if (
+            ($null -eq $errorProperty -or [string]::IsNullOrWhiteSpace([string]$errorProperty.Value)) -and
+            $null -ne $resultProperty
+        ) {
+            $issueResult = $resultProperty.Value
+        }
+    }
+    $issue = if ($null -ne $issueResult) { Get-AvmPrimaryIssue -Result $issueResult }
+
+    if ($null -ne $issue -and (Test-AvmIssuePresented -Issue $issue)) {
+        Write-AvmLog $summary -Level Fail
+    }
+    elseif ([string]::IsNullOrWhiteSpace($detail)) {
         Write-AvmLog $summary -Level Error
     }
     else {
