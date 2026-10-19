@@ -226,6 +226,12 @@ param([switch]$Enabled = $true)
 $unused = ConvertTo-SecureString 'fixture' -AsPlainText -Force
 write-host 'fixture'
 }
+function Get-AnalyzerOutputFixture {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+    return 42
+}
 '@
     }
 
@@ -233,13 +239,20 @@ write-host 'fixture'
         $baselineErrors = @()
         $baseline = @(Invoke-ScriptAnalyzer @script:realParameters -ErrorVariable baselineErrors)
         $baselineErrors | Should -BeNullOrEmpty
+        $analyzerVersion = (Get-Module -Name PSScriptAnalyzer).Version.ToString()
+        $baselineSeverities = ($baseline.Severity | Sort-Object -Unique) -join ', '
+        $casingSeverities = ($baseline | Where-Object RuleName -eq PSUseCorrectCasing | Select-Object -ExpandProperty Severity -Unique) -join ', '
+        Write-Information "Real analyzer fixture: PSScriptAnalyzer $analyzerVersion; severities $baselineSeverities; casing [$casingSeverities]." -InformationAction Continue
         $baselineParser = @($baseline | Where-Object Severity -eq ParseError)
         $baselineParser | Should -HaveCount 1
         $baselineParser[0] | Should -BeOfType ([Microsoft.Windows.PowerShell.ScriptAnalyzer.Generic.DiagnosticRecord])
         $baselineParser[0].RuleName | Should -BeExactly 'MissingEndCurlyBrace'
         $baselineParser[0].Extent.StartLineNumber | Should -Be 1
+        @($baseline | Where-Object { $_.RuleName -eq 'PSUseOutputTypeCorrectly' -and $_.Severity -eq 'Information' }) |
+            Should -HaveCount 1
         foreach ($severity in 'Error', 'Warning', 'Information') {
-            @($baseline | Where-Object Severity -eq $severity).Count | Should -BeGreaterThan 0
+            @($baseline | Where-Object Severity -eq $severity).Count |
+                Should -BeGreaterThan 0 -Because "the real fixture must include $severity findings with PSScriptAnalyzer $analyzerVersion"
         }
 
         $serial = @(Invoke-ScriptAnalyzerWithRetry -Params $script:realParameters 2>&1)
