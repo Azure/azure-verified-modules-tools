@@ -906,6 +906,16 @@ Native MaPoTF inspects each direct `tests/unit/*.tftest.hcl` file before source
 transformation. Root runs and explicitly selected, known local module
 targets, including discovered examples and standalone test setup and wrapper modules,
 are supported; remote or unknown targets fail without fetching them.
+Load pre-transform provider trees only when preserving existing local bindings
+or augmenting an introduced provider mapping needs their evidence. Conservative
+local-provider usage checks select those inspections; they never establish
+binding coverage. Fully mocked templates can reference inputs that instrumentation
+has not created yet, so their native dependency loading waits until after the
+source transforms. Every selected post-transform provider tree still requires
+complete mock or proven preserved-binding coverage.
+When utility planning identifies a target that will gain telemetry, an authored
+mapping still requires the same baseline proof even without a root telemetry
+profile on that target.
 Only root and child modules establish test-file ownership; example and
 standalone test targets do not change which files are direct unit tests.
 After source transformation, only a target that gained a previously absent,
@@ -914,9 +924,26 @@ provider-mocked tests. Existing global and per-run values, including nulls
 and expressions, remain authored. This test-only value is not a production
 default and never replaces per-hub regions or repairs unrelated pre-existing
 missing inputs. Assertions, targets and telemetry opt-outs are preserved.
-Real-provider declarations, unproven aliases and partial or cross-provider
-bindings still require review rather than being silently changed; an AzureRM
-mock alone cannot cover new AzAPI telemetry. AzAPI aliases must have consistent
+New or unproven real-provider declarations, unproven aliases and partial or
+cross-provider bindings still require review rather than being silently changed;
+an AzureRM mock alone cannot cover new AzAPI telemetry. Preserve an existing
+`azure/alz` library provider only with literal relative library paths without
+parent traversal, and existing unmocked `hashicorp/random` and `hashicorp/time`
+bindings, when each run's pre- and post-transform native configuration trees prove
+the same provider source. Preserve retained declared versions and literal native
+provider identities. A generated mapping must retain the selected real library
+configuration rather than invent mock outputs or fall back to an unconfigured
+library. Unconfigured Random/Time defaults remain implicit; a dependency's proven
+HashiCorp source does not require an otherwise unused root declaration.
+Never replace an existing mock with a real binding, infer other real provider
+implementations, or use another run's source or alias proof. Azure operation
+providers and ModTM still require known same-provider mocks.
+When generating a new map, retain an already-authored built-in Terraform mock
+only when native source evidence identifies `terraform.io/builtin/terraform`.
+An undeclared source with both built-in and registry Terraform identities is
+ambiguous and requires an explicit source. Do not invent a built-in mock or
+silently complete an authored map that omitted it.
+AzAPI aliases must have consistent
 literal native names, labels and addresses; the same identity checks apply to
 every provider alias. Local source-backed aliases retain the source checks
 above. An alias is never treated as an unaliased default.
@@ -930,8 +957,9 @@ A valid, explicitly empty native run collection needs no mocks. Missing,
 malformed or incomplete native collections still fail inspection.
 When an instrumented target introduces AzAPI, add its existing default mock
 binding only if a pre-transform configuration provider tree proves the old
-mapping covered every selected provider. Preserve the original aliases and
-comments; incomplete or unmocked prior coverage still fails.
+mapping covered every selected provider through mocks or the preserved local
+bindings above. Preserve the original aliases and comments; incomplete or
+unproven prior coverage still fails.
 Preserve safe authored bindings; remove only bindings to an empty ModTM or
 random mock whose provider is absent from that target's
 configuration dependency tree. Preserve all remaining expression text and
@@ -1035,6 +1063,9 @@ unchanged. Default and complete example-wrapper regressions must check both
 required-provider and unused-provider lint as well as independent validation,
 exact dependency selections and lock/manifest bytes. Finish the normal
 ordering profile on restored scopes so the first pass is already drift-free.
+Restore requirements and bindings through the isolated `provider-restore`
+profile, not the full module profile: example and test callers must not acquire
+unrelated module inputs or changed provider constraints during this repair.
 Published dependencies remain untouched. An inspected target's or dependency's
 direct `.tf.json` files may contain only `locals` blocks in strict JSON objects,
 including arrays of locals objects; empty configuration objects are also safe.
@@ -1050,6 +1081,16 @@ Unrelated selected targets still retire their unused bindings and requirements.
 Native regression fixtures use loopback-only ModTM endpoints and verify mocked
 resource values, full original locks, installed selections, repeat stability
 and failure-path drift restoration without production collector access.
+Real ALZ library regressions preserve provider configuration, fixture bytes and
+assertions through native parsing, provider-tree inspection and validation;
+they do not execute the original Terraform tests or fabricate ALZ outputs.
+Separate binding regressions execute only with proven default and same-provider
+alias mocks, including Terraform's built-in provider. Native execution rejects
+real provider blocks, missing dependency mocks and unproven mappings before
+`terraform test`; inherited credentials are cleared, authentication fallbacks
+disabled and runtime endpoints/proxies restricted to loopback. Preservation
+and mocked-binding evidence do not establish original consumer/runtime
+equivalence, which remains an explicit qualification gap.
 
 `avm pre-commit` and `avm pr-check` resolve their required tools before the
 first step, which validates metadata for the selected root and its module
@@ -1517,6 +1558,18 @@ suppress nested `Info` and `Pass` narration. `-Verbose`, `AVM_VERBOSE=1`, and
 GitHub Actions runner debug mode restore all nested narration. Warnings and
 errors are never suppressed.
 
+Terraform lint presents every finding at or above its failure threshold through
+the shared error logger when lint completes, before subsequent composition
+steps. This produces source-linked GitHub error annotations and visible local
+error diagnostics even when the underlying issue is a blocking warning.
+Preserve the original issue severity, threshold/status semantics and complete
+scope collection. Below-threshold canonical AVM notices remain advisory
+warnings. Final dispatcher and composition rendering must not repeat already
+presented findings; every finding remains in the structured result.
+
+Internal transform dependency copies suppress filesystem-provider progress
+bars; inspection-cache diagnostics remain available through verbose logging.
+
 Sensitive-output consumers can use `Invoke-AvmProcess -StreamOutput` with
 `OnStdOutLine` and `OnStdErrLine` callbacks to own both streams' incremental
 rendering. A handled stream is not echoed or replayed unfiltered on failure.
@@ -1890,7 +1943,10 @@ This mock boundary includes Terraform's built-in provider. Applying fixtures
 that use `terraform_data` declare `terraform.io/builtin/terraform` explicitly,
 provide `mock_provider "terraform" {}`, and include its binding in every
 explicit run mapping that selects such a target. Provider-free setup targets
-do not acquire unrelated bindings. Before a native test process starts,
+do not acquire unrelated bindings. An inspected literal plan in a preservation
+regression may use unambiguous native built-in source proof for an authored mock without
+adding a source declaration; that proof does not cover another run's explicit
+or default apply command. Before a native test process starts,
 inspect every selected local target's provider sources and test declarations.
 Missing mocks, unproven sources, real test-provider configurations and partial,
 unknown or cross-provider mappings fail closed. Root test files outside the
@@ -2101,12 +2157,20 @@ including workflow and repository-management tests.
   satisfy `PSUseProcessBlockForPipelineCommand`.
 - Consumers wrap `Invoke-ScriptAnalyzer` results in `@(...)`; a no-finding
   result can otherwise be `$AutomationNull` on non-Windows hosts.
+- The build invokes publicly discovered builtin rules serially through
+  `IncludeRule`, retaining the original full inputs, settings, severities and
+  custom-rule discovery arguments. A final custom-only partition excludes
+  those builtins without enabling otherwise undiscovered custom rules.
+  Parser `DiagnosticRecord` findings are identified by `ParseError` severity,
+  not rule name, and retained once from the first full-input partition.
+  All non-parser findings, including duplicates, remain intact.
 - The build retry wrapper may retry only PSScriptAnalyzer's known transient
   `NullReferenceException` or a `CommandNotFoundException` whose `CommandName`
   is exactly `Get-Command`, including either failure inside an exception chain.
   Matching message text alone does not qualify a command-resolution failure.
   Both share the `AVM_LINT_MAX_ATTEMPTS` budget (eight total attempts by default)
-  and the existing 500 ms incremental backoff. Exhaustion rethrows the original
+  and the existing 500 ms incremental backoff. Each attempt covers the entire
+  serial pass; failed attempts emit no partial findings. Exhaustion rethrows the original
   final error; unrelated exceptions fail immediately. The wrapper must never
   retry or hide analyzer findings.
 - A `pre-commit` Pester suite runs:

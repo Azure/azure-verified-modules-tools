@@ -83,6 +83,22 @@ BeforeAll {
 
 
 
+        function Invoke-TelemetryEngine {
+            param([string] $Root, [switch] $CheckDrift)
+
+            InModuleScope 'Avm.Authoring' -Parameters @{
+                Root = $Root
+                CheckDrift = [bool]$CheckDrift
+            } {
+                param($Root, $CheckDrift)
+                Invoke-AvmTerraformTransform -Context ([pscustomobject]@{
+                        Kind = 'terraform-module-repo'
+                        Root = $Root
+                        Ecosystem = 'terraform'
+                    }) -ThrottleLimit 2 -CheckDrift:$CheckDrift
+            }
+        }
+
         function New-TelemetryModule {
             param([string] $Root, [switch] $WithLocation, [switch] $WithLegacy, [switch] $Child)
 
@@ -234,6 +250,415 @@ AfterEach {
         else {
             $script:processEnvironment.Remove('MODTM_ENDPOINT')
         }
+    }
+
+It 'preserves real local-library bindings and assertions without running their Terraform tests' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $dependency = Join-Path $root '.published' 'dependency'
+        $unit = Join-Path $root 'tests' 'unit'
+        $library = Join-Path $unit 'library'
+        New-TelemetryModule -Root $root -WithLegacy -WithLocation
+        $null = New-Item -ItemType Directory -Path $dependency, $library -Force
+        $providers = Join-Path $root 'terraform.tf'
+        $localProviders = @'
+    alz = {
+      source  = "azure/alz"
+      version = "~> 0.21"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.9"
+    }
+'@
+        [System.IO.File]::WriteAllText($providers,
+            [System.IO.File]::ReadAllText($providers).Replace('  required_providers {', "  required_providers {`n$localProviders"),
+            [System.Text.UTF8Encoding]::new($false))
+        $libraryPath = Join-Path $library 'local.alz_architecture_definition.yml'
+        Set-Content -LiteralPath $libraryPath -Encoding utf8NoBOM -Value @'
+name: local
+management_groups:
+  - id: existing
+    display_name: Local library management group
+    exists: true
+    parent_id: null
+    archetypes:
+      - empty
+'@
+        $libraryBytes = [System.IO.File]::ReadAllBytes($libraryPath)
+        $published = Join-Path $dependency 'main.tf'
+        Set-Content -LiteralPath $published -Encoding utf8NoBOM -Value @'
+terraform {
+  required_providers {
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.12"
+    }
+    modtm = {
+      source  = "Azure/modtm"
+      version = "= 0.3.5"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+  }
+}
+resource "modtm_telemetry" "published" {
+  endpoint = "http://127.0.0.1:1/never-production"
+  tags     = { fixture = "mock-only" }
+}
+resource "random_uuid" "published" {}
+resource "azapi_resource" "published" {
+  type                   = "Microsoft.Resources/resourceGroups@2025-04-01"
+  name                   = "mock-only"
+  parent_id              = "/subscriptions/00000000-0000-0000-0000-000000000000"
+  location               = "eastus"
+  body                   = {}
+  response_export_values = []
+}
+output "identity" {
+  value = {
+    azure  = azapi_resource.published.id
+    mocked = modtm_telemetry.published.id
+    local  = random_uuid.published.result
+  }
+}
+'@
+        $publishedHash = (Get-FileHash -LiteralPath $published).Hash
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+data "alz_architecture" "local" {
+  name                     = "local"
+  root_management_group_id = "parent"
+  location                 = var.location
+}
+resource "time_static" "local" {
+  rfc3339 = "2026-01-01T00:00:00Z"
+}
+module "published" {
+  source = "./.published/dependency"
+}
+'@
+        $source = @'
+provider "alz" {
+  library_references = [{ custom_url = "./tests/unit/library" }]
+}
+provider "alz" {
+  alias              = "library"
+  library_references = [{ custom_url = "./tests/unit/library" }]
+}
+mock_provider "azapi" {}
+mock_provider "modtm" {}
+variables {
+  location = "eastus"
+}
+run "implicit" {
+  command = apply
+  assert {
+    condition     = data.alz_architecture.local.management_groups[0].exists
+    error_message = "The real provider must read the authored local library."
+  }
+  assert {
+    condition     = can(regex("^[A-Za-z0-9]{8}$", module.published.identity.mocked))
+    error_message = "The unchanged dependency must use the ModTM mock."
+  }
+  assert {
+    condition     = can(regex("^[A-Za-z0-9]{8}$", module.published.identity.azure))
+    error_message = "Restoring the ModTM binding must preserve the dependency's AzAPI mock."
+  }
+  assert {
+    condition     = can(regex("^[0-9a-f-]{36}$", module.published.identity.local))
+    error_message = "The unchanged dependency must retain its real local random provider."
+  }
+  assert {
+    condition     = time_static.local.rfc3339 == "2026-01-01T00:00:00Z"
+    error_message = "The authored local time provider must retain its default binding."
+  }
+}
+run "explicit" {
+  command = plan
+  providers = {
+    alz   = alz.library # Keep the selected local library.
+    azapi = azapi
+    modtm = modtm
+  }
+  assert {
+    condition     = data.alz_architecture.local.management_groups[0].exists
+    error_message = "The same-provider alias must keep the real library behavior."
+  }
+}
+'@
+        $testPath = Join-Path $unit 'local-library.tftest.hcl'
+        [System.IO.File]::WriteAllText($testPath, $source, [System.Text.UTF8Encoding]::new($false))
+        $null = Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $root `
+            -ArgumentList @('init', '-backend=false', '-input=false', '-no-color', '-test-directory=tests/unit')
+        $lockPath = Join-Path $root '.terraform.lock.hcl'
+        $manifestPath = Join-Path $root '.terraform' 'modules' 'modules.json'
+        $lock = [System.IO.File]::ReadAllBytes($lockPath)
+        $manifest = [System.IO.File]::ReadAllBytes($manifestPath)
+        $version = Invoke-TelemetryProcess -FilePath $script:terraformPath -ArgumentList @('version', '-json') -Root $root
+        $selections = (($version.StdOut | ConvertFrom-Json).provider_selections | ConvertTo-Json -Compress)
+        $providerTree = Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $root `
+            -ArgumentList @('providers', '-no-color', '-test-directory=tests/unit')
+        foreach ($provider in @('azure/alz', 'azure/azapi', 'azure/modtm', 'hashicorp/random', 'hashicorp/time')) {
+            $providerTree.StdOut | Should -Match ([regex]::Escape("registry.terraform.io/$provider"))
+        }
+        $inspectionArguments = @(
+            'debug', '--tf-dir', $root, '--test-file', 'tests/unit/local-library.tftest.hcl',
+            '--mptf-dir', (Join-Path $script:profilesRoot 'unit-test'), '--eval', 'data.test_file.this.result'
+        )
+        $inspection = Invoke-TelemetryProcess -FilePath $script:mapotfPath -Root $root -ArgumentList $inspectionArguments
+        $before = $inspection.StdOut | ConvertFrom-Json -AsHashtable
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -BeExactly 'fail'
+        [System.IO.File]::ReadAllText($testPath) | Should -BeExactly $source
+        (Invoke-TelemetryEngine -Root $root).Status | Should -BeExactly 'pass'
+        $inspection = Invoke-TelemetryProcess -FilePath $script:mapotfPath -Root $root -ArgumentList $inspectionArguments
+        $after = $inspection.StdOut | ConvertFrom-Json -AsHashtable
+        @($after.providers.Keys | Sort-Object) | Should -Be @($before.providers.Keys | Sort-Object)
+        @($after.runs.Keys | Sort-Object) | Should -Be @($before.runs.Keys | Sort-Object)
+        foreach ($name in $before.providers.Keys) {
+            ($after.providers[$name].mptf.attributes | ConvertTo-Json -Depth 10 -Compress) |
+                Should -BeExactly ($before.providers[$name].mptf.attributes | ConvertTo-Json -Depth 10 -Compress)
+        }
+        foreach ($name in $before.runs.Keys) {
+            $after.runs[$name].mptf.attributes.command | Should -BeExactly $before.runs[$name].mptf.attributes.command
+            ($after.runs[$name].assert.mptf.attributes | ConvertTo-Json -Depth 10 -Compress) |
+                Should -BeExactly ($before.runs[$name].assert.mptf.attributes | ConvertTo-Json -Depth 10 -Compress)
+        }
+        $after.runs.implicit.mptf.attributes.providers | Should -Match '\balz\s*=\s*alz\b'
+        $after.runs.implicit.mptf.attributes.providers | Should -Match '\bazapi\s*=\s*azapi\b'
+        $after.runs.implicit.mptf.attributes.providers | Should -Match '\bmodtm\s*=\s*modtm\b'
+        $after.runs.implicit.mptf.attributes.providers | Should -Not -Match '\b(random|time)\s*='
+        $after.runs.explicit.mptf.attributes.providers |
+            Should -BeExactly $before.runs.explicit.mptf.attributes.providers
+        $after.mock_providers.Keys | Should -Not -Contain 'alz'
+        $providerTree = Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $root `
+            -ArgumentList @('providers', '-no-color', '-test-directory=tests/unit')
+        foreach ($provider in @('azure/alz', 'azure/azapi', 'azure/modtm', 'hashicorp/random', 'hashicorp/time')) {
+            $providerTree.StdOut | Should -Match ([regex]::Escape("registry.terraform.io/$provider"))
+        }
+        $validation = Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $root `
+            -ArgumentList @('validate', '-json', '-test-directory=tests/unit')
+        ($validation.StdOut | ConvertFrom-Json).valid | Should -BeTrue
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -BeExactly 'pass'
+        (Invoke-TelemetryEngine -Root $root).Changed | Should -BeNullOrEmpty
+        [System.IO.File]::ReadAllBytes($lockPath) | Should -Be $lock
+        [System.IO.File]::ReadAllBytes($manifestPath) | Should -Be $manifest
+        [System.IO.File]::ReadAllBytes($libraryPath) | Should -Be $libraryBytes
+        (Get-FileHash -LiteralPath $published).Hash | Should -BeExactly $publishedHash
+        $version = Invoke-TelemetryProcess -FilePath $script:terraformPath -ArgumentList @('version', '-json') -Root $root
+        (($version.StdOut | ConvertFrom-Json).provider_selections | ConvertTo-Json -Compress) | Should -BeExactly $selections
+    }
+
+It 'preserves default and alias bindings with fully mocked providers and rejects an unmocked dependency' {
+        $root = Join-Path $TestDrive 'mocked-provider-bindings'
+        $dependency = Join-Path $root '.published' 'dependency'
+        $unit = Join-Path $root 'tests' 'unit'
+        New-TelemetryModule -Root $root -WithLegacy -WithLocation
+        $null = New-Item -ItemType Directory -Path $dependency, $unit -Force
+        $requirements = Join-Path $root 'terraform.tf'
+        Set-Content -LiteralPath $requirements -Encoding utf8NoBOM -Value @'
+terraform {
+  required_version = ">= 1.9.0, < 2.0.0"
+  required_providers {
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.12"
+    }
+    modtm = {
+      source  = "Azure/modtm"
+      version = "~> 0.3"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.9"
+    }
+  }
+}
+'@
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+resource "time_static" "current" {}
+module "published" {
+  source = "./.published/dependency"
+}
+'@
+        $published = Join-Path $dependency 'main.tf'
+        Set-Content -LiteralPath $published -Encoding utf8NoBOM -Value @'
+terraform {
+  required_providers {
+    azapi = { source = "Azure/azapi", version = "~> 2.12" }
+    modtm = { source = "Azure/modtm", version = "= 0.3.5" }
+    random = { source = "hashicorp/random", version = "~> 3.6" }
+  }
+}
+resource "modtm_telemetry" "published" {
+  endpoint = "http://127.0.0.1:1/never-production"
+  tags = { fixture = "mock-only" }
+}
+resource "random_uuid" "published" {}
+resource "azapi_resource" "published" {
+  type = "Microsoft.Resources/resourceGroups@2025-04-01"
+  name = "mock-only"
+  parent_id = "/subscriptions/00000000-0000-0000-0000-000000000000"
+  location = "eastus"
+  body = {}
+}
+output "identity" {
+  value = {
+    azure = azapi_resource.published.id
+    modtm = modtm_telemetry.published.id
+    random = random_uuid.published.result
+  }
+}
+'@
+        $publishedBytes = [IO.File]::ReadAllBytes($published)
+        $testPath = Join-Path $unit 'bindings.tftest.hcl'
+        Set-Content -LiteralPath $testPath -Encoding utf8NoBOM -Value @'
+mock_provider "terraform" {
+  override_during = plan
+  mock_resource "terraform_data" {
+    defaults = { id = "mocked-builtin" }
+  }
+}
+mock_provider "azapi" {
+  override_during = plan
+  mock_resource "azapi_resource" {
+    defaults = { id = "default-azure" }
+  }
+}
+mock_provider "modtm" {
+  override_during = plan
+  mock_resource "modtm_telemetry" {
+    defaults = { id = "default-modtm" }
+  }
+}
+mock_provider "random" {
+  override_during = plan
+  mock_resource "random_uuid" {
+    defaults = { result = "default-random" }
+  }
+}
+mock_provider "time" {
+  override_during = plan
+  mock_resource "time_static" {
+    defaults = { id = "default-time" }
+  }
+}
+mock_provider "azapi" {
+  alias = "unit"
+  override_during = plan
+  mock_resource "azapi_resource" {
+    defaults = { id = "aliased-azure" }
+  }
+}
+mock_provider "modtm" {
+  alias = "unit"
+  override_during = plan
+  mock_resource "modtm_telemetry" {
+    defaults = { id = "aliased-modtm" }
+  }
+}
+mock_provider "random" {
+  alias = "unit"
+  override_during = plan
+  mock_resource "random_uuid" {
+    defaults = { result = "aliased-random" }
+  }
+}
+mock_provider "time" {
+  alias = "unit"
+  override_during = plan
+  mock_resource "time_static" {
+    defaults = { id = "aliased-time" }
+  }
+}
+run "defaults" {
+  command = plan
+  state_key = "default-bindings"
+  assert {
+    condition = (
+      module.published.identity.azure == "default-azure" &&
+      module.published.identity.modtm == "default-modtm" &&
+      module.published.identity.random == "default-random" &&
+      time_static.current.id == "default-time" &&
+      terraform_data.telemetry[0].id == "mocked-builtin"
+    )
+    error_message = "Restoring dependency bindings must preserve every default provider mock, including the built-in provider."
+  }
+}
+run "aliases" {
+  command = plan
+  state_key = "aliased-bindings"
+  providers = {
+    azapi     = azapi.unit
+    modtm     = modtm.unit
+    random    = random.unit
+    terraform = terraform
+    time      = time.unit
+  }
+  assert {
+    condition = (
+      module.published.identity.azure == "aliased-azure" &&
+      module.published.identity.modtm == "aliased-modtm" &&
+      module.published.identity.random == "aliased-random" &&
+      time_static.current.id == "aliased-time" &&
+      terraform_data.telemetry[0].id == "mocked-builtin"
+    )
+    error_message = "Same-provider aliases must reach the intended mocks without falling back to a real or default provider."
+  }
+}
+'@
+        $null = Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $root `
+            -ArgumentList @('init', '-backend=false', '-input=false', '-no-color', '-test-directory=tests/unit')
+        $lockPath = Join-Path $root '.terraform.lock.hcl'
+        $manifestPath = Join-Path $root '.terraform' 'modules' 'modules.json'
+        $lock = [IO.File]::ReadAllBytes($lockPath)
+        $manifest = [IO.File]::ReadAllBytes($manifestPath)
+        $inspectionArguments = @(
+            'debug', '--tf-dir', $root, '--test-file', 'tests/unit/bindings.tftest.hcl',
+            '--mptf-dir', (Join-Path $script:profilesRoot 'unit-test'), '--eval', 'data.test_file.this.result'
+        )
+        $before = (Invoke-TelemetryProcess -FilePath $script:mapotfPath -Root $root -ArgumentList $inspectionArguments).
+            StdOut | ConvertFrom-Json -AsHashtable
+        $before.runs.defaults.mptf.attributes.Contains('providers') | Should -BeFalse
+        [IO.File]::ReadAllText($requirements) | Should -Not -Match '(?m)^\s*terraform\s*='
+        (Invoke-TelemetryEngine -Root $root).Status | Should -BeExactly 'pass'
+        $after = (Invoke-TelemetryProcess -FilePath $script:mapotfPath -Root $root -ArgumentList $inspectionArguments).
+            StdOut | ConvertFrom-Json -AsHashtable
+        [IO.File]::ReadAllText($requirements) | Should -Not -Match '(?m)^\s*terraform\s*='
+        $after.runs.defaults.mptf.attributes.providers | Should -Match '\bterraform\s*=\s*terraform\b'
+        $after.runs.aliases.mptf.attributes.providers | Should -BeExactly $before.runs.aliases.mptf.attributes.providers
+        foreach ($name in $before.runs.Keys) {
+            $after.runs[$name].mptf.attributes.command | Should -BeExactly 'plan'
+            ($after.runs[$name].assert.mptf.attributes | ConvertTo-Json -Depth 10 -Compress) |
+                Should -BeExactly ($before.runs[$name].assert.mptf.attributes | ConvertTo-Json -Depth 10 -Compress)
+        }
+        $result = Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $root `
+            -ArgumentList @('test', '-no-color', '-test-directory=tests/unit')
+        $result.StdOut | Should -Match 'Success! 2 passed, 0 failed'
+        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -BeExactly 'pass'
+        (Invoke-TelemetryEngine -Root $root).Changed | Should -BeNullOrEmpty
+        [IO.File]::ReadAllBytes($published) | Should -Be $publishedBytes
+        [IO.File]::ReadAllBytes($lockPath) | Should -Be $lock
+        [IO.File]::ReadAllBytes($manifestPath) | Should -Be $manifest
+
+        $validTest = [IO.File]::ReadAllBytes($testPath)
+        Set-Content -LiteralPath (Join-Path $unit 'unmocked-dependency.tftest.hcl') -Encoding utf8NoBOM -Value @'
+mock_provider "terraform" {}
+mock_provider "azapi" {}
+mock_provider "random" {}
+mock_provider "time" {}
+run "reject_unmocked_modtm" {
+  command = plan
+}
+'@
+        { Invoke-TelemetryEngine -Root $root -CheckDrift } |
+            Should -Throw '*introduced providers need default mocks or complete known alias bindings*'
+        [IO.File]::ReadAllBytes($testPath) | Should -Be $validTest
+        [IO.File]::ReadAllBytes($published) | Should -Be $publishedBytes
     }
 
 It 'emits the reviewed telemetry bytes for independent fresh migrations and repeated runs' {

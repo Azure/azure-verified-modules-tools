@@ -1018,6 +1018,50 @@ run "wrapper" {
         [regex]::IsMatch($updated, 'mock_provider "random"') | Should -Be $UsesRandom
     }
 
+    It 'includes only selected examples in <Provider> preflight without losing their owner dependencies' -TestCases @(
+        @{ Provider = 'random'; ResourceType = 'random_string' }
+        @{ Provider = 'time'; ResourceType = 'time_static' }
+    ) {
+        param($Provider, $ResourceType)
+        $empty = Join-Path $script:moduleDir 'examples' 'empty'
+        $used = Join-Path $script:moduleDir 'examples' 'used'
+        $unit = Join-Path $script:moduleDir 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $empty, $used, $unit -Force
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'main.tf') -Value 'locals {}' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $empty 'main.tf') -Encoding utf8NoBOM -Value @'
+module "test" {
+  source = "../.."
+}
+'@
+        Set-Content -LiteralPath (Join-Path $used 'main.tf') -Encoding utf8NoBOM `
+            -Value "resource `"$ResourceType`" `"proof`" {}"
+        InModuleScope Avm.Authoring -Parameters @{
+            Root = $script:moduleDir; Empty = $empty; Used = $used; Unit = $unit; Provider = $Provider
+        } {
+            param($Root, $Empty, $Used, $Unit, $Provider)
+            $targets = @(
+                [pscustomobject]@{ Path = $Root; Profiles = @('root', 'module') }
+                [pscustomobject]@{ Path = $Empty; Profiles = @('example') }
+                [pscustomobject]@{ Path = $Used; Profiles = @('example') }
+            )
+            $scope = [pscustomobject]@{
+                Owner = $targets[0]
+                File = [pscustomobject]@{ FullName = Join-Path $Unit 'preflight.tftest.hcl' }
+            }
+            $cache = @{}
+            $parameters = @{
+                Scope = $scope
+                ModuleTargets = $targets
+                Cache = $cache
+                Provider = $Provider
+                IncludeSelectedExamples = $true
+            }
+            Test-AvmTerraformScopedProviderInUse @parameters -TargetPaths @($Empty) | Should -BeFalse
+            Test-AvmTerraformScopedProviderInUse @parameters -TargetPaths @($Used) | Should -BeTrue
+            Test-AvmTerraformScopedProviderInUse @parameters -TargetPaths @($Empty) | Should -BeFalse
+        }
+    }
+
     It 'migrates a native-validated sibling target and checks its actual random use' -TestCases @(
         @{ UsesRandom = $true }
         @{ UsesRandom = $false }

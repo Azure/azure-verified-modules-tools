@@ -184,7 +184,8 @@ It 'renders retained ModTM requirements without JSON encoding for <State>' -Test
         @{ State = 'no terraform block'; Source = 'Azure/modtm'; Version = '~> 0.3' }
         @{ State = 'an existing inline requirement'; Source = 'azure/modtm'; Version = '~> 0.3' }
         @{ State = 'an authored versionless requirement'; Source = 'Azure/modtm'; Version = $null }
-    ) | Where-Object { $_.State -ceq 'an example without a requirement' }) {
+        @{ State = 'an example with an authored location'; Source = 'Azure/modtm'; Version = '~> 0.3' }
+    ) | Where-Object { $_.State -cin @('an example without a requirement', 'an example with an authored location') }) {
         param($State, $Source, $Version)
 
         $root = $script:target
@@ -211,6 +212,31 @@ module "dependency" {
         }
         elseif ($State -eq 'no terraform block') {
             Remove-Item -LiteralPath $terraformFile
+        }
+        if ($State -eq 'an example with an authored location') {
+            Add-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+locals {
+  location = "westeurope"
+}
+resource "azapi_resource" "authored" {
+  type      = "Microsoft.Resources/resourceGroups@2025-04-01"
+  name      = "authored"
+  parent_id = "/subscriptions/00000000-0000-0000-0000-000000000000"
+  location  = local.location
+  body      = {}
+}
+'@
+            Set-Content -LiteralPath $terraformFile -Encoding utf8NoBOM -Value @'
+terraform {
+  required_version = "~> 1.9"
+  required_providers {
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.4"
+    }
+  }
+}
+'@
         }
         Set-Content -LiteralPath (Join-Path $dependency 'terraform.tf') -Encoding utf8NoBOM -Value @'
 terraform {
@@ -240,7 +266,10 @@ terraform {
                 -ModuleTargets @([pscustomobject]@{ Path = $Root }) `
                 -Options ([pscustomobject]@{
                     ToolPath = $mapotf.Path
-                    ProfileDirs = @{ module = Join-Path $Profiles 'module' }
+                    ProfileDirs = @{
+                        module = Join-Path $Profiles 'module'
+                        'provider-restore' = Join-Path $Profiles 'provider-restore'
+                    }
                     EnvVars = @{}
                 }) `
                 -RequiredProviders $required -ProviderSources @{ $Root = @($source) } `
@@ -276,6 +305,12 @@ terraform {
             $null = Invoke-AvmProcess -FilePath $mapotf.Path -ArgumentList $plan.Arguments -WorkingDirectory $Root
             $null = Invoke-AvmProcess -FilePath $mapotf.Path -ArgumentList @('clean-backup', '--tf-dir', $Root) -WorkingDirectory $Root
             [System.IO.File]::ReadAllText($terraformFile) | Should -BeExactly $first
+        }
+        if ($State -eq 'an example with an authored location') {
+            Join-Path $root 'variables.tf' | Should -Not -Exist
+            Get-Content -LiteralPath $terraformFile -Raw | Should -Match 'required_version\s*=\s*"~> 1\.9"'
+            Get-Content -LiteralPath $terraformFile -Raw | Should -Match 'version\s*=\s*"~> 2\.4"'
+            Get-Content -LiteralPath (Join-Path $root 'main.tf') -Raw | Should -Match 'location\s*=\s*local\.location'
         }
     }
 

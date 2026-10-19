@@ -106,6 +106,13 @@ function Invoke-MockedTerraformQualification {
                     foreach ($source in $sources) {
                         $matching = @(Get-AvmTerraformUnitTestMockProviderName -ProviderNames $provenDefaults `
                                 -RequiredProviders $requiredByTarget[$path] -ProviderSources @($source))
+                        if ($source -ceq 'terraform.io/builtin/terraform' -and
+                            ($run.mptf.attributes['command'] -isnot [string] -or $run.mptf.attributes['command'] -cne 'plan')) {
+                            $matching = @($matching | Where-Object {
+                                    $requiredByTarget[$path].Contains($_) -and
+                                    $requiredByTarget[$path][$_]['source'] -ieq $source
+                                })
+                        }
                         if ($matching.Count -eq 0) {
                             throw [System.InvalidOperationException]::new("Native qualification requires a default mock for '$source' in '$($file.Name)' run '$runName'.")
                         }

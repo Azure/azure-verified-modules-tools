@@ -164,6 +164,46 @@ function script:Invoke-AvmPester {
     }
 }
 
+function script:Invoke-ScriptAnalyzerSerial {
+    param(
+        [Parameter(Mandatory)] [hashtable] $Params
+    )
+
+    $ruleNames = @(Get-ScriptAnalyzerRule -ErrorAction Stop | Select-Object -ExpandProperty RuleName -Unique | Sort-Object)
+    if ($ruleNames.Count -eq 0) {
+        throw [System.InvalidOperationException]::new('PSScriptAnalyzer returned no built-in rules.')
+    }
+
+    $partitions = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($ruleName in $ruleNames) {
+        $partition = $Params.Clone()
+        $partition.IncludeRule = @($ruleName)
+        $partitions.Add($partition)
+    }
+    if ($Params.ContainsKey('CustomRulePath')) {
+        $partition = $Params.Clone()
+        $partition.ExcludeRule = $ruleNames
+        if ($Params.ContainsKey('ExcludeRule')) {
+            $partition.ExcludeRule = @($Params['ExcludeRule']) + $ruleNames
+        }
+        $partitions.Add($partition)
+    }
+
+    $results = [System.Collections.Generic.List[object]]::new()
+    $firstPartition = $true
+    foreach ($partition in $partitions) {
+        foreach ($diagnostic in @(Invoke-ScriptAnalyzer @partition)) {
+            $isParserDiagnostic = $diagnostic -is [Microsoft.Windows.PowerShell.ScriptAnalyzer.Generic.DiagnosticRecord] -and
+                $diagnostic.Severity -eq 'ParseError'
+            if ($firstPartition -or -not $isParserDiagnostic) {
+                $results.Add($diagnostic)
+            }
+        }
+        $firstPartition = $false
+    }
+    return $results.ToArray()
+}
+
 function script:Invoke-ScriptAnalyzerWithRetry {
     param(
         [Parameter(Mandatory)] [hashtable] $Params
@@ -174,7 +214,7 @@ function script:Invoke-ScriptAnalyzerWithRetry {
 
     for ($attempt = 1; $attempt -le $max; $attempt++) {
         try {
-            return Invoke-ScriptAnalyzer @Params
+            return Invoke-ScriptAnalyzerSerial -Params $Params
         }
         catch {
             $retryReason = $null

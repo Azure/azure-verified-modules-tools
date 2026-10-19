@@ -396,6 +396,33 @@ section when cutting a release.
 
 ### Fixed
 
+- Build lint runs unchanged effective analyzer rules serially through the public
+  API to avoid concurrent dynamic command-metadata access. Original settings and
+  discovery remain unchanged, parser findings are retained once, and the retry
+  budget applies to complete passes rather than individual rules.
+
+- Terraform lint reports blocking findings immediately as source-linked GitHub
+  errors and visible local diagnostics, including warnings that fail the
+  configured threshold. Structured severities and collect-all behavior remain
+  unchanged; advisory notices remain warnings and final output avoids repeats.
+
+- Terraform transform dependency-cache copies no longer render file-copy
+  progress bars. Copy diagnostics remain available with verbose logging.
+
+- Telemetry unit-test migration preserves proven existing ALZ local-library
+  provider bindings and implicit Random/Time defaults alongside required Azure
+  and legacy dependency mocks. Generated mappings keep real library assertions
+  meaningful without accepting unknown, cross-provider, or real-Azure bindings.
+  Dependency-provider restoration no longer reapplies module conventions to
+  example callers, preserving authored locations without unused inputs.
+  Fully mocked wrappers and examples defer native dependency loading until
+  instrumentation has created their required module inputs.
+  Existing built-in Terraform mocks are retained in generated maps only with
+  unambiguous native source proof; incomplete authored maps still require
+  review. Native qualification separates ALZ fixture preservation from guarded,
+  fully mocked binding execution rather than claiming original runtime coverage.
+  Retained dependency restoration also preserves module labels such as `keys`
+  that shadow PowerShell dictionary members.
 - TFLint uses attested AVM ruleset v1.2.0 and requires `resource_id` only
   for resource roots. Validated pattern and utility roots receive their
   module class automatically; child and example scopes are excluded.
