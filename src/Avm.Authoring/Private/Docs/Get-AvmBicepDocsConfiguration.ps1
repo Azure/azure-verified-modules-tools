@@ -44,10 +44,11 @@ function Get-AvmBicepDocsConfiguration {
         ($config['documentation'] -is [System.Collections.IDictionary] -and
         -not $config['documentation'].Contains('template'))) {
         return [pscustomobject]@{
-            ConfigPath   = $configPath
-            TemplatePath = $template.Path
-            Version      = $template.Version
-            Hash         = $template.Hash
+            ConfigPath          = $configPath
+            TemplatePath        = $template.Path
+            Version             = $template.Version
+            Hash                = $template.Hash
+            UsesPackageTemplate = $true
         }
     }
     if ($config['documentation'] -isnot [System.Collections.IDictionary] -or
@@ -82,9 +83,10 @@ function Get-AvmBicepDocsConfiguration {
     }
 
     return [pscustomobject]@{
-        ConfigPath   = $configPath
-        TemplatePath = $path
-        Version      = $template.Version
-        Hash         = $hash
+        ConfigPath          = $configPath
+        TemplatePath        = $path
+        Version             = $template.Version
+        Hash                = $hash
+        UsesPackageTemplate = $false
     }
 }

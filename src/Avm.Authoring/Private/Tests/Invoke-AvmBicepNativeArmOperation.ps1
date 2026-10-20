@@ -23,7 +23,10 @@ function Invoke-AvmBicepNativeArmOperation {
 
         [string] $ResourceGroupName,
 
-        [string] $ManagementGroupId
+        [string] $ManagementGroupId,
+
+        [ValidateNotNull()]
+        [object] $DefaultProfile
     )
 
     Set-StrictMode -Version 3.0
@@ -37,6 +40,9 @@ function Invoke-AvmBicepNativeArmOperation {
         ErrorAction                 = 'Stop'
         Verbose                     = $false
         Debug                       = $false
+    }
+    if ($PSBoundParameters.ContainsKey('DefaultProfile')) {
+        $arguments.DefaultProfile = $DefaultProfile
     }
     if ($Scope -eq 'group') {
         if ([string]::IsNullOrWhiteSpace($ResourceGroupName)) {

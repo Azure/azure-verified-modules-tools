@@ -96,6 +96,9 @@ function Invoke-AvmBicepTestE2e {
         if ([string]::IsNullOrEmpty($TestSubscriptionIds)) { $TestSubscriptionIds = $ci.PoolJson }
     }
     if ([string]::IsNullOrWhiteSpace($TenantId)) { $TenantId = $ci.TenantId }
+    if ($UseCiInputs -and -not $PSBoundParameters.ContainsKey('ManagementGroupId')) {
+        $ManagementGroupId = $ci.ManagementGroupId
+    }
     $tenant = [guid]::Empty
     if (-not [guid]::TryParseExact($TenantId, 'D', [ref]$tenant) -or $tenant -eq [guid]::Empty) {
         throw [AvmConfigurationException]::new('Bicep e2e requires an explicit, nonempty GUID -TenantId.')
@@ -137,7 +140,17 @@ function Invoke-AvmBicepTestE2e {
             $ManagementGroupId.EndsWith('.') -or $ManagementGroupId -in @('.', '..'))) {
         throw [AvmConfigurationException]::new('Bicep e2e -ManagementGroupId must be a safe group name, not an ARM resource ID.')
     }
-    $requiredFeatures = if ($Phase -eq 'Complete') { @() } else { @(Get-AvmContextRequiredFeature -Context $Context) }
+    $requirementsByModule = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
+    if ($Phase -ne 'Complete') {
+        foreach ($case in $cases) {
+            if ($requirementsByModule.ContainsKey($case.ModuleRoot)) { continue }
+            $caseContext = [pscustomobject]@{ Root = $case.ModuleRoot; Ecosystem = 'bicep' }
+            $requirementsByModule.Add($case.ModuleRoot, [pscustomobject]@{
+                    Features  = @(Get-AvmContextRequiredRegistration -Context $caseContext -Kind Feature)
+                    Providers = @(Get-AvmContextRequiredRegistration -Context $caseContext -Kind Provider)
+                })
+        }
+    }
     if (-not $PSCmdlet.ShouldProcess(
             "$($cases.Count) Bicep case(s) in the explicitly selected test targets", "Run Bicep e2e phase $Phase")) {
         return [pscustomobject]$result
@@ -154,6 +167,9 @@ function Invoke-AvmBicepTestE2e {
                 -AzPath $az.Source -KeepResources:$KeepResources -Confirm:$false)
     }
     else {
+        $retryPolicy = Get-AvmBicepRetryPolicy
+        $DeploymentRetryLimit = [Math]::Min($DeploymentRetryLimit, $retryPolicy['limits']['deploymentAttempts'])
+        $ValidationRetryLimit = [Math]::Min($ValidationRetryLimit, $retryPolicy['limits']['regionAttempts'])
         $bicep = Resolve-AvmTool -Name bicep -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
         $result.BicepTool = "bicep/$($bicep.Version)"
         $runDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ('avm-bicep-e2e-{0}' -f [guid]::NewGuid().ToString('N'))
@@ -168,6 +184,7 @@ function Invoke-AvmBicepTestE2e {
             for ($index = 0; $index -lt $cases.Count; $index++) {
                 $case = $cases[$index]
                 $subscription = $selections[$index]
+                $requirements = $requirementsByModule[$case.ModuleRoot]
                 $runId = [guid]::NewGuid().ToString('N')
                 $tokenMap = Get-AvmBicepTestTokenMap -Root $Context.Root -SubscriptionId $subscription.SubscriptionId `
                     -TenantId $TenantId -ManagementGroupId $ManagementGroupId -RunId $runId `
@@ -176,23 +193,37 @@ function Invoke-AvmBicepTestE2e {
                 $null = $tokenMap.Remove('resourceLocation')
                 $templatePath = Join-Path $runDirectory ("$index.json")
                 $template = New-AvmBicepTestTemplate -SourcePath $case.Path -DestinationPath $templatePath `
-                    -BicepPath $bicep.Path -Tokens $tokenMap -DeferResourceLocation -Confirm:$false
+                    -BicepPath $bicep.Path -Tokens $tokenMap -DeferTokens -Confirm:$false
                 if ($template.Scope -eq 'group' -and [string]::IsNullOrWhiteSpace($ResourceGroupPrefix)) {
                     throw [AvmConfigurationException]::new('Resource-group Bicep e2e cases require -ResourceGroupPrefix.')
                 }
                 if ($template.Scope -eq 'mg' -and [string]::IsNullOrWhiteSpace($ManagementGroupId)) {
                     throw [AvmConfigurationException]::new('Management-group Bicep e2e cases require -ManagementGroupId.')
                 }
-                $parameterPath = New-AvmBicepTestParameterFile -Root $Context.Root `
-                    -DestinationPath (Join-Path $runDirectory ("$index-parameters.json")) -Tokens $tokenMap `
-                    -ParameterFile $ParameterFile -DeferResourceLocation -Confirm:$false
-                $nativeParameters = Get-AvmBicepNativeParameter -ParameterPath $parameterPath -Parameters $Parameters
-                $references = @{}
-                foreach ($key in @($nativeParameters.psbase.Keys)) {
-                    if ($nativeParameters[$key] -is [hashtable] -and $nativeParameters[$key].ContainsKey('reference')) {
-                        $references[$key] = $nativeParameters[$key]
-                        $nativeParameters.Remove($key)
+                $attemptInputs = [System.Collections.Generic.List[object]]::new()
+                for ($namingIndex = 0; $namingIndex -lt $DeploymentRetryLimit; $namingIndex++) {
+                    $namingId = if ($namingIndex -eq 0) { $runId } else { [guid]::NewGuid().ToString('N') }
+                    $attemptTokens = if ($namingIndex -eq 0) { $tokenMap } else {
+                        Get-AvmBicepTestTokenMap -Root $Context.Root -SubscriptionId $subscription.SubscriptionId `
+                            -TenantId $TenantId -ManagementGroupId $ManagementGroupId -RunId $namingId `
+                            -TokenFile $TokenFile -Tokens $Tokens -DefaultTokens $ci.Tokens
                     }
+                    $null = $attemptTokens.Remove('resourceLocation')
+                    $parameterPath = New-AvmBicepTestParameterFile -Root $Context.Root `
+                        -DestinationPath (Join-Path $runDirectory ("$index-$namingIndex-parameters.json")) -Tokens $attemptTokens `
+                        -ParameterFile $ParameterFile -DeferTokens -Confirm:$false
+                    $nativeParameters = Get-AvmBicepNativeParameter -ParameterPath $parameterPath -Parameters $Parameters
+                    $references = @{}
+                    foreach ($key in @($nativeParameters.psbase.Keys)) {
+                        if ($nativeParameters[$key] -is [hashtable] -and $nativeParameters[$key].ContainsKey('reference')) {
+                            $references[$key] = $nativeParameters[$key]
+                            $nativeParameters.Remove($key)
+                        }
+                    }
+                    $attemptInputs.Add([pscustomobject]@{
+                            NamingId = $namingId; Tokens = $attemptTokens; TemplateContent = $template.CompiledContent
+                            Parameters = $nativeParameters; ReferenceParameters = $references
+                        })
                 }
                 $resourceType = ''
                 $metadataPath = Join-Path $case.ModuleRoot 'metadata.json'
@@ -210,23 +241,38 @@ function Invoke-AvmBicepTestE2e {
                         Case = $case; Scope = $template.Scope; SubscriptionId = $subscription.SubscriptionId
                         RunId = $runId; TemplatePath = $templatePath; Template = $template.Template
                         TemplateContent = [System.IO.File]::ReadAllText($templatePath)
-                        Parameters = $nativeParameters; ReferenceParameters = $references; RequiredFeatures = $requiredFeatures
+                        Parameters = $attemptInputs[0].Parameters; ReferenceParameters = $attemptInputs[0].ReferenceParameters
+                        AttemptInputs = $attemptInputs.ToArray(); RetryPolicy = $retryPolicy
+                        RequiredFeatures = $requirements.Features; RequiredProviders = $requirements.Providers
                         Tokens = $tokenMap; TokenResourceLocation = $tokenLocation; ResourceType = $resourceType
                         SourceHash      = Get-AvmBicepTestSourceHash -Case $case
                         AssertionFiles  = [string[]]@(Get-AvmBicepE2eAssertionFile -CasePath $case.Path)
                     })
             }
-            $featureSubscriptions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            $registeredFeatures = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            $registeredProviders = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
             foreach ($item in $prepared) {
-                if ($featureSubscriptions.Contains($item.SubscriptionId)) { $item.RequiredFeatures = @() }
+                $item.RequiredFeatures = @($item.RequiredFeatures | Where-Object {
+                        -not $registeredFeatures.Contains("$($item.SubscriptionId):$($_.FullName)")
+                    })
+                $item.RequiredProviders = @($item.RequiredProviders | Where-Object {
+                        -not $registeredProviders.Contains("$($item.SubscriptionId):$($_.FullName)")
+                    })
                 $run = Invoke-AvmBicepNativeTestCase -Item $item -TenantId $tenant -Location $Location `
                     -RepositoryRoot $repoRoot -AzPath $az.Source -CiInput $ci -ManagementGroupId $ManagementGroupId `
                     -ResourceGroupPrefix $ResourceGroupPrefix -ResourceLocation $ResourceLocation -StatePath $CleanupStatePath `
                     -Phase $Phase -DeploymentRetryLimit $DeploymentRetryLimit -ValidationRetryLimit $ValidationRetryLimit `
                     -KeepResources:$KeepResources -Confirm:$false
                 $runs.Add($run)
-                if (-not @($run.Issues | Where-Object Code -EQ 'avm.bicep.e2e-feature-registration-failed')) {
-                    $null = $featureSubscriptions.Add($item.SubscriptionId)
+                if (-not @($run.Issues | Where-Object {
+                            $_.Code -in @('avm.bicep.e2e-feature-registration-failed', 'avm.bicep.e2e-provider-registration-failed')
+                        })) {
+                    foreach ($requirement in $item.RequiredFeatures) {
+                        $null = $registeredFeatures.Add("$($item.SubscriptionId):$($requirement.FullName)")
+                    }
+                    foreach ($requirement in $item.RequiredProviders) {
+                        $null = $registeredProviders.Add("$($item.SubscriptionId):$($requirement.FullName)")
+                    }
                 }
                 if ($run.CleanupPending.Count -gt 0) { break }
             }

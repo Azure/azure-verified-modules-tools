@@ -16,8 +16,8 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 if ($PSCmdlet.ParameterSetName -eq 'File') {
-    $inputData = Get-Content -LiteralPath $InputPath -Raw -Encoding utf8 |
-        ConvertFrom-Json -AsHashtable -ErrorAction Stop
+    . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '..', 'Private', 'Objects', 'ConvertFrom-AvmStrictJson.ps1')
+    $inputData = ConvertFrom-AvmStrictJson -Json (Get-Content -LiteralPath $InputPath -Raw -Encoding utf8)
 }
 if (-not $inputData.Contains('PesterPath') -or -not $inputData.Contains('PesterVersion') -or
     -not [System.IO.Path]::IsPathFullyQualified([string]$inputData.PesterPath)) {

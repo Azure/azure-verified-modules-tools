@@ -578,20 +578,79 @@ Describe 'Bicep workflow cleanup native handlers' {
         }
     }
 
-    It 'removes only the exact role assignment, including at tenant scope' {
-        InModuleScope Avm.Authoring {
-            $script:assignment = '/providers/Microsoft.Authorization/roleAssignments/owned'
-            Mock Get-AzRoleAssignment {
-                @(
-                    [pscustomobject]@{ RoleAssignmentId = $script:assignment }
-                    [pscustomobject]@{ RoleAssignmentId = '/providers/Microsoft.Authorization/roleAssignments/foreign' }
-                )
-            }
-            Mock Remove-AzRoleAssignment {}
+    It 'removes only the exact role assignment through ARM at <Scope> scope' -ForEach @(
+        @{ Scope = 'tenant'; Prefix = '' }
+        @{ Scope = 'management group'; Prefix = '/providers/Microsoft.Management/managementGroups/test' }
+        @{ Scope = 'subscription'; Prefix = '/subscriptions/00000000-0000-0000-0000-000000000001' }
+        @{ Scope = 'resource'; Prefix = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Storage/storageAccounts/test' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Prefix = $Prefix } {
+            param($Prefix)
+            $script:assignment = "$Prefix/providers/Microsoft.Authorization/roleAssignments/11111111-1111-4111-8111-111111111111"
+            Mock Get-AzRoleAssignment { throw 'Graph-backed lookup must not run.' }
+            Mock Remove-AzRoleAssignment { throw 'Graph-backed removal must not run.' }
+            Mock Invoke-AzRestMethod { @{ StatusCode = 204 } }
             Remove-AvmBicepResource -ResourceId $script:assignment -Type 'Microsoft.Authorization/roleAssignments'
-            Should -Invoke Get-AzRoleAssignment -Exactly 1 -ParameterFilter { $Scope -eq '/' }
-            Should -Invoke Remove-AzRoleAssignment -Exactly 1 -ParameterFilter {
-                $InputObject.RoleAssignmentId -eq $script:assignment
+            Should -Invoke Get-AzRoleAssignment -Exactly 0
+            Should -Invoke Remove-AzRoleAssignment -Exactly 0
+            Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter {
+                $Method -eq 'DELETE' -and $Path -ceq "$($script:assignment)?api-version=2022-04-01"
+            }
+        }
+    }
+
+    It 'requires a synchronous ARM removal or absence response: <Status>' -ForEach @(
+        @{ Status = 200; Accepted = $true }, @{ Status = 204; Accepted = $true }, @{ Status = 404; Accepted = $true }
+        @{ Status = 202; Accepted = $false }, @{ Status = 400; Accepted = $false }, @{ Status = 401; Accepted = $false }
+        @{ Status = 403; Accepted = $false }, @{ Status = 429; Accepted = $false }, @{ Status = 500; Accepted = $false }
+        @{ Status = '204'; Accepted = $false }, @{ Status = @(204); Accepted = $false }, @{ Status = $null; Accepted = $false }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Status = $Status; Accepted = $Accepted } {
+            param($Status, $Accepted)
+            Mock Invoke-AzRestMethod { @{ StatusCode = $Status } }
+            $options = @{
+                ResourceId = '/providers/Microsoft.Authorization/roleAssignments/11111111-1111-4111-8111-111111111111'
+                Type = 'Microsoft.Authorization/roleAssignments'
+            }
+            if ($Accepted) { Remove-AvmBicepResource @options }
+            else { { Remove-AvmBicepResource @options } | Should -Throw '*did not confirm*' }
+            Should -Invoke Invoke-AzRestMethod -Exactly 1
+        }
+    }
+
+    It 'rejects invalid role identities before lock discovery: <Case>' -ForEach @(
+        @{ Case = 'non-GUID'; Id = '/providers/Microsoft.Authorization/roleAssignments/owned' }
+        @{ Case = 'query'; Id = '/providers/Microsoft.Authorization/roleAssignments/11111111-1111-4111-8111-111111111111?api-version=other' }
+        @{ Case = 'fragment'; Id = '/providers/Microsoft.Authorization/roleAssignments/11111111-1111-4111-8111-111111111111#other' }
+        @{ Case = 'child'; Id = '/providers/Microsoft.Authorization/roleAssignments/11111111-1111-4111-8111-111111111111/other/child' }
+        @{ Case = 'other resource'; Id = '/providers/Microsoft.Authorization/roleDefinitions/11111111-1111-4111-8111-111111111111' }
+        @{ Case = 'relative'; Id = 'providers/Microsoft.Authorization/roleAssignments/11111111-1111-4111-8111-111111111111' }
+        @{ Case = 'traversal'; Id = '/providers/Microsoft.Management/managementGroups/../providers/Microsoft.Authorization/roleAssignments/11111111-1111-4111-8111-111111111111' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Id = $Id } {
+            param($Id)
+            Mock Invoke-AzRestMethod { throw 'No Azure request permitted.' }
+            { Remove-AvmBicepResource -ResourceId $Id -Type 'Microsoft.Authorization/roleAssignments' } | Should -Throw
+            Should -Invoke Remove-AvmBicepResourceLock -Exactly 0
+            Should -Invoke Invoke-AzRestMethod -Exactly 0
+        }
+    }
+
+    It 'keeps role-assignment WhatIf non-writing and propagates ARM failures' {
+        InModuleScope Avm.Authoring {
+            $options = @{
+                ResourceId = '/providers/Microsoft.Authorization/roleAssignments/11111111-1111-4111-8111-111111111111'
+                Type = 'Microsoft.Authorization/roleAssignments'
+            }
+            Mock Invoke-AzRestMethod { throw [UnauthorizedAccessException]::new('ARM removal denied.') }
+            Remove-AvmBicepResource @options -WhatIf
+            Should -Invoke Remove-AvmBicepResourceLock -Exactly 0
+            Should -Invoke Invoke-AzRestMethod -Exactly 0
+            { Remove-AvmBicepResource @options } | Should -Throw '*ARM removal denied*'
+            Should -Invoke Invoke-AzRestMethod -Exactly 1
+            foreach ($requirement in @(Get-AvmBicepAzureRequirement)) {
+                $requirement.Commands.Keys | Should -Not -Contain 'Get-AzRoleAssignment'
+                $requirement.Commands.Keys | Should -Not -Contain 'Remove-AzRoleAssignment'
             }
         }
     }
@@ -914,7 +973,7 @@ Describe 'Bicep workflow cleanup deployment discovery' {
                 @{ properties = @{ provisioningOperation = $Kind; targetResource = @{ id = $Id } } }
             }
             $script:pages = @{
-                ($script:root + '/operations?api-version=2021-04-01')          = @{
+                ($script:root + '/operations?api-version=2025-04-01')          = @{
                     value = @(
                         & $operation $script:group
                         & $operation $childGroup
@@ -924,17 +983,17 @@ Describe 'Bicep workflow cleanup deployment discovery' {
                         & $operation "$script:group/providers/Microsoft.Storage/storageAccounts/borrowed" 'Read'
                     )
                 }
-                ($childGroup + '/operations?api-version=2021-04-01')           = @{
+                ($childGroup + '/operations?api-version=2025-04-01')           = @{
                     value = @(
                         & $operation "$script:group/providers/Microsoft.Storage/storageAccounts/created"
                         & $operation $script:root
                     )
                 }
-                ($childSubscription + '/operations?api-version=2021-04-01')    = @{ value = @() }
-                ($childManagementGroup + '/operations?api-version=2021-04-01') = @{
+                ($childSubscription + '/operations?api-version=2025-04-01')    = @{ value = @() }
+                ($childManagementGroup + '/operations?api-version=2025-04-01') = @{
                     value = @(& $operation '/providers/Microsoft.Management/managementGroups/actual-child/providers/Microsoft.Authorization/policyDefinitions/created')
                 }
-                ($childTenant + '/operations?api-version=2021-04-01')          = @{
+                ($childTenant + '/operations?api-version=2025-04-01')          = @{
                     value = @(& $operation '/providers/Microsoft.Management/managementGroups/new-group')
                 }
             }
@@ -1013,6 +1072,7 @@ Describe 'Bicep workflow cleanup deployment discovery' {
     It 'retains known targets after a later page times out and still reads other attempts' {
         InModuleScope Avm.Authoring {
             $other = $script:root + '-other'
+            Mock Wait-AvmRetryDelay {}
             Mock Invoke-AzRestMethod {
                 param($Path)
                 if ($Path -like '*page=2') { throw [System.TimeoutException]::new('Timed out') }
@@ -1034,7 +1094,15 @@ Describe 'Bicep workflow cleanup deployment discovery' {
             $result.Issues.Count | Should -Be 1
             $result.Issues[0].Message | Should -Match 'Timed out'
             @($result.Deployments | Where-Object { $_.Status -eq 'Resolved' }).Count | Should -Be 1
-            Should -Invoke Invoke-AzRestMethod -Exactly 3
+            Should -Invoke Invoke-AzRestMethod -Exactly 5
+            Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter {
+                $Path -ceq "$script:root/operations?api-version=2025-04-01"
+            }
+            Should -Invoke Invoke-AzRestMethod -Exactly 3 -ParameterFilter { $Path -ceq "$script:root/operations?page=2" }
+            Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter {
+                $Path -ceq "$other/operations?api-version=2025-04-01"
+            }
+            Should -Invoke Wait-AvmRetryDelay -Exactly 2
             Should -Invoke Start-Sleep -Exactly 0
         }
     }

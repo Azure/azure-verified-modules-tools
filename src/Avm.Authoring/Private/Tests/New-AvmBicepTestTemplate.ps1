@@ -22,7 +22,9 @@ function New-AvmBicepTestTemplate {
 
         [string] $SourceRoot,
 
-        [switch] $DeferResourceLocation
+        [switch] $DeferResourceLocation,
+
+        [switch] $DeferTokens
     )
 
     Set-StrictMode -Version 3.0
@@ -38,7 +40,7 @@ function New-AvmBicepTestTemplate {
         throw [AvmProcessException]::new($message)
     }
 
-    $template = [string]$build.StdOut | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+    $template = ConvertFrom-AvmStrictJson -Json ([string]$build.StdOut)
     if ($template -isnot [System.Collections.IDictionary]) {
         throw [AvmConfigurationException]::new("Bicep test compilation did not return an ARM object: $SourcePath")
     }
@@ -65,9 +67,12 @@ function New-AvmBicepTestTemplate {
     else {
         $Tokens
     }
-    $content = Resolve-AvmBicepTestToken -Content ([string]$build.StdOut) `
-        -SourcePath $SourcePath -Tokens $effectiveTokens -DeferResourceLocation:$DeferResourceLocation
-    $template = $content | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+    $content = [string]$build.StdOut
+    if (-not $DeferTokens) {
+        $content = Resolve-AvmBicepTestToken -Content $content `
+            -SourcePath $SourcePath -Tokens $effectiveTokens -DeferResourceLocation:$DeferResourceLocation
+    }
+    $template = ConvertFrom-AvmStrictJson -Json $content
     $hasGroupDeployment = $false
     if ($scope -eq 'sub' -and -not [string]::IsNullOrWhiteSpace($OwnedGroupRunId)) {
         if ([string]::IsNullOrWhiteSpace($SourceRoot)) {
@@ -91,7 +96,7 @@ function New-AvmBicepTestTemplate {
         if ($ownership.Tagged) {
             $content = ConvertTo-Json -InputObject $template -Depth 100 -Compress `
                 -WarningAction Stop -ErrorAction Stop
-            $template = $content | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+            $template = ConvertFrom-AvmStrictJson -Json $content
         }
     }
     if (-not $PSCmdlet.ShouldProcess($DestinationPath, 'Write temporary ARM test template')) {
@@ -102,6 +107,7 @@ function New-AvmBicepTestTemplate {
         Path               = $DestinationPath
         Scope              = $scope
         Template           = $template
+        CompiledContent    = [string]$build.StdOut
         HasGroupDeployment = $hasGroupDeployment
     }
 }

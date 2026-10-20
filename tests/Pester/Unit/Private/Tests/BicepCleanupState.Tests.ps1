@@ -168,6 +168,75 @@ Describe 'Bicep cleanup state validation' {
     }
 }
 
+Describe 'Bicep cleanup deletion progress validation' {
+    BeforeEach {
+        InModuleScope Avm.Authoring {
+            $script:state = New-TestCleanupState
+            $script:state.status = 'CleanupPending'
+            $script:state.deployments = @(@{
+                    id = "/subscriptions/$($script:state.subscriptionId)/providers/Microsoft.Resources/deployments/avm-e2e-$($script:state.runId)-t1"
+                    status = 'Failed'; preflightRejected = $false; recordDeletion = 'Pending'
+                })
+            $resource = New-TestCleanupResource
+            $resource.removed = $true
+            $resource.postProcessed = $true
+            $resource.metadataCaptured = $true
+            $script:state.resources = @($resource)
+        }
+    }
+
+    It 'round-trips <Progress> without changing the version or persisting unrelated data' -ForEach @(
+        @{ Progress = 'Pending' }, @{ Progress = 'Complete' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Progress = $Progress } {
+            param($Progress)
+            $script:state.deployments[0].recordDeletion = $Progress
+            $script:state.deployments[0].response = 'must-not-persist'
+            if ($Progress -eq 'Complete') { $script:state.status = 'Complete' }
+            $document = ConvertTo-AvmBicepCleanupState -State $script:state
+            $roundTrip = ConvertTo-AvmBicepCleanupState -State (
+                $document | ConvertTo-Json -Depth 10 | ConvertFrom-Json -AsHashtable)
+            $roundTrip.schemaVersion | Should -Be 1
+            $roundTrip.deployments[0].recordDeletion | Should -BeExactly $Progress
+            $roundTrip.deployments[0].Contains('response') | Should -BeFalse
+        }
+    }
+
+    It 'retains compatibility with version-one records without deletion progress' {
+        InModuleScope Avm.Authoring {
+            $script:state.deployments[0].Remove('recordDeletion')
+            $actual = ConvertTo-AvmBicepCleanupState -State $script:state
+            $actual.deployments[0].Contains('recordDeletion') | Should -BeFalse
+        }
+    }
+
+    It 'rejects inconsistent deletion progress: <Mutation>' -ForEach @(
+        @{ Mutation = 'unknown progress' }, @{ Mutation = 'array progress' }, @{ Mutation = 'succeeded deployment' }
+        @{ Mutation = 'unknown deployment' }, @{ Mutation = 'unfinished resource' }, @{ Mutation = 'pending completion' }
+        @{ Mutation = 'nested deployment' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Mutation = $Mutation } {
+            param($Mutation)
+            switch ($Mutation) {
+                'unknown progress' { $script:state.deployments[0].recordDeletion = 'Accepted' }
+                'array progress' { $script:state.deployments[0].recordDeletion = @('Complete') }
+                'succeeded deployment' { $script:state.deployments[0].status = 'Succeeded' }
+                'unknown deployment' { $script:state.deployments[0].status = 'Unknown' }
+                'unfinished resource' { $script:state.resources[0].postProcessed = $false }
+                'pending completion' { $script:state.status = 'Complete' }
+                'nested deployment' {
+                    $script:state.case = @{
+                        path = 'tests/e2e/defaults/main.test.bicep'; scope = 'sub'; resourceGroupName = ''
+                        managementGroupId = ''; metadataLocation = 'westus'; sourceHash = 'a' * 64; completionStarted = $false
+                    }
+                    $script:state.deployments[0].id = "/subscriptions/$($script:state.subscriptionId)/resourceGroups/nested/providers/Microsoft.Resources/deployments/child"
+                }
+            }
+            { ConvertTo-AvmBicepCleanupState -State $script:state } | Should -Throw
+        }
+    }
+}
+
 Describe 'Bicep cleanup metadata capture' {
     BeforeEach {
         InModuleScope Avm.Authoring {

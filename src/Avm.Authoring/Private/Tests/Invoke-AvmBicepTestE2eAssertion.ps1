@@ -40,7 +40,15 @@ function Invoke-AvmBicepTestE2eAssertion {
         return [pscustomobject]$result
     }
     try {
-        $deployment = $DeploymentOutput | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+        try {
+            $deployment = ConvertFrom-AvmStrictJson -Json $DeploymentOutput
+        }
+        catch [System.ArgumentException] {
+            throw [AvmProcessException]::new("ARM deployment '$DeploymentName' returned invalid JSON.")
+        }
+        if ($deployment['properties'] -isnot [System.Collections.IDictionary]) {
+            throw [AvmProcessException]::new("ARM deployment '$DeploymentName' returned invalid properties.")
+        }
         $outputs = $deployment['properties']['outputs']
         if ($null -ne $outputs -and $outputs -isnot [System.Collections.IDictionary]) {
             throw [AvmProcessException]::new(

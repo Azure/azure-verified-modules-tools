@@ -38,8 +38,12 @@ function Get-AvmBicepTestTokenMap {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             throw [AvmConfigurationException]::new("Bicep test token file not found: $path")
         }
-        $provided = Get-Content -LiteralPath $path -Raw -Encoding utf8 |
-            ConvertFrom-Json -AsHashtable -ErrorAction Stop
+        try {
+            $provided = ConvertFrom-AvmStrictJson -Json (Get-Content -LiteralPath $path -Raw -Encoding utf8)
+        }
+        catch [System.ArgumentException] {
+            throw [AvmConfigurationException]::new("Bicep test token file must contain a JSON object: $path")
+        }
         if ($provided -isnot [System.Collections.IDictionary]) {
             throw [AvmConfigurationException]::new("Bicep test token file must contain a JSON object: $path")
         }

@@ -113,21 +113,36 @@ function Install-AvmToolFromPins {
         if (-not (Test-Path -LiteralPath $stagingRoot)) {
             New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
         }
-        $stagingDir = Join-Path $stagingRoot ([Guid]::NewGuid().ToString('N').Substring(0, 12))
-        New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
-
+        $stagingDir = $null
         try {
-            $archiveSuffix = $extToken
-            $archivePath = Join-Path $stagingDir ("download" + $archiveSuffix)
+            for ($attempt = 1; $attempt -le 2; $attempt++) {
+                $stagingDir = Join-Path $stagingRoot ([Guid]::NewGuid().ToString('N'))
+                New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
+                $archivePath = Join-Path $stagingDir ("download" + $extToken)
 
-            Write-AvmLog ("install: downloading to {0}" -f $archivePath) -Level Verbose | Out-Null
-            $download = @{ Url = $url; Destination = $archivePath }
-            if (-not $overridden) { $download.ExpectedSha256 = $expectedSha256 }
-            else { $download.UnverifiedToolVersionOverride = $true }
-            Invoke-AvmHttp @download | Out-Null
-            Write-AvmLog ("install: expanding {0}" -f $resolvedArchive) -Level Verbose | Out-Null
-            Expand-AvmToolArchive -ArchivePath $archivePath -Archive $resolvedArchive -TargetDir $stagingDir -EntrypointBasename $Tool.entrypoint
-            Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
+                Write-AvmLog ("install: downloading to {0}" -f $archivePath) -Level Verbose | Out-Null
+                $download = @{ Url = $url; Destination = $archivePath }
+                if (-not $overridden) { $download.ExpectedSha256 = $expectedSha256 }
+                else { $download.UnverifiedToolVersionOverride = $true }
+                Invoke-AvmHttp @download | Out-Null
+                try {
+                    if ($isModule -and $resolvedArchive -eq 'zip') {
+                        Assert-AvmPowerShellModuleArchive -Path $archivePath -Name $Tool.name -Version $Tool.version
+                    }
+                    Write-AvmLog ("install: expanding {0}" -f $resolvedArchive) -Level Verbose | Out-Null
+                    Expand-AvmToolArchive -ArchivePath $archivePath -Archive $resolvedArchive -TargetDir $stagingDir -EntrypointBasename $Tool.entrypoint
+                }
+                catch [System.IO.InvalidDataException] {
+                    if (-not $isModule -or $resolvedArchive -ne 'zip' -or $attempt -eq 2) { throw }
+                    Write-AvmLog -Level Warning -Message (
+                        "Downloaded module archive for '$($Tool.name)' $($Tool.version) is corrupt; retrying once in a fresh staging directory.")
+                    Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction Stop -ProgressAction SilentlyContinue
+                    $stagingDir = $null
+                    continue
+                }
+                Remove-Item -LiteralPath $archivePath -Force -ErrorAction Stop
+                break
+            }
 
             $stagedEntrypoint = Join-Path $stagingDir $entrypointName
             if (-not (Test-Path -LiteralPath $stagedEntrypoint)) {
@@ -193,7 +208,7 @@ function Install-AvmToolFromPins {
             }
         }
         finally {
-            if (Test-Path -LiteralPath $stagingDir) {
+            if ($stagingDir -and (Test-Path -LiteralPath $stagingDir)) {
                 Remove-Item `
                     -LiteralPath $stagingDir `
                     -Recurse `

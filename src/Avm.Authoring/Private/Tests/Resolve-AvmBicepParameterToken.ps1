@@ -35,10 +35,11 @@ function Resolve-AvmBicepParameterToken {
         $json = ConvertTo-Json -InputObject $Value -Compress
         $resolved = Resolve-AvmBicepTestToken -Content $json -SourcePath '<in-memory parameters>' `
             -Tokens $Tokens -DeferResourceLocation:$DeferResourceLocation
-        return ConvertFrom-Json -InputObject $resolved -NoEnumerate -ErrorAction Stop
+        return ConvertFrom-AvmStrictJson -Json $resolved -AllowScalar
     }
     if ($Value -is [System.Collections.IDictionary]) {
-        $copy = if ($Value -is [hashtable]) { @{} } else { [ordered]@{} }
+        $copy = if ($Value -is [hashtable]) { $Value.Clone() }
+        else { [System.Collections.Specialized.OrderedDictionary]::new([System.StringComparer]::Ordinal) }
         foreach ($key in $Value.psbase.Keys) {
             $copy[$key] = Resolve-AvmBicepParameterToken -Value $Value[$key] @options
         }

@@ -239,7 +239,7 @@ Describe 'Bicep workflow resource location selection' {
     It 'queries the canonical provider explicitly and uses only supported allowed recommended paired regions' {
         InModuleScope Avm.Authoring {
             Mock Get-AzResourceProvider {
-                @{ ResourceTypes = @(@{
+                @{ ProviderNamespace = 'Microsoft.Storage'; ResourceTypes = @(@{
                             ResourceTypeName = 'storageAccounts'
                             Locations = @('East US', 'West Europe', 'Central US', 'Korea Central', 'Sweden Central')
                         }) }
@@ -264,7 +264,7 @@ Describe 'Bicep workflow resource location selection' {
     It 'uses the fixed metadata location only for explicit global availability' {
         InModuleScope Avm.Authoring {
             Mock Get-AzResourceProvider {
-                @{ ResourceTypes = @(@{ ResourceTypeName = 'roleDefinitions'; Locations = @('Global') }) }
+                @{ ProviderNamespace = 'Microsoft.Authorization'; ResourceTypes = @(@{ ResourceTypeName = 'roleDefinitions'; Locations = @('Global') }) }
             }
             Mock Get-AzLocation { throw 'Global resources must not select another region.' }
             $actual = Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Authorization/roleDefinitions' `
@@ -277,7 +277,7 @@ Describe 'Bicep workflow resource location selection' {
 
     It 'rejects absent provider location metadata rather than treating it as global' {
         InModuleScope Avm.Authoring {
-            Mock Get-AzResourceProvider { @{ ResourceTypes = @() } }
+            Mock Get-AzResourceProvider { @{ ProviderNamespace = 'Microsoft.Storage'; ResourceTypes = @() } }
             { Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Storage/storageAccounts' -MetadataLocation 'westus' } |
                 Should -Throw -ExpectedMessage '*No location metadata*'
         }
@@ -290,6 +290,66 @@ Describe 'Bicep workflow resource location selection' {
                     -UnavailableRegions @('swedencentral')).Location | Should -Be 'centralus'
             { Get-AvmBicepResourceLocation -MetadataLocation 'westus' -AllowedRegions @('westeurope') } |
                 Should -Throw -ExpectedMessage '*No supported*'
+        }
+    }
+
+    It 'accepts <Rows> provider resource-type rows without losing the matching type' -ForEach @(
+        @{ Rows = 1 }
+        @{ Rows = 3 }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Rows = $Rows } {
+            param($Rows)
+            Mock Get-AzResourceProvider {
+                for ($index = 1; $index -lt $Rows; $index++) {
+                    [pscustomobject]@{
+                        ProviderNamespace = 'Microsoft.Storage'
+                        RegistrationState = 'Registered'
+                        ResourceTypes = @([pscustomobject]@{
+                                ResourceTypeName = "unrelatedType$index"; Locations = @('Global')
+                            })
+                    }
+                }
+                [pscustomobject]@{
+                    ProviderNamespace = 'microsoft.storage'
+                    RegistrationState = 'Registered'
+                    ResourceTypes = @([pscustomobject]@{
+                            ResourceTypeName = 'storageAccounts'; Locations = @('East US', 'Central US')
+                        })
+                }
+            }
+            Mock Get-AzLocation {
+                @{ Location = 'eastus'; DisplayName = 'East US'; PairedRegion = 'westus'; RegionCategory = 'Recommended' }
+            }
+            $actual = Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Storage/storageAccounts' `
+                -MetadataLocation 'westus' -AllowedRegions @('eastus') -ExcludedRegions @()
+            $actual.Location | Should -BeExactly 'eastus'
+            $actual.IsGlobal | Should -BeFalse
+            Should -Invoke Get-AzResourceProvider -Exactly 1 -ParameterFilter { $ProviderNamespace -ceq 'Microsoft.Storage' }
+            Should -Invoke Get-AzLocation -Exactly 1
+        }
+    }
+
+    It 'rejects a <Invalid> row rather than trusting a valid sibling' -ForEach @(
+        @{ Invalid = 'missing namespace'; Namespace = $null }
+        @{ Invalid = 'foreign namespace'; Namespace = 'Microsoft.Compute' }
+        @{ Invalid = 'nonscalar namespace'; Namespace = @('Microsoft.Storage') }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Namespace = $Namespace } {
+            param($Namespace)
+            Mock Get-AzResourceProvider {
+                [pscustomobject]@{
+                    ProviderNamespace = 'Microsoft.Storage'
+                    ResourceTypes = @(@{ ResourceTypeName = 'storageAccounts'; Locations = @('East US') })
+                }
+                [pscustomobject]@{
+                    ProviderNamespace = $Namespace
+                    ResourceTypes = @(@{ ResourceTypeName = 'storageAccounts'; Locations = @('East US') })
+                }
+            }
+            Mock Get-AzLocation { throw 'Malformed provider rows must fail before another metadata read.' }
+            { Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Storage/storageAccounts' -MetadataLocation 'westus' } |
+                Should -Throw '*unexpected provider namespace*'
+            Should -Invoke Get-AzLocation -Exactly 0
         }
     }
 }
@@ -309,19 +369,19 @@ Describe 'Bicep workflow regional validation classification' {
         InModuleScope Avm.Authoring -Parameters @{ C = $Code; M = $Message; Expected = $Expected } {
             param($C, $M, $Expected)
             $node = @{ error = @{ code = 'InvalidTemplateDeployment'; details = @(@{ code = $C; message = $M }) } }
-            (Test-AvmBicepRegionalErrorNode -Node $node) | Should -Be $Expected
+            (Test-AvmBicepRetryErrorNode -Node $node) | Should -Be $Expected
         }
     }
 
     It 'rejects mixed, empty, malformed and cyclic error trees' {
         InModuleScope Avm.Authoring {
             $regional = @{ code = 'AllocationFailed'; message = 'No capacity in this region.' }
-            (Test-AvmBicepRegionalErrorNode -Node @($regional, @{ code = 'AuthorizationFailed' })) | Should -BeFalse
-            (Test-AvmBicepRegionalErrorNode -Node @()) | Should -BeFalse
-            (Test-AvmBicepRegionalErrorNode -Node @{ code = 'DeploymentFailed'; details = $regional }) | Should -BeFalse
+            (Test-AvmBicepRetryErrorNode -Node @($regional, @{ code = 'AuthorizationFailed' })) | Should -BeFalse
+            (Test-AvmBicepRetryErrorNode -Node @()) | Should -BeFalse
+            (Test-AvmBicepRetryErrorNode -Node @{ code = 'DeploymentFailed'; details = $regional }) | Should -BeFalse
             $cycle = @{ code = 'DeploymentFailed' }
             $cycle.details = @($cycle)
-            (Test-AvmBicepRegionalErrorNode -Node $cycle) | Should -BeFalse
+            (Test-AvmBicepRetryErrorNode -Node $cycle) | Should -BeFalse
         }
     }
 
