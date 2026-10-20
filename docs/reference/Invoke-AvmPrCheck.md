@@ -42,6 +42,13 @@ all contributors receive results without environment approval.
 The convention step requires a tests/unit/*.tftest.hcl fixture,
 preventing an empty unit tier from reading as a green gauntlet.
 
+Set AVM_TF_UTILITY_MIGRATION=preserve when pre-commit used that setting
+to retain exact utility sources, versions and migration-related
+inputs/provider bindings. Unset or migrate retains default migrations.
+Invalid nonempty values fail configuration. Preservation does not
+exclude any checks, relax exact-pin validation or approve dependency
+changes; ordinary policy evaluation remains enabled.
+
 After metadata validation, the managed-files sync step (terraform
 only) in **drift-check mode** (-CheckDrift): unlike pre-commit,
 which reconciles the governed files by writing them, pr-check

@@ -42,7 +42,8 @@ function Get-AvmTerraformUtilityMigrationPlan {
     [OutputType([object[]])]
     param(
         [Parameter(Mandatory)] [object[]] $Targets,
-        [Parameter(Mandatory)] [object] $Options
+        [Parameter(Mandatory)] [object] $Options,
+        [switch] $PreserveSelections
     )
 
     Set-StrictMode -Version 3.0
@@ -70,6 +71,7 @@ function Get-AvmTerraformUtilityMigrationPlan {
             if (-not [version]::TryParse($version, [ref]$parsedVersion)) {
                 throw [AvmConfigurationException]::new("Utility module '$name' in '$($target.Path)' has an unsupported version pin that requires review.")
             }
+            if ($PreserveSelections) { continue }
             $legacyNaming = $source -ceq 'azure/naming/azurerm'
             if (-not $legacyNaming -and $parsedVersion -gt [version]$versions[$source]) { continue }
             $upgrade = $legacyNaming -or $parsedVersion -lt [version]$versions[$source]

@@ -30,6 +30,38 @@ Describe 'Terraform utility migration planning' {
         }
     }
 
+    It 'preserves exact utility selections without bypassing inspection: <Source>' -ForEach @(
+        @{ Source = 'Azure/avm-utl-regions/azurerm'; Version = '0.12.0' }
+        @{ Source = 'Azure/avm-utl-interfaces/azure'; Version = '0.8.0' }
+        @{ Source = 'registry.terraform.io/Azure/naming/azurerm'; Version = '0.4.3' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Source = $Source; Version = $Version } {
+            param($Source, $Version)
+            $script:utilityInspection.calls.original = @{
+                source = $Source; version = $Version
+                providers = '{ azapi = azapi.original }'; location = 'var.original_location'
+            }
+            $before = $script:utilityInspection | ConvertTo-Json -Depth 10
+            @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets `
+                    -Options $script:utilityOptions -PreserveSelections) | Should -HaveCount 0
+            ($script:utilityInspection | ConvertTo-Json -Depth 10) | Should -BeExactly $before
+            Should -Invoke Get-AvmTerraformUtilityInspection -Exactly 1
+        }
+    }
+
+    It 'still rejects ambiguous pins while preserving selections: <Version>' -ForEach @(
+        @{ Version = $null }
+        @{ Version = '~> 0.12' }
+        @{ Version = '0.12.0-beta' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Version = $Version } {
+            param($Version)
+            $script:utilityInspection.calls.regions = @{ source = 'Azure/avm-utl-regions/azurerm'; version = $Version }
+            { Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets `
+                    -Options $script:utilityOptions -PreserveSelections } | Should -Throw '*review*'
+        }
+    }
+
     It 'plans literal exact pins without guessing: <Version>' -TestCases @(
         @{ Version = '0.1.0'; Upgrade = $true; ExpectedCount = 1 }
         @{ Version = '= 0.12.0'; Upgrade = $true; ExpectedCount = 1 }

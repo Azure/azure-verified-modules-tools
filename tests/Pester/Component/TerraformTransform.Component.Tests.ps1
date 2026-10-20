@@ -47,6 +47,59 @@ Describe 'Invoke-AvmTerraformTransform' -Tag Component {
         } | Should -Throw -ExceptionType ([System.ArgumentException])
     }
 
+    It 'routes utility migration mode without skipping other transforms: <Mode>' -ForEach @(
+        @{ Mode = $null; Preserve = $false }
+        @{ Mode = ''; Preserve = $false }
+        @{ Mode = 'migrate'; Preserve = $false }
+        @{ Mode = 'preserve'; Preserve = $true }
+    ) {
+        $previous = [Environment]::GetEnvironmentVariable('AVM_TF_UTILITY_MIGRATION')
+        try {
+            $value = if ($null -eq $Mode) { [NullString]::Value } else { $Mode }
+            [Environment]::SetEnvironmentVariable('AVM_TF_UTILITY_MIGRATION', $value, 'Process')
+            InModuleScope Avm.Authoring -Parameters @{ C = $script:context; Preserve = $Preserve } {
+                param($C, $Preserve)
+                Mock Resolve-AvmTool { [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" } }
+                Mock Resolve-AvmMapotfConfigDir { "/fake/$ProfileName" }
+                Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+                (Invoke-AvmTerraformTransform -Context $C).Status | Should -Be 'pass'
+                Should -Invoke Get-AvmTerraformUtilityMigrationPlan -Exactly 1 -ParameterFilter {
+                    [bool]$PreserveSelections -eq $Preserve
+                }
+                Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter { $ArgumentList[0] -eq 'transform' }
+            }
+        }
+        finally {
+            $value = if ($null -eq $previous) { [NullString]::Value } else { $previous }
+            [Environment]::SetEnvironmentVariable('AVM_TF_UTILITY_MIGRATION', $value, 'Process')
+        }
+    }
+
+    It 'rejects an invalid utility migration mode before tool resolution or source changes: <Mode>' -ForEach @(
+        @{ Mode = 'presrve' }
+        @{ Mode = 'PRESERVE' }
+        @{ Mode = ' migrate ' }
+        @{ Mode = 'false' }
+    ) {
+        $previous = [Environment]::GetEnvironmentVariable('AVM_TF_UTILITY_MIGRATION')
+        $before = [IO.File]::ReadAllBytes((Join-Path $script:moduleDir 'main.tf'))
+        try {
+            [Environment]::SetEnvironmentVariable('AVM_TF_UTILITY_MIGRATION', $Mode, 'Process')
+            InModuleScope Avm.Authoring -Parameters @{ C = $script:context } {
+                param($C)
+                Mock Resolve-AvmTool { throw 'Tool resolution must not run.' }
+                { Invoke-AvmTerraformTransform -Context $C } |
+                    Should -Throw -ExceptionType ([AvmConfigurationException]) -ExpectedMessage '*AVM_TF_UTILITY_MIGRATION*'
+                Should -Invoke Resolve-AvmTool -Exactly 0
+            }
+            [IO.File]::ReadAllBytes((Join-Path $script:moduleDir 'main.tf')) | Should -Be $before
+        }
+        finally {
+            $value = if ($null -eq $previous) { [NullString]::Value } else { $previous }
+            [Environment]::SetEnvironmentVariable('AVM_TF_UTILITY_MIGRATION', $value, 'Process')
+        }
+    }
+
     It 'captures pre-upgrade evidence before utility edits and reconciles providers before mocks' {
         InModuleScope Avm.Authoring -Parameters @{ C = $script:context } {
             param($C)

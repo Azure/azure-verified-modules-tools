@@ -690,6 +690,22 @@ Root, child, example and discovered test-wrapper scopes share this phase.
 These are fixed one-off migration targets, not latest-release lookups or an
 automatic progression to future utility versions.
 
+`AVM_TF_UTILITY_MIGRATION=preserve` is the supported opt-in for retaining
+authored utility dependencies without accepting those migrations. Set it
+consistently for `avm pre-commit`, `avm transform` and `avm pr-check`, including
+CI. Unset, empty or `migrate` retains the default behavior; other values fail
+configuration before the transform resolves tools or changes source.
+Preservation still inspects recognized utility calls and requires literal exact
+pins. It leaves their source, version, caller inputs and migration-related
+provider bindings unchanged, rather than replacing the Mapotf profiles or
+excluding transform. All other instrumentation, provider/mock reconciliation,
+drift checks, lint and ordinary policy evaluation remain enabled. This is not
+an approval to upgrade dependencies, freeze unrelated generated content or
+weaken consumer checks. Existing lock selections remain protected by the same
+initialization and native-inspection controls. In particular, preservation
+does not waive a module-root lint rejection of legacy Naming; its retained
+calls must already satisfy the applicable source rules.
+
 Legacy `Azure/naming/azurerm` calls become `Azure/avm-utl-naming/azure` at
 `0.2.0` in modern mode. Omit `legacy_mode` to use its false default; if an
 old-source call already contains that input, set it to false. Preserve labels
