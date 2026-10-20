@@ -186,6 +186,21 @@ Describe 'Independent CI workflows' {
             Should -Match 'build[.]ps1 qualification -QualificationGroup Package'
     }
 
+    It 'admits packaged Bicep policy changes at <File> without broadening unrelated paths' -ForEach @(
+        @{ File = 'src/Avm.Authoring/Engines/Bicep/Get-AvmBicepPolicyTestFile.ps1' }
+        @{ File = 'src/Avm.Authoring/Engines/Bicep/Invoke-AvmBicepCheckPolicy.ps1' }
+        @{ File = 'src/Avm.Authoring/Public/Invoke-AvmCheckPolicy.ps1' }
+    ) {
+        Test-Path -LiteralPath (Join-Path $script:repoRoot $File) | Should -BeTrue
+        foreach ($eventName in @('push', 'pull_request')) {
+            $paths = $script:definitions['ci-package-qualification.yml']['on'][$eventName].paths
+            @($paths | Where-Object { $File -clike $_ }) | Should -Be @($File)
+            foreach ($unrelated in @('README.md', 'docs/quality-spec.md', 'repository-management/repository-config/config.json')) {
+                @($paths | Where-Object { $unrelated -clike $_ }) | Should -BeNullOrEmpty
+            }
+        }
+    }
+
     It 'uses the repository-sync executor <Variable> in both provider and login settings' -ForEach @(
         @{ Name = 'ARM_CLIENT_ID'; LoginInput = 'client-id'; Variable = 'TEST_BAMI_CONTROLLER_CLIENT_ID' }
         @{ Name = 'ARM_TENANT_ID'; LoginInput = 'tenant-id'; Variable = 'TEST_BAMI_TENANT_ID' }
