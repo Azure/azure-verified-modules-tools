@@ -1,0 +1,41 @@
+name: Bicep module identity
+description: Resolve the published module identity without Azure access or a shared-identity fallback.
+inputs:
+  modulePath:
+    description: Caller-relative module path, including an optional child path.
+    required: true
+  moduleClientIds:
+    description: Published flat VALIDATE_MODULE_CLIENT_IDS JSON keyed by canonical root module path.
+    required: true
+  tenantId:
+    description: Effective VALIDATE_TENANT_ID from the caller's variable/secret precedence.
+    required: true
+outputs:
+  clientId:
+    description: Validated client GUID belonging to the module's canonical root.
+    value: ${{ steps.identity.outputs.clientId }}
+  tenantId:
+    description: Validated tenant GUID.
+    value: ${{ steps.identity.outputs.tenantId }}
+  moduleRoot:
+    description: Canonical root selected from the published mapping.
+    value: ${{ steps.identity.outputs.moduleRoot }}
+  identityKey:
+    description: Digest binding the selected root, client and tenant.
+    value: ${{ steps.identity.outputs.identityKey }}
+runs:
+  using: composite
+  steps:
+    - name: Resolve mapped module identity
+      id: identity
+      shell: pwsh
+      env:
+        AVM_ACTION_PATH: ${{ github.action_path }}
+        MODULE_PATH: ${{ inputs.modulePath }}
+        VALIDATE_MODULE_CLIENT_IDS: ${{ inputs.moduleClientIds }}
+        VALIDATE_TENANT_ID: ${{ inputs.tenantId }}
+      run: |
+        $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
+        . (Join-Path $root 'scripts' 'bicep-workflows' 'Deployment.ps1')
+        $identity = Get-AvmWorkflowModuleIdentity -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH -ModuleClientIds $env:VALIDATE_MODULE_CLIENT_IDS -TenantId $env:VALIDATE_TENANT_ID
+        foreach ($entry in $identity.GetEnumerator()) { Write-AvmWorkflowOutput -Name $entry.Key -Value $entry.Value }

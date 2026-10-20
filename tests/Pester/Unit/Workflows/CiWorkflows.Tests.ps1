@@ -55,12 +55,15 @@ Describe 'Independent CI workflows' {
     It 'includes source, tests and shared dependencies in the static filters for <File>' -ForEach @(
         @{ File = 'ci-authoring.yml'; Required = @(
             'src/Avm.Authoring/**', 'build/**', 'build.ps1', 'scripts/**', 'tests/**', 'docs/reference/**',
+            'repository-management/shared/TestTenant.ps1', 'repository-management/shared/GroupSettings.ps1',
             '.github/workflows/ci-authoring.yml', '.github/workflows/release.yml'
         ) }
         @{ File = 'ci-workflows.yml'; Required = @(
             '.github/workflows/**', '.github/dependabot.yml', 'tests/Pester/Unit/Workflows/**',
             'tests/Pester/Import-AvmTestModule.ps1', 'build/**', 'build.ps1',
             'scripts/Install-AvmBuildPrerequisites.ps1', 'scripts/Import-AvmNetworkRetry.ps1',
+            'scripts/bicep-workflows/**', 'repository-management/shared/TestTenant.ps1',
+            'repository-management/shared/GroupSettings.ps1',
             'src/Avm.Authoring/Avm.Authoring.psd1', 'src/Avm.Authoring/Avm.Authoring.psm1',
             'src/Avm.Authoring/Resources/**', 'src/Avm.Authoring/Private/Tools/**',
             'src/Avm.Authoring/Private/Network/**', 'src/Avm.Authoring/Private/Process/**',
@@ -102,8 +105,8 @@ Describe 'Independent CI workflows' {
             $paths.IndexOf("!$excluded") | Should -BeGreaterThan $paths.IndexOf('tests/**')
         }
         $paths | Should -Not -Contain 'repository-management/**'
-        $paths | Should -Not -Contain 'repository-management/shared/TestTenant.ps1'
-        $paths | Should -Not -Contain 'repository-management/shared/GroupSettings.ps1'
+        @($paths | Where-Object { $_ -like 'repository-management/*' } | Sort-Object) |
+            Should -Be @('repository-management/shared/GroupSettings.ps1', 'repository-management/shared/TestTenant.ps1')
         $paths | Should -Not -Contain 'infra/**'
         $paths | Should -Not -Contain '.github/workflows/terraform-module.yml'
         foreach ($file in @('ci-workflows.yml', 'repository-management-config-test.yml')) {
@@ -181,6 +184,21 @@ Describe 'Independent CI workflows' {
         $package.env.ARM_USE_OIDC | Should -BeExactly 'false'
         ($package.steps | Where-Object { $_.Contains('run') } | ForEach-Object { $_.run }) -join "`n" |
             Should -Match 'build[.]ps1 qualification -QualificationGroup Package'
+    }
+
+    It 'admits packaged Bicep policy changes at <File> without broadening unrelated paths' -ForEach @(
+        @{ File = 'src/Avm.Authoring/Engines/Bicep/Get-AvmBicepPolicyTestFile.ps1' }
+        @{ File = 'src/Avm.Authoring/Engines/Bicep/Invoke-AvmBicepCheckPolicy.ps1' }
+        @{ File = 'src/Avm.Authoring/Public/Invoke-AvmCheckPolicy.ps1' }
+    ) {
+        Test-Path -LiteralPath (Join-Path $script:repoRoot $File) | Should -BeTrue
+        foreach ($eventName in @('push', 'pull_request')) {
+            $paths = $script:definitions['ci-package-qualification.yml']['on'][$eventName].paths
+            @($paths | Where-Object { $File -clike $_ }) | Should -Be @($File)
+            foreach ($unrelated in @('README.md', 'docs/quality-spec.md', 'repository-management/repository-config/config.json')) {
+                @($paths | Where-Object { $unrelated -clike $_ }) | Should -BeNullOrEmpty
+            }
+        }
     }
 
     It 'uses the repository-sync executor <Variable> in both provider and login settings' -ForEach @(

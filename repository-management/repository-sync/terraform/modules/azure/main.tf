@@ -72,6 +72,22 @@ resource "azapi_resource" "validation_federated_credential" {
   }
 }
 
+resource "azapi_resource" "bicep_registry_federated_credential" {
+  count = var.bicep_registry_federation_enabled ? 1 : 0
+
+  type      = "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview"
+  name      = "${local.owner_repo_name}-registry-avm-validation"
+  parent_id = azapi_resource.identity.id
+  locks     = [azapi_resource.identity.id]
+  body = {
+    properties = {
+      audiences = ["api://AzureADTokenExchange"]
+      issuer    = "https://token.actions.githubusercontent.com"
+      subject   = "repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:avm-validation"
+    }
+  }
+}
+
 data "azuread_group" "test_permissions" {
   for_each = var.entra_group_names
 

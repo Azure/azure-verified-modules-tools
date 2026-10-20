@@ -1622,6 +1622,212 @@ still relies on the reaper or operator cleanup, not a new external journal.
 An artifact must also be retained when a deployment phase fails after
 creating state; a failing command does not mean no resources exist.
 
+### Shared Bicep workflows
+
+Tools owns the six reusable `bicep-module*.yml` workflows, their composite
+actions and `scripts/bicep-workflows` support. The registry retains module
+callers, source, authored tests and configuration, including
+`.avm/child-module-publish-allowed-list.json` with the existing child approvals.
+Shared native validation and execution belong to the released `Avm.Authoring`
+package, not registry utilities or copied compliance scripts.
+Reserved Azure Local cases retain the registry-local prepared-environment
+lifecycle until equivalent native coverage exists. Registry entry workflows
+partition generic selections with the existing reservation helper and retain
+the reserved module callers; do not duplicate the reservation inventory or
+send reserved cases to ordinary native execution. This routing exception does
+not permit a legacy shared-identity fallback.
+
+Callers pin every tools `uses` reference and `tools-ref` to the same full
+immutable commit SHA and supply an exact qualified `avm-authoring-version`.
+There is no floating, development-version or missing-release fallback.
+The tools checkout does not supply the runtime module: each native phase
+imports the selected PSGallery package. Package qualification must exercise
+the workflow adapter with that runtime, including InPlace/Fresh retries and
+final-only cleanup; interface-parameter checks alone do not prove this behavior.
+Nested reusable calls remain relative to that tools revision. Executable
+jobs check out the complete caller at its intended target and separately
+check out tools actions, workflow support and shared repository-management
+helpers into `.avm-tools`; local actions must never resolve against
+caller-owned implementation. Remote initializers resolve their scripts from
+`github.action_path`. Ordinary callers retain `github.sha`; generic callers
+forward their checked `targetCommit` through every validation tier.
+
+For generic pull requests, `pullRequestHeadCommit` is the event's head SHA.
+The checked-out target must be the tested merge with exactly two parents:
+its second parent must match that head, and its first parent is the only
+comparison base. Ignore the mutable event base; never substitute a branch
+tip or merge-base. Unavailable or malformed merge history fails before
+matrix outputs. Pushes retain their before-to-target comparison and
+static-only all-module fallback when the base is unavailable; manual
+selection does not inspect pull-request history.
+
+Static validation invokes `Invoke-AvmTestUnit -Recurse -IncludeCompliance`
+only after the package declares integer
+`PrivateData.AvmCapabilities.BicepPackagedCompliance = 1`. A compiled asset
+alone is not acceptance. Policy uses the public Bicep-only `Example` and
+`Baseline` selectors; omission retains defaults/WAF-aligned examples and
+all four baselines. Explicit examples may select another authored e2e case;
+invalid, unmatched or incorrectly cased selectors fail. Required baselines
+are `Azure.Pillar.Reliability` and `CB.AVM.WAF.Security`; `Azure.Default`
+and `Azure.Pillar.Security` are advisory. Missing dependencies, empty results
+and uninspectable evaluations still fail.
+Packaged policy supplies the registry's static-only
+`builtInServicePrincipalObjectId` placeholder through PSRule parameter defaults.
+It does not write consumer source or supply a native deployment parameter.
+
+Policy preparation requires integer package capability
+`PrivateData.AvmCapabilities.PowerShellModuleArchiveRecovery = 1` and the
+reservation-aware `BicepTestSubscriptionSelection = 1` capability. Resolve
+PSRule and PSRule.Rules.Azure with `Get-AvmTool` at the same caller module
+path used for validation. Reuse the exact installed or managed-cache versions;
+prepare missing packages through `Install-AvmTool`, including its pinned
+dependencies, then confirm readiness. Do not maintain a second package
+downloader, custom repository or direct policy dependency installation in
+workflow support. The native installer owns checksum validation, download
+staging, bounded local archive-corruption recovery and atomic publication.
+Retain the selected release's exact dependency pins and repository overrides,
+not a new floating prerelease lookup. Bootstrap or import failures are errors
+even for advisory baselines; advisory rule findings remain warnings.
+
+Only requested, nonignored Azure cases require identity selection. Static,
+policy, discovery, release preview and tag-only execution must not require
+the module identity mapping or Azure login. Empty and wholly `.e2eignore`
+selections need neither identities nor a subscription pool or compiler.
+Generic/bulk Azure execution remains supported.
+Generic preview and publish workflows with an empty test list skip the
+protected subscription-selection job rather than requesting an unused approval.
+Dispatch and phase-control JSON uses one package-independent flat scalar
+reader. Preserve date-looking strings without DateTime conversion, retain
+boolean conversion and empty/null omission, and reject nested object/array
+values. Duplicate scalar names retain their existing last-value precedence;
+this does not change the separate strict identity or subscription-map readers.
+
+Selection and deployment read `vars.VALIDATE_MODULE_CLIENT_IDS`, the
+producer's flat canonical-root-to-client-GUID JSON map. Use the shared
+producer validator, not another naming or parsing convention. Child and
+nested child paths use their slash-delimited root entry; resource, pattern
+and utility roots follow the same contract. Reject missing, malformed,
+duplicate, case-colliding or reused bindings. Never fall back to
+`VALIDATE_CLIENT_ID`, `AZURE_CREDENTIALS` or legacy OIDC exceptions.
+Each matrix entry binds the root/client/tenant, original subscription pool
+index/digest, native owning module path, selection seed and case index.
+Revalidate them before authenticating rather than switching an already-selected
+identity or target when configuration changes.
+
+The tools-owned `bicep-module-identity` action exposes that same producer-backed
+resolver to retained registry-local workflows. It reads the checked-out caller's
+module path, the flat module-client map and the effective validation tenant,
+then emits only `clientId`, `tenantId`, `moduleRoot` and `identityKey`. Validate
+the complete input before emitting any output. It neither loads a native runtime
+nor authenticates. Retained HCI preparation and consumer workflows use these
+outputs for every initial and renewed sign-in, completion and recovery; the old
+shared identity remains untouched but is not a fallback.
+
+Subscription pool precedence is variables `VALIDATE_SUBSCRIPTION_IDS`, then
+`TEST_SUBSCRIPTION_IDS`, then those secrets. Singleton subscription and tenant
+prefer `VALIDATE_*` variables over secrets; the mapped tenant must be a GUID.
+Management group prefers variables `VALIDATE_MANAGEMENT_GROUP_ID`, then
+`ARM_MGMTGROUP_ID`, then those secrets. Malformed preferred values fail.
+Forward the pool explicitly to workflow selection, then explicit
+`SubscriptionId` and `TenantId` to native execution; shared phases must not
+reselect their target from ambient CI pools.
+Matrix preparation and deployment require integer package capability
+`PrivateData.AvmCapabilities.BicepTestSubscriptionSelection = 1`. The adapter
+calls public `Select-AvmTestSubscription` with the explicit caller repository,
+module and exact example, the complete effective pool, seed and case index.
+Native discovery resolves child ownership before exact reservation lookup;
+never substitute the family identity root. Deploy and Complete target that
+selected owning module, with the selected example rebased relative to it.
+Dependency preparation uses the same owner path, and exact prerequisite maps
+are therefore evaluated for the child without changing its family-root identity.
+The adapter may form one id/name
+record from the explicit singleton only when no pool is configured, leaving
+validation and reservation enforcement to the native selector. It does not
+parse, filter or shuffle pools itself. Validate every active selection before
+resolving the compiler, and rerun the identical native selection before login.
+Use public `Get-AvmModuleContext` to admit the selected owner for direct native
+execution before compiler preparation or authentication. Read-only discovery is
+not an execution-admission promise; unsupported owners never bypass the native
+reserved-ancestor guard or silently retarget to a family root.
+Non-General results fail before compiler or Azure dependency preparation and
+authentication; they require the retained registry-local lifecycle.
+
+Both initial and renewed `azure/login` calls use the same selected client,
+tenant and subscription with `enable-AzPSSession: true`. Keep one mapped root
+per job/execution context. Check the selected service principal, tenant,
+subscription and cloud before Deploy, Complete and state-only recovery;
+the package also guards CLI/PowerShell agreement. Deployment identities do
+not replace unrelated publication credentials.
+
+Before deployment authentication, require integer package capability
+`PrivateData.AvmCapabilities.BicepRequiredResourceProviders = 1`. The native
+Deploy/All runner alone discovers and validates repository-root
+`.required-features.json` and `.required-resource-providers.json`, using the
+exact module path rather than the identity map's canonical-root inheritance.
+Feature prerequisites precede provider prerequisites, then token replacement,
+validation and deployment, in the already selected tenant/subscription
+context. The optional provider map contains namespace arrays, not feature
+names or identities. Missing, empty and unrelated requirements do not issue
+registration calls. WhatIf, Complete, cleanup and nondeployment workflow
+paths never register. Registration persists after testing and does not grant
+the test identity additional permissions. The marker does not qualify a
+release containing the other required runtime and policy interfaces.
+
+Keep `avm-validation` for selection/execution and `publish-approval` for tag
+approval. Per-target locks cover deployment, assertions and cleanup; shared
+tenant/management-group/linked-template scopes additionally take the shared
+outer lock. Queue rather than cancel. Pass full CI variables/secrets only to
+Deploy; retain generic `gci` and separate custom resource location from fixed
+`WestEurope` metadata location. Renewal precedes Complete after either a
+successful or failed Deploy. Native completion validates saved state, runs
+the final terminal deployment's post hook once, and then cleans every attempt;
+it must not mask the original deployment failure. KeepResources skips post
+and cleanup. Unsafe, changed-source or interrupted-completion state must not
+replay authored code. Cleanup-only recovery uses persisted state without
+authored hooks, and cancellation prevents starting renewal, completion or
+recovery. Artifacts contain only allowed
+diagnostics and credential-free state; skipped or malformed executions are
+not passing results.
+
+Release jobs create only module Git tags for the existing ADO publication
+path, never MCR publication. Retain upstream/main/manual guards, child-before-
+parent ordering, same-target tag reuse, conflicting-tag failures and
+reconciliation of uncertain pushes without mutation replay. Preview cannot
+create or push tags.
+
+Publishing an executable candidate is not a package release, federation apply
+or registry cutover. Moving deployment to tools changes `job_workflow_ref`
+to the exact tools deployment workflow at the immutable caller pin; it only
+affects authentication when the configured subject includes that claim.
+Registry and Tools currently configure only `repository_owner_id`,
+`repository_id`, and `context`; the latter expands to
+`environment:avm-validation`. Add one distinctly named registry credential
+per module using that exact subject, the existing issuer and audience, and
+the existing federation API. Retain the staged workflow-bound and Tools
+validation credentials without changing their subjects or resource names.
+Do not change the GitHub subject configuration. New workflow restrictions
+and flexible credentials are a separate follow-up; tools pin changes do not
+require credential changes under the current three-claim contract.
+Generic execution keeps its existing label/internal-fork controls without
+adding a base-main restriction. The same registry subject can authenticate
+multiple module identities: workflow selection is not a federated per-module
+isolation boundary. Never substitute the Tools validation credential for a
+registry caller. Keep the old shared Bicep identity unchanged.
+
+The scheduled main-only Bicep identity reconciliation can apply the additive
+credentials after merge, so its merge/apply and subsequent registry cutover
+require separate approval. Branch publication and review checks do not apply
+the credentials or establish live login readiness.
+
+The registry's existing `bicepconfig.json` selects
+`docs/templates/avm-readme-v1.scriban` with `includeRoot=docs/templates`.
+Remove only `documentation.template` after compatible-release and remaining-
+consumer qualification to select the package default; preserve examples,
+compiler settings and still-used Scriban files. Coupled workflow pin changes
+edit module callers whose own files are main-push triggers, potentially
+starting fleet validation. Registry merging/cutover needs an approved rollout
+window. Do not retire registry platform-cleanup tests or native compatibility
+coverage solely because workflow source checks pass.
 Registry caller replacements must preserve the existing orchestration:
 experimental checks require both `PR: Run Checks` and `PR: Run E2E Tests`;
 ignored jobs exit before checkout, bootstrap or sign-in. The seeded matrix
@@ -2397,7 +2603,7 @@ status aggregation.
 | Workflow | File | Coverage |
 | --- | --- | --- |
 | `Authoring: CI` | `ci-authoring.yml` | Lint once on Ubuntu; authoring unit and component tests on Ubuntu, Windows and macOS; the Ubuntu unit leg enforces the 70% coverage floor. |
-| `Authoring: Package qualification` | `ci-package-qualification.yml` | Cold/offline runtime dependencies, release downloads, checksums and ruleset attestation on all three operating systems when package/pin/bootstrap dependencies change. |
+| `Authoring: Package qualification` | `ci-package-qualification.yml` | Cold/offline runtime dependencies, release downloads, checksums and ruleset attestation on all three operating systems when package/pin/bootstrap dependencies or packaged Bicep policy selectors change. |
 | `Workflows: CI` | `ci-workflows.yml` | Workflow definitions, embedded installation behavior and CI contract tests on Ubuntu only. |
 | `Repos: CI` | `repository-management-config-test.yml` | Repository-management unit/component tests, configuration checks and mocked Terraform validation on Ubuntu only. |
 

@@ -1,0 +1,198 @@
+name: Bicep native deployment
+description: Authenticate the preselected target, run native deployment/completion, and preserve recovery state.
+inputs:
+  avm-authoring-version:
+    description: Exact qualified Avm.Authoring release.
+    required: true
+  modulePath:
+    description: >-
+      Caller-relative module or family path. Native selection resolves the exact
+      owning module path for each test. The qualified native package reads root
+      .required-features.json and .required-resource-providers.json for this exact
+      owning path, registers features then provider namespaces in the selected context
+      before token replacement, validation and deployment, and never during completion or cleanup.
+    required: true
+  workflowInput:
+    description: Validation and location inputs as JSON.
+    required: true
+  testCase:
+    description: One preselected deployment matrix entry as JSON.
+    required: true
+  subscriptionPool:
+    description: Effective subscription pool, using caller variable/secret precedence.
+    required: false
+  fallbackSubscriptionId:
+    description: Effective singleton subscription.
+    required: false
+  moduleClientIds:
+    description: Published VALIDATE_MODULE_CLIENT_IDS JSON, keyed by canonical root module path.
+    required: true
+  tenantId:
+    description: Effective validation tenant.
+    required: false
+  managementGroupId:
+    description: Effective management group.
+    required: false
+  tokenNamePrefix:
+    description: Caller token name prefix.
+    required: false
+  ciKeyVaultName:
+    description: Caller CI key vault name.
+    required: false
+  githubVariables:
+    description: Variables consumed only by the native CI-input adapter.
+    required: true
+  githubSecrets:
+    description: Secrets consumed only by the native CI-input adapter.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Validate authentication selection
+      id: auth
+      shell: pwsh
+      env:
+        AVM_ACTION_PATH: ${{ github.action_path }}
+        AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
+        MODULE_PATH: ${{ inputs.modulePath }}
+        TEST_CASE: ${{ inputs.testCase }}
+        POOL_JSON: ${{ inputs.subscriptionPool }}
+        FALLBACK_SUBSCRIPTION_ID: ${{ inputs.fallbackSubscriptionId }}
+        VALIDATE_MODULE_CLIENT_IDS: ${{ inputs.moduleClientIds }}
+        VALIDATE_TENANT_ID: ${{ inputs.tenantId }}
+      run: |
+        $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
+        . (Join-Path $root 'scripts' 'bicep-workflows' 'Deployment.ps1')
+        $case = ConvertFrom-Json -InputObject $env:TEST_CASE -AsHashtable
+        if (ConvertTo-AvmWorkflowBoolean $case.e2eIgnore) { throw 'Ignored tests must not enter deployment authentication.' }
+        Initialize-AvmWorkflow -Version $env:AVM_AUTHORING_VERSION -Profile Matrix -Confirm:$false
+        $parameters = @{
+          Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH; TestCase = $case
+          PoolJson = $env:POOL_JSON; FallbackSubscriptionId = $env:FALLBACK_SUBSCRIPTION_ID
+          ModuleClientIds = $env:VALIDATE_MODULE_CLIENT_IDS; TenantId = $env:VALIDATE_TENANT_ID
+        }
+        $auth = Get-AvmWorkflowAuthentication @parameters
+        Write-Output "::add-mask::$($auth.subscriptionId)"
+        foreach ($entry in $auth.GetEnumerator()) { Write-AvmWorkflowOutput -Name $entry.Key -Value $entry.Value }
+        $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes("$env:MODULE_PATH|$($case.path)"))).ToLowerInvariant()
+        Write-AvmWorkflowOutput -Name artifactKey -Value $key
+    - name: Prepare deployment dependencies
+      id: setup
+      shell: pwsh
+      env:
+        AVM_ACTION_PATH: ${{ github.action_path }}
+        AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
+        MODULE_PATH: ${{ steps.auth.outputs.modulePath }}
+      run: |
+        $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
+        . (Join-Path $root 'scripts' 'bicep-workflows' 'Common.ps1')
+        $modulePath = Resolve-AvmWorkflowPath -Root $env:GITHUB_WORKSPACE -RelativePath $env:MODULE_PATH
+        Initialize-AvmWorkflow -Version $env:AVM_AUTHORING_VERSION -Profile Deployment -Path $modulePath -Confirm:$false
+        $null = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'avm-bicep-state') -Force
+    - name: Sign in with OIDC
+      id: login_oidc
+      uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+      with:
+        client-id: ${{ steps.auth.outputs.clientId }}
+        tenant-id: ${{ steps.auth.outputs.tenantId }}
+        subscription-id: ${{ steps.auth.outputs.subscriptionId }}
+        enable-AzPSSession: true
+    - name: Confirm selected Azure context
+      id: context
+      shell: pwsh
+      env:
+        AVM_ACTION_PATH: ${{ github.action_path }}
+        SELECTED_SUBSCRIPTION: ${{ steps.auth.outputs.subscriptionId }}
+        SELECTED_TENANT: ${{ steps.auth.outputs.tenantId }}
+        SELECTED_CLIENT: ${{ steps.auth.outputs.clientId }}
+      run: |
+        $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
+        . (Join-Path $root 'scripts' 'bicep-workflows' 'Deployment.ps1')
+        $tenant = Confirm-AvmWorkflowAzureContext -SubscriptionId $env:SELECTED_SUBSCRIPTION -TenantId $env:SELECTED_TENANT -ClientId $env:SELECTED_CLIENT
+        Write-AvmWorkflowOutput -Name tenantId -Value $tenant
+    - name: Deploy native test case
+      id: deploy
+      shell: pwsh
+      env:
+        AVM_ACTION_PATH: ${{ github.action_path }}
+        MODULE_PATH: ${{ steps.auth.outputs.modulePath }}
+        WORKFLOW_INPUT: ${{ inputs.workflowInput }}
+        SELECTED_EXAMPLE: ${{ steps.auth.outputs.example }}
+        ARM_SUBSCRIPTION_ID: ${{ steps.auth.outputs.subscriptionId }}
+        ARM_TENANT_ID: ${{ steps.context.outputs.tenantId }}
+        ARM_CLIENT_ID: ${{ steps.auth.outputs.clientId }}
+        ARM_MGMTGROUP_ID: ${{ inputs.managementGroupId }}
+        TOKEN_NAMEPREFIX: ${{ inputs.tokenNamePrefix }}
+        CI_KEY_VAULT_NAME: ${{ inputs.ciKeyVaultName }}
+        AVM_CI_VARIABLES: ${{ inputs.githubVariables }}
+        AVM_CI_SECRETS: ${{ inputs.githubSecrets }}
+      run: |
+        $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
+        . (Join-Path $root 'scripts' 'bicep-workflows' 'Validation.ps1')
+        Import-AvmWorkflowPackage
+        $workflowInput = ConvertFrom-AvmWorkflowScalarInput -Json $env:WORKFLOW_INPUT
+        $parameters = @{
+          Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH; Phase = 'Deploy'; Example = $env:SELECTED_EXAMPLE
+          SubscriptionId = $env:ARM_SUBSCRIPTION_ID; TenantId = $env:ARM_TENANT_ID; ClientId = $env:ARM_CLIENT_ID
+          ManagementGroupId = $env:ARM_MGMTGROUP_ID; CustomLocation = $workflowInput['customLocation']
+          RemoveDeployment = ConvertTo-AvmWorkflowBoolean $workflowInput.removeDeployment
+          StatePath = Join-Path $env:RUNNER_TEMP 'avm-bicep-state' 'state.json'
+          ResultDirectory = Join-Path $env:RUNNER_TEMP 'avm-bicep-results'
+        }
+        Invoke-AvmWorkflowE2e @parameters -Confirm:$false
+    - name: Renew OIDC sign-in for completion
+      id: renew_oidc
+      if: ${{ !cancelled() && (success() || failure()) && steps.deploy.outcome != 'skipped' }}
+      uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+      with:
+        client-id: ${{ steps.auth.outputs.clientId }}
+        tenant-id: ${{ steps.auth.outputs.tenantId }}
+        subscription-id: ${{ steps.auth.outputs.subscriptionId }}
+        enable-AzPSSession: true
+    - name: Assert and complete native test case
+      id: complete
+      if: ${{ !cancelled() && (success() || failure()) && (steps.deploy.outcome == 'success' || steps.deploy.outcome == 'failure') && steps.renew_oidc.outcome == 'success' }}
+      shell: pwsh
+      env:
+        AVM_ACTION_PATH: ${{ github.action_path }}
+        MODULE_PATH: ${{ steps.auth.outputs.modulePath }}
+        WORKFLOW_INPUT: ${{ inputs.workflowInput }}
+        ARM_SUBSCRIPTION_ID: ${{ steps.auth.outputs.subscriptionId }}
+        ARM_TENANT_ID: ${{ steps.context.outputs.tenantId }}
+        ARM_CLIENT_ID: ${{ steps.auth.outputs.clientId }}
+      run: |
+        $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
+        . (Join-Path $root 'scripts' 'bicep-workflows' 'Validation.ps1')
+        Import-AvmWorkflowPackage
+        $workflowInput = ConvertFrom-AvmWorkflowScalarInput -Json $env:WORKFLOW_INPUT
+        $parameters = @{
+          Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH; Phase = 'Complete'
+          SubscriptionId = $env:ARM_SUBSCRIPTION_ID; TenantId = $env:ARM_TENANT_ID; ClientId = $env:ARM_CLIENT_ID
+          RemoveDeployment = ConvertTo-AvmWorkflowBoolean $workflowInput.removeDeployment
+          StatePath = Join-Path $env:RUNNER_TEMP 'avm-bicep-state' 'state.json'
+          ResultDirectory = Join-Path $env:RUNNER_TEMP 'avm-bicep-results'
+        }
+        Invoke-AvmWorkflowE2e @parameters -Confirm:$false
+    - name: Recover unfinished native cleanup
+      if: ${{ !cancelled() && failure() && steps.deploy.outcome != 'skipped' && fromJSON(inputs.workflowInput).removeDeployment == 'true' && steps.renew_oidc.outcome == 'success' }}
+      shell: pwsh
+      env:
+        AVM_ACTION_PATH: ${{ github.action_path }}
+        ARM_SUBSCRIPTION_ID: ${{ steps.auth.outputs.subscriptionId }}
+        ARM_TENANT_ID: ${{ steps.context.outputs.tenantId }}
+        ARM_CLIENT_ID: ${{ steps.auth.outputs.clientId }}
+      run: |
+        $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
+        . (Join-Path $root 'scripts' 'bicep-workflows' 'Validation.ps1')
+        Import-AvmWorkflowPackage
+        Invoke-AvmWorkflowRecovery -StatePath (Join-Path $env:RUNNER_TEMP 'avm-bicep-state' 'state.json') -SubscriptionId $env:ARM_SUBSCRIPTION_ID -TenantId $env:ARM_TENANT_ID -ClientId $env:ARM_CLIENT_ID -Confirm:$false
+    - name: Retain results and recovery state
+      if: always() && steps.auth.outcome == 'success'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: bicep-deployment-${{ steps.auth.outputs.artifactKey }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          ${{ runner.temp }}/avm-bicep-results/*.json
+          ${{ runner.temp }}/avm-bicep-state/*.json
+        if-no-files-found: warn
+        retention-days: 14

@@ -3,6 +3,7 @@ module "bicep" {
   source   = "../../repository-sync/terraform/modules/azure"
 
   identity_name                       = local.identity_names[each.key]
+  bicep_registry_federation_enabled   = true
   identity_resource_group_name        = var.bami_test_settings.identity_resource_group_name
   github_repository_owner             = "Azure"
   github_repository_name              = "bicep-registry-modules"

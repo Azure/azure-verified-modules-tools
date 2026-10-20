@@ -13,8 +13,9 @@ function Invoke-AvmCheckPolicy {
         The ecosystem is determined by Get-AvmModuleContext, which honours
         the .avm/context.psd1 override file and the -Ecosystem filter.
         Bicep policy checks use packaged ps-rule.yaml and rules/ assets
-        under Resources/bicep/psrule. PSRule 2.9.0 and
-        PSRule.Rules.Azure 1.47.0 must be installed separately. Set
+        under Resources/bicep/psrule. Exact PSRule and PSRule.Rules.Azure
+        versions, including pinned dependencies and repository overrides,
+        are resolved and prepared by the shared managed-tool installer. Set
         VALIDATE_SUBSCRIPTION_IDS or the TEST_SUBSCRIPTION_IDS alias. The first
         entry matching the exact module path in the required root
         .reserved-test-subscriptions.json map is used; unmapped modules use
@@ -59,6 +60,16 @@ function Invoke-AvmCheckPolicy {
         Maximum number of independent Terraform examples to evaluate at once.
         Defaults to four. Bicep policy checks ignore this value.
 
+    .PARAMETER Example
+        Bicep-only exact module-relative main.test.bicep paths under tests/e2e,
+        including child modules. Omit to select defaults and waf-aligned tests.
+        Unmatched paths fail before evaluation.
+
+    .PARAMETER Baseline
+        Bicep-only subset of Azure.Pillar.Reliability, CB.AVM.WAF.Security,
+        Azure.Default and Azure.Pillar.Security. Required and advisory
+        outcomes are unchanged. Omit to run all four baselines.
+
     .PARAMETER SkipModuleVersionCheck
         Skip the PowerShell Gallery check that otherwise stops the command when a
         newer Avm.Authoring version is available. Writes a warning once.
@@ -72,6 +83,9 @@ function Invoke-AvmCheckPolicy {
 
     .EXAMPLE
         Invoke-AvmCheckPolicy -Path C:\repos\my-bicep-module -Ecosystem bicep
+
+    .EXAMPLE
+        avm check policy --example tests/e2e/defaults/main.test.bicep --baseline Azure.Pillar.Reliability
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -87,6 +101,12 @@ function Invoke-AvmCheckPolicy {
         [ValidateRange(1, 32)]
         [int] $ThrottleLimit = 4,
 
+        [ValidateNotNullOrEmpty()]
+        [string[]] $Example,
+
+        [ValidateNotNullOrEmpty()]
+        [string[]] $Baseline,
+
         [switch] $SkipModuleVersionCheck
     )
 
@@ -96,12 +116,22 @@ function Invoke-AvmCheckPolicy {
     Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
     $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
+    $selection = @{}
+    foreach ($name in @('Example', 'Baseline')) {
+        if ($PSBoundParameters.ContainsKey($name)) {
+            $selection[$name] = $PSBoundParameters[$name]
+        }
+    }
 
     switch ($context.Ecosystem) {
         'bicep' {
-            Invoke-AvmBicepCheckPolicy -Context $context -AllowPathFallback:$AllowPathFallback
+            Invoke-AvmBicepCheckPolicy -Context $context -AllowPathFallback:$AllowPathFallback @selection
         }
         'terraform' {
+            if ($selection.Count -gt 0) {
+                throw [AvmConfigurationException]::new(
+                    '-Example and -Baseline are only supported for Bicep policy checks.')
+            }
             Invoke-AvmTerraformCheckPolicy `
                 -Context $context `
                 -AllowPathFallback:$AllowPathFallback `

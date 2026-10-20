@@ -26,6 +26,12 @@ function Invoke-AvmBicepCheckPolicy {
     .PARAMETER AllowPathFallback
         Permit a PATH-resolved Bicep CLI matching the pinned version.
 
+    .PARAMETER Example
+        Exact module-relative paths from the discovered policy tests.
+
+    .PARAMETER Baseline
+        Exact names from the four supported required and advisory baselines.
+
     .OUTPUTS
         pscustomobject with Engine, Tool, ToolPath, ToolSource, Status,
         RequiredBaselines, AdvisoryBaselines, TestsSelected,
@@ -37,7 +43,13 @@ function Invoke-AvmBicepCheckPolicy {
         [Parameter(Mandatory)]
         $Context,
 
-        [switch] $AllowPathFallback
+        [switch] $AllowPathFallback,
+
+        [ValidateNotNullOrEmpty()]
+        [string[]] $Example,
+
+        [ValidateNotNullOrEmpty()]
+        [string[]] $Baseline
     )
 
     Set-StrictMode -Version 3.0
@@ -49,6 +61,16 @@ function Invoke-AvmBicepCheckPolicy {
 
     $required = @('Azure.Pillar.Reliability', 'CB.AVM.WAF.Security')
     $advisory = @('Azure.Default', 'Azure.Pillar.Security')
+    if ($PSBoundParameters.ContainsKey('Baseline')) {
+        foreach ($name in $Baseline) {
+            if (($required + $advisory) -cnotcontains $name) {
+                throw [AvmConfigurationException]::new(
+                    '-Baseline must select exact supported Bicep policy baseline names.')
+            }
+        }
+        $required = @($required | Where-Object { $Baseline -ccontains $_ })
+        $advisory = @($advisory | Where-Object { $Baseline -ccontains $_ })
+    }
     $baselines = @(
         foreach ($name in $required) { [pscustomobject]@{ Name = $name; Required = $true } }
         foreach ($name in $advisory) { [pscustomobject]@{ Name = $name; Required = $false } }
@@ -105,7 +127,8 @@ function Invoke-AvmBicepCheckPolicy {
         }
         $repositoryRoot = $scope.RepositoryRoot
         try {
-            foreach ($file in @(Get-AvmBicepPolicyTestFile -ModulePath $scope.Path)) {
+            foreach ($file in @(Get-AvmBicepPolicyTestFile -ModulePath $scope.Path `
+                        -IncludeAllExamples:($PSBoundParameters.ContainsKey('Example')))) {
                 if ($seen.Add($file.FullName)) {
                     $tests.Add($file)
                     $testModulePaths[$file.FullName] = $scope.ModuleRelativePath
@@ -116,6 +139,28 @@ function Invoke-AvmBicepCheckPolicy {
             & $addFailure $_ $module.Path 'avm.bicep.psrule-input' ([AvmConfigurationException]) `
                 "PSRule could not select test sources ($($_.Exception.GetType().Name))."
         }
+    }
+    if ($PSBoundParameters.ContainsKey('Example')) {
+        $selected = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        foreach ($path in $Example) {
+            $relative = $path.Replace('\', '/')
+            if ([string]::IsNullOrWhiteSpace($relative) -or
+                [System.IO.Path]::IsPathRooted($relative) -or
+                $relative -match '[:\x00-\x1f*?\[\]]' -or
+                $relative.Split('/') -contains '..') {
+                throw [AvmConfigurationException]::new(
+                    '-Example must contain literal module-relative policy test paths without parent segments.')
+            }
+            $matched = @($tests | Where-Object {
+                    [System.IO.Path]::GetRelativePath($Context.Root, $_.FullName).Replace('\', '/') -ceq $relative
+                })
+            if ($matched.Count -ne 1) {
+                throw [AvmConfigurationException]::new(
+                    "Policy example '$relative' did not match exactly one discovered e2e main.test.bicep file.")
+            }
+            $null = $selected.Add($matched[0].FullName)
+        }
+        $tests = [System.Collections.Generic.List[object]]@($tests | Where-Object { $selected.Contains($_.FullName) })
     }
     if ($tests.Count -eq 0) {
         $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $Context.Root `
@@ -146,14 +191,14 @@ function Invoke-AvmBicepCheckPolicy {
         }
     }
     if ($issues.Count -eq 0) {
-        foreach ($baseline in $baselines) {
+        foreach ($baselineDefinition in $baselines) {
             try {
-                $verified[$baseline.Name] = Get-AvmBicepPolicyBaseline `
-                    -Configuration $configuration -Name $baseline.Name
+                $verified[$baselineDefinition.Name] = Get-AvmBicepPolicyBaseline `
+                    -Configuration $configuration -Name $baselineDefinition.Name
             }
             catch {
                 & $addFailure $_ $Context.Root 'avm.bicep.psrule-baseline' ([AvmConfigurationException]) `
-                    "PSRule baseline '$($baseline.Name)' could not be inspected." $baseline.Name
+                    "PSRule baseline '$($baselineDefinition.Name)' could not be inspected." $baselineDefinition.Name
             }
         }
     }
@@ -202,15 +247,15 @@ function Invoke-AvmBicepCheckPolicy {
                         throw [AvmConfigurationException]::new(
                             'The selected PSRule input was not staged.')
                     }
-                    foreach ($baseline in $baselines) {
+                    foreach ($baselineDefinition in $baselines) {
                         try {
                             $records = @(Invoke-AvmBicepPolicyBaseline `
                                     -StageRoot $stage.FullName -InputPath $relative `
                                     -OptionPath $configuration.OptionPath `
                                     -RulePath $configuration.RulePath `
-                                    -Baseline $baseline.Name)
+                                    -Baseline $baselineDefinition.Name)
                             $result = ConvertFrom-AvmBicepPolicyResult -Records $records `
-                                -Baseline $verified[$baseline.Name] `
+                                -Baseline $verified[$baselineDefinition.Name] `
                                 -StagePath $stagePath `
                                 -SourcePath $test.FullName -ModuleRoot $Context.Root
                             foreach ($issue in $result.Issues) { $issues.Add($issue) }
@@ -218,27 +263,27 @@ function Invoke-AvmBicepCheckPolicy {
                             $evaluations.Add([pscustomobject]@{
                                     File            = [System.IO.Path]::GetRelativePath(
                                         $Context.Root, $test.FullName).Replace('\', '/')
-                                    Baseline        = $baseline.Name
-                                    Required        = $baseline.Required
+                                    Baseline        = $baselineDefinition.Name
+                                    Required        = $baselineDefinition.Required
                                     Records         = $records.Count
                                     ExpandedRecords = $result.ExpandedRecords
                                     ProcessedRules  = $result.ProcessedRules
                                     FailedRules     = $result.Failures.Count
                                 })
                             foreach ($failure in $result.Failures) {
-                                $severity = if ($baseline.Required) { 'error' } else { 'warning' }
-                                $message = "PSRule baseline '$($baseline.Name)' failed rule '$($failure.RuleName)' for target type '$($failure.TargetType)'."
+                                $severity = if ($baselineDefinition.Required) { 'error' } else { 'warning' }
+                                $message = "PSRule baseline '$($baselineDefinition.Name)' failed rule '$($failure.RuleName)' for target type '$($failure.TargetType)'."
                                 $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root `
-                                            -Path $test.FullName -Baseline $baseline.Name `
+                                            -Path $test.FullName -Baseline $baselineDefinition.Name `
                                             -RuleName $failure.RuleName -TargetType $failure.TargetType `
                                             -Severity $severity -Code 'avm.bicep.psrule-rule' `
                                             -Message $message))
                             }
                         }
                         catch {
-                            $message = "PSRule baseline '$($baseline.Name)' could not evaluate this tokenized Bicep test ($($_.Exception.GetType().Name)); verify the source and configuration."
+                            $message = "PSRule baseline '$($baselineDefinition.Name)' could not evaluate this tokenized Bicep test ($($_.Exception.GetType().Name)); verify the source and configuration."
                             $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root `
-                                        -Path $test.FullName -Baseline $baseline.Name `
+                                        -Path $test.FullName -Baseline $baselineDefinition.Name `
                                         -Code 'avm.bicep.psrule-evaluation' `
                                         -Message $message))
                         }

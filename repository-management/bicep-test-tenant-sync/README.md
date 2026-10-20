@@ -27,7 +27,8 @@ The existing canonical-path limit remains 68 characters; identity names retain
 the repository's 90-character bound. These are repository policies, not Azure's
 absolute limits: Azure allows [3-128 identity name characters](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-name-rules#microsoftmanagedidentity)
 and [3-120 federated credential name characters](https://learn.microsoft.com/en-us/azure/templates/microsoft.managedidentity/userassignedidentities/federatedidentitycredentials).
-Terraform checks complete credential names, including the `module-` discriminator.
+Terraform checks complete credential names, including the `module-` and
+`registry-` discriminators.
 
 ## Group configuration
 
@@ -100,8 +101,8 @@ first eight lowercase SHA-256 characters of the original canonical path.
 Before allowing replacement, the guard verifies the old resource, tenant,
 dedicated client/principal and existing repository/caller federation. All
 retained credentials and membership edges must move to the new identity;
-only the verified old principal's edges can be removed. Permissions and
-federation trust do not broaden.
+only the verified old principal's edges can be removed. Renaming itself
+does not broaden permissions or change the configured federation subjects.
 
 The identity step supplies `-IdentityMigrationPath` for a separate, unused
 job-local JSON file. After the saved plan succeeds and outputs are validated,
@@ -129,30 +130,48 @@ before merge. Source changes do not authorize a live apply or publication.
 Coordinate the first approved reconciliation with active test runs because
 identity replacement changes client IDs and invalidates the old federation.
 
-## Separate consumer cutover
+## Registry authentication and separate cutover
 
-This producer does not change Bicep validation workflows, their OIDC subject
-template, or `VALIDATE_CLIENT_ID`. BAMI continues to own and retain the shared
-`id-avm-bicep` identity, its federation and permissions.
+Registry and Tools use `include_claim_keys` in this order:
+`repository_owner_id`, `repository_id`, `context`. Neither workflow claim is
+included. The producer adds one `<identity>-registry-avm-validation` credential
+per module for the registry's current subject:
 
-Each new identity stages a future subject with claims in this order:
+```text
+repository_owner_id:{Azure ID}:repository_id:{registry ID}:environment:avm-validation
+```
+
+The issuer remains `https://token.actions.githubusercontent.com`, and the sole
+audience is `api://AzureADTokenExchange`. This uses the existing federation API;
+no flexible credential, GitHub subject change or tools-SHA-bound credential is
+needed. Future workflow restrictions are a separate change.
+
+The same registry subject is accepted by every module identity. Strict workflow
+selection of `VALIDATE_MODULE_CLIENT_IDS` is therefore a code-level control,
+not federated isolation between modules. Ordinary and generic/bulk test runs
+select the canonical root's client for both Azure CLI and PowerShell; child
+modules share that entry. Existing opt-in labels and internal-fork controls
+remain unchanged, including generic pull-request runs.
+
+The existing `<identity>-module-avm-validation` staged credential remains
+unchanged:
 
 ```text
 repository_owner_id:{Azure ID}:repository_id:{registry ID}:environment:avm-validation:job_workflow_ref:Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml@refs/heads/main:workflow_ref:Azure/bicep-registry-modules/.github/workflows/{module.path}.yml@refs/heads/main
 ```
 
-The later cutover must select the client ID by canonical root module path and
-emit this exact subject. `workflow_ref` identifies the top-level module caller;
-`job_workflow_ref` identifies the shared deployment workflow. Keep both bindings:
-the shared workflow alone does not isolate modules. The separate protected
-Tools `avm-validation` credential remains available, as for Terraform identities.
-Module and Tools credentials have distinct names.
-Registry pushes and manual dispatches on `main` match these workflow references;
-dispatches on other branches do not. The cutover must preserve that boundary.
+The distinct `<identity>-avm-validation` credential still binds the Tools
+repository ID, not the registry, and cannot substitute for registry
+authentication. The producer leaves `VALIDATE_CLIENT_ID`, the shared
+`id-avm-bicep` identity, its federation and permissions untouched.
 
-Roll out and inspect the producer first, then make the separately reviewed
-consumer change and verify actual logins and permissions. Retire the shared
-BAMI identity only after that cutover is complete.
+Source qualification and branch publication do not apply these credentials or
+prove live login readiness. The main-only scheduled identity reconciliation can
+apply them after merge; coordinate that merge/apply separately, before an
+approved registry cutover to the qualified tools SHA and package version.
+Changing the tools pin later does not require federation restaging under this
+three-claim subject. Retire the shared identity only after a separately approved
+complete cutover.
 
 ## Local checks
 

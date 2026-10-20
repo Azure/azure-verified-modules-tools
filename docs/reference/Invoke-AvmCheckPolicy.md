@@ -17,8 +17,9 @@ Routes to the engine matching the module's ecosystem:
 The ecosystem is determined by Get-AvmModuleContext, which honours
 the .avm/context.psd1 override file and the -Ecosystem filter.
 Bicep policy checks use packaged ps-rule.yaml and rules/ assets
-under Resources/bicep/psrule. PSRule 2.9.0 and
-PSRule.Rules.Azure 1.47.0 must be installed separately. Set
+under Resources/bicep/psrule. Exact PSRule and PSRule.Rules.Azure
+versions, including pinned dependencies and repository overrides,
+are resolved and prepared by the shared managed-tool installer. Set
 VALIDATE_SUBSCRIPTION_IDS or the TEST_SUBSCRIPTION_IDS alias. The first
 entry matching the exact module path in the required root
 .reserved-test-subscriptions.json map is used; unmapped modules use
@@ -55,7 +56,7 @@ Routed by the dispatcher: 'avm check policy'.
 ## Syntax
 
 ```powershell
-Invoke-AvmCheckPolicy [[-Path] <string>] [-Ecosystem <string>] [-AllowPathFallback] [-ThrottleLimit <int>] [-SkipModuleVersionCheck] [<CommonParameters>]
+Invoke-AvmCheckPolicy [[-Path] <string>] [-Ecosystem <string>] [-AllowPathFallback] [-ThrottleLimit <int>] [-Example <string[]>] [-Baseline <string[]>] [-SkipModuleVersionCheck] [<CommonParameters>]
 ```
 
 ## Parameters
@@ -74,6 +75,21 @@ lock-pinned version.
 | Accept pipeline input | false |
 | Accept wildcard characters | false |
 
+### -Baseline
+
+Bicep-only subset of Azure.Pillar.Reliability, CB.AVM.WAF.Security,
+Azure.Default and Azure.Pillar.Security. Required and advisory
+outcomes are unchanged. Omit to run all four baselines.
+
+| Property | Value |
+| --- | --- |
+| Type | `String[]` |
+| Required | false |
+| Position | named |
+| Default value |  |
+| Accept pipeline input | false |
+| Accept wildcard characters | false |
+
 ### -Ecosystem
 
 Force the ecosystem selector. Defaults to 'auto'.
@@ -84,6 +100,21 @@ Force the ecosystem selector. Defaults to 'auto'.
 | Required | false |
 | Position | named |
 | Default value | auto |
+| Accept pipeline input | false |
+| Accept wildcard characters | false |
+
+### -Example
+
+Bicep-only exact module-relative main.test.bicep paths under tests/e2e,
+including child modules. Omit to select defaults and waf-aligned tests.
+Unmatched paths fail before evaluation.
+
+| Property | Value |
+| --- | --- |
+| Type | `String[]` |
+| Required | false |
+| Position | named |
+| Default value |  |
 | Accept pipeline input | false |
 | Accept wildcard characters | false |
 
@@ -141,6 +172,12 @@ avm check policy
 
 ```powershell
 Invoke-AvmCheckPolicy -Path C:\repos\my-bicep-module -Ecosystem bicep
+```
+
+### EXAMPLE 3
+
+```powershell
+avm check policy --example tests/e2e/defaults/main.test.bicep --baseline Azure.Pillar.Reliability
 ```
 
 ## Outputs

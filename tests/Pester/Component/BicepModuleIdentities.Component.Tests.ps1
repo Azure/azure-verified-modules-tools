@@ -258,6 +258,38 @@ Describe 'Bicep module identity entry points with real files and mocked services
             Should -Be @('init', 'plan', 'show', 'show')
     }
 
+    It 'applies only additive registry credentials to existing identities through the guarded entry point' {
+        $script:state.Plan = New-AvmTestBicepIdentityPlan -KnownClient
+        foreach ($change in $script:state.Plan.resource_changes) {
+            if ($change.address.EndsWith('.azapi_resource.bicep_registry_federated_credential[0]')) {
+                $change.change.before = $null
+                $change.change.actions = @('create')
+            }
+        }
+        $result = & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath -Apply |
+            ConvertFrom-Json -AsHashtable
+        $result.Status | Should -BeExactly 'Applied'
+        $mapping = Get-Content -LiteralPath $script:mappingPath -Raw | ConvertFrom-Json -AsHashtable
+        $mapping['avm/res/fabric/capacity'] | Should -BeExactly '10000000-0000-4000-8000-000000000006'
+        $mapping['avm/res/storage/storage-account'] | Should -BeExactly '10000000-0000-4000-8000-000000000016'
+        @($script:state.Calls | Where-Object Command -CEQ 'terraform' | ForEach-Object { $_.Arguments[0] }) |
+            Should -Be @('init', 'plan', 'show', 'show', 'apply', 'output')
+        $script:state.Writes | Should -HaveCount 0
+    }
+
+    It 'rejects a missing registry credential before apply or publication' {
+        $address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.bicep_registry_federated_credential[0]'
+        $module = $script:state.Plan.planned_values.root_module.child_modules[0]
+        $module.resources = @($module.resources | Where-Object address -CNE $address)
+        $script:state.Plan.resource_changes = @($script:state.Plan.resource_changes | Where-Object address -CNE $address)
+        { & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath -Apply } |
+            Should -Throw '*complete dedicated repository identity*'
+        @($script:state.Calls | Where-Object Command -CEQ 'terraform' | ForEach-Object { $_.Arguments[0] }) |
+            Should -Be @('init', 'plan', 'show')
+        Test-Path -LiteralPath $script:mappingPath | Should -BeFalse
+        $script:state.Writes | Should -HaveCount 0
+    }
+
     It 'applies one verified saved plan and publishes only its mapping while retaining the shared identity' {
         $information = [System.Collections.Generic.List[string]]::new()
         $result = & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath -Apply `

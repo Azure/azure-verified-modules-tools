@@ -58,7 +58,10 @@ function Assert-AvmBicepIdentityPlan {
         $suffix = $match.Groups[2].Value
         $expectedProvider = $null
         if ($resource['mode'] -ceq 'managed' -and $resource['type'] -ceq 'azapi_resource' -and
-            $suffix -cin @('azapi_resource.identity', 'azapi_resource.identity_federated_credentials["avm-validation"]', 'azapi_resource.validation_federated_credential')) {
+            $suffix -cin @(
+                'azapi_resource.identity', 'azapi_resource.identity_federated_credentials["avm-validation"]',
+                'azapi_resource.validation_federated_credential', 'azapi_resource.bicep_registry_federated_credential[0]'
+            )) {
             $expectedProvider = 'registry.terraform.io/azure/azapi'
         }
         elseif ($resource['mode'] -ceq 'managed' -and $resource['type'] -ceq 'azuread_group_member' -and
@@ -98,7 +101,8 @@ function Assert-AvmBicepIdentityPlan {
             -RepositorySyncRepositoryId $Context.ToolsRepositoryId -EntraGroupNames $Modules[$path] `
             -ModuleAddress $address -IdentityName $name -Environments @('avm-validation') `
             -JobWorkflowRef 'Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml@refs/heads/main' `
-            -WorkflowRef "Azure/bicep-registry-modules/.github/workflows/$($path.Replace('/', '.')).yml@refs/heads/main" -PassThru
+            -WorkflowRef "Azure/bicep-registry-modules/.github/workflows/$($path.Replace('/', '.')).yml@refs/heads/main" `
+            -BicepRegistryFederation -PassThru
         if ($null -ne $previous) {
             $renames[$path] = $previous
             $identity = @($slice.resource_changes | Where-Object { $_['address'] -ceq "${prefix}azapi_resource.identity" })[0]

@@ -1,0 +1,54 @@
+name: 'Reusable: Bicep Module Static'
+
+on:
+  workflow_call:
+    inputs:
+      tools-ref:
+        description: Full tools commit SHA, identical to the caller's workflow revision.
+        type: string
+        required: true
+      avm-authoring-version:
+        description: Exact qualified Avm.Authoring release.
+        type: string
+        required: true
+      modulePath:
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  job_module_static_validation:
+    name: Static validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Validate tools revision
+        shell: pwsh
+        env:
+          TOOLS_REF: ${{ inputs.tools-ref }}
+        run: |
+          if ($env:TOOLS_REF -cnotmatch '^[0-9a-f]{40}$') { throw 'tools-ref must be the full immutable SHA used by the caller.' }
+      - name: Check out caller
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out workflow support
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: Azure/azure-verified-modules-tools
+          ref: ${{ inputs.tools-ref }}
+          path: .avm-tools
+          persist-credentials: false
+          sparse-checkout: |
+            .github/actions
+            scripts/bicep-workflows
+            repository-management/shared
+      - name: Run native static validation
+        uses: ./.avm-tools/.github/actions/bicep-validation
+        with:
+          operation: Static
+          avm-authoring-version: ${{ inputs.avm-authoring-version }}
+          modulePath: ${{ inputs.modulePath }}

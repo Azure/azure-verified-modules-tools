@@ -86,6 +86,36 @@ function ConvertFrom-AvmTestTenantJson {
     }
 }
 
+function ConvertTo-AvmBicepModuleClientIdJson {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [System.Collections.IDictionary] $ClientIds,
+        [string[]] $ForbiddenClientIds = @()
+    )
+
+    if ($ClientIds.Count -eq 0) {
+        throw [System.ArgumentException]::new('The module client-ID mapping must not be empty.')
+    }
+    $normalized = [ordered]@{}
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($path in @($ClientIds.Keys | Sort-Object -CaseSensitive)) {
+        if ($path -isnot [string]) { throw [System.ArgumentException]::new('Module mapping keys must be canonical path strings.') }
+        Assert-AvmBicepModulePath -Path $path
+        $id = [guid]::Empty
+        if ($ClientIds[$path] -isnot [string] -or -not [guid]::TryParseExact($ClientIds[$path], 'D', [ref]$id) -or
+            $id -eq [guid]::Empty -or $id.ToString() -in $ForbiddenClientIds -or -not $seen.Add($id.ToString())) {
+            throw [System.ArgumentException]::new('Each module must have its own nonempty client ID, never a shared or controller identity.')
+        }
+        $normalized[$path] = $id.ToString()
+    }
+    $json = ConvertTo-Json -InputObject $normalized -Compress -Depth 3
+    if ([System.Text.Encoding]::UTF8.GetByteCount($json) -gt 48KB) {
+        throw [System.InvalidOperationException]::new('The compact module client-ID mapping exceeds the 48 KB Actions variable limit; publication requires a different storage contract.')
+    }
+    return $json
+}
+
 function Get-AvmBamiSettings {
     [CmdletBinding()]
     param(
