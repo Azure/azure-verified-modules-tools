@@ -1101,6 +1101,10 @@ children. Missing or invalid metadata fails and stops either chain before
 other steps, without changing module files or reading indexes. `avm pr-check`
 also requires a clean worktree before tool resolution. `-Verbose` logs the
 discovered module count, each validated metadata path, and any issues.
+Terraform pr-check initializes missing source examples with the backend disabled
+and compatible locked dependency selections preserved. Validation must not
+request dependency upgrades. Incompatible locked selections fail initialization
+without an upgrade retry; candidate-tree checks still reject tracked lock drift.
 `avm pr-check -ExcludeSteps` accepts an array of any of its nine step names:
 `metadata`, `sync`, `format`, `transform`, `lint`, `check policy`,
 `check convention`, `validate`, and `docs`. Names are case-insensitive and

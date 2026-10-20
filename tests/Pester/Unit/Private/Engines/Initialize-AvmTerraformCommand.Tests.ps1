@@ -47,7 +47,7 @@ Describe 'Initialize-AvmTerraformCommand' {
         }
     }
 
-    It 'initializes each missing pr-check example once and reuses prepared module caches' {
+    It 'preserves dependency selections when initializing missing pr-check examples and reuses prepared caches' {
         InModuleScope 'Avm.Authoring' {
             $first = Join-Path $script:initializeContext.Root 'examples' 'first'
             $second = Join-Path $script:initializeContext.Root 'examples' 'second'
@@ -81,8 +81,41 @@ Describe 'Initialize-AvmTerraformCommand' {
                 $WorkingDirectory -eq $second -and
                 $BackendFalse -and
                 $NoColor -and
-                -not $PreserveDependencySelections -and
+                $PreserveDependencySelections -and
                 $EnvVars.TF_PLUGIN_CACHE_DIR -eq (Join-Path $TestDrive 'provider-cache')
+            }
+        }
+    }
+
+    It 'propagates incompatible locked dependency failures without retrying with upgrades' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Get-AvmTerraformValidationScope {
+                [pscustomobject]@{
+                    Examples = @(
+                        [pscustomobject]@{
+                            Path = Join-Path $script:initializeContext.Root 'examples' 'default'
+                            RelativePath = 'examples/default'
+                        }
+                    )
+                    Modules = @()
+                }
+            }
+            Mock Test-Path { $false }
+            $script:initializationFailure = [System.InvalidOperationException]::new('Incompatible locked dependency.')
+            Mock Invoke-AvmTerraformInit { throw $script:initializationFailure }
+
+            $failure = $null
+            try {
+                $null = Initialize-AvmTerraformCommand -Context $script:initializeContext -Command pr-check
+            }
+            catch {
+                $failure = $_.Exception
+            }
+
+            $failure | Should -Be $script:initializationFailure
+            Should -Invoke Invoke-AvmTerraformInit -Exactly 1
+            Should -Invoke Invoke-AvmTerraformInit -Exactly 0 -ParameterFilter {
+                -not $PreserveDependencySelections
             }
         }
     }

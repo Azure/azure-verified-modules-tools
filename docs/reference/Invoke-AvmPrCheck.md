@@ -30,7 +30,10 @@ ExcludeSteps omits named steps and tools needed only by those steps.
 Excluded steps remain visible as 'skipped' in the result and log.
 Excluding every step returns overall Status='skipped', not 'pass'.
 
-For Terraform, the initialize step prepares each source example once.
+For Terraform, the initialize step prepares each source example once,
+reusing compatible locked dependency selections without requesting
+upgrades. An incompatible locked selection fails initialization rather
+than being silently upgraded.
 The later validate step reuses that persistent `.terraform` state instead
 of initializing the example again. The 'validate' step is a build-validation
 pass ('terraform validate' / 'bicep build'), not a test run. Unit tests remain a
