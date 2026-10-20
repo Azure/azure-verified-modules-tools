@@ -814,7 +814,7 @@ Describe 'Terraform effective contract and state wiring' {
         $azure = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'azure' 'main.tf')
         $variables = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'azure' 'variables.tf')
         $bami = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'main.tf')
-        $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'repository-management-sync-repository.yml')
+        $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'repository-management-sync.yml')
         $azure | Should -Match 'resource "azuread_group_member" "test_permissions"'
         $azure | Should -Match 'for_each\s*=\s*var.entra_group_names'
         $azure | Should -Match 'display_name\s*=\s*each.value'
@@ -863,7 +863,7 @@ Describe 'Terraform effective contract and state wiring' {
         ([regex]::Matches($providers, 'use_cli\s*=\s*false')).Count | Should -Be 2
         $providers | Should -Match 'tenant_id\s*=\s*var.bami_test_settings == null \? null : var.bami_test_settings.tenant_id'
         $providers | Should -Match 'client_id\s*=\s*var.bami_test_settings == null \? null : var.bami_test_settings.controller_client_id'
-        $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'repository-management-sync-repository.yml')
+        $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'repository-management-sync.yml')
         $workflow | Should -Not -Match 'vars\.ARM_(TENANT_ID|CLIENT_ID|SUBSCRIPTION_ID)|vars\.TEST_SUBSCRIPTION_IDS'
     }
 
@@ -933,7 +933,7 @@ Describe 'Terraform effective contract and state wiring' {
         $source.IndexOf('Resolve-RepositoryTestTenantSettings') | Should -BeLessThan $source.IndexOf('Remove-LegacyBranchProtection')
         $source | Should -Not -Match 'Invoke-AvmBamiRepositoryIdentity|candidateSettings'
         $source | Should -Match 'ConvertTo-AvmRepositoryTerraformSettings'
-        $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'repository-management-sync-repository.yml')
+        $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'repository-management-sync.yml')
         $workflow | Should -Match '-bamiSettings \$bamiSettings'
         $source | Should -Match '\[string\]\$repositorySyncRepositoryId = \$env:GITHUB_REPOSITORY_ID'
         $workflow | Should -Not -Match '-repositorySyncRepositoryId'
