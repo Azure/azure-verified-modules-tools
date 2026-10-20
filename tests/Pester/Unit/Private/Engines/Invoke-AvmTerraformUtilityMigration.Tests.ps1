@@ -207,6 +207,105 @@ Describe 'Terraform utility migration planning' {
         }
     }
 
+    It 'does not declare or explicitly bind a child-only AzAPI dependency: <Declared>' -ForEach @(
+        @{ Declared = $false }
+        @{ Declared = $true }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Declared = $Declared } {
+            param($Declared)
+            $script:utilityTargets[0].Scope = 'example'
+            $script:utilityTargets[0].Profiles = @('example', 'provider-cleanup', 'common')
+            $script:utilityInspection.calls.regions = @{ source = 'Azure/avm-utl-regions/azurerm'; version = '0.12.0' }
+            if ($Declared) {
+                $script:utilityInspection.requirements.azapi = @{ source = 'Azure/azapi'; version = '~> 2.4' }
+            }
+            $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets -Options $script:utilityOptions)
+            Mock Invoke-AvmTerraformUtilityPatch {
+                $Mappings.Count | Should -Be 0
+                $Requirement | Should -BeNullOrEmpty
+            }
+            Invoke-AvmTerraformUtilityMigration -Plans $plans -Options $script:utilityOptions
+            Should -Invoke Invoke-AvmTerraformUtilityPatch -Exactly 1
+            if ($Declared) {
+                $script:utilityInspection.requirements.azapi.version | Should -BeExactly '~> 2.4'
+            }
+        }
+    }
+
+    It 'completes an existing explicit utility map without replacing its bindings: <Declared>' -ForEach @(
+        @{ Declared = $false }
+        @{ Declared = $true }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Declared = $Declared } {
+            param($Declared)
+            $script:utilityTargets[0].Scope = 'example'
+            $script:utilityTargets[0].Profiles = @('example')
+            $script:utilityInspection.calls.interfaces = @{
+                source = 'Azure/avm-utl-interfaces/azure'; version = '0.8.0'
+                providers = '{ random = random.original /* keep random */ }'
+            }
+            if ($Declared) {
+                $script:utilityInspection.requirements.azapi = @{ source = 'Azure/azapi'; version = '~> 2.4' }
+            }
+            $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets -Options $script:utilityOptions)
+            Mock Invoke-AvmTerraformUtilityPatch {
+                $Mappings.interfaces | Should -Match 'random = random.original /\* keep random \*/'
+                $Mappings.interfaces | Should -Match 'azapi = azapi'
+                if ($Declared) { $Requirement | Should -BeNullOrEmpty }
+                else { $Requirement | Should -Match 'source = "Azure/azapi"' }
+            }
+            Invoke-AvmTerraformUtilityMigration -Plans $plans -Options $script:utilityOptions
+            Should -Invoke Invoke-AvmTerraformUtilityPatch -Exactly 1
+        }
+    }
+
+    It 'preserves an authored utility alias when its parent requirement already exists' {
+        InModuleScope Avm.Authoring {
+            $script:utilityTargets[0].Scope = 'example'
+            $script:utilityTargets[0].Profiles = @('example')
+            $script:utilityInspection.calls.regions = @{
+                source = 'Azure/avm-utl-regions/azurerm'; version = '0.12.0'
+                providers = '{ azapi = azapi.management /* keep subscription */ }'
+            }
+            $script:utilityInspection.requirements.azapi = @{ source = 'Azure/azapi'; version = '~> 2.12' }
+            $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets -Options $script:utilityOptions)
+            Mock Invoke-AvmTerraformUtilityPatch {
+                $Mappings.Count | Should -Be 0
+                $Requirement | Should -BeNullOrEmpty
+            }
+            Invoke-AvmTerraformUtilityMigration -Plans $plans -Options $script:utilityOptions
+            Should -Invoke Invoke-AvmTerraformUtilityPatch -Exactly 1
+        }
+    }
+
+    It 'does not introduce bindings in implicit local callers of a migrated utility' {
+        InModuleScope Avm.Authoring {
+            $child = Join-Path $script:utilityRoot 'modules' 'child'
+            $script:utilityInspections = @{
+                $script:utilityRoot = @{
+                    calls = @{ child = @{ source = './modules/child' } }
+                    requirements = @{}; variables = @{}
+                }
+                $child = @{
+                    calls = @{ regions = @{ source = 'Azure/avm-utl-regions/azurerm'; version = '0.12.0' } }
+                    requirements = @{}; variables = @{}
+                }
+            }
+            Mock Get-AvmTerraformUtilityInspection { $script:utilityInspections[$Path] }
+            $targets = @(
+                [pscustomobject]@{ Path = $script:utilityRoot; Scope = 'example'; Profiles = @('example') }
+                [pscustomobject]@{ Path = $child; Scope = 'module'; Profiles = @('module') }
+            )
+            $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $targets -Options $script:utilityOptions)
+            Mock Invoke-AvmTerraformUtilityPatch {
+                $Mappings.Count | Should -Be 0
+                $Requirement | Should -BeNullOrEmpty
+            }
+            Invoke-AvmTerraformUtilityMigration -Plans $plans -Options $script:utilityOptions
+            Should -Invoke Invoke-AvmTerraformUtilityPatch -Exactly 2
+        }
+    }
+
     It 'preserves authored call locations and opt-outs: <Location>, <Telemetry>' -ForEach @(
         @{ Location = 'each.value.region'; Telemetry = $false }
         @{ Location = '"westus3"'; Telemetry = $true }
@@ -503,6 +602,28 @@ Describe 'Terraform utility provider mapping proof' {
             Get-AvmTerraformUtilityProviderMapping -Path 'fixture' -Name 'renamed' `
                 -Call @{ providers = $expression } -ProviderSources @('registry.terraform.io/azure/modtm') |
                 Should -BeNullOrEmpty
+        }
+    }
+
+    It 'restores inheritance when the retired ModTM binding was the entire map' {
+        InModuleScope Avm.Authoring {
+            $mapping = Get-AvmTerraformUtilityProviderMapping -Path 'fixture' -Name 'regions' `
+                -Call @{ providers = '{ modtm = modtm }' } `
+                -ProviderSources @('registry.terraform.io/azure/azapi')
+            $mapping.RemoveMap | Should -BeTrue
+            $mapping.Expression | Should -Not -Match 'azapi'
+        }
+    }
+
+    It 'adds AzAPI when another authored binding requires retaining the explicit map' {
+        InModuleScope Avm.Authoring {
+            $mapping = Get-AvmTerraformUtilityProviderMapping -Path 'fixture' -Name 'interfaces' `
+                -Call @{ providers = '{ modtm = modtm, random = random.original }' } `
+                -ProviderSources @('registry.terraform.io/azure/azapi', 'registry.terraform.io/hashicorp/random')
+            $mapping.RemoveMap | Should -BeFalse
+            $mapping.Expression | Should -Match 'random = random.original'
+            $mapping.Expression | Should -Match 'azapi = azapi'
+            $mapping.Expression | Should -Not -Match 'modtm\s*='
         }
     }
 

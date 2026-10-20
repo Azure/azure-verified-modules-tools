@@ -256,7 +256,8 @@ function Get-AvmTerraformUtilityProviderMapping {
     if (-not $mapping.Changed) { return $null }
     $remainingCount = $mapping.Bindings.Count - 1
     $expression = $mapping.Expression
-    if ($ProviderSources -contains 'registry.terraform.io/azure/azapi' -and -not $mapping.Bindings.ContainsKey('azapi')) {
+    if ($remainingCount -gt 0 -and $ProviderSources -contains 'registry.terraform.io/azure/azapi' -and
+        -not $mapping.Bindings.ContainsKey('azapi')) {
         $expression = $expression.Insert($expression.LastIndexOf('}'), "`n  azapi = azapi`n")
         $remainingCount++
     }
@@ -279,8 +280,7 @@ function Invoke-AvmTerraformUtilityMigration {
         $mappings = @{}
         $removeMaps = [System.Collections.Generic.List[string]]::new()
         $inputs = @{}
-        $requiresAzapi = $scope.Telemetry -and -not $scope.Before.requirements.Contains('azapi') -and
-        $scope.Target.Profiles -notcontains 'root'
+        $requiresAzapi = $false
         foreach ($name in $scope.Calls.Keys) {
             $plan = $scope.Calls[$name]
             $call = $scope.Before.calls[$name]
@@ -320,21 +320,17 @@ function Invoke-AvmTerraformUtilityMigration {
             }
             if ($body.Count -gt 0) { $updates[$name] = ($body -join "`n") + "`n" }
         }
-        $requirement = ''
         $localTelemetryCalls = @($scope.Dependencies.Keys | Where-Object { $scope.Dependencies[$_] -cin $telemetryPaths })
-        if ($requiresAzapi -or $localTelemetryCalls.Count -gt 0) {
-            if ($requiresAzapi) {
-                $requirement = "required_providers {`n  azapi = {`n    source = `"Azure/azapi`"`n    version = `"~> 2.12`"`n  }`n}`n"
-            }
+        if ($scope.Telemetry -or $localTelemetryCalls.Count -gt 0) {
             $azapiCalls = @($scope.Before.calls.Keys | Where-Object {
-                    ($requiresAzapi -and $scope.Calls.ContainsKey($_) -and $scope.Calls[$_].Telemetry) -or
+                    ($scope.Calls.ContainsKey($_) -and $scope.Calls[$_].Telemetry) -or
                     $_ -cin $localTelemetryCalls
                 })
             foreach ($name in $azapiCalls) {
                 $call = $scope.Before.calls[$name]
                 $expression = if ($mappings.ContainsKey($name)) { $mappings[$name] }
                 elseif ($call.Contains('providers') -and -not $removeMaps.Contains($name)) { $call.providers }
-                else { '{}' }
+                else { continue }
                 $mapping = ConvertFrom-AvmTerraformUnitTestProviderMapping -Expression $expression -ProviderNames @() -AllowUnlistedProviders
                 if ($null -eq $mapping) {
                     throw [AvmConfigurationException]::new("Cannot introduce AzAPI for utility module '$name' in '$($scope.Target.Path)': review its provider mapping.")
@@ -342,8 +338,13 @@ function Invoke-AvmTerraformUtilityMigration {
                 if (-not $mapping.Bindings.ContainsKey('azapi')) {
                     $mappings[$name] = $expression.Insert($expression.LastIndexOf('}'), "`n  azapi = azapi`n")
                 }
+                $requiresAzapi = $true
                 $null = $removeMaps.Remove($name)
             }
+        }
+        $requirement = ''
+        if ($requiresAzapi -and -not $scope.Before.requirements.Contains('azapi')) {
+            $requirement = "required_providers {`n  azapi = {`n    source = `"Azure/azapi`"`n    version = `"~> 2.12`"`n  }`n}`n"
         }
         if ($PSCmdlet.ShouldProcess($scope.Target.Path, 'upgrade utility modules before telemetry transformation')) {
             Invoke-AvmTerraformUtilityPatch -Path $scope.Target.Path -Options $Options -Updates $updates `
@@ -387,7 +388,9 @@ function Invoke-AvmTerraformUtilityProviderCleanup {
             if ($null -ne $mapping) {
                 if ($mapping.RemoveMap) { $removeMaps.Add($name) }
                 else { $mappings[$name] = $mapping.Expression }
-                if ($sources[$dependency] -contains 'registry.terraform.io/azure/azapi') { $requiresAzapi = $true }
+                if (-not $mapping.RemoveMap -and $sources[$dependency] -contains 'registry.terraform.io/azure/azapi') {
+                    $requiresAzapi = $true
+                }
             }
         }
         $requirement = ''

@@ -341,6 +341,80 @@ It 'preserves aliases for <Scenario> with <Syntax> syntax' -TestCases (@(
         Assert-ProviderRequirements -Root $script:target -ExpectedConfiguration $expected
     }
 
+It 'inherits child-only AzAPI after migrating <Binding> utility bindings' -ForEach @(
+        @{ Binding = 'implicit' }
+        @{ Binding = 'retired ModTM-only' }
+    ) {
+        $root = $script:target
+        $providers = ''
+        if ($Binding -eq 'retired ModTM-only') {
+            $providers = '  providers = { modtm = modtm }'
+            Set-Content -LiteralPath (Join-Path $root 'terraform.tf') -Encoding utf8NoBOM -Value @'
+terraform {
+  required_version = "~> 1.9"
+  required_providers {
+    modtm = {
+      source  = "Azure/modtm"
+      version = "~> 0.3"
+    }
+  }
+}
+'@
+        }
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @"
+module "regions" {
+  source           = "Azure/avm-utl-regions/azurerm"
+  version          = "0.12.0"
+  location         = "eastus"
+  enable_telemetry = true
+$providers
+}
+"@
+        InModuleScope Avm.Authoring -Parameters @{
+            Root = $root; Profiles = $script:profilesRoot; LintConfig = $script:lintConfig
+            InspectionRoot = (Join-Path $TestDrive 'inheritance-inspection')
+        } {
+            param($Root, $Profiles, $LintConfig, $InspectionRoot)
+            $terraform = Resolve-AvmTool -Name terraform
+            $mapotf = Resolve-AvmTool -Name mapotf
+            $tflint = Resolve-AvmTool -Name tflint
+            $environment = New-AvmToolPathEnvironment -ToolPath $terraform.Path -ToolName terraform
+            $profilesByName = @{}
+            foreach ($name in @('utility-module', 'module', 'provider-restore', 'unit-test-inspect', 'variable-order', 'common')) {
+                $profilesByName[$name] = Join-Path $Profiles $name
+            }
+            $options = [pscustomobject]@{
+                ToolPath = $mapotf.Path; TerraformPath = $terraform.Path; EnvVars = $environment
+                InspectionRoot = $InspectionRoot; ProfileDirs = $profilesByName; UtilityProviderSources = @{}
+            }
+            $targets = @([pscustomobject]@{ Path = $Root; Scope = 'example'; Profiles = @('example') })
+            $first = $null
+            foreach ($pass in 1..2) {
+                $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $targets -Options $options)
+                Invoke-AvmTerraformUtilityMigration -Plans $plans -Options $options
+                Invoke-AvmTerraformUtilityProviderCleanup -Plans $plans -ModuleTargets $targets -Options $options
+                $inspection = Get-AvmTerraformUtilityInspection -Path $Root -Options $options
+                $inspection.requirements.Count | Should -Be 0
+                $inspection.calls.regions.Contains('providers') | Should -BeFalse
+                $inspection.calls.regions.version | Should -BeExactly '0.13.0'
+                $content = [IO.File]::ReadAllText((Join-Path $Root 'main.tf')) +
+                [IO.File]::ReadAllText((Join-Path $Root 'terraform.tf'))
+                if ($pass -eq 1) { $first = $content }
+                else { $content | Should -BeExactly $first }
+            }
+            $null = Invoke-AvmProcess -FilePath $terraform.Path -WorkingDirectory $Root -EnvVars $environment `
+                -ArgumentList @('init', '-backend=false', '-input=false', '-no-color')
+            $null = Invoke-AvmProcess -FilePath $terraform.Path -WorkingDirectory $Root -EnvVars $environment `
+                -ArgumentList @('validate', '-no-color')
+            $lint = Invoke-AvmProcess -FilePath $tflint.Path -WorkingDirectory $Root -EnvVars $environment -ArgumentList @(
+                '--config', $LintConfig, '--only=terraform_required_providers',
+                '--only=terraform_unused_required_providers', '--format=json'
+            )
+            $lint.ExitCode | Should -Be 0
+            @((ConvertFrom-Json $lint.StdOut).issues) | Should -HaveCount 0
+        }
+    }
+
 It 'reconciles explicit-map callers of a shared utility dependency without changing selections' {
         $root = $script:target
         $dependency = Join-Path $root 'dependencies' 'legacy'
