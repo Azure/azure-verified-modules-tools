@@ -134,6 +134,15 @@ function Get-AvmTerraformUtilityMigrationPlan {
     foreach ($target in $Targets) {
         if ($scopes[$target.Path].Affected) { & $visit $target.Path }
     }
+    do {
+        $previousCount = $visited.Count
+        foreach ($target in $Targets) {
+            if (-not $visited.Contains($target.Path) -and
+                @($scopes[$target.Path].Dependencies.Values | Where-Object { $visited.Contains($_) }).Count -gt 0) {
+                & $visit $target.Path
+            }
+        }
+    } while ($visited.Count -gt $previousCount)
     foreach ($scope in $ordered) {
         foreach ($file in Get-ChildItem -LiteralPath $scope.Target.Path -File -Filter '*.tf.json') {
             Assert-AvmTerraformLocalsOnlyJson -Path $file.FullName `

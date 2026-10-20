@@ -718,7 +718,10 @@ utility edits. Inspect upgraded dependencies through fresh private Terraform
 data directories, not the consumer's stale modules manifest. Remove obsolete
 ModTM mappings only with dependency proof and literal same-provider mappings;
 preserve other bindings and their comments. Reconcile affected local callers
-in dependency order after telemetry transforms. Remove provider requirements
+in dependency order after telemetry transforms. Include every known transitive
+local caller of a visited dependency, even when only another example directly
+uses the migrated utility; unrelated scopes stay outside this cleanup closure.
+Remove provider requirements
 and empty mocks only when resources, data, ephemeral blocks, provider
 configurations, bindings and the fresh dependency trees prove them unused.
 Retain genuine ModTM dependencies, custom mocks, state-only `removed` blocks

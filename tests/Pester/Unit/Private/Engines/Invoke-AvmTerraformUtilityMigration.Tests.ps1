@@ -268,6 +268,59 @@ Describe 'Terraform utility migration planning' {
         }
     }
 
+    It 'includes every caller of a shared migration dependency with reverse target order <Reverse>' -ForEach @(
+        @{ Reverse = $false }
+        @{ Reverse = $true }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Reverse = $Reverse } {
+            param($Reverse)
+            $example = Join-Path $script:utilityRoot 'examples' 'default'
+            $complete = Join-Path $script:utilityRoot 'examples' 'complete'
+            $wrapper = Join-Path $script:utilityRoot 'tests' 'wrapper'
+            $unrelated = Join-Path $script:utilityRoot 'modules' 'unrelated'
+            $providers = '{ azapi = azapi.management /* keep subscription */ azurerm = azurerm.management }'
+            $script:utilityInspections = @{
+                $script:utilityRoot = @{
+                    calls = @{ dependency = @{ source = 'Azure/avm-res-resources-resourcegroup/azurerm'; version = '0.4.0' } }
+                    requirements = @{}
+                }
+                $example = @{
+                    calls = @{
+                        parent = @{ source = '../..' }
+                        naming = @{ source = 'Azure/naming/azurerm'; version = '0.4.4' }
+                    }
+                    requirements = @{}
+                }
+                $complete = @{ calls = @{ parent = @{ source = '../..'; providers = $providers } }; requirements = @{} }
+                $wrapper = @{ calls = @{ complete = @{ source = '../../examples/complete' } }; requirements = @{} }
+                $unrelated = @{ calls = @{}; requirements = @{} }
+            }
+            Mock Get-AvmTerraformUtilityInspection { $script:utilityInspections[$Path] }
+            $targets = @(
+                [pscustomobject]@{ Path = $wrapper; Scope = 'test' }
+                [pscustomobject]@{ Path = $complete; Scope = 'example' }
+                [pscustomobject]@{ Path = $example; Scope = 'example' }
+                [pscustomobject]@{ Path = $unrelated; Scope = 'module' }
+                [pscustomobject]@{ Path = $script:utilityRoot; Scope = 'root' }
+            )
+            if ($Reverse) { [array]::Reverse($targets) }
+            $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $targets -Options $script:utilityOptions)
+            $paths = @($plans | ForEach-Object { $_.Target.Path })
+            $paths | Should -HaveCount 4
+            $paths | Should -Not -Contain $unrelated
+            $paths.IndexOf($script:utilityRoot) | Should -BeLessThan $paths.IndexOf($complete)
+            $paths.IndexOf($complete) | Should -BeLessThan $paths.IndexOf($wrapper)
+            @($plans | Where-Object Affected | ForEach-Object { $_.Target.Path }) | Should -Be @($example)
+            @($plans | Where-Object Telemetry) | Should -HaveCount 0
+            ($plans | Where-Object { $_.Target.Path -ceq $complete }).Before.calls.parent.providers | Should -BeExactly $providers
+            $script:utilityInspections[$script:utilityRoot].calls.dependency.version | Should -BeExactly '0.4.0'
+
+            $script:utilityInspections[$complete].calls.cycle = @{ source = '../../tests/wrapper' }
+            { Get-AvmTerraformUtilityMigrationPlan -Targets $targets -Options $script:utilityOptions } |
+                Should -Throw '*cyclic local module calls*'
+        }
+    }
+
     It 'fails a selected native profile capability check before any writing invocation' {
         InModuleScope Avm.Authoring {
             Mock Invoke-AvmProcess { [pscustomobject]@{ StdOut = 'false' } }
