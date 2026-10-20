@@ -18,7 +18,7 @@ Describe 'Terraform acceptance byte inventory' -Tag Component {
             $script:result = [pscustomobject]@{
                 Status = 'pass'
                 Steps = @(
-                    foreach ($name in @('metadata', 'sync', 'format', 'transform', 'lint',
+                    foreach ($name in @('metadata', 'initialize', 'sync', 'format', 'transform', 'lint',
                             'check policy', 'check convention', 'validate', 'docs')) {
                         [pscustomobject]@{
                             Step = $name
@@ -33,7 +33,7 @@ Describe 'Terraform acceptance byte inventory' -Tag Component {
             Mock avm { $script:result }
         }
 
-        It 'accepts all nine public steps with internal initialization and real policy evidence' {
+        It 'accepts all ten public steps with explicit initialization and real policy evidence' {
             $actual = Invoke-TerraformAcceptancePrCheck -Context ([pscustomobject]@{ Root = $TestDrive })
 
             [object]::ReferenceEquals($actual, $script:result) | Should -BeTrue
@@ -41,21 +41,29 @@ Describe 'Terraform acceptance byte inventory' -Tag Component {
             Should -Invoke avm -Exactly 1
         }
 
-        It 'rejects <Failure> without treating initialization as a public step' -ForEach @(
-            @{ Failure = 'an extra initialization step' }
+        It 'rejects <Failure> in the public step contract' -ForEach @(
+            @{ Failure = 'a duplicate initialization step' }
+            @{ Failure = 'a missing initialization step' }
+            @{ Failure = 'a failed initialization step' }
+            @{ Failure = 'a skipped initialization step' }
             @{ Failure = 'a missing step' }
             @{ Failure = 'an empty policy evaluation' }
             @{ Failure = 'a policy issue' }
         ) {
             switch ($Failure) {
-                'an extra initialization step' {
+                'a duplicate initialization step' {
                     $script:result.Steps = @($script:result.Steps[0],
                         [pscustomobject]@{ Step = 'initialize'; Status = 'pass'; Error = '' }) +
-                    $script:result.Steps[1..8]
+                    $script:result.Steps[1..9]
                 }
-                'a missing step' { $script:result.Steps = $script:result.Steps[0..7] }
-                'an empty policy evaluation' { $script:result.Steps[5].Result.Evaluated = 0 }
-                'a policy issue' { $script:result.Steps[5].Result.Issues = @('Policy failed.') }
+                'a missing initialization step' {
+                    $script:result.Steps = @($script:result.Steps | Where-Object Step -ne 'initialize')
+                }
+                'a failed initialization step' { $script:result.Steps[1].Status = 'fail' }
+                'a skipped initialization step' { $script:result.Steps[1].Status = 'skipped' }
+                'a missing step' { $script:result.Steps = $script:result.Steps[0..8] }
+                'an empty policy evaluation' { $script:result.Steps[6].Result.Evaluated = 0 }
+                'a policy issue' { $script:result.Steps[6].Result.Issues = @('Policy failed.') }
             }
 
             { Invoke-TerraformAcceptancePrCheck -Context ([pscustomobject]@{ Root = $TestDrive }) } |

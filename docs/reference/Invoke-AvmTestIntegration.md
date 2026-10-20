@@ -18,6 +18,11 @@ module scopes. Missing or entirely ignored tests report 'skipped'.
 
 For Terraform, runs 'terraform test' against tests/integration/
 through Invoke-AvmTerraformTestSuite -Tier integration.
+After setup.ps1 and .env loading, checks ARM_* authentication inputs
+or the enabled Azure CLI subscription before init/test. CLI subscription
+and tenant IDs are supplied only to child processes. Nothing signs in
+or changes the selected CLI account; providers still validate credentials
+and resource permissions. Unit tests do not perform this preflight.
 
 Unlike the bare build-only 'avm test' verb, this tier needs Azure
 credentials at runtime. Terraform integration tests can provision

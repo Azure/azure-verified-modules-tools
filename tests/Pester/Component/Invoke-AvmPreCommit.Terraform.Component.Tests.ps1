@@ -214,6 +214,11 @@ AfterAll {
 }
 
 Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine end-to-end)' -Tag 'Component' {
+    BeforeEach {
+        InModuleScope Avm.Authoring {
+            Mock Get-AvmTerraformAuthenticationEnvironment { @{} + $Environment }
+        }
+    }
     It 'uses the configured conftest launcher instead of installing a real policy runner' {
         $pins = InModuleScope Avm.Authoring { Read-AvmPins }
         $expected = @($pins.tools | Where-Object name -eq 'conftest')[0].version
@@ -401,6 +406,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         }
         $result.Status | Should -Be $(if ($Enabled -eq 'none') { 'skipped' } else { 'pass' })
         $result.Steps.Step | Should -Be $names
+        $result.Steps.Step | Should -Not -Contain 'initialize'
         $calls = if (Test-Path -LiteralPath $trace) { @(Get-Content -LiteralPath $trace | ConvertFrom-Json) } else { @() }
         @($calls | Where-Object { $_.Command -eq 'init' -and $_.Directory -eq $sourceExample }) |
             Should -HaveCount 0
@@ -414,7 +420,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         }
     }
 
-    It 'pr-check composes nine steps with one initialization prerequisite before the drift checks' {
+    It 'pr-check composes ten steps with explicit initialization before the drift checks' {
         $savedTrace = $env:AVM_STUB_TERRAFORM_TRACE
         $trace = Join-Path $TestDrive 'pr-check-initialization-trace.jsonl'
         $env:AVM_STUB_TERRAFORM_TRACE = $trace
@@ -430,8 +436,8 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $result.PSObject.Properties['Status'].Value | Should -Be 'pass'
 
         $steps = $result.PSObject.Properties['Steps'].Value
-        $steps.Count | Should -Be 9
-        $expected = @('metadata', 'sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
+        $steps.Count | Should -Be 10
+        $expected = @('metadata', 'initialize', 'sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
         ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be $expected
 
         $byName = @{}
@@ -440,6 +446,11 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         $byName['metadata'].Result.ToolSource | Should -Be 'builtin'
         $byName['metadata'].Result.Issues | Should -HaveCount 0
         Test-Path -LiteralPath (Join-Path $script:fixtureRoot 'metadata.json') | Should -BeTrue
+        $byName['initialize'].Status | Should -Be 'pass'
+        $byName['initialize'].Result.Engine | Should -Be 'terraform'
+        $byName['initialize'].Result.InitializedDirectories | Should -Be 1
+        $byName['initialize'].Result.Initialized | Should -Be @('examples/foo')
+        $byName['initialize'].DurationMs | Should -BeGreaterOrEqual 0
 
         $terraformCalls = @(Get-Content -LiteralPath $trace | ConvertFrom-Json)
         $sourceExample = Join-Path $script:fixtureRoot 'examples' 'foo'
@@ -527,12 +538,12 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
             $unit = avm test unit -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback --passthru
 
             $result.Status | Should -Be 'pass'
-            $result.Steps | Should -HaveCount 9
+            $result.Steps | Should -HaveCount 10
             $skipped = @($result.Steps | Where-Object Status -eq 'skipped')
             $skipped | Should -HaveCount 1
             $skipped[0].Step | Should -Be 'check policy'
             $skipped[0].Error | Should -Be 'Excluded by -ExcludeSteps.'
-            @($result.Steps | Where-Object Status -eq 'pass') | Should -HaveCount 8
+            @($result.Steps | Where-Object Status -eq 'pass') | Should -HaveCount 9
             $unit.Status | Should -Be 'pass'
             $calls = @(Get-Content -LiteralPath $trace | ConvertFrom-Json)
             foreach ($command in @('fmt', 'init', 'validate', 'test')) {
@@ -662,7 +673,13 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         }
         $providerConfig | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $example 'providers.tf.json') -Encoding utf8NoBOM
         $schema | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $example '.avm-stub-provider-schemas.json') -Encoding utf8NoBOM
-        Set-Content -LiteralPath (Join-Path $example '.env') -Value "ARM_SKIP_PROVIDER_REGISTRATION=false`nARM_RESOURCE_PROVIDER_REGISTRATIONS=all" -Encoding utf8NoBOM
+        @(
+            'ARM_SKIP_PROVIDER_REGISTRATION=false'
+            'ARM_RESOURCE_PROVIDER_REGISTRATIONS=all'
+            'ARM_SUBSCRIPTION_ID=11111111-1111-1111-1111-111111111111'
+            'ARM_USE_MSI=true'
+            'ARM_USE_AKS_WORKLOAD_IDENTITY=false'
+        ) | Set-Content -LiteralPath (Join-Path $example '.env') -Encoding utf8NoBOM
         Copy-Item -LiteralPath $example -Destination (Join-Path $fixture 'examples' 'second') -Recurse -Force
         & git -C $fixture add -A
         & git -C $fixture commit --quiet -m 'Add provider safety fixtures'

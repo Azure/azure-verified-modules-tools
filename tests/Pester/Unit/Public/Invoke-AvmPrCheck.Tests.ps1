@@ -81,20 +81,23 @@ Describe 'Invoke-AvmPrCheck' {
                 param($SelectedStep, $SelectedEcosystem, $Commands)
                 $result = Invoke-AvmPrCheck -Path root -Ecosystem $SelectedEcosystem -ExcludeSteps @($SelectedStep) -StopOnFail
 
+                $initializations = if ($SelectedEcosystem -eq 'terraform' -and $SelectedStep -ne 'validate') { 1 } else { 0 }
+                $expectedSteps = @('metadata')
+                if ($initializations) { $expectedSteps += 'initialize' }
+                $expectedSteps += @($Commands.Keys | Where-Object { $_ -ne 'metadata' })
                 $result.Status | Should -Be 'pass'
-                $result.Steps.Step | Should -Be @($Commands.Keys)
+                $result.Steps.Step | Should -Be $expectedSteps
                 $skipped = @($result.Steps | Where-Object Status -eq 'skipped')
                 $skipped | Should -HaveCount 1
                 $skipped[0].Step | Should -Be $SelectedStep
                 $skipped[0].Error | Should -Be 'Excluded by -ExcludeSteps.'
                 $skipped[0].Result | Should -BeNullOrEmpty
                 $skipped[0].DurationMs | Should -Be 0
-                @($result.Steps | Where-Object Status -eq 'pass') | Should -HaveCount 8
+                @($result.Steps | Where-Object Status -eq 'pass') | Should -HaveCount (8 + $initializations)
                 foreach ($entry in $Commands.GetEnumerator()) {
                     $count = if ($entry.Key -eq $SelectedStep) { 0 } else { 1 }
                     Should -Invoke $entry.Value -Exactly $count
                 }
-                $initializations = if ($SelectedEcosystem -eq 'terraform' -and $SelectedStep -ne 'validate') { 1 } else { 0 }
                 Should -Invoke Initialize-AvmTerraformCommand -Exactly $initializations
                 Should -Invoke Resolve-AvmCommandTool -Exactly 1 -ParameterFilter {
                     $Command -eq 'pr-check' -and $ModuleRoot -eq 'root' -and
@@ -115,7 +118,7 @@ Describe 'Invoke-AvmPrCheck' {
                 param($Flag)
                 $result = avm pr-check $Flag @('CHECK POLICY', 'Lint', 'lint') -Path root --passthru
                 $result.Status | Should -Be 'pass'
-                $result.Steps | Should -HaveCount 9
+                $result.Steps | Should -HaveCount 10
                 @($result.Steps | Where-Object Status -eq 'skipped').Step | Should -Be @('lint', 'check policy')
                 Should -Invoke Invoke-AvmCheckPolicy -Exactly 0
                 Should -Invoke Invoke-AvmLint -Exactly 0
@@ -130,7 +133,7 @@ Describe 'Invoke-AvmPrCheck' {
             InModuleScope Avm.Authoring {
                 $result = avm pr-check -ExcludeSteps @() -Path root --passthru
                 $result.Status | Should -Be 'pass'
-                $result.Steps | Should -HaveCount 9
+                $result.Steps | Should -HaveCount 10
                 @($result.Steps | Where-Object Status -ne 'pass') | Should -HaveCount 0
                 Should -Invoke Invoke-AvmCheckPolicy -Exactly 1
                 Should -Invoke Resolve-AvmCommandTool -Exactly 1 -ParameterFilter { $ExcludeSteps.Count -eq 0 }
@@ -175,9 +178,13 @@ Describe 'Invoke-AvmPrCheck' {
                 param($SelectedStep, $NeedsTerraform, $NeedsInitialization, $Commands)
                 $exclusions = @($Commands.Keys | Where-Object { $_ -ne $SelectedStep })
                 $result = Invoke-AvmPrCheck -Path root -Ecosystem terraform -ExcludeSteps $exclusions
+                $expectedSteps = @('metadata')
+                if ($NeedsInitialization) { $expectedSteps += 'initialize' }
+                $expectedSteps += @($Commands.Keys | Where-Object { $_ -ne 'metadata' })
+                $expectedPassing = if ($NeedsInitialization) { @('initialize', $SelectedStep) } else { @($SelectedStep) }
                 $result.Status | Should -Be 'pass'
-                $result.Steps.Step | Should -Be @($Commands.Keys)
-                @($result.Steps | Where-Object Status -eq 'pass').Step | Should -Be $SelectedStep
+                $result.Steps.Step | Should -Be $expectedSteps
+                @($result.Steps | Where-Object Status -eq 'pass').Step | Should -Be $expectedPassing
                 @($result.Steps | Where-Object Status -eq 'skipped') | Should -HaveCount 8
                 $tools = @(Get-AvmCommandTool -Command 'pr-check' -Ecosystem terraform -ExcludeSteps $exclusions)
                 ('terraform' -in $tools) | Should -Be $NeedsTerraform
@@ -205,10 +212,39 @@ Describe 'Invoke-AvmPrCheck' {
                 Mock Invoke-AvmTest { $script:order.Add('validate'); [pscustomobject]@{ Status = 'pass' } }
                 $result = Invoke-AvmPrCheck -Path root -Ecosystem terraform -ExcludeSteps $Exclusions
                 $result.Status | Should -Be 'pass'
-                $result.Steps | Should -HaveCount 9
+                $result.Steps | Should -HaveCount 10
                 @($script:order) | Should -Be @('metadata', 'initialize', 'sync', 'validate')
                 Should -Invoke Initialize-AvmTerraformCommand -Exactly 1 -ParameterFilter { $Command -eq 'pr-check' }
                 Should -Invoke Invoke-AvmTest -Exactly 1 -ParameterFilter { $UseExistingInit }
+            }
+        }
+
+        It 'reports initialization as step 2/10 with its own result and timing' {
+            InModuleScope Avm.Authoring {
+                $script:initializationResult = [pscustomobject]@{
+                    Status = 'pass'; Initialized = @('examples/default'); Reused = @('examples/prepared')
+                }
+                Mock Initialize-AvmTerraformCommand { $script:initializationResult }
+
+                $result = Invoke-AvmPrCheck -Path root -Ecosystem terraform -AllowPathFallback
+                $initialize = $result.Steps[1]
+                $initialize.Step | Should -Be 'initialize'
+                $initialize.Status | Should -Be 'pass'
+                $initialize.Result | Should -Be $script:initializationResult
+                $initialize.DurationMs | Should -BeGreaterOrEqual 0
+                $initialize.EndTime | Should -BeGreaterOrEqual $initialize.StartTime
+                Should -Invoke Initialize-AvmTerraformCommand -Exactly 1 -ParameterFilter {
+                    $Context.Root -eq 'root' -and $Command -eq 'pr-check' -and $AllowPathFallback
+                }
+                Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                    $Level -eq 'Info' -and $Message -match '^step 2/10: initialize \(started '
+                }
+                Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                    $Level -eq 'Pass' -and $Message -match '^step 2/10: initialize -> pass \('
+                }
+                Should -Invoke Write-AvmLog -Exactly 0 -ParameterFilter {
+                    $Message -like '*preparing Terraform initialization for validate*'
+                }
             }
         }
 
@@ -245,7 +281,8 @@ Describe 'Invoke-AvmPrCheck' {
                 }
                 $result = Invoke-AvmPrCheck -Path root -Ecosystem terraform
                 $result.Status | Should -Be $Expected
-                $result.Steps.Step | Should -Be @('metadata', 'sync')
+                $result.Steps.Step | Should -Be @('metadata', 'initialize')
+                $result.Steps[-1].Status | Should -Be $Expected
                 $result.Steps[-1].Error | Should -Match '^Terraform initialization prerequisite failed:'
                 if ($Failure -eq 'retry detail') {
                     $result.Steps[-1].Error | Should -Be 'Terraform initialization prerequisite failed: Initialization download failed. Run with -Verbose for technical details.'
@@ -255,6 +292,12 @@ Describe 'Invoke-AvmPrCheck' {
                 Should -Invoke Invoke-AvmTransform -Exactly 0
                 Should -Invoke Invoke-AvmTest -Exactly 0
                 Should -Invoke Invoke-AvmDocs -Exactly 0
+                Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                    $Level -eq 'Info' -and $Message -match '^step 2/10: initialize \(started '
+                }
+                Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                    $Level -eq 'Fail' -and $Message -match "^step 2/10: initialize -> $Expected \("
+                }
             }
         }
 
@@ -286,8 +329,8 @@ Describe 'Invoke-AvmPrCheck' {
         }
 
         It 'retains fail-soft and StopOnFail behavior for non-excluded steps with StopOnFail=<Stop>' -ForEach @(
-            @{ Stop = $false; Count = 9; DocsCalls = 1 }
-            @{ Stop = $true; Count = 5; DocsCalls = 0 }
+            @{ Stop = $false; Count = 10; DocsCalls = 1 }
+            @{ Stop = $true; Count = 6; DocsCalls = 0 }
         ) {
             InModuleScope Avm.Authoring -Parameters @{ Stop = $Stop; Count = $Count; DocsCalls = $DocsCalls } {
                 param($Stop, $Count, $DocsCalls)
@@ -1034,7 +1077,7 @@ Describe 'Invoke-AvmPrCheck' {
         }
     }
 
-    It 'composes all nine steps in order on a passing chain (terraform), running the drift-check sync first and forwarding the ecosystem to every step' {
+    It 'composes all ten Terraform steps in order with initialization before drift checks and forwards the ecosystem to every check' {
         $dir = Join-Path $TestDrive ("prcheck-tf-pass-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -1056,8 +1099,6 @@ Describe 'Invoke-AvmPrCheck' {
             Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'terraform'; Status = 'pass' } }
             $r = Invoke-AvmPrCheck -Path $D -ThrottleLimit 5
 
-            # sync runs first in drift-check mode: -CheckDrift is forwarded via
-            # the step's ExtraArgs so CI treats stale governed files as a fail.
             Should -Invoke Invoke-AvmSync            -Exactly 1 -ParameterFilter { $Ecosystem -eq 'terraform' -and $CheckDrift }
             Should -Invoke Initialize-AvmTerraformCommand -Exactly 1 -ParameterFilter {
                 $Context.Root -eq $D -and $Command -eq 'pr-check'
@@ -1080,8 +1121,8 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result.Status                    | Should -Be 'pass'
         $result.Ecosystem                 | Should -Be 'terraform'
-        $result.Steps.Count               | Should -Be 9
-        $result.Steps.Step | Should -Be @('metadata', 'sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
+        $result.Steps.Count               | Should -Be 10
+        $result.Steps.Step | Should -Be @('metadata', 'initialize', 'sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
     }
 
@@ -1159,7 +1200,7 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result.Status                                                     | Should -Be 'pass'
         $result.Ecosystem                                                  | Should -Be 'terraform'
-        $result.Steps.Count                                                | Should -Be 9
+        $result.Steps.Count                                                | Should -Be 10
         ($result.Steps | Where-Object Status -eq 'skipped').Count          | Should -Be 3
         ($result.Steps | Where-Object Step -eq 'sync').Status              | Should -Be 'pass'
         ($result.Steps | Where-Object Step -eq 'transform').Status         | Should -Be 'skipped'

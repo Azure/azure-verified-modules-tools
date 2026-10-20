@@ -55,6 +55,7 @@ Describe 'Component: Terraform policy cleanup workers' -Tag 'Component' {
                             }
                         }
                         function ConvertFrom-AvmDotEnv { param($Path) @{} }
+                        function Get-AvmTerraformAuthenticationEnvironment { param($Environment) @{} + $Environment }
                         function Lock-AvmTerraformPluginCache { param($WorkingDirectory, $EnvVars) $null }
                         function Initialize-AvmTerraformPolicyStage {
                             param($TerraformPath, $ConftestPath, $WorkingDirectory, $StageRoot, $EnvVars)

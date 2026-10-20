@@ -12,6 +12,9 @@ AfterAll {
 
 Describe 'Invoke-AvmTerraformTestSuite' {
     BeforeEach {
+        InModuleScope Avm.Authoring {
+            Mock Get-AvmTerraformAuthenticationEnvironment { @{} + $Environment }
+        }
         $script:moduleDir = Join-Path $TestDrive ("tf-suite-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $script:moduleDir -Force | Out-Null
         New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'tests' 'unit') -Force | Out-Null
@@ -35,6 +38,42 @@ Describe 'Invoke-AvmTerraformTestSuite' {
                 Invoke-AvmTerraformTestSuite -Context $C -Tier unit
             }
         } | Should -Throw -ExceptionType ([System.ArgumentException])
+    }
+
+    It 'checks integration authentication after setup and dotenv even with NoInit' {
+        $tierDir = Join-Path $script:moduleDir 'tests' 'integration'
+        $null = New-Item -ItemType Directory -Path $tierDir
+        Set-Content -LiteralPath (Join-Path $tierDir 'main.tftest.hcl') -Value 'run "x" {}'
+        InModuleScope Avm.Authoring -Parameters @{ C = $script:context } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'terraform'; Version = 'test'; Path = 'never-executed'; Source = 'cache' }
+            }
+            Mock Invoke-AvmTerraformSetupHook {
+                Set-Content -LiteralPath (Join-Path $WorkingDirectory '.env') -Value 'ARM_USE_CLI=false'
+            }
+            Mock Get-AvmTerraformAuthenticationEnvironment {
+                $Environment.ARM_USE_CLI | Should -Be 'false'
+                throw [AvmConfigurationException]::new('Terraform Azure authentication is not configured.')
+            }
+            Mock Invoke-AvmProcess { throw 'Terraform must not run' }
+            { Invoke-AvmTerraformTestSuite -Context $C -Tier integration -NoInit } |
+                Should -Throw '*Terraform Azure authentication*'
+            Should -Invoke Get-AvmTerraformAuthenticationEnvironment -Exactly 1
+            Should -Invoke Invoke-AvmProcess -Exactly 0
+        }
+    }
+
+    It 'does not require authentication for unit tests' {
+        InModuleScope Avm.Authoring -Parameters @{ C = $script:context } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'terraform'; Version = 'test'; Path = 'terraform-stub'; Source = 'cache' }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            $null = Invoke-AvmTerraformTestSuite -Context $C -Tier unit
+            Should -Invoke Get-AvmTerraformAuthenticationEnvironment -Exactly 0
+        }
     }
 
     It 'returns a clean skip with FilesProcessed=0 and never shells out when the tier ships no tftest files' {

@@ -29,6 +29,13 @@ VALIDATE_MANAGEMENT_GROUP_ID (or ARM_MGMTGROUP_ID), TOKEN_NAMEPREFIX,
 and localToken_* variables for tokens used by the selected tests.
 Missing inputs or uninspectable results fail rather than skip.
 
+Terraform checks Azure authentication after pre.ps1 and .env loading,
+before init/plan. Supply ARM_* credentials (including a subscription)
+or an authenticated Azure CLI on PATH with an enabled subscription.
+CLI subscription and tenant IDs are passed only to child processes;
+the check never signs in or changes the selected CLI account.
+Providers still validate credentials and resource permissions.
+
 Terraform post-hook failure or interrupted cleanup retains recovery
 staging beneath the AVM cache (AVM_HOME/cache when overridden). The
 warning identifies the local path; it can contain sensitive state,

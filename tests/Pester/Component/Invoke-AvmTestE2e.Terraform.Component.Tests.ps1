@@ -73,6 +73,11 @@ AfterAll {
 }
 
 Describe 'Component: Invoke-AvmTestE2e (terraform e2e tier end-to-end)' -Tag 'Component' {
+    BeforeEach {
+        InModuleScope Avm.Authoring {
+            Mock Get-AvmTerraformAuthenticationEnvironment { @{} + $Environment }
+        }
+    }
 
     It 'deploys, checks idempotency, and destroys each example via the launcher-resolved stub' {
         $result = Invoke-AvmTestE2e -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback

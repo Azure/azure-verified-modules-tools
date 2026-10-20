@@ -76,6 +76,7 @@ exception contains rules if {
 Describe 'Invoke-AvmTerraformCheckPolicy' -Tag Component {
     BeforeEach {
         InModuleScope Avm.Authoring {
+            Mock Get-AvmTerraformAuthenticationEnvironment { @{} + $Environment }
             Mock Initialize-AvmTerraformPolicyStage {
                 $null = Invoke-AvmTerraformInit -TerraformPath $TerraformPath -WorkingDirectory $WorkingDirectory `
                     -EnvVars $EnvVars -NoColor -SkipPluginCacheLock -PreserveDependencySelections
@@ -121,6 +122,34 @@ Describe 'Invoke-AvmTerraformCheckPolicy' -Tag Component {
                 Invoke-AvmTerraformCheckPolicy -Context $C
             }
         } | Should -Throw -ExceptionType ([System.ArgumentException])
+    }
+
+    It 'checks hook-provided authentication before Terraform and still runs post cleanup on failure' {
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:exampleDir; Stage = $script:cacheDir } {
+            param($Root, $Stage)
+            $example = [pscustomobject]@{
+                Name = 'default'; RelativePath = 'examples/default'; StagedPath = $Root
+                StageRoot = $Stage; CleanupStarted = $false; CleanupCompleted = $false
+            }
+            Mock Invoke-AvmScriptHook {
+                if ($HookPath -like '*pre.ps1') {
+                    Set-Content -LiteralPath (Join-Path $WorkingDirectory '.env') -Value 'ARM_USE_CLI=false'
+                }
+            }
+            Mock Get-AvmTerraformAuthenticationEnvironment {
+                $Environment.ARM_USE_CLI | Should -Be 'false'
+                throw [AvmConfigurationException]::new('Terraform Azure authentication is not configured.')
+            }
+            Mock Invoke-AvmProcess { throw 'Terraform must not run' }
+            Mock Lock-AvmTerraformPluginCache { throw 'Cache must not be locked' }
+
+            { Invoke-AvmTerraformPolicyExample -Example $example -Options @{} } |
+                Should -Throw '*Terraform Azure authentication*'
+            $example.CleanupCompleted | Should -BeTrue
+            Should -Invoke Get-AvmTerraformAuthenticationEnvironment -Exactly 1
+            Should -Invoke Invoke-AvmProcess -Exactly 0
+            Should -Invoke Invoke-AvmScriptHook -Exactly 1 -ParameterFilter { $HookPath -like '*post.ps1' }
+        }
     }
 
     It 'runs the complete plan-JSON lifecycle for every active example' {

@@ -79,8 +79,9 @@ function Invoke-AvmTerraformTestE2e {
 
         e2e provisions and destroys real cloud resources, so it needs valid
         credentials at runtime (an authenticated 'az' session or ARM_*
-        environment variables). Authentication is left to terraform and its
-        providers; this engine performs no preflight.
+        environment variables). The shared Terraform authentication preflight
+        checks configuration after pre.ps1 and .env loading, before init.
+        Providers still validate credential validity and resource permissions.
 
     .PARAMETER Context
         Module context produced by Get-AvmModuleContext. Must have
@@ -209,7 +210,16 @@ function Invoke-AvmTerraformTestE2e {
 
         if ($preOk) {
             $envVars = ConvertFrom-AvmDotEnv -Path (Join-Path $exampleDir '.env')
+            try {
+                $envVars = Get-AvmTerraformAuthenticationEnvironment -Environment $envVars
+            }
+            catch [AvmConfigurationException] {
+                $issues.Add((New-AvmE2eIssue -File $rel -Message $_.Exception.Message))
+                $preOk = $false
+            }
+        }
 
+        if ($preOk) {
             $init = Invoke-AvmProcess `
                 -FilePath $tool.Path `
                 -ArgumentList @('init', '-upgrade', '-input=false', '-no-color') `
