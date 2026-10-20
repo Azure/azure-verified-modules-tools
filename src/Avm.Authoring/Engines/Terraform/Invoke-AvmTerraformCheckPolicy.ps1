@@ -25,6 +25,7 @@ function Invoke-AvmTerraformPolicyExample {
             -Label ("policy {0} pre.ps1" -f $Example.Name)
 
         $envVars = ConvertFrom-AvmDotEnv -Path (Join-Path $Example.StagedPath '.env')
+        $envVars = Get-AvmTerraformAuthenticationEnvironment -Environment $envVars
         $terraformEnv = Get-AvmTerraformPolicyEnvironment -StageRoot $Example.StageRoot -Environment $envVars
 
         $terraformLock = Lock-AvmTerraformPluginCache `

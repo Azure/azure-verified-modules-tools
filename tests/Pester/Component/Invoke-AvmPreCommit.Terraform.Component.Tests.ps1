@@ -214,6 +214,11 @@ AfterAll {
 }
 
 Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine end-to-end)' -Tag 'Component' {
+    BeforeEach {
+        InModuleScope Avm.Authoring {
+            Mock Get-AvmTerraformAuthenticationEnvironment { @{} + $Environment }
+        }
+    }
     It 'uses the configured conftest launcher instead of installing a real policy runner' {
         $pins = InModuleScope Avm.Authoring { Read-AvmPins }
         $expected = @($pins.tools | Where-Object name -eq 'conftest')[0].version
@@ -662,7 +667,13 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         }
         $providerConfig | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $example 'providers.tf.json') -Encoding utf8NoBOM
         $schema | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $example '.avm-stub-provider-schemas.json') -Encoding utf8NoBOM
-        Set-Content -LiteralPath (Join-Path $example '.env') -Value "ARM_SKIP_PROVIDER_REGISTRATION=false`nARM_RESOURCE_PROVIDER_REGISTRATIONS=all" -Encoding utf8NoBOM
+        @(
+            'ARM_SKIP_PROVIDER_REGISTRATION=false'
+            'ARM_RESOURCE_PROVIDER_REGISTRATIONS=all'
+            'ARM_SUBSCRIPTION_ID=11111111-1111-1111-1111-111111111111'
+            'ARM_USE_MSI=true'
+            'ARM_USE_AKS_WORKLOAD_IDENTITY=false'
+        ) | Set-Content -LiteralPath (Join-Path $example '.env') -Encoding utf8NoBOM
         Copy-Item -LiteralPath $example -Destination (Join-Path $fixture 'examples' 'second') -Recurse -Force
         & git -C $fixture add -A
         & git -C $fixture commit --quiet -m 'Add provider safety fixtures'

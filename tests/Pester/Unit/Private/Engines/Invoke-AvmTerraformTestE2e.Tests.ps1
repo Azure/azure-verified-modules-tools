@@ -18,6 +18,9 @@ AfterAll {
 
 Describe 'Invoke-AvmTerraformTestE2e' {
     BeforeEach {
+        InModuleScope Avm.Authoring {
+            Mock Get-AvmTerraformAuthenticationEnvironment { @{} + $Environment }
+        }
         $script:moduleDir = Join-Path $TestDrive ("tf-e2e-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $script:moduleDir -Force | Out-Null
 
@@ -39,6 +42,36 @@ Describe 'Invoke-AvmTerraformTestE2e' {
                 Invoke-AvmTerraformTestE2e -Context $C
             }
         } | Should -Throw -ExceptionType ([System.ArgumentException])
+    }
+
+    It 'reports missing authentication before Terraform and still runs the post hook' {
+        $example = Join-Path $script:moduleDir 'examples' 'default'
+        $null = New-Item -ItemType Directory -Path $example -Force
+        Set-Content -LiteralPath (Join-Path $example 'main.tf') -Value 'terraform {}'
+        InModuleScope Avm.Authoring -Parameters @{ C = $script:context } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'terraform'; Version = 'test'; Path = 'never-executed'; Source = 'cache' }
+            }
+            Mock Invoke-AvmE2eHook {
+                if ($HookPath -like '*pre.ps1') {
+                    Set-Content -LiteralPath (Join-Path $WorkingDirectory '.env') -Value 'ARM_USE_CLI=false'
+                }
+            }
+            Mock Get-AvmTerraformAuthenticationEnvironment {
+                $Environment.ARM_USE_CLI | Should -Be 'false'
+                throw [AvmConfigurationException]::new('Terraform Azure authentication is not configured.')
+            }
+            Mock Invoke-AvmProcess { throw 'Terraform must not run' }
+
+            $result = Invoke-AvmTerraformTestE2e -Context $C
+            $result.Status | Should -Be 'fail'
+            $result.Issues | Should -HaveCount 1
+            $result.Issues[0].Message | Should -Match 'Terraform Azure authentication'
+            Should -Invoke Get-AvmTerraformAuthenticationEnvironment -Exactly 1
+            Should -Invoke Invoke-AvmProcess -Exactly 0
+            Should -Invoke Invoke-AvmE2eHook -Exactly 1 -ParameterFilter { $HookPath -like '*post.ps1' }
+        }
     }
 
     It 'F40: reports skipped, not pass, and never shells out when there are no runnable examples' {
@@ -737,6 +770,9 @@ Describe 'Test-AvmTerraformTransientError' {
 
 Describe 'Invoke-AvmTerraformTestE2e per-example targeting (F26/F27)' {
     BeforeEach {
+        InModuleScope Avm.Authoring {
+            Mock Get-AvmTerraformAuthenticationEnvironment { @{} + $Environment }
+        }
         $script:moduleDir = Join-Path $TestDrive ("tf-tgt-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         foreach ($name in @('example-a', 'example-b', 'skipped')) {
             $dir = Join-Path $script:moduleDir 'examples' $name

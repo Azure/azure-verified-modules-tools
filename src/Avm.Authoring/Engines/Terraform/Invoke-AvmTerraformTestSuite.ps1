@@ -175,6 +175,9 @@ function Invoke-AvmTerraformTestSuite {
         }
 
         $envVars = ConvertFrom-AvmDotEnv -Path (Join-Path $targetDir '.env')
+        if ($Tier -eq 'integration') {
+            $envVars = Get-AvmTerraformAuthenticationEnvironment -Environment $envVars
+        }
 
         if (-not $NoInit) {
             $initResult = Invoke-AvmProcess `

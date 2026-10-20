@@ -85,6 +85,11 @@ AfterAll {
 }
 
 Describe 'Component: Invoke-AvmTestIntegration (terraform integration tier end-to-end)' -Tag 'Component' {
+    BeforeEach {
+        InModuleScope Avm.Authoring {
+            Mock Get-AvmTerraformAuthenticationEnvironment { @{} + $Environment }
+        }
+    }
 
     It 'auto-inits and runs terraform test against tests/integration via the launcher-resolved stub' {
         $result = Invoke-AvmTestIntegration -Path $script:fixtureRoot -Ecosystem terraform -AllowPathFallback

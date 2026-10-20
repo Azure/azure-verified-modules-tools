@@ -75,6 +75,12 @@ which does not need the checkout and never runs assertions or hooks.
 
 Terraform runs init, apply, idempotency plan and destroy for runnable
 examples/. MaxRetry controls Terraform transient apply retries.
+After pre.ps1 and .env loading, the shared Terraform authentication
+preflight checks ARM_* inputs or an enabled Azure CLI subscription.
+It passes CLI subscription/tenant IDs only to child processes and never
+signs in or changes the selected account. An authentication failure
+skips Terraform operations, reports an error and still runs post.ps1.
+Providers still validate credentials and resource permissions.
 No deployment tests belong in avm pr-check or the local build gate.
 Listing does not resolve tools or credentials. An absent tier is
 'skipped', not a pass; .e2eignore excludes a case.

@@ -344,6 +344,23 @@ This is the integration point for `mise` / `asdf` / `tenv` users who centralise 
 
 ## 8. Hidden folder and repo-local conventions
 
+### Terraform Azure authentication
+
+Terraform policy, integration and e2e share one Azure authentication preflight.
+Run it after the applicable pre/setup hook and `.env` loading, before Terraform
+init, plan, test or apply. Per-example/target overrides take precedence over the
+process environment. Non-CLI authentication requires `ARM_SUBSCRIPTION_ID` and
+the identity inputs for the selected secret, certificate, OIDC, managed-identity
+or AKS workload-identity method; incomplete inputs fail without CLI fallback.
+Otherwise inspect the existing Azure CLI account through the shared CLI resolver
+and process helper, requiring an enabled subscription and tenant matching any
+explicit IDs. Supply those IDs only to child processes so providers cannot plan
+with an empty subscription; never sign in, switch accounts or mutate the caller's
+environment. Diagnostics name missing inputs and recovery commands, not values
+or raw CLI output. Providers remain responsible for token validity and resource
+permissions. Unit tests, discovery/listing and absent/ignored tiers need no
+authentication. Preflight failures retain ordinary post-hook cleanup behavior.
+
 ### Terraform policy recovery staging
 
 Terraform policy checks stage examples under `Get-AvmFolder -Kind Cache` in

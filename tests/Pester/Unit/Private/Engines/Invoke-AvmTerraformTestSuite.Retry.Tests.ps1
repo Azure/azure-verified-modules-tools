@@ -85,6 +85,7 @@ BeforeAll {
             Mock Test-Path { $false }
             Mock Get-Content { $Config }
             Mock Invoke-AvmTerraformSetupHook { $null }
+            Mock Get-AvmTerraformAuthenticationEnvironment { @{} + $Environment }
             Mock ConvertFrom-AvmDotEnv {
                 @{
                     TF_CLI_ARGS_test = '-filter=tests/integration/deploy.tftest.hcl'
