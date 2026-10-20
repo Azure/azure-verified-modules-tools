@@ -120,13 +120,13 @@ Describe 'State identity wiring' {
         $jobs.Success | Should -BeTrue
         @([regex]::Matches($jobs.Groups['jobs'].Value, '(?m)^  ([a-z][a-z0-9-]+):\r?$') |
             ForEach-Object { $_.Groups[1].Value }) | Should -Be @('generate-matrix', 'sync-repository')
-        $worker = [regex]::Match($jobs.Value, '(?ms)^  sync-repository:\r?\n(?<header>.*?)^    uses:')
+        $worker = [regex]::Match($jobs.Value, '(?ms)^  sync-repository:\r?\n(?<header>.*?)^    steps:')
         $worker.Success | Should -BeTrue
         $dependencies = [regex]::Matches($worker.Groups['header'].Value, '(?m)^    needs: (.+)\r?$')
         $dependencies | Should -HaveCount 1
         $dependencies[0].Groups[1].Value.Trim() | Should -BeExactly 'generate-matrix'
         $worker.Groups['header'].Value | Should -Match "(?m)^    if: needs.generate-matrix.result == 'success'"
-        $workflow | Should -Match '(?m)^    uses: \./\.github/workflows/repository-management-sync-repository\.yml'
+        $workflow | Should -Not -Match '(?m)^    uses:'
         $worker.Groups['header'].Value | Should -Match 'include: \$\{\{ fromJson\(needs\.generate-matrix\.outputs\.matrix\) \}\}'
         $workflow | Should -Match '(?m)^  group: repository-sync\r?$'
         $workflow | Should -Match '(?m)^  cancel-in-progress: false\r?$'
@@ -185,18 +185,15 @@ Describe 'State identity wiring' {
 
     It 'uses backend-only CLI recovery authentication without changing provider OIDC' {
         $workflow = Get-Content -LiteralPath (Join-Path $script:repoRoot (
-            '.github/workflows/repository-management-sync-repository.yml'
-        )) -Raw
-        $dispatcher = Get-Content -LiteralPath (Join-Path $script:repoRoot (
             '.github/workflows/repository-management-sync.yml'
         )) -Raw
         $syncStep = [regex]::Match(
             $workflow,
-            '(?ms)^      - name: Run sync for .*?(?=^      - name:)'
+            '(?ms)^      - name: Prepare repository candidate\r?\n.*?(?=^      - name:)'
         ).Value
         $syncStep | Should -Not -BeNullOrEmpty
         $workflow | Should -Match '(?s)Write-Host "Running repo sync"\s+\$moduleToLoad = .*?Import-Module -Name \$moduleToLoad -Force -ErrorAction Stop\s+\./scripts/Invoke-RepositorySync\.ps1'
-        $worker = [regex]::Match($workflow, '(?ms)^  run-sync:.*?(?=^  [a-z][a-z0-9-]+:|\z)').Value
+        $worker = [regex]::Match($workflow, '(?ms)^  sync-repository:.*?(?=^  [a-z][a-z0-9-]+:|\z)').Value
         $worker | Should -Not -BeNullOrEmpty
         foreach ($name in 'TENANT', 'SUBSCRIPTION', 'CLIENT') {
             $worker | Should -Not -Match ('(?m)^\s*ARM_' + $name + '_ID:\s*')
@@ -220,11 +217,6 @@ Describe 'State identity wiring' {
         $worker | Should -Match '(?m)^      contents: read\r?$'
         $worker | Should -Match '(?m)^      id-token: write\r?$'
         $syncStep | Should -Not -Match 'ACTIONS_STATE_LOCK_TOKEN'
-        $caller = [regex]::Match($dispatcher, '(?ms)^  sync-repository:.*$').Value
-        foreach ($permission in @('contents: read', 'id-token: write')) {
-            $caller | Should -Match ('(?m)^      ' + [regex]::Escape($permission) + '\r?$')
-        }
-        $caller | Should -Not -Match '(?m)^      actions:'
         $workflow | Should -Match '-stateTenantId \$env:ARM_BACKEND_TENANT_ID'
         $workflow | Should -Match '-stateClientId \$env:ARM_BACKEND_CLIENT_ID'
         $workflow | Should -Match '-stateSubscriptionId \$env:ARM_BACKEND_SUBSCRIPTION_ID'
@@ -237,21 +229,21 @@ Describe 'State identity wiring' {
         $workflow | Should -Not -Match 'stateResourceGroupName|STORAGE_ACCOUNT_RESOURCE_GROUP_NAME'
         $workflow | Should -Not -Match '(?<![A-Z_])STORAGE_ACCOUNT_(CONTAINER_)?NAME'
         $workflow | Should -Not -Match 'ARM_BACKEND_ENVIRONMENT_VARIABLE_SUFFIX|ARM_OIDC_TOKEN:'
-        $dispatcher | Should -Match 'cancel-in-progress: false'
+        $workflow | Should -Match '(?m)^  cancel-in-progress: false\r?$'
         $workflow | Should -Not -Match 'AVM_SYNC_PAUSED'
     }
 
     It 'serializes the state-writing job across branches with GitHub Actions concurrency' {
         $workflow = Get-Content -LiteralPath (Join-Path $script:repoRoot (
-            '.github/workflows/repository-management-sync-repository.yml'
+            '.github/workflows/repository-management-sync.yml'
         )) -Raw
-        $worker = [regex]::Match($workflow, '(?ms)^  run-sync:.*?(?=^  [a-z][a-z0-9-]+:|\z)').Value
+        $worker = [regex]::Match($workflow, '(?ms)^  sync-repository:.*?(?=^  [a-z][a-z0-9-]+:|\z)').Value
         $concurrency = [regex]::Match($worker, '(?ms)^    concurrency:\r?\n(?<settings>.*?)(?=^    \S|\z)')
         $concurrency.Success | Should -BeTrue
-        $concurrency.Groups['settings'].Value | Should -Match '(?m)^      group: repository-sync-state-\$\{\{ inputs\.repo_id \}\}\r?$'
+        $concurrency.Groups['settings'].Value | Should -Match '(?m)^      group: repository-sync-state-\$\{\{ matrix\.repoId \}\}\r?$'
         $concurrency.Groups['settings'].Value | Should -Match '(?m)^      cancel-in-progress: false\r?$'
-        $concurrency.Value | Should -Not -Match 'github\.(ref|sha|run_id)|inputs\.repo_name'
-        $worker | Should -Match '(?m)^          REPO_ID: \$\{\{ inputs\.repo_id \}\}\r?$'
+        $concurrency.Value | Should -Not -Match 'github\.(ref|sha|run_id)|matrix\.repoName'
+        $worker | Should -Match '(?m)^          REPO_ID: \$\{\{ matrix\.repoId \}\}\r?$'
         $source = Get-Content -LiteralPath (Join-Path $script:repoRoot (
             'repository-management/repository-sync/scripts/lib/RetryHelpers.ps1'
         )) -Raw
@@ -373,7 +365,7 @@ Describe 'State backend workflow resolution' {
         @{ Mode = 'missing' }
         @{ Mode = 'partial' }
     ) {
-        $workflow = Get-Content -Raw (Join-Path $script:repoRoot '.github/workflows/repository-management-sync-repository.yml')
+        $workflow = Get-Content -Raw (Join-Path $script:repoRoot '.github/workflows/repository-management-sync.yml')
         $step = [regex]::Match($workflow, '(?ms)^      - name: Resolve state backend\r?\n.*?^        run: \|\r?\n(?<body>.*?)(?=^      - name:)')
         $step.Success | Should -BeTrue
         $bindings = @([regex]::Matches($step.Value, '(?m)^          ([A-Z_]+): \$\{\{ vars\.\1 \}\}') |

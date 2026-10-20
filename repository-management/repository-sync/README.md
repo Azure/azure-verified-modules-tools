@@ -102,8 +102,8 @@ operations are not replayed. State contents and Terraform lock IDs are never
 downloaded, parsed or rewritten.
 
 This runs from any branch of the Tools Terraform Sync workflow. GitHub
-Actions provides serialization: the preparation job's concurrency group is
-`repository-sync-state-${{ inputs.repo_id }}`, with `cancel-in-progress: false`.
+Actions provides serialization: each repository job's concurrency group is
+`repository-sync-state-${{ matrix.repoId }}`, with `cancel-in-progress: false`.
 The key is independent of branch and repository naming prefix. The existing
 workflow-wide `repository-sync` concurrency group is retained. No custom
 run/job polling or additional Actions token is required.
@@ -209,19 +209,27 @@ controller as an execution identity to bypass a failed prerequisite.
 
 ## Candidate validation before publication
 
-After `avm pre-commit`, a changed module is committed locally and transferred
-as an artifact; the preparation job no longer pushes it. A separate
-`avm-validation` job runs `avm pr-check` and `avm test unit` against that exact
-file tree with the module's existing test identity and a randomly selected
-configured test subscription. Static-check failures and failures in existing
+The sync workflow directly runs one `Sync` matrix job per repository, without a
+nested reusable workflow.
+Preparation, validation and publication appear as ordered steps in that job,
+using the `avm` environment and the same runner. After `avm pre-commit`, a
+changed module is committed locally and staged as an immutable candidate;
+preparation does not push it. Validation runs `avm pr-check` excluding
+`check policy`, followed by `avm test unit`, against that exact file tree.
+Conftest, integration and E2E checks are deferred to full pre-release verification.
+The module's test identity and randomly selected configured test subscription
+remain configured, but these candidate checks do not authenticate to Azure.
+Static-check failures and failures in existing
 unit tests block publication. A module with no discovered unit tests skips that
 tier without blocking validation. Once the static checks and any unit tests
-pass, a job with the GitHub App token checks that the target branch has not moved
+pass, the publication step obtains a fresh GitHub App token for changed candidates
+and checks that the target branch has not moved
 and that the patch recreates the validated Git tree before pushing and merging
 the generated change. An unchanged module needs neither checks nor publication.
-Each matrix entry calls the per-repository reusable workflow so a failed
-preparation skips only its own validation and publication; other repositories
-continue through their own checks.
+Failed preparation skips only that repository's validation and publication;
+other repositories continue independently. Prepared candidates and validation
+receipts are still uploaded for diagnostics, but later steps use the local files
+without downloading artifacts or checking out the tools repository again.
 Failed validation logs show the failing check steps and their structured lint,
 policy, and test diagnostics. An absent unit-test tier is reported as skipped,
 not as a passing check.
@@ -234,12 +242,16 @@ Manual plan-only runs perform the same candidate checks without publishing.
 They use the authoring source from the selected workflow branch by default;
 set `use_workflow_authoring_source=false` to test the released Gallery module.
 Scheduled and manually requested apply runs continue to use Gallery.
-Plan-only does not provision a missing `avm-validation` federated credential:
-apply that prerequisite separately before the first preview. BAMI's
+Plan-only does not provision a missing `avm-validation` federated credential;
+that federation is retained but is not used by the combined job. Authenticated
+candidate checks must not be restored without a compatible isolation and
+federation design. Sharing the `avm` environment and runner with module-owned
+checks removes the former validation isolation boundary and requires recorded
+SFI sign-off before merge. BAMI's
 trusted-main restriction remains in force for applies; a manually dispatched
 branch preview is plan-only. If its identity or validation federation is
 still pending, BAMI preparation stops and no module checks run for that
-repository. The validation job can run
+repository. The validation step can run
 module-owned PowerShell hooks and Terraform unit-test apply blocks, so
 plan-only prevents repository publication and governance apply, **not** every
 possible Azure-side test action.
