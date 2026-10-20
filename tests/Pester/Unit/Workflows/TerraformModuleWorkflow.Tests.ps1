@@ -303,6 +303,13 @@ Describe 'terraform-module automatic checks and fork isolation' {
             if (-not $block.Success) { throw "Could not isolate the $name job block." }
             $script:jobs[$name] = $block.Value
         }
+        $unitRun = [regex]::Match(
+            $script:jobs['unit-test'],
+            '(?m)^      - name: Run unit tests\r?\n        shell: pwsh\r?\n        run: \|\r?\n(?<code>(?:^          .*\r?\n|^\r?\n)*)')
+        if (-not $unitRun.Success -or [string]::IsNullOrWhiteSpace($unitRun.Groups['code'].Value)) {
+            throw 'Could not isolate the unit-test script.'
+        }
+        $script:unitTestScript = [scriptblock]::Create(($unitRun.Groups['code'].Value -replace '(?m)^          ', ''))
         $run = [regex]::Match(
             $script:jobs['pr-check-fork'],
             '(?m)^      - name: Run PR check without policy\r?\n        shell: pwsh\r?\n        run: \|\r?\n(?<code>(?:^          .*\r?\n|^\r?\n)*)')
@@ -348,8 +355,65 @@ Describe 'terraform-module automatic checks and fork isolation' {
             $step.Contains('continue-on-error') | Should -BeFalse
         }
         $script:jobs['unit-test'] | Should -Not -Match 'Prepare test environment|ConvertFrom-Context|github\.event'
-        $script:jobs['unit-test'] | Should -Match '(?m)^          avm test unit\r?$'
+        $script:jobs['unit-test'] | Should -Match '(?m)^\s+avm test unit\r?$'
         $script:jobs['unit-test'] | Should -Match '(?m)^          persist-credentials: false\r?$'
+    }
+
+    It 'isolates the unit test telemetry default and restores <Scenario>' -ForEach @(
+        @{ Scenario = 'an inherited opt-out after success'; InitialTelemetry = 'false'; Fails = $false }
+        @{ Scenario = 'an absent value after success'; InitialTelemetry = $null; Fails = $false }
+        @{ Scenario = 'an inherited opt-out after failure'; InitialTelemetry = 'false'; Fails = $true }
+    ) {
+        param($InitialTelemetry, [bool] $Fails)
+        $previousTelemetry = [Environment]::GetEnvironmentVariable('TF_VAR_enable_telemetry', 'Process')
+        try {
+            $initialValue = if ($null -eq $InitialTelemetry) { [NullString]::Value } else { $InitialTelemetry }
+            [Environment]::SetEnvironmentVariable('TF_VAR_enable_telemetry', $initialValue, 'Process')
+            $script:unitTestTelemetry = $null
+            $result = & {
+                function Import-Module {
+                    param([string] $Name)
+                    $Name | Should -BeExactly 'Avm.Authoring'
+                }
+                function Invoke-UnitTestCommand {
+                    param([string] $Verb, [string] $Tier)
+                    $script:unitTestTelemetry = [Environment]::GetEnvironmentVariable('TF_VAR_enable_telemetry', 'Process')
+                    if ($Fails) {
+                        throw 'Expected unit test failure.'
+                    }
+                    [pscustomobject]@{
+                        Verb = $Verb
+                        Tier = $Tier
+                    }
+                }
+                Set-Alias -Name avm -Value Invoke-UnitTestCommand -Scope Local
+
+                if ($Fails) {
+                    { & $script:unitTestScript } | Should -Throw '*Expected unit test failure.*'
+                }
+                else {
+                    & $script:unitTestScript
+                }
+            }
+
+            if (-not $Fails) {
+                $result.Verb | Should -BeExactly 'test'
+                $result.Tier | Should -BeExactly 'unit'
+            }
+            $script:unitTestTelemetry | Should -BeNullOrEmpty
+            $restoredTelemetry = [Environment]::GetEnvironmentVariable('TF_VAR_enable_telemetry', 'Process')
+            if ($null -eq $InitialTelemetry) {
+                $restoredTelemetry | Should -BeNullOrEmpty
+            }
+            else {
+                $restoredTelemetry | Should -BeExactly $InitialTelemetry
+            }
+            $script:definition.env.TF_VAR_enable_telemetry | Should -BeExactly 'false'
+        }
+        finally {
+            $restore = if ($null -eq $previousTelemetry) { [NullString]::Value } else { $previousTelemetry }
+            [Environment]::SetEnvironmentVariable('TF_VAR_enable_telemetry', $restore, 'Process')
+        }
     }
 
     It 'selects the appropriate PR check using only the fork status' {
