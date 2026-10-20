@@ -102,8 +102,8 @@ operations are not replayed. State contents and Terraform lock IDs are never
 downloaded, parsed or rewritten.
 
 This runs from any branch of the Tools Terraform Sync workflow. GitHub
-Actions provides serialization: the preparation job's concurrency group is
-`repository-sync-state-${{ inputs.repo_id }}`, with `cancel-in-progress: false`.
+Actions provides serialization: each repository job's concurrency group is
+`repository-sync-state-${{ matrix.repoId }}`, with `cancel-in-progress: false`.
 The key is independent of branch and repository naming prefix. The existing
 workflow-wide `repository-sync` concurrency group is retained. No custom
 run/job polling or additional Actions token is required.
@@ -209,7 +209,8 @@ controller as an execution identity to bypass a failed prerequisite.
 
 ## Candidate validation before publication
 
-Each matrix entry calls a reusable workflow with one `Sync` job per repository.
+The sync workflow directly runs one `Sync` matrix job per repository, without a
+nested reusable workflow.
 Preparation, validation and publication appear as ordered steps in that job,
 using the `avm` environment and the same runner. After `avm pre-commit`, a
 changed module is committed locally and staged as an immutable candidate;

@@ -1,12 +1,10 @@
 BeforeAll {
     $root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..')).Path
-    $script:dispatcher = Get-Content -LiteralPath (Join-Path $root '.github' 'workflows' 'repository-management-sync.yml') -Raw
-    $script:workflow = Get-Content -LiteralPath (Join-Path $root '.github' 'workflows' 'repository-management-sync-repository.yml') -Raw
+    $script:workflow = Get-Content -LiteralPath (Join-Path $root '.github' 'workflows' 'repository-management-sync.yml') -Raw
     $script:configChecks = Get-Content -LiteralPath (Join-Path $root '.github' 'workflows' 'repository-management-config-test.yml') -Raw
-    $script:caller = [regex]::Match($script:dispatcher,
-        '(?ms)^  sync-repository:\r?\n(?<body>.*)\z').Groups['body'].Value
+    $script:retiredWorkflow = Join-Path $root '.github' 'workflows' 'repository-management-sync-repository.yml'
     $script:worker = [regex]::Match($script:workflow,
-        '(?ms)^  run-sync:\r?\n(?<body>.*?)(?=^  [a-z][a-z-]*:\r?\n|\z)').Groups['body'].Value
+        '(?ms)^  sync-repository:\r?\n(?<body>.*?)(?=^  [a-z][a-z-]*:\r?\n|\z)').Groups['body'].Value
     $script:prepare = [regex]::Match($script:worker,
         '(?ms)\A.*?(?=^      - name: Configure validation tool cache\r?$)').Value
     $script:validate = [regex]::Match($script:worker,
@@ -16,7 +14,7 @@ BeforeAll {
 }
 
 Describe 'Repository sync candidate workflow' {
-    It 'keeps configuration checks wired to the moved workflow and candidate entry points' {
+    It 'keeps configuration checks wired to the sync workflow and candidate entry points' {
         foreach ($pattern in @(
                 '.github/workflows/repository-management-*.yml',
                 'repository-management/**'
@@ -25,29 +23,32 @@ Describe 'Repository sync candidate workflow' {
         }
     }
 
-    It 'runs one reusable worker job for every repository in the matrix' {
-        $script:dispatcher | Should -Match '(?m)^  generate-matrix:\s*$'
-        $script:caller | Should -Match 'fail-fast:\s*false'
-        $script:caller | Should -Match 'include:\s*\$\{\{ fromJson\(needs\.generate-matrix\.outputs\.matrix\) \}\}'
-        $script:caller | Should -Match 'uses:\s*\./\.github/workflows/repository-management-sync-repository\.yml'
-        $script:caller | Should -Match 'secrets:\s*inherit'
+    It 'runs one direct worker job for every repository without a nested reusable workflow' {
+        $script:workflow | Should -Match '(?m)^  generate-matrix:\s*$'
+        $script:worker | Should -Match 'fail-fast:\s*false'
+        $script:worker | Should -Match 'include:\s*\$\{\{ fromJson\(needs\.generate-matrix\.outputs\.matrix\) \}\}'
+        $script:worker | Should -Match '(?m)^    runs-on: ubuntu-latest\r?$'
+        $script:worker | Should -Match '(?m)^    steps:\r?$'
+        $script:worker | Should -Not -Match '(?m)^    uses:|secrets:\s*inherit'
+        $script:workflow | Should -Not -Match '(?m)^  workflow_call:|inputs\.(repo_id|repo_name|repo_url|repo_metadata_json)\b'
+        Test-Path -LiteralPath $script:retiredWorkflow | Should -BeFalse
         foreach ($binding in @(
-                'repo_id: ${{ matrix.repoId }}',
-                'repo_name: ${{ matrix.repoName }}',
-                'repo_url: ${{ matrix.repoUrl }}',
-                'repo_metadata_json: ${{ toJson(matrix.repoMetaData) }}'
+                'REPO_ID: ${{ matrix.repoId }}',
+                'SYNC_REPO_NAME: ${{ matrix.repoName }}',
+                'REPO_URL: ${{ matrix.repoUrl }}',
+                'REPO_META_DATA_JSON: ${{ toJson(matrix.repoMetaData) }}'
             )) {
-            $script:caller | Should -Match ([regex]::Escape($binding))
+            $script:worker | Should -Match ([regex]::Escape($binding))
         }
-        $script:workflow | Should -Match '(?m)^  workflow_call:\s*$'
-        $script:workflow | Should -Not -Match 'matrix\.|needs\.generate-matrix'
         $jobs = [regex]::Match($script:workflow, '(?ms)^jobs:\r?\n(?<body>.*)\z').Groups['body'].Value
         @([regex]::Matches($jobs, '(?m)^  ([a-z][a-z-]*):\r?$') |
-            ForEach-Object { $_.Groups[1].Value }) | Should -Be @('run-sync')
-        $script:worker | Should -Match ([regex]::Escape('name: Sync ${{ inputs.repo_name }}'))
+            ForEach-Object { $_.Groups[1].Value }) | Should -Be @('generate-matrix', 'sync-repository')
+        $script:worker | Should -Match ([regex]::Escape('name: Sync ${{ matrix.repoName }}'))
         $script:worker | Should -Match '(?m)^    environment: avm\r?$'
-        $script:worker | Should -Match ([regex]::Escape('group: repository-sync-state-${{ inputs.repo_id }}'))
+        $script:worker | Should -Match ([regex]::Escape('group: repository-sync-state-${{ matrix.repoId }}'))
         $script:worker | Should -Match '(?m)^      cancel-in-progress: false\r?$'
+        $script:worker | Should -Match '(?ms)^    defaults:\r?\n      run:\r?\n        working-directory: \./repository-management/repository-sync\r?$'
+        $script:worker | Should -Match ([regex]::Escape("PROJECT_URL: 'https://github.com/orgs/Azure/projects/1011'"))
         $ids = @([regex]::Matches($script:worker, '(?m)^        id: (.+)\r?$') |
                 ForEach-Object { $_.Groups[1].Value.Trim() })
         @($ids | Sort-Object -Unique).Count | Should -Be $ids.Count
@@ -58,35 +59,31 @@ Describe 'Repository sync candidate workflow' {
             $phase | Should -Not -BeNullOrEmpty
         }
         ([regex]::Matches($script:worker, 'uses: actions/checkout@')).Count | Should -Be 1
-        $script:worker | Should -Not -Match 'uses: actions/download-artifact@|(?m)^    needs:'
+        $script:worker | Should -Not -Match 'uses: actions/download-artifact@'
         $script:prepare | Should -Match '(?m)^      - name: Prepare repository candidate\r?$'
         $script:prepare | Should -Match '(?m)^          persist-credentials: false\r?$'
         foreach ($phase in @($script:validate, $script:publish)) {
             $phase | Should -Match ([regex]::Escape(
-                    'CANDIDATE_DIRECTORY: ${{ runner.temp }}/avm-sync-candidates/${{ inputs.repo_name }}'))
+                    'CANDIDATE_DIRECTORY: ${{ runner.temp }}/avm-sync-candidates/${{ matrix.repoName }}'))
             $phase | Should -Match ([regex]::Escape(
-                    'RECEIPT_DIRECTORY: ${{ runner.temp }}/avm-sync-validation/${{ inputs.repo_name }}'))
+                    'RECEIPT_DIRECTORY: ${{ runner.temp }}/avm-sync-validation/${{ matrix.repoName }}'))
         }
     }
 
     It 'defaults manual plan-only runs to the checked-out authoring source' {
-        $script:dispatcher | Should -Match '(?ms)^      use_workflow_authoring_source:\r?\n.*?^        default:\s*true\s*$'
-        $script:caller | Should -Match ([regex]::Escape(
-                'use_workflow_authoring_source: ${{ github.event_name == ''workflow_dispatch'' && inputs.plan_only && inputs.use_workflow_authoring_source }}'))
-        $script:caller | Should -Match ([regex]::Escape(
-                'plan_only: ${{ github.event_name == ''workflow_dispatch'' && inputs.plan_only }}'))
+        $script:workflow | Should -Match '(?ms)^      use_workflow_authoring_source:\r?\n.*?^        default:\s*true\s*$'
+        $script:workflow | Should -Match '(?ms)^      plan_only:\r?\n.*?^        default:\s*true\s*$'
         $script:prepare | Should -Match '\$planOnly -and \$triggerType -eq ''workflow_dispatch'''
         $script:prepare | Should -Match '-authoringModulePath \$authoringModulePath'
         $script:prepare | Should -Match '-candidateOutputDirectory \$candidateDirectory'
-        $script:prepare | Should -Match 'REPO_META_DATA_JSON: \$\{\{ inputs\.repo_metadata_json \}\}'
+        $script:prepare | Should -Match 'REPO_META_DATA_JSON: \$\{\{ toJson\(matrix\.repoMetaData\) \}\}'
         $script:prepare | Should -Match '-repoId \$env:REPO_ID'
-        $script:prepare | Should -Match 'REPO_ID: \$\{\{ inputs\.repo_id \}\}'
+        $script:prepare | Should -Match 'REPO_ID: \$\{\{ matrix\.repoId \}\}'
         $script:prepare | Should -Match '-repoUrl \$env:REPO_URL'
-        $script:prepare | Should -Match 'REPO_URL: \$\{\{ inputs\.repo_url \}\}'
-        $script:caller | Should -Match ([regex]::Escape(
-                'force_file_update: ${{ github.event_name == ''workflow_dispatch'' && inputs.force_file_update }}'))
-        $script:caller | Should -Match ([regex]::Escape(
-                'sync_project_items: ${{ github.event_name != ''workflow_dispatch'' || inputs.sync_project_items }}'))
+        $script:prepare | Should -Match 'REPO_URL: \$\{\{ matrix\.repoUrl \}\}'
+        $script:prepare | Should -Match '(?s)if\(\$triggerType -eq "workflow_dispatch"\).*?\$forceFileUpdate = "\$\{\{ inputs\.force_file_update \}\}"'
+        $script:prepare | Should -Match ([regex]::Escape(
+                "(github.event_name != 'workflow_dispatch' || inputs.sync_project_items)"))
     }
 
     It 'shares the guarded source selection with bootstrap and optional project synchronization' {
@@ -110,7 +107,7 @@ Describe 'Repository sync candidate workflow' {
         $script:worker | Should -Match '(?m)^      id-token:\s*write\r?$'
         $script:validate | Should -Match 'Invoke-RepositoryCandidate\.ps1 -Mode Validate'
         $script:validate | Should -Not -Match 'GH_TOKEN:|ARM_CLIENT_ID:|ARM_BACKEND_|azure/login@|create-github-app-token@'
-        $script:validate | Should -Match 'name:\s*validated-\$\{\{ inputs\.repo_name \}\}'
+        $script:validate | Should -Match 'name:\s*validated-\$\{\{ matrix\.repoName \}\}'
         $checks = [regex]::Match($script:validate,
             '(?ms)^      - name: Validate repository candidate\r?\n(?<body>.*?)(?=^      - name:|\z)').Groups['body'].Value
         $checks | Should -Not -Match '(?m)^        if:'
@@ -142,7 +139,7 @@ Describe 'Repository sync candidate workflow' {
                 "if: `${{ !inputs.plan_only && steps.validate-candidate.outcome == 'success' }}"))
         $script:publish | Should -Match 'Invoke-RepositoryCandidate\.ps1 -Mode Publish'
         $script:publish | Should -Not -Match 'ARM_CLIENT_ID:|azure/login@'
-        $script:prepare | Should -Match 'name:\s*candidate-\$\{\{ inputs\.repo_name \}\}'
+        $script:prepare | Should -Match 'name:\s*candidate-\$\{\{ matrix\.repoName \}\}'
     }
 
     Context 'Candidate change output' {
@@ -219,7 +216,7 @@ Describe 'Repository sync candidate workflow' {
             '(?ms)^      - name: Upload validation receipt\r?\n(?<body>.*?)(?=^      - name:|\z)').Groups['body'].Value
         $upload | Should -Match '(?m)^        if: success\(\)\r?$'
         $upload | Should -Match '(?m)^          if-no-files-found: error\r?$'
-        $upload | Should -Match 'name: validated-\$\{\{ inputs\.repo_name \}\}'
+        $upload | Should -Match 'name: validated-\$\{\{ matrix\.repoName \}\}'
         $script:worker.IndexOf('Validate repository candidate') |
             Should -BeLessThan $script:worker.IndexOf('Upload validation receipt')
         $script:worker.IndexOf('Upload validation receipt') |

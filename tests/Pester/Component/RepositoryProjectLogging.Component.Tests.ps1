@@ -8,7 +8,7 @@ BeforeAll {
 
 Describe 'Repository sync project prerequisites' -Tag Component {
     BeforeAll {
-        $workflow = Get-Content -LiteralPath (Join-Path $script:root '.github' 'workflows' 'repository-management-sync-repository.yml') -Raw
+        $workflow = Get-Content -LiteralPath (Join-Path $script:root '.github' 'workflows' 'repository-management-sync.yml') -Raw
         $script:steps = @{}
         foreach ($name in @('Load Avm.Authoring', 'Create GitHub App token', 'Add repository items to the AVM All Up project', 'Report skipped project synchronization', 'Report project sync issues')) {
             $match = [regex]::Match($workflow, '(?ms)^      - name: ' + [regex]::Escape($name) + '\r?\n.*?(?=^      - name:|\z)')
@@ -84,7 +84,7 @@ Describe 'Repository sync project prerequisites' -Tag Component {
         $match.Success | Should -BeTrue
         $code = ($match.Groups['code'].Value -replace '(?m)^          ', '').
             Replace('${{ github.workspace }}', $TestDrive).
-            Replace('${{ inputs.repo_id }}', 'avm-ptn-example-repo')
+            Replace('${{ matrix.repoId }}', 'avm-ptn-example-repo')
         $scriptPath = Join-Path $TestDrive 'report-project-issues.ps1'
         [System.IO.File]::WriteAllText($scriptPath, $code)
         @{ severity = $Severity; message = 'Synthetic project issue.' } | ConvertTo-Json |

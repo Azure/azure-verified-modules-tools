@@ -2243,9 +2243,10 @@ fork workflow's explicit Conftest exclusion. This profile runs non-authenticated
 static analysis and unit tests only; Conftest, integration and E2E verification
 are deferred to a separate full-module pre-release check, never reported as
 passed. Normal standalone and module release validation defaults do not change.
-Preparation, validation and publication run as ordered steps in one `avm`
-environment job per repository. Keep workflow-wide and repository-state
-concurrency, independent matrix failures, read-only contents permission and
+Preparation, validation and publication run as ordered steps directly in the
+`repository-management-sync.yml` matrix job, with one `avm` environment job per
+repository and no nested reusable workflow. Keep workflow-wide and
+repository-state concurrency, independent matrix failures, read-only contents permission and
 step-scoped credentials. Validation failure blocks publication; plan-only runs
 validate without publishing. Candidate and receipt artifacts remain diagnostic
 outputs, not inter-job transfers. Keep the candidate identity configuration,
