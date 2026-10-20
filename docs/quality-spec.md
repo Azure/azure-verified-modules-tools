@@ -840,7 +840,8 @@ their key and render as an empty value. Modules without that exact authored
 input, and null or empty maps, retain the fixed base name; the transform never
 adds or rewrites the public variable declaration. The module catalog maps the
 metadata prefix to its canonical type. A precondition rejects a complete name
-with unsupported characters or a length over 64 characters; content is never
+with characters other than letters, numbers, periods, underscores, hyphens,
+or parentheses, or a length over 64 characters; content is never
 silently truncated, hashed, stripped, or discarded.
 
 Independent fresh telemetry migrations must produce identical file bytes, not

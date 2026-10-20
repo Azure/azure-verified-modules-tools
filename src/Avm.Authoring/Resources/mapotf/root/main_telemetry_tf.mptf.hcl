@@ -161,7 +161,7 @@ EOT
   additional_content_name_local_definition = local.telemetry_additional_content_exists ? trim(<<-EOT
     avm_telemetry_additional_content_name = ${trim(local.additional_content_name_expression, "\r\n")}
 EOT
-  , "\r\n") : "avm_telemetry_additional_content_name = \"\""
+  , "\r\n") : ""
   telemetry_locals_body = <<-BODY
     avm_metadata                = jsondecode(file("$${path.module}/metadata.json"))
     avm_telemetry_manifest_path = "$${path.root}/.terraform/modules/modules.json"
@@ -169,7 +169,6 @@ EOT
     avm_telemetry_module_entry  = try(one([for module in local.avm_telemetry_modules : module if module.Dir == path.module]), null)
     avm_module_version          = try(local.avm_telemetry_module_entry.Version, "")
     avm_module_source           = try(local.avm_telemetry_module_entry.Source, "")
-    ${local.additional_content_name_local_definition}
   BODY
 }
 
@@ -407,6 +406,14 @@ transform "new_block" "telemetry_locals" {
   ]
 }
 
+transform "new_block" "telemetry_additional_content_local" {
+  for_each       = !local.avm_metadata_exists && local.telemetry_additional_content_exists ? toset([1]) : toset([])
+  new_block_type = "locals"
+  filename       = "main.telemetry.tf"
+  body           = trim(local.additional_content_name_local_definition, "\r\n")
+  depends_on     = [transform.new_block.telemetry_locals]
+}
+
 transform "ensure_local" "avm_module_source_type" {
   for_each           = !local.module_source_type_exists ? toset([1]) : toset([])
   name               = "avm_module_source_type"
@@ -447,7 +454,7 @@ transform "ensure_local" "avm_telemetry_version_token" {
 }
 
 transform "ensure_local" "avm_telemetry_additional_content_name" {
-  for_each           = local.avm_metadata_exists && !local.additional_content_name_exists ? toset([1]) : toset([])
+  for_each           = local.telemetry_additional_content_exists && local.avm_metadata_exists && !local.additional_content_name_exists ? toset([1]) : toset([])
   name               = "avm_telemetry_additional_content_name"
   fallback_file_name = "main.telemetry.tf"
   value_as_string    = local.telemetry_additional_content_exists ? trim(local.additional_content_name_expression, "\r\n") : "\"\""
@@ -515,7 +522,60 @@ transform "update_in_place" "terraform_data" {
 }
 
 transform "new_block" "azapi_resource" {
-  for_each       = !local.azapi_resource_exists ? toset([1]) : toset([])
+  for_each       = !local.azapi_resource_exists && !local.telemetry_additional_content_exists ? toset([1]) : toset([])
+  new_block_type = "resource"
+  labels         = ["azapi_resource", "telemetry"]
+  filename       = "main.telemetry.tf"
+  asraw {
+    count     = var.enable_telemetry ? 1 : 0
+    type      = "Microsoft.Resources/deployments@2025-04-01"
+    name      = "${local.avm_metadata.telemetryIdPrefix}.${local.avm_telemetry_version_token}.${local.avm_module_source_type}.${substr(sha1(terraform_data.telemetry[0].id), 0, 4)}"
+    parent_id = one(data.azapi_client_config.telemetry).subscription_resource_id
+    location  = local.main_location
+    response_export_values = []
+    body = {
+      properties = {
+        mode = "Incremental"
+        template = {
+          "$schema"      = "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#"
+          contentVersion = "1.0.0.0"
+          resources      = []
+          outputs = {
+            telemetry = {
+              type  = "String"
+              value = "For more information, see https://aka.ms/avm/TelemetryInfo"
+            }
+            apply_id = {
+              type  = "String"
+              value = plantimestamp()
+            }
+          }
+        }
+      }
+    }
+    lifecycle {
+      precondition {
+        condition     = length(local.avm_metadata.telemetryIdPrefix) + length(local.avm_telemetry_version_token) + 8 <= 64 && can(regex("^[A-Za-z0-9_-]+$", local.avm_telemetry_version_token))
+        error_message = "The telemetry deployment name must fit Azure's 64-character limit and contain a valid module version."
+      }
+    }
+  }
+  depends_on = [
+    transform.new_block.azapi_client_config,
+    transform.new_block.forget_modtm_telemetry,
+    transform.new_block.forget_random_uuid,
+    transform.new_block.forget_legacy_deployment,
+    transform.new_block.forget_legacy_random_id,
+    transform.new_block.telemetry_locals,
+    transform.ensure_local.avm_module_source_type,
+    transform.ensure_local.avm_telemetry_version_token,
+    transform.ensure_local.main_location,
+    transform.new_block.terraform_data,
+  ]
+}
+
+transform "new_block" "azapi_resource_with_additional_content" {
+  for_each       = !local.azapi_resource_exists && local.telemetry_additional_content_exists ? toset([1]) : toset([])
   new_block_type = "resource"
   labels         = ["azapi_resource", "telemetry"]
   filename       = "main.telemetry.tf"
@@ -548,8 +608,8 @@ transform "new_block" "azapi_resource" {
     }
     lifecycle {
       precondition {
-        condition     = length(local.avm_metadata.telemetryIdPrefix) + length(local.avm_telemetry_version_token) + 8 + (local.avm_telemetry_additional_content_name == "" ? 0 : 1 + length(local.avm_telemetry_additional_content_name)) <= 64 && can(regex("^[A-Za-z0-9_-]+$", local.avm_telemetry_version_token)) && (local.avm_telemetry_additional_content_name == "" || can(regex("^[A-Za-z0-9_.-]+$", local.avm_telemetry_additional_content_name)))
-        error_message = "The telemetry deployment name must fit Azure's 64-character limit and contain only letters, numbers, periods, underscores, and hyphens."
+        condition     = length(local.avm_metadata.telemetryIdPrefix) + length(local.avm_telemetry_version_token) + 8 + (local.avm_telemetry_additional_content_name == "" ? 0 : 1 + length(local.avm_telemetry_additional_content_name)) <= 64 && can(regex("^[A-Za-z0-9_-]+$", local.avm_telemetry_version_token)) && (local.avm_telemetry_additional_content_name == "" || can(regex("^[A-Za-z0-9_.()-]+$", local.avm_telemetry_additional_content_name)))
+        error_message = "The telemetry deployment name must fit Azure's 64-character limit and contain only letters, numbers, periods, underscores, hyphens, and parentheses."
       }
     }
   }
@@ -560,6 +620,7 @@ transform "new_block" "azapi_resource" {
     transform.new_block.forget_legacy_deployment,
     transform.new_block.forget_legacy_random_id,
     transform.new_block.telemetry_locals,
+    transform.new_block.telemetry_additional_content_local,
     transform.ensure_local.avm_module_source_type,
     transform.ensure_local.avm_telemetry_version_token,
     transform.ensure_local.avm_telemetry_additional_content_name,
@@ -575,7 +636,7 @@ transform "update_in_place" "azapi_resource" {
   asraw {
     count     = var.enable_telemetry ? 1 : 0
     type      = "Microsoft.Resources/deployments@2025-04-01"
-    name      = format("%s%s", join(".", [local.avm_metadata.telemetryIdPrefix, local.avm_telemetry_version_token, local.avm_module_source_type, substr(sha1(terraform_data.telemetry[0].id), 0, 4)]), local.avm_telemetry_additional_content_name == "" ? "" : "-${local.avm_telemetry_additional_content_name}")
+    name      = "${local.avm_metadata.telemetryIdPrefix}.${local.avm_telemetry_version_token}.${local.avm_module_source_type}.${substr(sha1(terraform_data.telemetry[0].id), 0, 4)}"
     parent_id = one(data.azapi_client_config.telemetry).subscription_resource_id
     location  = local.main_location
     response_export_values = []
@@ -601,16 +662,48 @@ transform "update_in_place" "azapi_resource" {
     }
     lifecycle {
       precondition {
-        condition     = length(local.avm_metadata.telemetryIdPrefix) + length(local.avm_telemetry_version_token) + 8 + (local.avm_telemetry_additional_content_name == "" ? 0 : 1 + length(local.avm_telemetry_additional_content_name)) <= 64 && can(regex("^[A-Za-z0-9_-]+$", local.avm_telemetry_version_token)) && (local.avm_telemetry_additional_content_name == "" || can(regex("^[A-Za-z0-9_.-]+$", local.avm_telemetry_additional_content_name)))
-        error_message = "The telemetry deployment name must fit Azure's 64-character limit and contain only letters, numbers, periods, underscores, and hyphens."
+        condition     = length(local.avm_metadata.telemetryIdPrefix) + length(local.avm_telemetry_version_token) + 8 <= 64 && can(regex("^[A-Za-z0-9_-]+$", local.avm_telemetry_version_token))
+        error_message = "The telemetry deployment name must fit Azure's 64-character limit and contain a valid module version."
       }
     }
   }
+}
+
+transform "update_in_place" "azapi_resource_additional_content_name" {
+  for_each             = local.azapi_resource_exists && local.telemetry_additional_content_exists ? toset([1]) : toset([])
+  target_block_address = "resource.azapi_resource.telemetry"
+  asraw {
+    name = format("%s%s", join(".", [local.avm_metadata.telemetryIdPrefix, local.avm_telemetry_version_token, local.avm_module_source_type, substr(sha1(terraform_data.telemetry[0].id), 0, 4)]), local.avm_telemetry_additional_content_name == "" ? "" : "-${local.avm_telemetry_additional_content_name}")
+  }
+  depends_on = [
+    transform.update_in_place.azapi_resource,
+    transform.ensure_local.avm_telemetry_additional_content_name,
+    transform.update_in_place.avm_telemetry_additional_content_name,
+  ]
+}
+
+transform "update_in_place" "azapi_resource_additional_content_precondition" {
+  for_each             = local.azapi_resource_exists && local.telemetry_additional_content_exists ? toset([1]) : toset([])
+  target_block_address = "resource.azapi_resource.telemetry"
+  asraw {
+    lifecycle {
+      precondition {
+        condition     = length(local.avm_metadata.telemetryIdPrefix) + length(local.avm_telemetry_version_token) + 8 + (local.avm_telemetry_additional_content_name == "" ? 0 : 1 + length(local.avm_telemetry_additional_content_name)) <= 64 && can(regex("^[A-Za-z0-9_-]+$", local.avm_telemetry_version_token)) && (local.avm_telemetry_additional_content_name == "" || can(regex("^[A-Za-z0-9_.()-]+$", local.avm_telemetry_additional_content_name)))
+        error_message = "The telemetry deployment name must fit Azure's 64-character limit and contain only letters, numbers, periods, underscores, hyphens, and parentheses."
+      }
+    }
+  }
+  depends_on = [
+    transform.update_in_place.azapi_resource_additional_content_name,
+  ]
 }
 
 transform "remove_block_element" "drop_legacy_telemetry_tags" {
   for_each             = local.azapi_resource_exists && try(data.resource.azapi_resource.result["azapi_resource"].telemetry.tags != null, false) ? toset([1]) : toset([])
   target_block_address = "resource.azapi_resource.telemetry"
   paths                = ["tags"]
-  depends_on           = [transform.update_in_place.azapi_resource]
+  depends_on           = [
+    transform.update_in_place.azapi_resource,
+    transform.update_in_place.azapi_resource_additional_content_precondition,
+  ]
 }

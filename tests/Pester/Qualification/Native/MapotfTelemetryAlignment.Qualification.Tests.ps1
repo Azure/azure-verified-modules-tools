@@ -1112,10 +1112,24 @@ run "sorted" {
     error_message = "Additional content must retain null values and append sorted key-value pairs."
   }
 }
+
+run "parentheses" {
+  command = plan
+  variables {
+    location = "eastus"
+    telemetry_additional_content = {
+      ring = "blue(green)"
+    }
+  }
+  assert {
+    condition     = can(regex("-ring-blue\\(green\\)$", azapi_resource.telemetry[0].name))
+    error_message = "Additional content must preserve parentheses allowed in deployment names."
+  }
+}
 '@
         $result = Invoke-TelemetryProcess -FilePath $script:terraformPath `
             -ArgumentList @('test', '-no-color', '-test-directory=tests/unit') -Root $root
-        $result.StdOut | Should -Match 'Success! 3 passed, 0 failed\.'
+        $result.StdOut | Should -Match 'Success! 4 passed, 0 failed\.'
     }
 
 It 'ignores a non-map telemetry additional-content declaration without rewriting it' {
@@ -1131,6 +1145,45 @@ It 'ignores a non-map telemetry additional-content declaration without rewriting
         $generated | Should -Not -Match 'var[.]telemetry_additional_content'
         Invoke-TelemetryProfiles -Root $root
         Get-Content -LiteralPath $generatedPath -Raw | Should -BeExactly $generated
+    }
+
+It 'updates an already migrated telemetry resource when additional content is declared' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $root
+        Invoke-TelemetryProfiles -Root $root
+        Add-TelemetryAdditionalContentVariable -Root $root
+        Invoke-TelemetryProfiles -Root $root
+        $generatedPath = Join-Path $root 'main.telemetry.tf'
+        $generated = Get-Content -LiteralPath $generatedPath -Raw
+        $generated | Should -Match '(?s)avm_telemetry_additional_content_name\s*=\s*var[.]telemetry_additional_content\s*==\s*null'
+        $generated | Should -Match 'name\s*=\s*format\("%s%s"'
+        $generated | Should -Match 'length\(local[.]avm_metadata[.]telemetryIdPrefix\) \+ length\(local[.]avm_telemetry_version_token\) \+ 8 \+'
+        Invoke-TelemetryProfiles -Root $root
+        Get-Content -LiteralPath $generatedPath -Raw | Should -BeExactly $generated
+    }
+
+It 'clears a generated additional-content local when its authored variable is removed or unsupported' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $root
+        Add-TelemetryAdditionalContentVariable -Root $root
+        Invoke-TelemetryProfiles -Root $root
+        $variablesPath = Join-Path $root 'variables.tf'
+        $withoutAdditionalContent = (Get-Content -LiteralPath $variablesPath -Raw) -replace '(?s)(?:\A|\r?\n)variable "telemetry_additional_content" \{.*?\r?\n\}\r?\n?', ''
+        Set-Content -LiteralPath $variablesPath -Encoding utf8NoBOM -Value $withoutAdditionalContent
+        (Get-Content -LiteralPath $variablesPath -Raw) | Should -Not -Match 'variable "telemetry_additional_content"'
+        Invoke-TelemetryProfiles -Root $root
+        $generatedPath = Join-Path $root 'main.telemetry.tf'
+        $generated = Get-Content -LiteralPath $generatedPath -Raw
+        $generated | Should -Match 'avm_telemetry_additional_content_name\s*=\s*""'
+        $generated | Should -Not -Match 'var[.]telemetry_additional_content'
+        $generated | Should -Not -Match 'name\s*=\s*format\("%s%s"'
+
+        Add-TelemetryAdditionalContentVariable -Root $root -Type 'string' -Default '"author-owned"'
+        Invoke-TelemetryProfiles -Root $root
+        $generated = Get-Content -LiteralPath $generatedPath -Raw
+        $generated | Should -Match 'avm_telemetry_additional_content_name\s*=\s*""'
+        $generated | Should -Not -Match 'var[.]telemetry_additional_content'
+        $generated | Should -Not -Match 'name\s*=\s*format\("%s%s"'
     }
 
 It 'composes native plan clocks with a stable-name in-place mocked telemetry update' {
@@ -1462,6 +1515,49 @@ run "name" {
         $result.StdOut | Should -Match 'Success! 1 passed, 0 failed\.'
     }
 
+It 'rejects additional content that produces a 65-character deployment name' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TelemetryModule -Root $root
+        Add-TelemetryAdditionalContentVariable -Root $root
+        Invoke-TelemetryProfiles -Root $root
+        Assert-TelemetryTerraformValid -Root $root
+        $manifestPath = Join-Path $root '.terraform' 'modules' 'modules.json'
+        $null = New-Item -ItemType Directory -Path (Split-Path -Parent $manifestPath) -Force
+        @{ Modules = @(@{ Dir = '.'; Version = '1'; Source = 'C:/private/customer/module' }) } |
+            ConvertTo-Json -Depth 5 |
+            Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
+        $testDirectory = Join-Path $root 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $testDirectory -Force
+        Set-Content -LiteralPath (Join-Path $testDirectory 'name.tftest.hcl') -Encoding utf8NoBOM -Value @'
+mock_provider "terraform" {}
+mock_provider "azapi" {
+  mock_data "azapi_client_config" {
+    defaults = {
+      subscription_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000"
+    }
+  }
+}
+
+run "name" {
+  command = plan
+  variables {
+    location = "eastus"
+    telemetry_additional_content = {
+      a = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    }
+  }
+  assert {
+    condition     = length(azapi_resource.telemetry) == 1
+    error_message = "The plan should be rejected by the telemetry name precondition."
+  }
+}
+'@
+        {
+            Invoke-TelemetryProcess -FilePath $script:terraformPath `
+                -ArgumentList @('test', '-no-color', '-test-directory=tests/unit') -Root $root
+        } | Should -Throw '*64-character limit*'
+    }
+
 It 'rejects invalid additional content before creating an Azure deployment name' {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-TelemetryModule -Root $root
@@ -1497,7 +1593,7 @@ run "name" {
         {
             Invoke-TelemetryProcess -FilePath $script:terraformPath `
                 -ArgumentList @('test', '-no-color', '-test-directory=tests/unit') -Root $root
-        } | Should -Throw '*only letters, numbers, periods, underscores, and hyphens*'
+        } | Should -Throw '*underscores, hyphens, and parentheses*'
     }
 
 It 'classifies <Name> module sources without sending their raw paths' -TestCases @(

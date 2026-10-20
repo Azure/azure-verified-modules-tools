@@ -17,13 +17,12 @@ removed {
 }
 
 locals {
-  avm_metadata                          = jsondecode(file("${path.module}/metadata.json"))
-  avm_telemetry_manifest_path           = "${path.root}/.terraform/modules/modules.json"
-  avm_telemetry_modules                 = fileexists(local.avm_telemetry_manifest_path) ? jsondecode(file(local.avm_telemetry_manifest_path)).Modules : []
-  avm_telemetry_module_entry            = try(one([for module in local.avm_telemetry_modules : module if module.Dir == path.module]), null)
-  avm_module_version                    = try(local.avm_telemetry_module_entry.Version, "")
-  avm_module_source                     = try(local.avm_telemetry_module_entry.Source, "")
-  avm_telemetry_additional_content_name = ""
+  avm_metadata                = jsondecode(file("${path.module}/metadata.json"))
+  avm_telemetry_manifest_path = "${path.root}/.terraform/modules/modules.json"
+  avm_telemetry_modules       = fileexists(local.avm_telemetry_manifest_path) ? jsondecode(file(local.avm_telemetry_manifest_path)).Modules : []
+  avm_telemetry_module_entry  = try(one([for module in local.avm_telemetry_modules : module if module.Dir == path.module]), null)
+  avm_module_version          = try(local.avm_telemetry_module_entry.Version, "")
+  avm_module_source           = try(local.avm_telemetry_module_entry.Source, "")
 
 }
 
@@ -53,7 +52,7 @@ resource "azapi_resource" "telemetry" {
   count = var.enable_telemetry ? 1 : 0
 
   location  = local.main_location
-  name      = format("%s%s", join(".", [local.avm_metadata.telemetryIdPrefix, local.avm_telemetry_version_token, local.avm_module_source_type, substr(sha1(terraform_data.telemetry[0].id), 0, 4)]), local.avm_telemetry_additional_content_name == "" ? "" : "-${local.avm_telemetry_additional_content_name}")
+  name      = "${local.avm_metadata.telemetryIdPrefix}.${local.avm_telemetry_version_token}.${local.avm_module_source_type}.${substr(sha1(terraform_data.telemetry[0].id), 0, 4)}"
   parent_id = one(data.azapi_client_config.telemetry).subscription_resource_id
   type      = "Microsoft.Resources/deployments@2025-04-01"
   body = {
@@ -80,8 +79,8 @@ resource "azapi_resource" "telemetry" {
 
   lifecycle {
     precondition {
-      condition     = length(local.avm_metadata.telemetryIdPrefix) + length(local.avm_telemetry_version_token) + 8 + (local.avm_telemetry_additional_content_name == "" ? 0 : 1 + length(local.avm_telemetry_additional_content_name)) <= 64 && can(regex("^[A-Za-z0-9_-]+$", local.avm_telemetry_version_token)) && (local.avm_telemetry_additional_content_name == "" || can(regex("^[A-Za-z0-9_.-]+$", local.avm_telemetry_additional_content_name)))
-      error_message = "The telemetry deployment name must fit Azure's 64-character limit and contain only letters, numbers, periods, underscores, and hyphens."
+      condition     = length(local.avm_metadata.telemetryIdPrefix) + length(local.avm_telemetry_version_token) + 8 <= 64 && can(regex("^[A-Za-z0-9_-]+$", local.avm_telemetry_version_token))
+      error_message = "The telemetry deployment name must fit Azure's 64-character limit and contain a valid module version."
     }
   }
 }
