@@ -359,16 +359,10 @@ Describe 'terraform-module automatic checks and fork isolation' {
         $script:jobs['unit-test'] | Should -Match '(?m)^          persist-credentials: false\r?$'
     }
 
-    It 'isolates the unit test telemetry default and restores <Scenario>' -ForEach @(
-        @{ Scenario = 'an inherited opt-out after success'; InitialTelemetry = 'false'; Fails = $false }
-        @{ Scenario = 'an absent value after success'; InitialTelemetry = $null; Fails = $false }
-        @{ Scenario = 'an inherited opt-out after failure'; InitialTelemetry = 'false'; Fails = $true }
-    ) {
-        param($InitialTelemetry, [bool] $Fails)
+    It 'removes the workflow telemetry opt-out for the unit test command only' {
         $previousTelemetry = [Environment]::GetEnvironmentVariable('TF_VAR_enable_telemetry', 'Process')
         try {
-            $initialValue = if ($null -eq $InitialTelemetry) { [NullString]::Value } else { $InitialTelemetry }
-            [Environment]::SetEnvironmentVariable('TF_VAR_enable_telemetry', $initialValue, 'Process')
+            [Environment]::SetEnvironmentVariable('TF_VAR_enable_telemetry', 'false', 'Process')
             $script:unitTestTelemetry = $null
             $result = & {
                 function Import-Module {
@@ -378,9 +372,6 @@ Describe 'terraform-module automatic checks and fork isolation' {
                 function Invoke-UnitTestCommand {
                     param([string] $Verb, [string] $Tier)
                     $script:unitTestTelemetry = [Environment]::GetEnvironmentVariable('TF_VAR_enable_telemetry', 'Process')
-                    if ($Fails) {
-                        throw 'Expected unit test failure.'
-                    }
                     [pscustomobject]@{
                         Verb = $Verb
                         Tier = $Tier
@@ -388,26 +379,12 @@ Describe 'terraform-module automatic checks and fork isolation' {
                 }
                 Set-Alias -Name avm -Value Invoke-UnitTestCommand -Scope Local
 
-                if ($Fails) {
-                    { & $script:unitTestScript } | Should -Throw '*Expected unit test failure.*'
-                }
-                else {
-                    & $script:unitTestScript
-                }
+                & $script:unitTestScript
             }
 
-            if (-not $Fails) {
-                $result.Verb | Should -BeExactly 'test'
-                $result.Tier | Should -BeExactly 'unit'
-            }
+            $result.Verb | Should -BeExactly 'test'
+            $result.Tier | Should -BeExactly 'unit'
             $script:unitTestTelemetry | Should -BeNullOrEmpty
-            $restoredTelemetry = [Environment]::GetEnvironmentVariable('TF_VAR_enable_telemetry', 'Process')
-            if ($null -eq $InitialTelemetry) {
-                $restoredTelemetry | Should -BeNullOrEmpty
-            }
-            else {
-                $restoredTelemetry | Should -BeExactly $InitialTelemetry
-            }
             $script:definition.env.TF_VAR_enable_telemetry | Should -BeExactly 'false'
         }
         finally {

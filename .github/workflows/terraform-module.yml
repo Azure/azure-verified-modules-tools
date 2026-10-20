@@ -232,15 +232,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module Avm.Authoring
-          $previousTelemetry = [Environment]::GetEnvironmentVariable('TF_VAR_enable_telemetry', 'Process')
-          try {
-              [Environment]::SetEnvironmentVariable('TF_VAR_enable_telemetry', [NullString]::Value, 'Process')
-              avm test unit
-          }
-          finally {
-              $restore = if ($null -eq $previousTelemetry) { [NullString]::Value } else { $previousTelemetry }
-              [Environment]::SetEnvironmentVariable('TF_VAR_enable_telemetry', $restore, 'Process')
-          }
+          Remove-Item -LiteralPath 'Env:\TF_VAR_enable_telemetry'
+          avm test unit
 
   pr-check-fork:
     name: PR check (fork)
