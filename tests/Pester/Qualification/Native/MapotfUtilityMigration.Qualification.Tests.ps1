@@ -285,8 +285,8 @@ run "legacy_naming" {
             }
             $result = avm pr-check -Path $context.Root -Ecosystem terraform -ExcludeSteps 'check policy' --passthru
             $result.Status | Should -BeExactly 'pass'
-            ($result.Steps.Step -join ',') | Should -BeExactly 'metadata,sync,format,transform,lint,check policy,check convention,validate,docs'
-            @($result.Steps | Where-Object Status -eq pass) | Should -HaveCount 8
+            ($result.Steps.Step -join ',') | Should -BeExactly 'metadata,initialize,sync,format,transform,lint,check policy,check convention,validate,docs'
+            @($result.Steps | Where-Object Status -eq pass) | Should -HaveCount 9
             $skipped = @($result.Steps | Where-Object Status -eq skipped)
             $skipped | Should -HaveCount 1
             $skipped[0].Step | Should -BeExactly 'check policy'
