@@ -31,6 +31,12 @@ function Invoke-AvmPreCommit {
         upstream porch, which runs tflint and the policy/plan checks in
         pr-check rather than pre-commit.
 
+        Terraform utility migrations default to migrate. Set
+        AVM_TF_UTILITY_MIGRATION=preserve to retain exact authored utility
+        selections and their migration-related inputs/provider bindings.
+        Keep the same setting for pr-check. Exact-pin validation and all other
+        transformations and checks remain enabled.
+
         Status semantics:
           - 'pass'    : step returned Status='pass' (or didn't throw for
                         format).

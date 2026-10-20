@@ -60,6 +60,7 @@ function Initialize-AvmTerraformCommand {
                 -Label ('terraform init {0}' -f $example.RelativePath) `
                 -BackendFalse `
                 -NoColor `
+                -PreserveDependencySelections `
                 -StreamOutput:(Test-AvmVerboseEnabled)
             $initialized.Add($example.RelativePath)
         }

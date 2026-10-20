@@ -790,7 +790,11 @@ function Invoke-AvmTerraformTransform {
         Unknown run targets are rejected rather than rewritten.
         After those snapshots, the utility-module profile upgrades older exact
         Regions and Interfaces pins and migrates legacy naming calls in
-        compatibility mode. A fresh dependency inspection reconciles obsolete
+        modern mode. Set AVM_TF_UTILITY_MIGRATION=preserve to keep exact utility
+        sources, versions, inputs and migration-related provider bindings.
+        The default is migrate; other nonempty values are configuration errors.
+        Exact-pin validation and all other transforms remain enabled.
+        A fresh dependency inspection reconciles obsolete
         ModTM bindings and requirements in affected local callers before test
         migration, without rewriting downloaded sources or trusting stale
         initialization data.
@@ -894,6 +898,15 @@ function Invoke-AvmTerraformTransform {
             "Invoke-AvmTerraformTransform requires a terraform context (got Ecosystem='$($Context.Ecosystem)').")
     }
 
+    $utilityMigrationMode = $env:AVM_TF_UTILITY_MIGRATION
+    if ($utilityMigrationMode -and $utilityMigrationMode -cnotin @('migrate', 'preserve')) {
+        throw [AvmConfigurationException]::new(
+            "AVM_TF_UTILITY_MIGRATION must be 'migrate' or 'preserve', or unset.")
+    }
+    if ($utilityMigrationMode -ceq 'preserve') {
+        Write-AvmLog 'transform: preserving exact utility module selections' -Level Info | Out-Null
+    }
+
     $tool = Resolve-AvmTool -Name 'mapotf' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
     $profileDirs = @{
         common              = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'common'
@@ -988,7 +1001,8 @@ function Invoke-AvmTerraformTransform {
         $testTargets = @($targets | Where-Object { $_.Scope -eq 'test' })
         $exampleTargets = @($targets | Where-Object { $_.Scope -eq 'example' })
         $unitTestTargets = @($moduleTargets + $testTargets + $exampleTargets)
-        $utilityPlans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $unitTestTargets -Options $transformOptions)
+        $utilityPlans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $unitTestTargets -Options $transformOptions `
+                -PreserveSelections:($utilityMigrationMode -ceq 'preserve'))
         $transformOptions.UtilityTelemetryPaths = @($utilityPlans | Where-Object Telemetry | ForEach-Object { $_.Target.Path })
         $newLocationTargets = @(
             foreach ($target in $moduleTargets | Where-Object { $_.Profiles -notcontains 'root' }) {
