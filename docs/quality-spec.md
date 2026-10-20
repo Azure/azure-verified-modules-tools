@@ -2243,8 +2243,18 @@ fork workflow's explicit Conftest exclusion. This profile runs non-authenticated
 static analysis and unit tests only; Conftest, integration and E2E verification
 are deferred to a separate full-module pre-release check, never reported as
 passed. Normal standalone and module release validation defaults do not change.
-Keep the candidate authentication, identity configuration and permissions in
-place for future reintroduction of authenticated checks. Terraform
+Preparation, validation and publication run as ordered steps in one `avm`
+environment job per repository. Keep workflow-wide and repository-state
+concurrency, independent matrix failures, read-only contents permission and
+step-scoped credentials. Validation failure blocks publication; plan-only runs
+validate without publishing. Candidate and receipt artifacts remain diagnostic
+outputs, not inter-job transfers. Keep the candidate identity configuration,
+OIDC permission and existing `avm-validation` federation for future authenticated
+checks, but the combined job does not use that environment's OIDC subject.
+Restoring authenticated candidate checks requires a compatible isolation and
+federation design first. Sharing the preparation environment and runner with
+module-owned checks removes the former validation isolation boundary and
+requires recorded SFI sign-off before merge. Terraform
 unit tests run when discovered; an absent suite is a visible, non-blocking
 `skipped` result, never a unit-test pass. Failures or execution errors in
 existing suites block validation. Candidate-tree and publication safeguards

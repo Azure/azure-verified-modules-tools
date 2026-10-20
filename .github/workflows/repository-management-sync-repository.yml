@@ -48,7 +48,7 @@ defaults:
 
 jobs:
   run-sync:
-    name: Prepare ${{ inputs.repo_name }}
+    name: Sync ${{ inputs.repo_name }}
     runs-on: ubuntu-latest
     environment: avm
     concurrency:
@@ -141,7 +141,7 @@ jobs:
           subscription-id: ${{ steps.state-backend.outputs.subscription-id }}
           client-id: ${{ steps.state-backend.outputs.client-id }}
 
-      - name: Run sync for ${{ inputs.repo_id }}
+      - name: Prepare repository candidate
         run: |
 
           $triggerType = "${{ github.event_name }}"
@@ -337,27 +337,6 @@ jobs:
           if ($hasError) { exit 1 }
         shell: pwsh
 
-  validate-candidate:
-    name: Validate ${{ inputs.repo_name }}
-    if: ${{ needs.run-sync.result == 'success' }}
-    needs: run-sync
-    runs-on: ubuntu-latest
-    environment: avm-validation
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - name: Checkout validation scripts
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Download prepared candidate
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: candidate-${{ inputs.repo_name }}
-          path: ${{ runner.temp }}/avm-sync-candidates/${{ inputs.repo_name }}
-
       - name: Configure validation tool cache
         shell: pwsh
         run: |
@@ -391,7 +370,8 @@ jobs:
             }
           }
 
-      - name: Run candidate checks
+      - name: Validate repository candidate
+        id: validate-candidate
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -410,33 +390,8 @@ jobs:
           path: ${{ runner.temp }}/avm-sync-validation/${{ inputs.repo_name }}
           if-no-files-found: error
 
-  publish-candidate:
-    name: Publish ${{ inputs.repo_name }}
-    if: ${{ needs.validate-candidate.result == 'success' && !inputs.plan_only }}
-    needs: validate-candidate
-    runs-on: ubuntu-latest
-    environment: avm
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout publication scripts
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Download prepared candidate
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: candidate-${{ inputs.repo_name }}
-          path: ${{ runner.temp }}/avm-sync-candidates/${{ inputs.repo_name }}
-
-      - name: Download validation receipt
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: validated-${{ inputs.repo_name }}
-          path: ${{ runner.temp }}/avm-sync-validation/${{ inputs.repo_name }}
-
       - name: Inspect candidate
+        if: ${{ !inputs.plan_only }}
         id: candidate
         shell: pwsh
         env:
@@ -447,9 +402,9 @@ jobs:
           "has-changes=$(([string]$candidate.hasChanges).ToLowerInvariant())" |
             Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Create GitHub App token
-        if: steps.candidate.outputs.has-changes == 'true'
-        id: app-token
+      - name: Create publication GitHub App token
+        if: ${{ !inputs.plan_only && steps.validate-candidate.outcome == 'success' && steps.candidate.outputs.has-changes == 'true' }}
+        id: publication-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ vars.AVM_APP_CLIENT_ID }}
@@ -457,12 +412,13 @@ jobs:
           owner: ${{ github.repository_owner }}
 
       - name: Publish validated candidate
+        if: ${{ !inputs.plan_only && steps.validate-candidate.outcome == 'success' }}
         shell: pwsh
         env:
           SYNC_REPOSITORY: Azure/${{ inputs.repo_name }}
           CANDIDATE_DIRECTORY: ${{ runner.temp }}/avm-sync-candidates/${{ inputs.repo_name }}
           RECEIPT_DIRECTORY: ${{ runner.temp }}/avm-sync-validation/${{ inputs.repo_name }}
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.publication-token.outputs.token }}
           AVM_APP_BOT_LOGIN: ${{ vars.AVM_APP_BOT_LOGIN }}
           AVM_APP_BOT_USER_ID: ${{ vars.AVM_APP_BOT_USER_ID }}
         run: |

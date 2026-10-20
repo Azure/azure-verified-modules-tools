@@ -5,12 +5,14 @@ BeforeAll {
     $script:configChecks = Get-Content -LiteralPath (Join-Path $root '.github' 'workflows' 'repository-management-config-test.yml') -Raw
     $script:caller = [regex]::Match($script:dispatcher,
         '(?ms)^  sync-repository:\r?\n(?<body>.*)\z').Groups['body'].Value
-    $script:prepare = [regex]::Match($script:workflow,
+    $script:worker = [regex]::Match($script:workflow,
         '(?ms)^  run-sync:\r?\n(?<body>.*?)(?=^  [a-z][a-z-]*:\r?\n|\z)').Groups['body'].Value
-    $script:validate = [regex]::Match($script:workflow,
-        '(?ms)^  validate-candidate:\r?\n(?<body>.*?)(?=^  [a-z][a-z-]*:\r?\n|\z)').Groups['body'].Value
-    $script:publish = [regex]::Match($script:workflow,
-        '(?ms)^  publish-candidate:\r?\n(?<body>.*?)(?=^  [a-z][a-z-]*:\r?\n|\z)').Groups['body'].Value
+    $script:prepare = [regex]::Match($script:worker,
+        '(?ms)\A.*?(?=^      - name: Configure validation tool cache\r?$)').Value
+    $script:validate = [regex]::Match($script:worker,
+        '(?ms)^      - name: Configure validation tool cache\r?\n.*?(?=^      - name: Inspect candidate\r?$)').Value
+    $script:publish = [regex]::Match($script:worker,
+        '(?ms)^      - name: Inspect candidate\r?\n.*\z').Value
 }
 
 Describe 'Repository sync candidate workflow' {
@@ -23,7 +25,7 @@ Describe 'Repository sync candidate workflow' {
         }
     }
 
-    It 'runs an independent reusable job chain for every repository in the matrix' {
+    It 'runs one reusable worker job for every repository in the matrix' {
         $script:dispatcher | Should -Match '(?m)^  generate-matrix:\s*$'
         $script:caller | Should -Match 'fail-fast:\s*false'
         $script:caller | Should -Match 'include:\s*\$\{\{ fromJson\(needs\.generate-matrix\.outputs\.matrix\) \}\}'
@@ -39,6 +41,32 @@ Describe 'Repository sync candidate workflow' {
         }
         $script:workflow | Should -Match '(?m)^  workflow_call:\s*$'
         $script:workflow | Should -Not -Match 'matrix\.|needs\.generate-matrix'
+        $jobs = [regex]::Match($script:workflow, '(?ms)^jobs:\r?\n(?<body>.*)\z').Groups['body'].Value
+        @([regex]::Matches($jobs, '(?m)^  ([a-z][a-z-]*):\r?$') |
+            ForEach-Object { $_.Groups[1].Value }) | Should -Be @('run-sync')
+        $script:worker | Should -Match ([regex]::Escape('name: Sync ${{ inputs.repo_name }}'))
+        $script:worker | Should -Match '(?m)^    environment: avm\r?$'
+        $script:worker | Should -Match ([regex]::Escape('group: repository-sync-state-${{ inputs.repo_id }}'))
+        $script:worker | Should -Match '(?m)^      cancel-in-progress: false\r?$'
+        $ids = @([regex]::Matches($script:worker, '(?m)^        id: (.+)\r?$') |
+                ForEach-Object { $_.Groups[1].Value.Trim() })
+        @($ids | Sort-Object -Unique).Count | Should -Be $ids.Count
+    }
+
+    It 'keeps the phases ordered on one checkout without artifact downloads' {
+        foreach ($phase in @($script:prepare, $script:validate, $script:publish)) {
+            $phase | Should -Not -BeNullOrEmpty
+        }
+        ([regex]::Matches($script:worker, 'uses: actions/checkout@')).Count | Should -Be 1
+        $script:worker | Should -Not -Match 'uses: actions/download-artifact@|(?m)^    needs:'
+        $script:prepare | Should -Match '(?m)^      - name: Prepare repository candidate\r?$'
+        $script:prepare | Should -Match '(?m)^          persist-credentials: false\r?$'
+        foreach ($phase in @($script:validate, $script:publish)) {
+            $phase | Should -Match ([regex]::Escape(
+                    'CANDIDATE_DIRECTORY: ${{ runner.temp }}/avm-sync-candidates/${{ inputs.repo_name }}'))
+            $phase | Should -Match ([regex]::Escape(
+                    'RECEIPT_DIRECTORY: ${{ runner.temp }}/avm-sync-validation/${{ inputs.repo_name }}'))
+        }
     }
 
     It 'defaults manual plan-only runs to the checked-out authoring source' {
@@ -76,38 +104,42 @@ Describe 'Repository sync candidate workflow' {
         $script:prepare | Should -Match '\$planOnly -and \$triggerType -eq ''workflow_dispatch'' -and\s+\$env:USE_WORKFLOW_AUTHORING_SOURCE -eq ''true'''
     }
 
-    It 'skips only this repository when its preparation fails and isolates its validation identity' {
-        $script:validate | Should -Match 'environment:\s*avm-validation'
-        $script:validate | Should -Match 'needs:\s*run-sync'
-        $script:validate | Should -Match ([regex]::Escape("if: `${{ needs.run-sync.result == 'success' }}"))
+    It 'stops validation after preparation failures without passing preparation credentials to checks' {
         $script:validate | Should -Not -Match 'always\(\)'
-        $script:validate | Should -Match 'id-token:\s*write'
+        $script:validate | Should -Not -Match 'continue-on-error:'
+        $script:worker | Should -Match '(?m)^      id-token:\s*write\r?$'
         $script:validate | Should -Match 'Invoke-RepositoryCandidate\.ps1 -Mode Validate'
         $script:validate | Should -Not -Match 'GH_TOKEN:|ARM_CLIENT_ID:|ARM_BACKEND_|azure/login@|create-github-app-token@'
         $script:validate | Should -Match 'name:\s*validated-\$\{\{ inputs\.repo_name \}\}'
+        $checks = [regex]::Match($script:validate,
+            '(?ms)^      - name: Validate repository candidate\r?\n(?<body>.*?)(?=^      - name:|\z)').Groups['body'].Value
+        $checks | Should -Not -Match '(?m)^        if:'
+        $checks | Should -Match '(?m)^        id: validate-candidate\r?$'
     }
 
     It 'authenticates candidate tool downloads with the read-only job token' {
         $step = [regex]::Match($script:validate,
-            '(?ms)^      - name: Run candidate checks\r?\n(?<body>.*?)(?=^      - name:|\z)')
+            '(?ms)^      - name: Validate repository candidate\r?\n(?<body>.*?)(?=^      - name:|\z)')
         $step.Success | Should -BeTrue
         $step.Groups['body'].Value | Should -Match '(?m)^          GITHUB_TOKEN: \$\{\{ github\.token \}\}\r?$'
-        $script:validate | Should -Match '(?m)^      contents:\s*read\r?$'
-        $script:validate | Should -Not -Match 'contents:\s*write|create-github-app-token@'
+        $script:worker | Should -Match '(?m)^      contents:\s*read\r?$'
+        $script:worker | Should -Not -Match 'contents:\s*write'
     }
 
     It 'requires only the candidate profile without adding an integration or E2E gate' {
         $script:validate | Should -Match 'Invoke-RepositoryCandidate\.ps1 -Mode Validate'
         $script:validate | Should -Not -Match 'avm test (integration|e2e)|Invoke-AvmTest(Integration|E2E)'
-        $script:publish | Should -Match '(?m)^    needs: validate-candidate\r?$'
         $script:workflow | Should -Not -Match '(?m)^  (integration-test|e2e-test):'
     }
 
     It 'publishes only after this repository validation passes and never for plan-only' {
-        $script:publish | Should -Match 'needs:\s*validate-candidate'
-        $script:publish | Should -Match ([regex]::Escape("if: `${{ needs.validate-candidate.result == 'success' && !inputs.plan_only }}"))
         $script:publish | Should -Not -Match 'always\(\)'
-        $script:publish | Should -Match 'name:\s*validated-\$\{\{ inputs\.repo_name \}\}'
+        $script:publish | Should -Not -Match 'continue-on-error:'
+        $step = [regex]::Match($script:publish,
+            '(?ms)^      - name: Publish validated candidate\r?\n(?<body>.*?)(?=^      - name:|\z)')
+        $step.Success | Should -BeTrue
+        $step.Groups['body'].Value | Should -Match ([regex]::Escape(
+                "if: `${{ !inputs.plan_only && steps.validate-candidate.outcome == 'success' }}"))
         $script:publish | Should -Match 'Invoke-RepositoryCandidate\.ps1 -Mode Publish'
         $script:publish | Should -Not -Match 'ARM_CLIENT_ID:|azure/login@'
         $script:prepare | Should -Match 'name:\s*candidate-\$\{\{ inputs\.repo_name \}\}'
@@ -167,18 +199,19 @@ Describe 'Repository sync candidate workflow' {
 
         It 'requests a publication token only for changed candidates and passes it to publication' {
             $token = [regex]::Match($script:publish,
-                '(?ms)^      - name: Create GitHub App token\r?\n(?<body>.*?)(?=^      - name:|\z)')
+                '(?ms)^      - name: Create publication GitHub App token\r?\n(?<body>.*?)(?=^      - name:|\z)')
             $token.Success | Should -BeTrue
-            $token.Groups['body'].Value | Should -Match '(?m)^        if: steps\.candidate\.outputs\.has-changes == ''true''\r?$'
-            $token.Groups['body'].Value | Should -Match '(?m)^        id: app-token\r?$'
-            $script:publish | Should -Match '(?m)^          GH_TOKEN: \$\{\{ steps\.app-token\.outputs\.token \}\}\r?$'
+            $token.Groups['body'].Value | Should -Match ([regex]::Escape(
+                    "if: `${{ !inputs.plan_only && steps.validate-candidate.outcome == 'success' && steps.candidate.outputs.has-changes == 'true' }}"))
+            $token.Groups['body'].Value | Should -Match '(?m)^        id: publication-token\r?$'
+            $script:publish | Should -Match '(?m)^          GH_TOKEN: \$\{\{ steps\.publication-token\.outputs\.token \}\}\r?$'
         }
     }
 
-    It 'propagates validation errors and accepts receipt artifacts only from the successful current run' {
+    It 'propagates validation errors and uploads receipts only after successful checks' {
         $script:validate | Should -Not -Match 'continue-on-error:'
         $checks = [regex]::Match($script:validate,
-            '(?ms)^      - name: Run candidate checks\r?\n(?<body>.*?)(?=^      - name:|\z)').Groups['body'].Value
+            '(?ms)^      - name: Validate repository candidate\r?\n(?<body>.*?)(?=^      - name:|\z)').Groups['body'].Value
         $checks | Should -Match '(?m)^        shell: pwsh\r?$'
         $checks | Should -Match 'Invoke-RepositoryCandidate\.ps1 -Mode Validate'
         $checks | Should -Not -Match '(?i)\btry\s*\{|\bcatch\s*\{|\bexit\s+0\b|SilentlyContinue'
@@ -186,10 +219,10 @@ Describe 'Repository sync candidate workflow' {
             '(?ms)^      - name: Upload validation receipt\r?\n(?<body>.*?)(?=^      - name:|\z)').Groups['body'].Value
         $upload | Should -Match '(?m)^        if: success\(\)\r?$'
         $upload | Should -Match '(?m)^          if-no-files-found: error\r?$'
-        $download = [regex]::Match($script:publish,
-            '(?ms)^      - name: Download validation receipt\r?\n(?<body>.*?)(?=^      - name:|\z)').Groups['body'].Value
-        $download | Should -Match 'uses: actions/download-artifact@'
-        $download | Should -Match 'name: validated-\$\{\{ inputs\.repo_name \}\}'
-        $download | Should -Not -Match '(?m)^\s+(run-id|repository|github-token):'
+        $upload | Should -Match 'name: validated-\$\{\{ inputs\.repo_name \}\}'
+        $script:worker.IndexOf('Validate repository candidate') |
+            Should -BeLessThan $script:worker.IndexOf('Upload validation receipt')
+        $script:worker.IndexOf('Upload validation receipt') |
+            Should -BeLessThan $script:worker.IndexOf('Publish validated candidate')
     }
 }

@@ -192,7 +192,7 @@ Describe 'State identity wiring' {
         )) -Raw
         $syncStep = [regex]::Match(
             $workflow,
-            '(?ms)^      - name: Run sync for .*?(?=^      - name:)'
+            '(?ms)^      - name: Prepare repository candidate\r?\n.*?(?=^      - name:)'
         ).Value
         $syncStep | Should -Not -BeNullOrEmpty
         $workflow | Should -Match '(?s)Write-Host "Running repo sync"\s+\$moduleToLoad = .*?Import-Module -Name \$moduleToLoad -Force -ErrorAction Stop\s+\./scripts/Invoke-RepositorySync\.ps1'
