@@ -1166,7 +1166,7 @@ Terraform pr-check initializes missing source examples with the backend disabled
 and compatible locked dependency selections preserved. Validation must not
 request dependency upgrades. Incompatible locked selections fail initialization
 without an upgrade retry; candidate-tree checks still reject tracked lock drift.
-`avm pr-check -ExcludeSteps` accepts an array of any of its nine step names:
+`avm pr-check -ExcludeSteps` accepts an array of any of its nine check names:
 `metadata`, `sync`, `format`, `transform`, `lint`, `check policy`,
 `check convention`, `validate`, and `docs`. Names are case-insensitive and
 validated before execution; an empty array keeps the default chain. Explicit
@@ -1175,10 +1175,14 @@ Bicep result checks for an excluded step. Each is reported as `skipped` with an
 exclusion reason. Non-excluded checks retain their ordering and failure rules;
 version and clean-worktree guards remain mandatory. An entirely excluded chain
 reports overall `skipped`, not `pass`.
-Terraform source-example initialization is a prerequisite, not a tenth public
-step. It runs once after selected metadata validation and before the remaining
-checks only when `validate` is enabled; validation reuses that persistent state.
-Initialization failure aborts dependent checks and cannot be reported as skipped.
+Terraform source-example initialization is an explicit `initialize` step with
+its own start/result logs, structured result and duration, consistent with
+pre-commit. It runs once after selected metadata validation and before the
+remaining checks only when `validate` is enabled; excluding `validate` also
+omits `initialize`. The default Terraform chain has ten steps; Bicep retains
+nine. Validation reuses the persistent initialization state.
+Initialization failure aborts dependent checks even without `StopOnFail` and
+cannot be reported as skipped.
 Formatting needs the Terraform executable but no initialized examples. Transform,
 lint and policy prepare their own working directories and retain their existing
 cache and policy-isolation contracts when validation is excluded.
