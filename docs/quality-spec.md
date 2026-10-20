@@ -827,15 +827,21 @@ Modules without direct AzAPI use do not gain an unused provider requirement.
 `metadata.json` at apply time. When telemetry is enabled, it creates an
 empty `Microsoft.Resources/deployments@2025-04-01` deployment at the active
 subscription scope. Its reporting payload is solely the deployment name:
-`<telemetryIdPrefix>.<version>.<source>.<instance>`. The full version comes
+`<telemetryIdPrefix>.<version>.<source>.<instance>[-<key1>-<value1>-...]`. The full version comes
 from the matching `path.module` entry in Terraform's modules manifest, with
 periods changed to hyphens; an unavailable version is `0-0-0`. The one-letter
 source token is `t` (Terraform Registry), `o` (OpenTofu Registry), `g` (Git),
 or `x` (other); the raw source path is never reported. The stable instance
 suffix is four hex characters derived from `terraform_data.telemetry`'s ID.
-The module catalog maps the metadata prefix to its canonical type. A
-precondition rejects a version with unsupported name characters or a
-combined name longer than 64 characters; neither is silently truncated.
+When the module already declares `telemetry_additional_content` with the exact
+`map(string)` type, its non-null, non-empty entries append after that instance
+suffix as sorted, hyphen-delimited key/value pairs. Null map values retain
+their key and render as an empty value. Modules without that exact authored
+input, and null or empty maps, retain the fixed base name; the transform never
+adds or rewrites the public variable declaration. The module catalog maps the
+metadata prefix to its canonical type. A precondition rejects a complete name
+with unsupported characters or a length over 64 characters; content is never
+silently truncated, hashed, stripped, or discarded.
 
 Independent fresh telemetry migrations must produce identical file bytes, not
 just equivalent Terraform. Conditional append operations explicitly depend on
