@@ -232,6 +232,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module Avm.Authoring
+          Remove-Item -LiteralPath 'Env:\TF_VAR_enable_telemetry'
           avm test unit
 
   pr-check-fork:
