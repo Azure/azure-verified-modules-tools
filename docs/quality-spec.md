@@ -1753,6 +1753,14 @@ Assume the user runs multiple `avm` invocations in parallel against different re
   - Verifies the certificate chain (no `-SkipCertificateCheck` — ever).
 - Download SHA256 verification is non-negotiable; mismatch throws `AvmToolException` with both expected and actual hashes in the message.
 
+Repository-sync team-existence discovery explicitly opts into HTTP 500, 502,
+503 and 504 retries through `Get-GitHubTransientRetryPatterns -ReadOnly`.
+Use this opt-in only for known read-only requests, never writes or command
+sequences containing writes: a server error does not prove a write failed.
+The shared GitHub CLI wrapper's default patterns, retry budgets, incremental
+delays and failure handling remain unchanged. Deterministic 404 and
+authentication/authorization failures do not gain retries.
+
 ---
 
 ## 17. Security
