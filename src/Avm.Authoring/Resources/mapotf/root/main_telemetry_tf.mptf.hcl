@@ -2,6 +2,11 @@ data "variable" "enable_telemetry" {
   name = "enable_telemetry"
 }
 
+data "variable" "telemetry_additional_content" {
+  name = "telemetry_additional_content"
+  type = "map(string)"
+}
+
 data "data" "azurerm_client_config" {
   data_source_type = "azurerm_client_config"
 }
@@ -52,22 +57,28 @@ data "local" "avm_telemetry_version_token" {
   name = "avm_telemetry_version_token"
 }
 
+data "local" "avm_telemetry_additional_content_name" {
+  name = "avm_telemetry_additional_content_name"
+}
+
 locals {
-  enable_telemetry_exists    = length(data.variable.enable_telemetry.result) == 1
-  main_location_exists       = length(data.local.main_location.result) == 1
-  avm_metadata_exists        = length(data.local.avm_metadata.result) == 1
-  module_source_type_exists  = length(data.local.avm_module_source_type.result) == 1
-  version_token_exists       = length(data.local.avm_telemetry_version_token.result) == 1
-  main_location_expression   = "var.location"
-  azurerm_client_exists      = try(data.data.azurerm_client_config.result["azurerm_client_config"].telemetry != null, false)
-  azapi_client_exists        = try(data.data.azapi_client_config.result["azapi_client_config"].telemetry != null, false)
-  modtm_module_source_exists = try(data.data.modtm_module_source.result["modtm_module_source"].telemetry != null, false)
-  random_uuid_exists         = try(data.resource.random_uuid.result["random_uuid"].telemetry != null, false)
-  modtm_telemetry_exists     = try(data.resource.modtm_telemetry.result["modtm_telemetry"].telemetry != null, false)
-  terraform_data_exists     = try(data.resource.terraform_data.result["terraform_data"].telemetry != null, false)
-  azapi_resource_exists     = try(data.resource.azapi_resource.result["azapi_resource"].telemetry != null, false)
-  modtm_provider_exists      = try(data.terraform.providers.required_providers.modtm != null, false)
-  random_provider_exists     = try(data.terraform.providers.required_providers.random != null, false)
+  enable_telemetry_exists                 = length(data.variable.enable_telemetry.result) == 1
+  telemetry_additional_content_exists      = length(data.variable.telemetry_additional_content.result) == 1
+  main_location_exists                    = length(data.local.main_location.result) == 1
+  avm_metadata_exists                     = length(data.local.avm_metadata.result) == 1
+  module_source_type_exists               = length(data.local.avm_module_source_type.result) == 1
+  version_token_exists                    = length(data.local.avm_telemetry_version_token.result) == 1
+  additional_content_name_exists          = length(data.local.avm_telemetry_additional_content_name.result) == 1
+  main_location_expression                = "var.location"
+  azurerm_client_exists                   = try(data.data.azurerm_client_config.result["azurerm_client_config"].telemetry != null, false)
+  azapi_client_exists                     = try(data.data.azapi_client_config.result["azapi_client_config"].telemetry != null, false)
+  modtm_module_source_exists              = try(data.data.modtm_module_source.result["modtm_module_source"].telemetry != null, false)
+  random_uuid_exists                      = try(data.resource.random_uuid.result["random_uuid"].telemetry != null, false)
+  modtm_telemetry_exists                  = try(data.resource.modtm_telemetry.result["modtm_telemetry"].telemetry != null, false)
+  terraform_data_exists                   = try(data.resource.terraform_data.result["terraform_data"].telemetry != null, false)
+  azapi_resource_exists                   = try(data.resource.azapi_resource.result["azapi_resource"].telemetry != null, false)
+  modtm_provider_exists                   = try(data.terraform.providers.required_providers.modtm != null, false)
+  random_provider_exists                  = try(data.terraform.providers.required_providers.random != null, false)
 
   legacy_deployment = try(data.resource.all_resources.result["azurerm_resource_group_template_deployment"].telemetry, null)
   legacy_deployment_exists = try(
@@ -141,6 +152,24 @@ locals {
       "x"
     )
 EOT
+  additional_content_name_expression = <<-EOT
+    var.telemetry_additional_content == null ? "" : join("-", flatten([
+      for key in sort(keys(var.telemetry_additional_content)) :
+      [key, var.telemetry_additional_content[key] == null ? "" : var.telemetry_additional_content[key]]
+    ]))
+EOT
+  additional_content_name_local_definition = local.telemetry_additional_content_exists ? trim(<<-EOT
+    avm_telemetry_additional_content_name = ${trim(local.additional_content_name_expression, "\r\n")}
+EOT
+  , "\r\n") : ""
+  telemetry_locals_body = <<-BODY
+    avm_metadata                = jsondecode(file("$${path.module}/metadata.json"))
+    avm_telemetry_manifest_path = "$${path.root}/.terraform/modules/modules.json"
+    avm_telemetry_modules       = fileexists(local.avm_telemetry_manifest_path) ? jsondecode(file(local.avm_telemetry_manifest_path)).Modules : []
+    avm_telemetry_module_entry  = try(one([for module in local.avm_telemetry_modules : module if module.Dir == path.module]), null)
+    avm_module_version          = try(local.avm_telemetry_module_entry.Version, "")
+    avm_module_source           = try(local.avm_telemetry_module_entry.Source, "")
+  BODY
 }
 
 transform "new_block" "new_enable_telemetry" {
@@ -367,14 +396,7 @@ transform "new_block" "telemetry_locals" {
   for_each       = !local.avm_metadata_exists ? toset([1]) : toset([])
   new_block_type = "locals"
   filename       = "main.telemetry.tf"
-  body = <<-BODY
-    avm_metadata                = jsondecode(file("$${path.module}/metadata.json"))
-    avm_telemetry_manifest_path = "$${path.root}/.terraform/modules/modules.json"
-    avm_telemetry_modules       = fileexists(local.avm_telemetry_manifest_path) ? jsondecode(file(local.avm_telemetry_manifest_path)).Modules : []
-    avm_telemetry_module_entry  = try(one([for module in local.avm_telemetry_modules : module if module.Dir == path.module]), null)
-    avm_module_version          = try(local.avm_telemetry_module_entry.Version, "")
-    avm_module_source           = try(local.avm_telemetry_module_entry.Source, "")
-BODY
+  body = local.telemetry_locals_body
   depends_on = [
     transform.new_block.azapi_client_config,
     transform.new_block.forget_modtm_telemetry,
@@ -382,6 +404,14 @@ BODY
     transform.new_block.forget_legacy_deployment,
     transform.new_block.forget_legacy_random_id,
   ]
+}
+
+transform "new_block" "telemetry_additional_content_local" {
+  for_each       = !local.avm_metadata_exists && local.telemetry_additional_content_exists ? toset([1]) : toset([])
+  new_block_type = "locals"
+  filename       = "main.telemetry.tf"
+  body           = trim(local.additional_content_name_local_definition, "\r\n")
+  depends_on     = [transform.new_block.telemetry_locals]
 }
 
 transform "ensure_local" "avm_module_source_type" {
@@ -423,6 +453,45 @@ transform "ensure_local" "avm_telemetry_version_token" {
   ]
 }
 
+transform "ensure_local" "avm_telemetry_additional_content_name" {
+  for_each           = local.telemetry_additional_content_exists && local.avm_metadata_exists && !local.additional_content_name_exists ? toset([1]) : toset([])
+  name               = "avm_telemetry_additional_content_name"
+  fallback_file_name = "main.telemetry.tf"
+  value_as_string    = local.telemetry_additional_content_exists ? trim(local.additional_content_name_expression, "\r\n") : "\"\""
+  depends_on = [
+    transform.new_block.azapi_client_config,
+    transform.new_block.forget_modtm_telemetry,
+    transform.new_block.forget_random_uuid,
+    transform.new_block.forget_legacy_deployment,
+    transform.new_block.forget_legacy_random_id,
+    transform.new_block.telemetry_locals,
+    transform.ensure_local.avm_module_source_type,
+    transform.ensure_local.avm_telemetry_version_token,
+    transform.ensure_local.main_location,
+    transform.update_in_place.main_location,
+  ]
+}
+
+transform "update_in_place" "avm_telemetry_additional_content_name" {
+  for_each             = local.avm_metadata_exists && local.additional_content_name_exists ? toset([1]) : toset([])
+  target_block_address = "local.avm_telemetry_additional_content_name"
+  asstring {
+    avm_telemetry_additional_content_name = local.telemetry_additional_content_exists ? trim(local.additional_content_name_expression, "\r\n") : "\"\""
+  }
+  depends_on = [
+    transform.new_block.azapi_client_config,
+    transform.new_block.forget_modtm_telemetry,
+    transform.new_block.forget_random_uuid,
+    transform.new_block.forget_legacy_deployment,
+    transform.new_block.forget_legacy_random_id,
+    transform.new_block.telemetry_locals,
+    transform.ensure_local.avm_module_source_type,
+    transform.ensure_local.avm_telemetry_version_token,
+    transform.ensure_local.main_location,
+    transform.update_in_place.main_location,
+  ]
+}
+
 transform "new_block" "terraform_data" {
   for_each       = !local.terraform_data_exists ? toset([1]) : toset([])
   new_block_type = "resource"
@@ -453,7 +522,7 @@ transform "update_in_place" "terraform_data" {
 }
 
 transform "new_block" "azapi_resource" {
-  for_each       = !local.azapi_resource_exists ? toset([1]) : toset([])
+  for_each       = !local.azapi_resource_exists && !local.telemetry_additional_content_exists ? toset([1]) : toset([])
   new_block_type = "resource"
   labels         = ["azapi_resource", "telemetry"]
   filename       = "main.telemetry.tf"
@@ -505,6 +574,62 @@ transform "new_block" "azapi_resource" {
   ]
 }
 
+transform "new_block" "azapi_resource_with_additional_content" {
+  for_each       = !local.azapi_resource_exists && local.telemetry_additional_content_exists ? toset([1]) : toset([])
+  new_block_type = "resource"
+  labels         = ["azapi_resource", "telemetry"]
+  filename       = "main.telemetry.tf"
+  asraw {
+    count     = var.enable_telemetry ? 1 : 0
+    type      = "Microsoft.Resources/deployments@2025-04-01"
+    name      = format("%s%s", join(".", [local.avm_metadata.telemetryIdPrefix, local.avm_telemetry_version_token, local.avm_module_source_type, substr(sha1(terraform_data.telemetry[0].id), 0, 4)]), local.avm_telemetry_additional_content_name == "" ? "" : "-${local.avm_telemetry_additional_content_name}")
+    parent_id = one(data.azapi_client_config.telemetry).subscription_resource_id
+    location  = local.main_location
+    response_export_values = []
+    body = {
+      properties = {
+        mode = "Incremental"
+        template = {
+          "$schema"      = "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#"
+          contentVersion = "1.0.0.0"
+          resources      = []
+          outputs = {
+            telemetry = {
+              type  = "String"
+              value = "For more information, see https://aka.ms/avm/TelemetryInfo"
+            }
+            apply_id = {
+              type  = "String"
+              value = plantimestamp()
+            }
+          }
+        }
+      }
+    }
+    lifecycle {
+      precondition {
+        condition     = length(local.avm_metadata.telemetryIdPrefix) + length(local.avm_telemetry_version_token) + 8 + (local.avm_telemetry_additional_content_name == "" ? 0 : 1 + length(local.avm_telemetry_additional_content_name)) <= 64 && can(regex("^[A-Za-z0-9_-]+$", local.avm_telemetry_version_token)) && (local.avm_telemetry_additional_content_name == "" || can(regex("^[A-Za-z0-9_.()-]+$", local.avm_telemetry_additional_content_name)))
+        error_message = "The telemetry deployment name must fit Azure's 64-character limit and contain only letters, numbers, periods, underscores, hyphens, and parentheses."
+      }
+    }
+  }
+  depends_on = [
+    transform.new_block.azapi_client_config,
+    transform.new_block.forget_modtm_telemetry,
+    transform.new_block.forget_random_uuid,
+    transform.new_block.forget_legacy_deployment,
+    transform.new_block.forget_legacy_random_id,
+    transform.new_block.telemetry_locals,
+    transform.new_block.telemetry_additional_content_local,
+    transform.ensure_local.avm_module_source_type,
+    transform.ensure_local.avm_telemetry_version_token,
+    transform.ensure_local.avm_telemetry_additional_content_name,
+    transform.update_in_place.avm_telemetry_additional_content_name,
+    transform.ensure_local.main_location,
+    transform.new_block.terraform_data,
+  ]
+}
+
 transform "update_in_place" "azapi_resource" {
   for_each             = local.azapi_resource_exists ? toset([1]) : toset([])
   target_block_address = "resource.azapi_resource.telemetry"
@@ -544,9 +669,41 @@ transform "update_in_place" "azapi_resource" {
   }
 }
 
+transform "update_in_place" "azapi_resource_additional_content_name" {
+  for_each             = local.azapi_resource_exists && local.telemetry_additional_content_exists ? toset([1]) : toset([])
+  target_block_address = "resource.azapi_resource.telemetry"
+  asraw {
+    name = format("%s%s", join(".", [local.avm_metadata.telemetryIdPrefix, local.avm_telemetry_version_token, local.avm_module_source_type, substr(sha1(terraform_data.telemetry[0].id), 0, 4)]), local.avm_telemetry_additional_content_name == "" ? "" : "-${local.avm_telemetry_additional_content_name}")
+  }
+  depends_on = [
+    transform.update_in_place.azapi_resource,
+    transform.ensure_local.avm_telemetry_additional_content_name,
+    transform.update_in_place.avm_telemetry_additional_content_name,
+  ]
+}
+
+transform "update_in_place" "azapi_resource_additional_content_precondition" {
+  for_each             = local.azapi_resource_exists && local.telemetry_additional_content_exists ? toset([1]) : toset([])
+  target_block_address = "resource.azapi_resource.telemetry"
+  asraw {
+    lifecycle {
+      precondition {
+        condition     = length(local.avm_metadata.telemetryIdPrefix) + length(local.avm_telemetry_version_token) + 8 + (local.avm_telemetry_additional_content_name == "" ? 0 : 1 + length(local.avm_telemetry_additional_content_name)) <= 64 && can(regex("^[A-Za-z0-9_-]+$", local.avm_telemetry_version_token)) && (local.avm_telemetry_additional_content_name == "" || can(regex("^[A-Za-z0-9_.()-]+$", local.avm_telemetry_additional_content_name)))
+        error_message = "The telemetry deployment name must fit Azure's 64-character limit and contain only letters, numbers, periods, underscores, hyphens, and parentheses."
+      }
+    }
+  }
+  depends_on = [
+    transform.update_in_place.azapi_resource_additional_content_name,
+  ]
+}
+
 transform "remove_block_element" "drop_legacy_telemetry_tags" {
   for_each             = local.azapi_resource_exists && try(data.resource.azapi_resource.result["azapi_resource"].telemetry.tags != null, false) ? toset([1]) : toset([])
   target_block_address = "resource.azapi_resource.telemetry"
   paths                = ["tags"]
-  depends_on           = [transform.update_in_place.azapi_resource]
+  depends_on           = [
+    transform.update_in_place.azapi_resource,
+    transform.update_in_place.azapi_resource_additional_content_precondition,
+  ]
 }
