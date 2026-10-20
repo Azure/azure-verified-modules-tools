@@ -28,7 +28,10 @@ function Invoke-AvmPrCheck {
 
         When Terraform validation is enabled, an initialization prerequisite
         prepares each source example once after metadata and before the remaining
-        checks. The validate step reuses that persistent `.terraform` state.
+        checks, reusing compatible locked dependency selections without requesting
+        upgrades. An incompatible locked selection fails initialization rather
+        than being silently upgraded. The validate step reuses that persistent
+        `.terraform` state.
         Excluding validate omits this prerequisite; formatting needs only the
         executable, while transform, lint and policy prepare their own working
         directories. Initialization is not an additional public step.
@@ -38,6 +41,13 @@ function Invoke-AvmPrCheck {
         all contributors receive results without environment approval.
         The convention step requires a tests/unit/*.tftest.hcl fixture,
         preventing an empty unit tier from reading as a green gauntlet.
+
+        Set AVM_TF_UTILITY_MIGRATION=preserve when pre-commit used that setting
+        to retain exact utility sources, versions and migration-related
+        inputs/provider bindings. Unset or migrate retains default migrations.
+        Invalid nonempty values fail configuration. Preservation does not
+        exclude any checks, relax exact-pin validation or approve dependency
+        changes; ordinary policy evaluation remains enabled.
 
         After metadata validation, the managed-files sync step (terraform
         only) in **drift-check mode** (-CheckDrift): unlike pre-commit,

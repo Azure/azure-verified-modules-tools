@@ -9,6 +9,9 @@ BeforeAll {
     . (Join-Path $script:repoRoot (
             "repository-management/repository-sync/scripts/lib/RetryHelpers.ps1"
         ))
+    . (Join-Path $script:repoRoot (
+            "repository-management/repository-sync/scripts/lib/TeamsAndUsers.ps1"
+        ))
 
     $script:esc = [char]27
 
@@ -241,6 +244,144 @@ Describe "Invoke-GitHubCliWithRetry transient failures" {
         $result.exitCode | Should -Be 1
         $result.error | Should -Match "HTTP 404"
         $global:retryHelpersAttempts | Should -Be 1
+    }
+}
+
+Describe 'GitHub read-only discovery retries' {
+    BeforeEach {
+        Push-Location $TestDrive
+        $global:retryHelpersAttempts = 0
+        Mock Start-Sleep {}
+        Mock Invoke-RepositorySyncProcess {
+            $global:retryHelpersAttempts++
+            $index = [Math]::Min(
+                $global:retryHelpersAttempts - 1,
+                $global:retryHelpersResponses.Count - 1
+            )
+            $response = $global:retryHelpersResponses[$index]
+            [pscustomobject]@{
+                ExitCode = $response.ExitCode
+                StdOut = $response.Output
+                StdErr = $response.Error
+            }
+        }
+    }
+
+    AfterEach {
+        Pop-Location
+    }
+
+    It 'retries team discovery after <Failure> and preserves its result' -TestCases @(
+        @{ Failure = 'gh: Internal Server Error (HTTP 500)' }
+        @{ Failure = 'gh: Server Error (HTTP 502)' }
+        @{ Failure = 'gh: Service Unavailable (HTTP 503)' }
+        @{ Failure = 'gh: Gateway Timeout (HTTP 504)' }
+    ) {
+        param($Failure)
+
+        $global:retryHelpersResponses = @(
+            @{ ExitCode = 1; Output = ''; Error = $Failure }
+            @{ ExitCode = 0; Output = '{"slug":"azure-verified-modules-module-readers"}'; Error = '' }
+        )
+        $teamDescription = 'AVM module readers'
+        $team = @{
+            name = 'azure-verified-modules-module-readers'
+            repositoryPermission = 'triage'
+            environmentApproval = $false
+            membersAreTeamMaintainers = $false
+        }
+
+        $result = Resolve-GitHubTeams -orgName Azure -orgAndRepoName 'Azure/example' -teams @($team) -issueLog @()
+
+        $global:retryHelpersAttempts | Should -Be 2
+        $result.GithubTeams.Count | Should -Be 1
+        $result.GithubTeams[$team.name].slug | Should -BeExactly $team.name
+        $result.GithubTeams[$team.name].repository_access_permission | Should -BeExactly 'triage'
+        $result.IssueLog | Should -HaveCount 0
+        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 10 }
+    }
+
+    It 'fails after the existing retry budget is exhausted (literal: <Literal>)' -TestCases @(
+        @{ Literal = $false }
+        @{ Literal = $true }
+    ) {
+        param($Literal)
+
+        $global:retryHelpersResponses = @(
+            @{ ExitCode = 1; Output = ''; Error = 'gh: Server Error (HTTP 502)' }
+        )
+
+        $result = Invoke-GitHubCliWithRetry -commands @(@{
+                Arguments = @('api', 'orgs/Azure/teams/azure-verified-modules-module-readers')
+            }) -retryOn (Get-GitHubTransientRetryPatterns -ReadOnly) -maxRetries 2 `
+            -retryDelayIncremental 3 -literalArguments:$Literal
+
+        $result.success | Should -BeFalse
+        $global:retryHelpersAttempts | Should -Be 3
+        Should -Invoke Start-Sleep -Exactly 2
+        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 3 }
+        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 6 }
+    }
+
+    It 'does not retry a deterministic read failure: <Failure>' -TestCases @(
+        @{ Failure = 'gh: Not Found (HTTP 404)' }
+        @{ Failure = 'gh: Bad credentials (HTTP 401)' }
+        @{ Failure = 'gh: Forbidden (HTTP 403)' }
+    ) {
+        param($Failure)
+
+        $global:retryHelpersResponses = @(
+            @{ ExitCode = 1; Output = ''; Error = $Failure }
+        )
+
+        $result = Invoke-GitHubCliWithRetry -commands @(@{
+                Arguments = @('api', 'orgs/Azure/teams/azure-verified-modules-module-readers')
+            }) -retryOn (Get-GitHubTransientRetryPatterns -ReadOnly) -maxRetries 2 -retryDelayIncremental 0
+
+        $result.success | Should -BeFalse
+        $result.exitCode | Should -Be 1
+        $result.error.Trim() | Should -BeExactly $Failure
+        $global:retryHelpersAttempts | Should -Be 1
+        Should -Invoke Start-Sleep -Exactly 0
+    }
+
+    It 'does not replay an ambiguous write after HTTP <Status>' -TestCases @(
+        @{ Status = 500 }
+        @{ Status = 502 }
+        @{ Status = 503 }
+        @{ Status = 504 }
+    ) {
+        param($Status)
+
+        $global:retryHelpersResponses = @(
+            @{ ExitCode = 1; Output = ''; Error = "gh: Server Error (HTTP $Status)" }
+            @{ ExitCode = 0; Output = ''; Error = '' }
+        )
+
+        $result = Invoke-GitHubCliWithRetry -commands @(@{
+                Arguments = @('api', 'repos/Azure/example/issues', '--method', 'POST', '-f', 'title=example')
+            }) -maxRetries 2 -retryDelayIncremental 0
+
+        $result.success | Should -BeFalse
+        $global:retryHelpersAttempts | Should -Be 1
+        Should -Invoke Start-Sleep -Exactly 0
+    }
+
+    It 'does not replay a successful write when a later command returns HTTP 502' {
+        $global:retryHelpersResponses = @(
+            @{ ExitCode = 0; Output = ''; Error = '' }
+            @{ ExitCode = 1; Output = ''; Error = 'gh: Server Error (HTTP 502)' }
+            @{ ExitCode = 0; Output = ''; Error = '' }
+        )
+
+        $result = @(Invoke-GitHubCliWithRetry -commands @(
+                @{ Arguments = @('api', 'repos/Azure/example/issues', '--method', 'POST', '-f', 'title=example') }
+                @{ Arguments = @('api', 'repos/Azure/example') }
+            ) -maxRetries 2 -retryDelayIncremental 0)
+
+        Test-CommandResultsSucceeded -results $result | Should -BeFalse
+        $global:retryHelpersAttempts | Should -Be 2
+        Should -Invoke Start-Sleep -Exactly 0
     }
 }
 

@@ -184,7 +184,8 @@ It 'renders retained ModTM requirements without JSON encoding for <State>' -Test
         @{ State = 'no terraform block'; Source = 'Azure/modtm'; Version = '~> 0.3' }
         @{ State = 'an existing inline requirement'; Source = 'azure/modtm'; Version = '~> 0.3' }
         @{ State = 'an authored versionless requirement'; Source = 'Azure/modtm'; Version = $null }
-    ) | Where-Object { $_.State -ceq 'an example without a requirement' }) {
+        @{ State = 'an example with an authored location'; Source = 'Azure/modtm'; Version = '~> 0.3' }
+    ) | Where-Object { $_.State -cin @('an example without a requirement', 'an example with an authored location') }) {
         param($State, $Source, $Version)
 
         $root = $script:target
@@ -211,6 +212,31 @@ module "dependency" {
         }
         elseif ($State -eq 'no terraform block') {
             Remove-Item -LiteralPath $terraformFile
+        }
+        if ($State -eq 'an example with an authored location') {
+            Add-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+locals {
+  location = "westeurope"
+}
+resource "azapi_resource" "authored" {
+  type      = "Microsoft.Resources/resourceGroups@2025-04-01"
+  name      = "authored"
+  parent_id = "/subscriptions/00000000-0000-0000-0000-000000000000"
+  location  = local.location
+  body      = {}
+}
+'@
+            Set-Content -LiteralPath $terraformFile -Encoding utf8NoBOM -Value @'
+terraform {
+  required_version = "~> 1.9"
+  required_providers {
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.4"
+    }
+  }
+}
+'@
         }
         Set-Content -LiteralPath (Join-Path $dependency 'terraform.tf') -Encoding utf8NoBOM -Value @'
 terraform {
@@ -240,7 +266,10 @@ terraform {
                 -ModuleTargets @([pscustomobject]@{ Path = $Root }) `
                 -Options ([pscustomobject]@{
                     ToolPath = $mapotf.Path
-                    ProfileDirs = @{ module = Join-Path $Profiles 'module' }
+                    ProfileDirs = @{
+                        module = Join-Path $Profiles 'module'
+                        'provider-restore' = Join-Path $Profiles 'provider-restore'
+                    }
                     EnvVars = @{}
                 }) `
                 -RequiredProviders $required -ProviderSources @{ $Root = @($source) } `
@@ -277,6 +306,12 @@ terraform {
             $null = Invoke-AvmProcess -FilePath $mapotf.Path -ArgumentList @('clean-backup', '--tf-dir', $Root) -WorkingDirectory $Root
             [System.IO.File]::ReadAllText($terraformFile) | Should -BeExactly $first
         }
+        if ($State -eq 'an example with an authored location') {
+            Join-Path $root 'variables.tf' | Should -Not -Exist
+            Get-Content -LiteralPath $terraformFile -Raw | Should -Match 'required_version\s*=\s*"~> 1\.9"'
+            Get-Content -LiteralPath $terraformFile -Raw | Should -Match 'version\s*=\s*"~> 2\.4"'
+            Get-Content -LiteralPath (Join-Path $root 'main.tf') -Raw | Should -Match 'location\s*=\s*local\.location'
+        }
     }
 
 It 'preserves aliases for <Scenario> with <Syntax> syntax' -TestCases (@(
@@ -304,6 +339,148 @@ It 'preserves aliases for <Scenario> with <Syntax> syntax' -TestCases (@(
         Set-Content -LiteralPath (Join-Path $script:target 'terraform.tf') -Value $source -Encoding utf8NoBOM -NoNewline
         $expected = New-AliasedProviderConfiguration -Syntax $Syntax -AzapiVersion $ExpectedAzapiVersion -RandomVersion $ExpectedRandomVersion
         Assert-ProviderRequirements -Root $script:target -ExpectedConfiguration $expected
+    }
+
+It 'reconciles explicit-map callers of a shared utility dependency without changing selections' {
+        $root = $script:target
+        $dependency = Join-Path $root 'dependencies' 'legacy'
+        $null = New-Item -ItemType Directory -Path $dependency -Force
+        Set-Content -LiteralPath (Join-Path $dependency 'main.tf') -Encoding utf8NoBOM -Value @'
+terraform {
+  required_providers {
+    modtm = {
+      source  = "Azure/modtm"
+      version = "~> 0.3"
+    }
+  }
+}
+data "modtm_module_source" "this" {
+  module_path = path.module
+}
+'@
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+module "legacy" {
+  source = "./dependencies/legacy"
+}
+data "azapi_client_config" "current" {}
+'@
+        $requirements = @'
+terraform {
+  required_providers {
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.12"
+    }
+  }
+}
+'@
+        Set-Content -LiteralPath (Join-Path $root 'terraform.tf') -Encoding utf8NoBOM -Value $requirements
+        foreach ($name in @('default', 'complete', 'custom')) {
+            $example = Join-Path $root 'examples' $name
+            $null = New-Item -ItemType Directory -Path $example -Force
+            Set-Content -LiteralPath (Join-Path $example 'terraform.tf') -Encoding utf8NoBOM -Value $requirements
+            Set-Content -LiteralPath (Join-Path $example 'main.tf') -Encoding utf8NoBOM -Value @'
+provider "azapi" {
+  alias           = "management"
+  subscription_id = "00000000-0000-0000-0000-000000000000"
+}
+module "parent" {
+  source = "../.."
+  providers = {
+    azapi = azapi.management # keep the management subscription
+  }
+}
+'@
+        }
+        $default = Join-Path $root 'examples' 'default'
+        Add-Content -LiteralPath (Join-Path $default 'main.tf') -Encoding utf8NoBOM -Value @'
+module "names" {
+  source  = "Azure/naming/azurerm"
+  version = "0.4.4"
+}
+'@
+        InModuleScope Avm.Authoring -Parameters @{
+            Root = $root; Dependency = $dependency; Profiles = $script:profilesRoot; LintConfig = $script:lintConfig
+            InspectionRoot = (Join-Path $TestDrive 'caller-inspection')
+        } {
+            param($Root, $Dependency, $Profiles, $LintConfig, $InspectionRoot)
+            $terraform = Resolve-AvmTool -Name terraform
+            $mapotf = Resolve-AvmTool -Name mapotf
+            $tflint = Resolve-AvmTool -Name tflint
+            $environment = New-AvmToolPathEnvironment -ToolPath $terraform.Path -ToolName terraform
+            foreach ($name in @('TF_DATA_DIR', 'TF_PLUGIN_CACHE_DIR', 'TF_CLI_ARGS', 'TF_CLI_ARGS_get',
+                    'TF_CLI_ARGS_init', 'TF_CLI_ARGS_validate')) {
+                $environment[$name] = $null
+            }
+            $environment.MODTM_ENDPOINT = 'http://127.0.0.1:1'
+            $profilesByName = @{}
+            foreach ($name in @('utility-module', 'module', 'provider-restore', 'unit-test-inspect', 'variable-order', 'common')) {
+                $profilesByName[$name] = Join-Path $Profiles $name
+            }
+            $options = [pscustomobject]@{
+                ToolPath = $mapotf.Path; TerraformPath = $terraform.Path; EnvVars = $environment
+                InspectionRoot = $InspectionRoot; ProfileDirs = $profilesByName; UtilityProviderSources = @{}
+            }
+            $targets = @([pscustomobject]@{ Path = $Root; Scope = 'root' })
+            foreach ($name in @('default', 'complete', 'custom')) {
+                $targets += [pscustomobject]@{ Path = Join-Path $Root 'examples' $name; Scope = 'example' }
+            }
+            $snapshots = @{}
+            foreach ($target in $targets) {
+                $path = $target.Path
+                $null = Invoke-AvmProcess -FilePath $terraform.Path -WorkingDirectory $path -EnvVars $environment `
+                    -ArgumentList @('init', '-backend=false', '-input=false', '-no-color')
+                $null = Invoke-AvmProcess -FilePath $terraform.Path -WorkingDirectory $path -EnvVars $environment `
+                    -ArgumentList @('validate', '-no-color')
+                foreach ($name in @('.terraform.lock.hcl', (Join-Path '.terraform' 'modules' 'modules.json'))) {
+                    $file = Join-Path $path $name
+                    $snapshots[$file] = [Convert]::ToBase64String([IO.File]::ReadAllBytes($file))
+                }
+            }
+            $dependencyBefore = [IO.File]::ReadAllText((Join-Path $Dependency 'main.tf'))
+            $first = @{}
+            foreach ($pass in 1..2) {
+                $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $targets -Options $options)
+                $plans | Should -HaveCount 4
+                Invoke-AvmTerraformUtilityProviderCleanup -Plans $plans -ModuleTargets $targets -Options $options
+                foreach ($target in $targets) {
+                    $path = $target.Path
+                    $null = Invoke-AvmProcess -FilePath $mapotf.Path -WorkingDirectory $path -EnvVars $environment `
+                        -ArgumentList @('clean-backup', '--tf-dir', $path)
+                    $inspection = Get-AvmTerraformUtilityInspection -Path $path -Options $options
+                    $inspection.requirements.modtm.source | Should -BeExactly 'registry.terraform.io/azure/modtm'
+                    $inspection.requirements.modtm.version | Should -BeExactly '~> 0.3'
+                    $inspection.requirements.azapi.version | Should -BeExactly '~> 2.12'
+                    $call = if ($path -ceq $Root) { 'legacy' } else { 'parent' }
+                    $mapping = ConvertFrom-AvmTerraformUnitTestProviderMapping -Expression $inspection.calls[$call].providers `
+                        -ProviderNames @() -AllowUnlistedProviders
+                    $mapping.Bindings.modtm | Should -BeExactly 'modtm'
+                    if ($path -cne $Root) {
+                        $mapping.Bindings.azapi | Should -BeExactly 'azapi.management'
+                        $inspection.calls.parent.providers | Should -Match '# keep the management subscription'
+                    }
+                    $null = Invoke-AvmProcess -FilePath $terraform.Path -WorkingDirectory $path -EnvVars $environment `
+                        -ArgumentList @('init', '-backend=false', '-input=false', '-lockfile=readonly', '-no-color')
+                    $null = Invoke-AvmProcess -FilePath $terraform.Path -WorkingDirectory $path -EnvVars $environment `
+                        -ArgumentList @('validate', '-no-color')
+                    $null = Invoke-AvmProcess -FilePath $tflint.Path -WorkingDirectory $path -EnvVars $environment -ArgumentList @(
+                        '--config', $LintConfig, '--only=terraform_required_providers', '--only=terraform_unused_required_providers'
+                    )
+                    foreach ($file in Get-ChildItem -LiteralPath $path -Filter '*.tf' -File) {
+                        $content = [IO.File]::ReadAllText($file.FullName)
+                        if ($pass -eq 1) { $first[$file.FullName] = $content }
+                        else { $content | Should -BeExactly $first[$file.FullName] }
+                    }
+                }
+                foreach ($file in $snapshots.Keys) {
+                    [Convert]::ToBase64String([IO.File]::ReadAllBytes($file)) | Should -BeExactly $snapshots[$file]
+                }
+                [IO.File]::ReadAllText((Join-Path $Dependency 'main.tf')) | Should -BeExactly $dependencyBefore
+                $default = Get-AvmTerraformUtilityInspection -Path (Join-Path $Root 'examples' 'default') -Options $options
+                $default.calls.names.source | Should -BeExactly 'Azure/naming/azurerm'
+                $default.calls.names.version | Should -BeExactly '0.4.4'
+            }
+        }
     }
 
 It 'keeps provider-free local helpers lint-clean and drift-free with the full profile chain' {

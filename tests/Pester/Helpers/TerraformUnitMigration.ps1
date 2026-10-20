@@ -55,6 +55,7 @@ function New-UnitMigrationFixture {
                 TerraformPath  = Join-Path $TestDrive 'terraform'
                 ProfileDirs    = @{
                     module              = Join-Path $TestDrive 'module-profile'
+                    'provider-restore'  = Join-Path $TestDrive 'provider-restore'
                     'unit-test-inspect' = Join-Path $TestDrive 'inspection'
                     'unit-test'         = Join-Path $TestDrive 'location'
                 }

@@ -27,6 +27,7 @@ function Resolve-GitHubTeams {
                     OutputLog = "team-exists.json"
                 }
             ) `
+            -retryOn (Get-GitHubTransientRetryPatterns -ReadOnly) `
             -returnOutputParsedFromJson
 
         if (!$existingTeam.success) {

@@ -39,6 +39,13 @@ New utility locations use var.location rather than their own outputs;
 authored utility locations and opt-outs remain unchanged. Dependency
 constraints require Terraform 1.9 or later, below 2.0, for naming.
 
+Set AVM_TF_UTILITY_MIGRATION=preserve to retain exact authored utility
+sources, versions, caller inputs and migration-related provider bindings.
+Use the same value for pre-commit and pr-check. Unset or migrate retains
+the default migrations; other nonempty values fail configuration.
+Preservation still validates exact pins and runs every other transform
+and check; it does not freeze ordinary telemetry or provider cleanup.
+
 Generated removed blocks let Terraform forget legacy modtm telemetry
 state without destroying its resources. Existing state may require
 the old providers for one final initialization. Test-module provider

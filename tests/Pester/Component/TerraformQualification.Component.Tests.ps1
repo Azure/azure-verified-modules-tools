@@ -84,6 +84,52 @@ Describe 'Native Terraform qualification mock boundary' -Tag Component {
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter { $ArgumentList[0] -ceq 'test' }
     }
 
+    It 'accepts unambiguous native built-in source proof for a plan with <Mapping> mocks' -TestCases @(
+        @{ Mapping = 'default'; Mapped = $false }
+        @{ Mapping = 'explicitly mapped'; Mapped = $true }
+    ) {
+        param($Mapped)
+        $script:required.Remove('terraform')
+        $script:test.runs.root.mptf.attributes.command = 'plan'
+        if ($Mapped) {
+            $script:test.runs.root.mptf.attributes.providers = '{ azapi = azapi.unit, terraform = terraform }'
+        }
+        Set-QualificationEvidence
+        (Invoke-MockedTerraformQualification @script:parameters).StdOut | Should -BeExactly 'mocked test passed'
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter { $ArgumentList[0] -ceq 'test' }
+    }
+
+    It 'rejects ambiguous native built-in source proof even for a plan-only run' {
+        $script:required.Remove('terraform')
+        $script:sources += 'registry.terraform.io/hashicorp/terraform'
+        $script:test.runs.root.mptf.attributes.command = 'plan'
+        Set-QualificationEvidence
+        { Invoke-MockedTerraformQualification @script:parameters } |
+            Should -Throw '*ambiguous built-in and registry provider evidence*'
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter { $ArgumentList[0] -ceq 'test' }
+    }
+
+    It 'does not let plan-only source proof cover a separate <Command> apply run' -TestCases @(
+        @{ Command = 'explicit'; Attributes = @{ command = 'apply' } }
+        @{ Command = 'default'; Attributes = @{} }
+        @{ Command = 'computed'; Attributes = @{ command = 'var.command' } }
+        @{ Command = 'unrecognized'; Attributes = @{ command = 'refresh-only' } }
+        @{ Command = 'incorrectly cased'; Attributes = @{ command = 'Plan' } }
+        @{ Command = 'non-string'; Attributes = @{ command = @('plan') } }
+    ) {
+        param($Attributes)
+        $script:required.Remove('terraform')
+        $script:test.runs = [ordered]@{
+            root = @{ mptf = @{ attributes = @{ command = 'plan' } } }
+            apply = @{ mptf = @{ attributes = $Attributes } }
+        }
+        $script:test.run_modules.apply = @{ kind = 'root'; dir = $script:root }
+        Set-QualificationEvidence
+        { Invoke-MockedTerraformQualification @script:parameters } |
+            Should -Throw "*requires a default mock for 'terraform.io/builtin/terraform'*run 'apply'*"
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter { $ArgumentList[0] -ceq 'test' }
+    }
+
     It 'checks each selected local target instead of imposing the root provider set on a setup run' {
         $helper = Join-Path $script:root 'tests' 'setup'
         $script:parameters.ModuleTargets = @(

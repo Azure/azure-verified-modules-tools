@@ -6,7 +6,9 @@
 # without indexing into `[0]`.
 
 function Get-GitHubTransientRetryPatterns {
-    return @(
+    param([switch]$ReadOnly)
+
+    $patterns = @(
         "API rate limit exceeded",
         "tls: failed to verify certificate",
         "x509: certificate is not valid for any names",
@@ -15,6 +17,12 @@ function Get-GitHubTransientRetryPatterns {
         "connection reset",
         "unexpected EOF"
     )
+
+    if ($ReadOnly) {
+        $patterns += @("HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504")
+    }
+
+    return $patterns
 }
 
 function Test-CommandResultsSucceeded {

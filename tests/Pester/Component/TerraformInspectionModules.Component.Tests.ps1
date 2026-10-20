@@ -90,6 +90,50 @@ Describe 'Component: invocation-owned inspection packages' -Tag Component {
         Test-Path -LiteralPath (Join-Path $script:fixture.Second 'providers') | Should -BeFalse
     }
 
+    It 'suppresses copy progress and retains diagnostics with verbose=<VerboseMode>' -ForEach @(
+        @{ VerboseMode = $false }
+        @{ VerboseMode = $true }
+    ) {
+        Register-InspectionFixture $script:fixture
+        InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture; VerboseMode = $VerboseMode } {
+            param($Fixture, $VerboseMode)
+            $script:inspectionCopyCommand = Get-Command -Name 'Microsoft.PowerShell.Management\Copy-Item' -CommandType Cmdlet
+            Mock Copy-Item { & $script:inspectionCopyCommand @PesterBoundParameters }
+            $ProgressPreference = 'Continue'
+            $records = @(Initialize-AvmTerraformInspectionModule -Path $Fixture.Owner -DataDirectory $Fixture.Second `
+                    -ModuleTargets $Fixture.Targets -Options $Fixture.Options -Cache $Fixture.Cache `
+                    -Confirm:$false -Verbose:$VerboseMode 4>&1)
+            $ProgressPreference | Should -Be 'Continue'
+            @($records | Where-Object { $_ -is [int] }) | Should -Be @(1)
+            $diagnostics = @($records | Where-Object { $_ -is [System.Management.Automation.VerboseRecord] })
+            if ($VerboseMode) {
+                @($diagnostics | Where-Object { $_.Message -like 'inspection cache: seeded 1 downloaded module(s)*' }).Count |
+                    Should -Be 1
+            }
+            else {
+                $diagnostics | Should -BeNullOrEmpty
+            }
+            Should -Invoke Copy-Item -Exactly 1 -ParameterFilter {
+                $ProgressAction -eq 'SilentlyContinue' -and $ErrorAction -eq 'Stop' -and $Recurse
+            }
+        }
+        $copy = Join-Path $script:fixture.Second 'modules' 'renamed'
+        foreach ($file in Get-ChildItem -LiteralPath $script:fixture.Download -File) {
+            (Get-FileHash -LiteralPath (Join-Path $copy $file.Name)).Hash |
+                Should -BeExactly (Get-FileHash -LiteralPath $file.FullName).Hash
+        }
+        $manifest = Get-Content -LiteralPath (Join-Path $script:fixture.Second 'modules' 'modules.json') -Raw |
+            ConvertFrom-Json -AsHashtable
+        $manifest.Modules.Key | Should -Be @('', 'renamed')
+    }
+
+    It 'propagates copy failure without publishing a seeded manifest' {
+        Register-InspectionFixture $script:fixture
+        Mock Copy-Item -ModuleName Avm.Authoring { throw [System.IO.IOException]::new('inspection copy failed') }
+        { Initialize-InspectionFixture $script:fixture } | Should -Throw '*inspection copy failed*'
+        Test-Path -LiteralPath (Join-Path $script:fixture.Second 'modules' 'modules.json') | Should -BeFalse
+    }
+
     It 'builds current local parent records and remaps nested remote calls' {
         Register-InspectionFixture $script:fixture
         InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {

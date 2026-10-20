@@ -11,6 +11,90 @@ AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
+Describe 'Terraform ModTM restoration module enumeration' {
+    It 'preserves a retained dependency with <Label> as the <Role> module label' -TestCases @(
+        @{ Label = 'keys'; Role = 'other'; RetainedLabel = $false }
+        @{ Label = 'Keys'; Role = 'other'; RetainedLabel = $false }
+        @{ Label = 'KEYS'; Role = 'other'; RetainedLabel = $false }
+        @{ Label = 'keys'; Role = 'retained'; RetainedLabel = $true }
+        @{ Label = 'Keys'; Role = 'retained'; RetainedLabel = $true }
+        @{ Label = 'KEYS'; Role = 'retained'; RetainedLabel = $true }
+    ) {
+        param($Label, $RetainedLabel)
+        InModuleScope Avm.Authoring -Parameters @{
+            Root = (Join-Path $TestDrive 'module')
+            Label = $Label
+            RetainedLabel = $RetainedLabel
+        } {
+            param($Root, $Label, $RetainedLabel)
+            $retainedName = if ($RetainedLabel) { $Label } else { 'avm_interfaces' }
+            $otherName = if ($RetainedLabel) { 'other' } else { $Label }
+            $dependency = Join-Path $Root '.published' 'interfaces'
+            $modtm = 'registry.terraform.io/azure/modtm'
+            $sources = @{
+                $retainedName = [Collections.Generic.HashSet[string]]::new(
+                    [string[]]@($modtm, 'registry.terraform.io/azure/azapi'), [StringComparer]::Ordinal)
+                $otherName = [Collections.Generic.HashSet[string]]::new(
+                    [string[]]@('registry.terraform.io/azure/azapi', 'terraform.io/builtin/terraform'), [StringComparer]::Ordinal)
+            }
+            $manifest = ConvertTo-Json -Depth 5 -Compress -InputObject @{
+                Modules = @(
+                    @{ Key = ''; Dir = '.' }
+                    @{ Key = $retainedName; Source = 'Azure/avm-utl-interfaces/azure'; Version = '0.5.0'; Dir = $dependency }
+                    @{ Key = $otherName; Source = './modules/other'; Dir = (Join-Path $Root 'modules' 'other') }
+                )
+            }
+            $calls = @{
+                $retainedName = @{ source = 'Azure/avm-utl-interfaces/azure'; version = '0.5.0'; mptf = @{} }
+                $otherName = @{ source = './modules/other'; mptf = @{} }
+            }
+            Mock ConvertFrom-AvmTerraformModuleManifest {}
+            Mock Get-ChildItem { @() }
+            Mock Get-AvmTerraformUnitTestRequiredProvider {
+                @{ modtm = @{ source = 'Azure/modtm'; version = '~> 0.3' } }
+            }
+            Mock Invoke-AvmProcess {
+                if ($ArgumentList[0] -cne 'debug') {
+                    throw [InvalidOperationException]::new('This pure test permits only mocked native inspection.')
+                }
+                [pscustomobject]@{ StdOut = $EnvVars['UNIT_CALLS_JSON']; ExitCode = 0; StdErr = '' }
+            }
+            $parameters = @{
+                Path = $Root
+                ModuleTargets = @([pscustomobject]@{ Path = $Root })
+                Options = [pscustomobject]@{
+                    ToolPath = 'mapotf'
+                    ProfileDirs = @{ 'provider-restore' = 'provider-restore' }
+                    EnvVars = @{ UNIT_CALLS_JSON = $calls | ConvertTo-Json -Depth 5 -Compress }
+                }
+                RequiredProviders = @{ $Root = @{} }
+                ProviderSources = @{ $Root = @($modtm) }
+                ModuleProviderSources = @{ $Root = $sources }
+                ModuleManifests = @{ $Root = $manifest }
+                OriginalRequirements = @{ $Root = @{ modtm = @{ source = 'Azure/modtm'; version = '~> 0.3' } } }
+                Plans = @{}
+                PlanningPaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+                BindDependencies = $true
+            }
+
+            $plan = Get-AvmTerraformUnitTestModtmRequirementPlan @parameters
+
+            $expectedBindings = ConvertTo-Json -Compress -InputObject @{ $retainedName = '{ modtm = modtm }' }
+            $plan.Arguments | Should -Contain "unit_test_modtm_bindings=$expectedBindings"
+            $plan.Capabilities | Should -Match ([regex]::Escape("unit_test_modtm_bindings[`"$retainedName`"]"))
+            $parameters.RequiredProviders[$Root].modtm.source | Should -BeExactly 'Azure/modtm'
+            $parameters.RequiredProviders[$Root].modtm.version | Should -BeExactly '~> 0.3'
+            $parameters.ModuleManifests[$Root] | Should -BeExactly $manifest
+            $calls[$retainedName].version | Should -BeExactly '0.5.0'
+            $parameters.Plans[$Root] | Should -Be $plan
+            $parameters.PlanningPaths.Count | Should -Be 0
+            Should -Invoke Get-AvmTerraformUnitTestRequiredProvider -Exactly 1 -ParameterFilter { $Path -ceq $dependency }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -ceq 'debug' }
+            Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -ceq 'transform' }
+        }
+    }
+}
+
 Describe 'Terraform unit-test migration' {
     BeforeEach {
         $script:fixture = New-UnitMigrationFixture
@@ -127,6 +211,144 @@ Describe 'Terraform unit-test migration' {
 
 
 
+
+    Context 'baseline provider-tree selection' {
+        BeforeEach {
+            Mock Get-AvmTerraformUnitTestInspection -ModuleName Avm.Authoring { $Scope.Inspection }
+            Mock Get-AvmTerraformUnitTestRequiredProvider -ModuleName Avm.Authoring {
+                @{ azapi = @{ source = 'Azure/azapi' } }
+            }
+            Mock Test-AvmTerraformScopedProviderInUse -ModuleName Avm.Authoring { $false }
+            Mock Get-AvmTerraformUnitTestProviderSource -ModuleName Avm.Authoring {
+                @('registry.terraform.io/azure/azapi')
+            }
+        }
+
+        It 'does not load Terraform dependencies before fully mocked templates gain their inputs' {
+            InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {
+                param($Fixture)
+                Mock Get-AvmTerraformTestFileScope { $Fixture.Scope }
+                $snapshots = @(Get-AvmTerraformUnitTestSnapshot -Root $Fixture.Root `
+                        -ModuleTargets $Fixture.Targets -Options $Fixture.Options)
+                $snapshots[0].ProviderSources.Count | Should -Be 0
+                Should -Invoke Get-AvmTerraformUnitTestProviderSource -Exactly 0
+                Should -Invoke Test-AvmTerraformScopedProviderInUse -Exactly 2 -ParameterFilter {
+                    $IncludeSelectedExamples -and $TargetPaths.Count -eq 2
+                }
+            }
+        }
+
+        It 'retains native baseline proof for a possible unmocked <LocalProvider> dependency' -TestCases @(
+            @{ LocalProvider = 'random' }
+            @{ LocalProvider = 'time' }
+        ) {
+            param($LocalProvider)
+            InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture; LocalProvider = $LocalProvider } {
+                param($Fixture, $LocalProvider)
+                Mock Get-AvmTerraformTestFileScope { $Fixture.Scope }
+                Mock Test-AvmTerraformScopedProviderInUse { $Provider -ceq $LocalProvider }
+                $snapshots = @(Get-AvmTerraformUnitTestSnapshot -Root $Fixture.Root `
+                        -ModuleTargets $Fixture.Targets -Options $Fixture.Options)
+                $snapshots[0].ProviderSources.Count | Should -Be 2
+                Should -Invoke Get-AvmTerraformUnitTestProviderSource -Exactly 2
+            }
+        }
+
+        It 'does not request preservation proof for mocked <LocalProvider> requirements' -TestCases @(
+            @{ LocalProvider = 'random' }
+            @{ LocalProvider = 'time' }
+        ) {
+            param($LocalProvider)
+            $script:fixture.After.test.mock_providers[$LocalProvider] = @{ mptf = @{ is_empty = $true } }
+            InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture; LocalProvider = $LocalProvider } {
+                param($Fixture, $LocalProvider)
+                Mock Get-AvmTerraformTestFileScope { $Fixture.Scope }
+                Mock Get-AvmTerraformUnitTestRequiredProvider {
+                    @{ azapi = @{ source = 'Azure/azapi' }; $LocalProvider = @{ source = "hashicorp/$LocalProvider" } }
+                }
+                $snapshots = @(Get-AvmTerraformUnitTestSnapshot -Root $Fixture.Root `
+                        -ModuleTargets $Fixture.Targets -Options $Fixture.Options)
+                $snapshots[0].ProviderSources.Count | Should -Be 0
+                Should -Invoke Get-AvmTerraformUnitTestProviderSource -Exactly 0
+                Should -Invoke Test-AvmTerraformScopedProviderInUse -Exactly 0 -ParameterFilter {
+                    $Provider -ceq $LocalProvider
+                }
+            }
+        }
+
+        It 'keeps native baseline proof when an authored mapping needs new AzAPI coverage for <Kind> telemetry' -TestCases @(
+            @{ Kind = 'root'; Utility = $false }
+            @{ Kind = 'planned utility'; Utility = $true }
+        ) {
+            param($Utility)
+            $script:fixture.After.test.mock_providers.modtm = @{ mptf = @{ is_empty = $true } }
+            $script:fixture.After.test.runs.root.mptf.attributes.providers = '{ modtm = modtm }'
+            if ($Utility) {
+                foreach ($target in $script:fixture.Targets) { $target.Profiles = @('module', 'common') }
+                $script:fixture.Options | Add-Member -NotePropertyName UtilityTelemetryPaths -NotePropertyValue @($script:fixture.Root)
+            }
+            InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {
+                param($Fixture)
+                Mock Get-AvmTerraformTestFileScope { $Fixture.Scope }
+                Mock Get-AvmTerraformUnitTestRequiredProvider { @{ modtm = @{ source = 'Azure/modtm' } } }
+                $snapshots = @(Get-AvmTerraformUnitTestSnapshot -Root $Fixture.Root `
+                        -ModuleTargets $Fixture.Targets -Options $Fixture.Options)
+                $snapshots[0].ProviderSources.Keys | Should -HaveCount 1
+                $snapshots[0].ProviderSources.ContainsKey($Fixture.Root) | Should -BeTrue
+                Should -Invoke Get-AvmTerraformUnitTestProviderSource -Exactly 1 -ParameterFilter { $Path -ceq $Fixture.Root }
+            }
+        }
+
+        It 'preserves proof for an unmocked local provider declared under another name' {
+            $script:fixture.After.test.mock_providers.time = @{ mptf = @{ is_empty = $true } }
+            InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {
+                param($Fixture)
+                Mock Get-AvmTerraformTestFileScope { $Fixture.Scope }
+                Mock Get-AvmTerraformUnitTestRequiredProvider {
+                    @{ azapi = @{ source = 'Azure/azapi' }; clock = @{ source = 'hashicorp/time' } }
+                }
+                $snapshots = @(Get-AvmTerraformUnitTestSnapshot -Root $Fixture.Root `
+                        -ModuleTargets $Fixture.Targets -Options $Fixture.Options)
+                $snapshots[0].ProviderSources.Count | Should -Be 2
+                Should -Invoke Get-AvmTerraformUnitTestProviderSource -Exactly 2
+            }
+        }
+    }
+
+    Context 'built-in mock source proof' {
+        It 'resolves only the proven mock identity: <Case>' -TestCases @(
+            @{ Case = 'implicit built-in default'; Name = 'terraform'; Required = @{}; Sources = @('terraform.io/builtin/terraform'); Expected = @('terraform') }
+            @{ Case = 'implicit built-in alias'; Name = 'terraform.unit'; Required = @{}; Sources = @('terraform.io/builtin/terraform'); Expected = @('terraform.unit') }
+            @{ Case = 'explicit local name'; Name = 'native.unit'; Required = @{ native = @{ source = 'terraform.io/builtin/terraform' } }; Sources = @('terraform.io/builtin/terraform'); Expected = @('native.unit') }
+            @{ Case = 'unproven built-in source'; Name = 'terraform'; Required = @{}; Sources = @('registry.terraform.io/hashicorp/random'); Expected = @() }
+            @{ Case = 'existing registry inference'; Name = 'terraform'; Required = @{}; Sources = @('registry.terraform.io/hashicorp/terraform'); Expected = @('terraform') }
+            @{ Case = 'different declared implementation'; Name = 'terraform'; Required = @{ terraform = @{ source = 'hashicorp/terraform' } }; Sources = @('terraform.io/builtin/terraform'); Expected = @() }
+            @{ Case = 'explicit source disambiguation'; Name = 'terraform'; Required = @{ terraform = @{ source = 'terraform.io/builtin/terraform' } }; Sources = @('terraform.io/builtin/terraform', 'registry.terraform.io/hashicorp/terraform'); Expected = @('terraform') }
+            @{ Case = 'no invented built-in mock'; Name = 'azapi'; Required = @{}; Sources = @('terraform.io/builtin/terraform'); Expected = @() }
+        ) {
+            param($Name, $Required, $Sources, $Expected)
+            InModuleScope Avm.Authoring -Parameters @{ Name = $Name; Required = $Required; Sources = $Sources; Expected = $Expected } {
+                param($Name, $Required, $Sources, $Expected)
+                $actual = @(Get-AvmTerraformUnitTestMockProviderName -ProviderNames @($Name) `
+                        -RequiredProviders $Required -ProviderSources $Sources)
+                $actual.Count | Should -Be $Expected.Count
+                if ($Expected.Count -gt 0) { $actual | Should -Be $Expected }
+            }
+        }
+
+        It 'rejects ambiguous inferred built-in and <OtherSource> identities' -TestCases @(
+            @{ OtherSource = 'registry.terraform.io/hashicorp/terraform' }
+            @{ OtherSource = 'example.com/owner/terraform' }
+        ) {
+            param($OtherSource)
+            InModuleScope Avm.Authoring -Parameters @{ OtherSource = $OtherSource } {
+                param($OtherSource)
+                { Get-AvmTerraformUnitTestMockProviderName -ProviderNames @('terraform') `
+                        -RequiredProviders @{} -ProviderSources @('terraform.io/builtin/terraform', $OtherSource) } |
+                    Should -Throw '*ambiguous built-in and registry provider evidence*'
+            }
+        }
+    }
 
     Context 'complete mock mappings' {
         It 'validates the complete native HCL mapping: <Shape>' -TestCases @(

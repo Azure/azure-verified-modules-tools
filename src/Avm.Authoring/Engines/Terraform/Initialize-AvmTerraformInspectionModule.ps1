@@ -219,7 +219,7 @@ function Initialize-AvmTerraformInspectionModule {
     $modulesPath = Join-Path $DataDirectory 'modules'
     $null = New-Item -ItemType Directory -Path $modulesPath -Force
     foreach ($copy in $copies) {
-        Copy-Item -LiteralPath $copy.Source -Destination $copy.Destination -Recurse -ErrorAction Stop
+        Copy-Item -LiteralPath $copy.Source -Destination $copy.Destination -Recurse -ErrorAction Stop -ProgressAction SilentlyContinue
     }
     $payload = ConvertTo-Json -InputObject @{ Modules = $records.ToArray() } -Depth 10 -Compress
     [System.IO.File]::WriteAllText((Join-Path $modulesPath 'modules.json'), $payload, [System.Text.UTF8Encoding]::new($false))
