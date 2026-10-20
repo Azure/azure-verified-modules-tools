@@ -12,6 +12,14 @@ function Remove-AvmBicepResource {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
+    if ($Type -ieq 'Microsoft.Authorization/roleAssignments') {
+        $resource = ConvertTo-AvmBicepCleanupResource -ResourceIds @($ResourceId)
+        $assignmentId = [guid]::Empty
+        if ($resource.type -ine $Type -or
+            -not [guid]::TryParseExact($ResourceId.Split('/')[-1], 'D', [ref]$assignmentId)) {
+            throw [AvmConfigurationException]::new('Role-assignment cleanup requires an exact ARM role assignment ID ending in a GUID.')
+        }
+    }
     if (-not $PSCmdlet.ShouldProcess($ResourceId, 'Remove Bicep test resource')) {
         return
     }
@@ -101,14 +109,13 @@ function Remove-AvmBicepResource {
             break
         }
         'Microsoft.Authorization/roleAssignments' {
-            $idElem = $ResourceId.Split('/')
-            $scope = $idElem[0..($idElem.Count - 5)] -join '/'
-            if ([string]::IsNullOrEmpty($scope)) { $scope = '/' }
-            $roleAssignmentsOnScope = Get-AzRoleAssignment -Scope $scope
             if ($PSCmdlet.ShouldProcess($ResourceId, 'Remove role assignment')) {
-                $null = $roleAssignmentsOnScope |
-                    Where-Object { $_.RoleAssignmentId -ieq $ResourceId } |
-                    Remove-AzRoleAssignment
+                $response = Invoke-AzRestMethod -Method DELETE -Path "$($ResourceId)?api-version=2022-04-01" -ErrorAction Stop
+                $status = Get-AvmPropertyValue -InputObject $response -Name StatusCode -NoEnumerate
+                if (($status -isnot [int] -and $status -isnot [System.Net.HttpStatusCode]) -or
+                    $status -notin @(200, 204, 404)) {
+                    throw [AvmProcessException]::new('ARM did not confirm removal or absence of the recorded role assignment.')
+                }
             }
             break
         }

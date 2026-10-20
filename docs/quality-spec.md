@@ -398,9 +398,37 @@ requires an explicit subscription GUID, validates every entry before calling
 Azure CLI, verifies that the CLI is selected to that subscription, and never
 unregisters a feature. The protected Terraform integration and e2e jobs run it
 only when the manifest is nonempty. Bicep `avm test e2e` reads the manifest
-before confirmation and registers the features once per selected subscription
-after the identity check and before validation; a registration failure fails
-the case without deploying.
+before confirmation and registers the features once per selected subscription.
+
+Bicep registry modules may also declare `.required-resource-providers.json`
+at the repository root. It maps exact lowercase `avm/res|ptn|utl/...` module
+paths to arrays of provider namespaces. This selection is independent of
+identity-root selection: never inherit a parent's requirements for a child,
+read a nested provider manifest, or accept an underscore filename alternative.
+Validate the whole map, including unselected entries, before dependencies or
+Azure calls. Reject duplicate keys/namespaces, malformed JSON, non-string
+entries, unsafe namespace syntax, files over 64 KiB, more than 32 requirements
+per module and namespace parts over 128 characters. Missing, empty and unrelated
+maps are logged registration no-ops; WhatIf validates without Azure calls.
+
+One private parser and registration implementation serves features and providers.
+Resolve declarations for each selected case's exact owning module before effects,
+including recursive and child-example selection; never inherit the invocation
+parent's declarations. Cache completed registrations by subscription and exact
+requirement, so one case cannot suppress another owner's distinct prerequisites.
+After compilation and identity verification, Bicep All/Deploy completes feature
+registration and its provider refresh, then required provider registration,
+before template/parameter token replacement, validation or deployment.
+Registered providers are left alone; Registering providers are polled without
+resubmission; NotRegistered/Unregistered providers register once and are polled.
+Recheck the selected subscription, tenant, cloud and principal before each
+registration command/read, and bind every response to the requested identity.
+Approval, unknown states, native errors, timeouts and cancellation fail explicitly;
+registration failure cannot continue to tokens or deployment. Complete and
+cleanup do not read these manifests or register prerequisites. Registrations
+persist; never unregister, grant roles, accept service terms or switch the
+authenticated account. Terraform's feature-only API and automatic-provider-
+registration safeguards are unchanged.
 
 Rules:
 
@@ -690,6 +718,22 @@ Root, child, example and discovered test-wrapper scopes share this phase.
 These are fixed one-off migration targets, not latest-release lookups or an
 automatic progression to future utility versions.
 
+`AVM_TF_UTILITY_MIGRATION=preserve` is the supported opt-in for retaining
+authored utility dependencies without accepting those migrations. Set it
+consistently for `avm pre-commit`, `avm transform` and `avm pr-check`, including
+CI. Unset, empty or `migrate` retains the default behavior; other values fail
+configuration before the transform resolves tools or changes source.
+Preservation still inspects recognized utility calls and requires literal exact
+pins. It leaves their source, version, caller inputs and migration-related
+provider bindings unchanged, rather than replacing the Mapotf profiles or
+excluding transform. All other instrumentation, provider/mock reconciliation,
+drift checks, lint and ordinary policy evaluation remain enabled. This is not
+an approval to upgrade dependencies, freeze unrelated generated content or
+weaken consumer checks. Existing lock selections remain protected by the same
+initialization and native-inspection controls. In particular, preservation
+does not waive a module-root lint rejection of legacy Naming; its retained
+calls must already satisfy the applicable source rules.
+
 Legacy `Azure/naming/azurerm` calls become `Azure/avm-utl-naming/azure` at
 `0.2.0` in modern mode. Omit `legacy_mode` to use its false default; if an
 old-source call already contains that input, set it to false. Preserve labels
@@ -718,7 +762,10 @@ utility edits. Inspect upgraded dependencies through fresh private Terraform
 data directories, not the consumer's stale modules manifest. Remove obsolete
 ModTM mappings only with dependency proof and literal same-provider mappings;
 preserve other bindings and their comments. Reconcile affected local callers
-in dependency order after telemetry transforms. Remove provider requirements
+in dependency order after telemetry transforms. Include every known transitive
+local caller of a visited dependency, even when only another example directly
+uses the migrated utility; unrelated scopes stay outside this cleanup closure.
+Remove provider requirements
 and empty mocks only when resources, data, ephemeral blocks, provider
 configurations, bindings and the fresh dependency trees prove them unused.
 Retain genuine ModTM dependencies, custom mocks, state-only `removed` blocks
@@ -906,6 +953,16 @@ Native MaPoTF inspects each direct `tests/unit/*.tftest.hcl` file before source
 transformation. Root runs and explicitly selected, known local module
 targets, including discovered examples and standalone test setup and wrapper modules,
 are supported; remote or unknown targets fail without fetching them.
+Load pre-transform provider trees only when preserving existing local bindings
+or augmenting an introduced provider mapping needs their evidence. Conservative
+local-provider usage checks select those inspections; they never establish
+binding coverage. Fully mocked templates can reference inputs that instrumentation
+has not created yet, so their native dependency loading waits until after the
+source transforms. Every selected post-transform provider tree still requires
+complete mock or proven preserved-binding coverage.
+When utility planning identifies a target that will gain telemetry, an authored
+mapping still requires the same baseline proof even without a root telemetry
+profile on that target.
 Only root and child modules establish test-file ownership; example and
 standalone test targets do not change which files are direct unit tests.
 After source transformation, only a target that gained a previously absent,
@@ -914,9 +971,26 @@ provider-mocked tests. Existing global and per-run values, including nulls
 and expressions, remain authored. This test-only value is not a production
 default and never replaces per-hub regions or repairs unrelated pre-existing
 missing inputs. Assertions, targets and telemetry opt-outs are preserved.
-Real-provider declarations, unproven aliases and partial or cross-provider
-bindings still require review rather than being silently changed; an AzureRM
-mock alone cannot cover new AzAPI telemetry. AzAPI aliases must have consistent
+New or unproven real-provider declarations, unproven aliases and partial or
+cross-provider bindings still require review rather than being silently changed;
+an AzureRM mock alone cannot cover new AzAPI telemetry. Preserve an existing
+`azure/alz` library provider only with literal relative library paths without
+parent traversal, and existing unmocked `hashicorp/random` and `hashicorp/time`
+bindings, when each run's pre- and post-transform native configuration trees prove
+the same provider source. Preserve retained declared versions and literal native
+provider identities. A generated mapping must retain the selected real library
+configuration rather than invent mock outputs or fall back to an unconfigured
+library. Unconfigured Random/Time defaults remain implicit; a dependency's proven
+HashiCorp source does not require an otherwise unused root declaration.
+Never replace an existing mock with a real binding, infer other real provider
+implementations, or use another run's source or alias proof. Azure operation
+providers and ModTM still require known same-provider mocks.
+When generating a new map, retain an already-authored built-in Terraform mock
+only when native source evidence identifies `terraform.io/builtin/terraform`.
+An undeclared source with both built-in and registry Terraform identities is
+ambiguous and requires an explicit source. Do not invent a built-in mock or
+silently complete an authored map that omitted it.
+AzAPI aliases must have consistent
 literal native names, labels and addresses; the same identity checks apply to
 every provider alias. Local source-backed aliases retain the source checks
 above. An alias is never treated as an unaliased default.
@@ -930,8 +1004,9 @@ A valid, explicitly empty native run collection needs no mocks. Missing,
 malformed or incomplete native collections still fail inspection.
 When an instrumented target introduces AzAPI, add its existing default mock
 binding only if a pre-transform configuration provider tree proves the old
-mapping covered every selected provider. Preserve the original aliases and
-comments; incomplete or unmocked prior coverage still fails.
+mapping covered every selected provider through mocks or the preserved local
+bindings above. Preserve the original aliases and comments; incomplete or
+unproven prior coverage still fails.
 Preserve safe authored bindings; remove only bindings to an empty ModTM or
 random mock whose provider is absent from that target's
 configuration dependency tree. Preserve all remaining expression text and
@@ -1035,6 +1110,9 @@ unchanged. Default and complete example-wrapper regressions must check both
 required-provider and unused-provider lint as well as independent validation,
 exact dependency selections and lock/manifest bytes. Finish the normal
 ordering profile on restored scopes so the first pass is already drift-free.
+Restore requirements and bindings through the isolated `provider-restore`
+profile, not the full module profile: example and test callers must not acquire
+unrelated module inputs or changed provider constraints during this repair.
 Published dependencies remain untouched. An inspected target's or dependency's
 direct `.tf.json` files may contain only `locals` blocks in strict JSON objects,
 including arrays of locals objects; empty configuration objects are also safe.
@@ -1050,6 +1128,16 @@ Unrelated selected targets still retire their unused bindings and requirements.
 Native regression fixtures use loopback-only ModTM endpoints and verify mocked
 resource values, full original locks, installed selections, repeat stability
 and failure-path drift restoration without production collector access.
+Real ALZ library regressions preserve provider configuration, fixture bytes and
+assertions through native parsing, provider-tree inspection and validation;
+they do not execute the original Terraform tests or fabricate ALZ outputs.
+Separate binding regressions execute only with proven default and same-provider
+alias mocks, including Terraform's built-in provider. Native execution rejects
+real provider blocks, missing dependency mocks and unproven mappings before
+`terraform test`; inherited credentials are cleared, authentication fallbacks
+disabled and runtime endpoints/proxies restricted to loopback. Preservation
+and mocked-binding evidence do not establish original consumer/runtime
+equivalence, which remains an explicit qualification gap.
 
 `avm pre-commit` and `avm pr-check` resolve their required tools before the
 first step, which validates metadata for the selected root and its module
@@ -1057,6 +1145,10 @@ children. Missing or invalid metadata fails and stops either chain before
 other steps, without changing module files or reading indexes. `avm pr-check`
 also requires a clean worktree before tool resolution. `-Verbose` logs the
 discovered module count, each validated metadata path, and any issues.
+Terraform pr-check initializes missing source examples with the backend disabled
+and compatible locked dependency selections preserved. Validation must not
+request dependency upgrades. Incompatible locked selections fail initialization
+without an upgrade retry; candidate-tree checks still reject tracked lock drift.
 `avm pr-check -ExcludeSteps` accepts an array of any of its nine step names:
 `metadata`, `sync`, `format`, `transform`, `lint`, `check policy`,
 `check convention`, `validate`, and `docs`. Names are case-insensitive and
@@ -1066,6 +1158,13 @@ Bicep result checks for an excluded step. Each is reported as `skipped` with an
 exclusion reason. Non-excluded checks retain their ordering and failure rules;
 version and clean-worktree guards remain mandatory. An entirely excluded chain
 reports overall `skipped`, not `pass`.
+Terraform source-example initialization is a prerequisite, not a tenth public
+step. It runs once after selected metadata validation and before the remaining
+checks only when `validate` is enabled; validation reuses that persistent state.
+Initialization failure aborts dependent checks and cannot be reported as skipped.
+Formatting needs the Terraform executable but no initialized examples. Transform,
+lint and policy prepare their own working directories and retain their existing
+cache and policy-isolation contracts when validation is excluded.
 For Bicep formatting, `avm pr-check` compares `bicep format --stdout` with
 the original source bytes and never rewrites the working copy. `avm pre-commit`
 still formats in place.
@@ -1144,11 +1243,19 @@ were added directly to the module repository rather than through Bicep Sync.
 and child READMEs through the pinned `bicep docs generate --stdout` command.
 Module-root runs include tests in that root's `tests/e2e` for its own and
 nested READMEs, but do not search above the selected root. The
-packaged `avm-readme-v1.scriban` is used by default through the compiler's
-`--template-file` option, without creating caller config or template files.
+packaged `avm-readme-v1.scriban` is used by default without creating caller
+config or template files. Bicep 0.48 resolves templates only from configuration;
+package-default renders use a temporary copy of the selected source/config
+tree (owner-only on POSIX), with the canonical template selected only in that copy. The copy
+preserves relative sources, binary assets, compiler options and example
+reassignments, excludes Git administration data, and is reused across modules
+and provenance renders in one invocation. It is removed on success or failure.
+Linked entries and filesystem/home/temporary-root staging are rejected rather
+than following links or copying an unbounded directory.
 An explicit `documentation.template.file` in the nearest `bicepconfig.json`
 must reference a relative canonical copy; a different template or hash fails
-before writing. Generated content comes from the
+before writing. Valid explicit configurations render directly without a
+temporary source copy. Generated content comes from the
 native model, Bicep test sources, and compiled `main.json` (or a local build
 when it is absent), never from the existing README body.
 
@@ -1251,6 +1358,13 @@ Secrets `TEST_SUBSCRIPTION_IDS`; directly supplied environment aliases follow
 the same canonical-before-legacy order. Management-group metadata uses the
 same source order, with `VALIDATE_MANAGEMENT_GROUP_ID` before `ARM_MGMTGROUP_ID`
 within each source. Authentication remains `VALIDATE_*`, not legacy `ARM_*`.
+Native e2e uses that management-group target only with `-UseCiInputs` and
+only when `-ManagementGroupId` was not explicitly supplied. An explicit
+target wins even when invalid; validation must reject it rather than
+substitute a CI target. Without the opt-in, management-group execution still
+requires an explicit target. Missing or invalid selected targets fail before
+authenticated execution or deployment. Static policy selection and scopes
+that do not require a management group retain their existing behavior.
 
 Registry-layout native execution and PSRule require the exact root
 `.reserved-test-subscriptions.json` file: an object mapping canonical module
@@ -1291,17 +1405,118 @@ type when available; pattern/helper or absent metadata uses the generic
 allowed-region list. Explicit parameter, token and resource-location pins
 must agree. Only wholly regional validation failures can relocate an
 unpinned, non-global, non-resource-group case. Metadata location and
-`baseTime` stay fixed. Record every attempt before submission, verify the
-native response's exact deployment ID, and retry only confirmed failure or
-exact preflight rejection. A submission timeout watches the same deployment
-for up to an hour (stopping after three consecutive read timeouts); a
+`baseTime` stay fixed.
+
+`Resources/bicep/retry-policy.json` and its adjacent schema own retry matching
+rules, modes, region choices, submission/region budgets, delay and read/observation
+budgets. Validate the packaged policy before execution: reject duplicate or
+unknown fields, invalid expressions and inconsistent rules. Expressions have
+bounded evaluation time and cannot execute code. Public attempt limits may
+lower, but not exceed, the configured budgets. Code retains unconditional
+identity, response-shape, authentication, cancellation and cleanup guards;
+configuration cannot turn those failures into retries. Every failed error
+branch must support the same configured mode; mixed or unknown evidence stops
+retrying. There is no catch-all replay for a failed or rejected deployment.
+
+The case uses one bounded submission loop with two modes. `InPlace` preserves
+the exact root deployment identity, validated template, resolved parameters,
+external naming context and region. `Fresh` generates another external naming
+context and root identity; resource-group cases create another uniquely named,
+tagged group. Fresh normally chooses the next eligible region, with rejected
+regions and validation attempts carried forward. A policy may instead preserve
+the region while generating a new context. A pin or exhausted region budget
+must not silently change a next-region retry into an in-place retry.
+Generate only harness-owned naming tokens and their derived inputs anew;
+explicit caller values and Bicep-authored names remain unchanged. Fresh means
+a new external attempt context, not guaranteed isolation of fixed or global
+names inside Bicep. Do not add naming-eligibility or ARM what-if gates to retry.
+
+Provider/location, deployment-record, operation-page and assertion-output reads
+buffer each attempt and discard partial failed output. Each idempotent read
+independently defaults to three attempts for typed request timeouts through
+the shared retry mechanism with a five-second initial delay. A later page's
+retry must not replay earlier pages. Any HTTP status, permission,
+authentication, cancellation, unknown sibling cause or untyped transport/
+message-only failure disqualifies the read retry. Traverse both inner exceptions
+and distinct RuntimeException error-record causes. This exception to the normal
+Azure SDK retry boundary does not change shared retry defaults or apply to
+mutations.
+
+Regional evidence includes the registry's captured small Linux container-group
+capacity message, wrapped ML/Cosmos high-demand response, AKS preflight
+response with an explicitly empty supported-zone list, and exact
+`LocationNotAvailableForResourceType` provider-availability response. The latter
+must name the selected region and a valid provider-qualified resource type,
+with a distinct non-global available-region list that excludes the rejected
+region. Exact Search SKU-capacity, semantic-availability and
+service-capacity `InsufficientResourcesAvailable` responses
+qualify only for the selected non-global region. Container Apps managed
+environment capacity requires its complete AKS diagnostic envelope, matching
+strict JSON body and recognized, unique diagnostic headers. For these service
+responses, every supplied ancestor or leaf target must be a consistent service
+identity or deployment in the selected subscription; Container Apps requires a managed-environment
+identity, while untargeted Search messages are allowed. Keep target ancestry
+separate for each error path. A selected candidate or resource ID alone does
+not establish the failed region for regionless service errors.
+Normalize null SDK `target` and `details` members only on the copied
+error node; preserve the original response and reject meaningful, empty,
+malformed or unknown extra fields in narrow evidence. Require the matching
+region and resource/subscription context, complete error structure and no
+mixed or malformed evidence; do not generalize these to arbitrary messages.
+Record every attempt before submission and verify the native response's exact
+deployment ID. Deployment retries require an exact Failed root and complete
+eligible operation evidence, not preflight rejection alone. A submission
+timeout watches the same deployment
+under one absolute UTC deadline shared by every attempt and recovery route
+in the case. `observation.coordinatorTimeoutSeconds` defaults to four hours
+and can only be lowered. Do not reset the deadline on a fresh/in-place attempt,
+start another status read at/after it, or accept a terminal result returned
+at/after it. Clamp the final sleep to the fractional time remaining.
+Direct private observation without a coordinator retains its one-hour default.
+Three consecutive read timeouts still stop observation; a
 recovered `Failed` state counts as confirmed. Unknown or cancelled outcomes
-never resubmit. A confirmed deployment failure whose operation errors are all regional
-may also relocate an eligible case: strict cleanup must first confirm every
-deployment is terminal and fully discovered, remove its resources (no retained
-or soft-deleted names) and delete its deployment records. Otherwise relocation
-stops and ordinary cleanup runs. Rejected regions and attempt numbers carry
-forward, so relocation never exceeds the validation or deployment budgets.
+never resubmit. Before either retry mode, strictly discover the failed attempt's
+terminal root and nested Create operations and atomically save the union of
+resource identities. Partial discovery is saved but blocks replay. This snapshot
+is read-only: never remove resources, purge soft-deleted names or delete
+deployment records between attempts. ARM may overwrite nested history even
+when root names differ. Final cleanup merges current discovery with saved
+evidence from every attempt, including failed or abandoned attempts, and safely
+deduplicates resource identities without case sensitivity.
+Subscription and management-group submission capture the authenticated context
+before recording an attempt and use that profile for submission and status reads.
+At subscription scope, an exact SDK nested-operation GET 404 may also observe
+the original root: require matching request, typed HTTP status, SDK body and
+strict JSON evidence for a different deployment in the same subscription and
+original cloud authority. It never authorizes another submission itself.
+Only separately confirmed Failed state and eligible operation evidence can
+permit retry after recovery; successful recovery never enters classification.
+For management-group submissions, an actual typed HTTP 403 may only observe
+that same deployment within the
+existing recovery budget: success requires its exact ID, scalar state and
+valid outputs. Failed, missing, malformed or unreadable recovery never permits
+replay or regional classification. Cancellation remains terminal and takes
+precedence over HTTP 403, which takes precedence over timeout or transport.
+Keep original and recovery errors in memory without logging raw Azure payloads.
+An unclassified submission exception may be recovered only by an exact Failed
+root record and complete eligible operation evidence; a malformed returned
+identity or unreadable classification must never enable replay.
+
+The default policy assigns narrowly targeted `InternalServerError` leaves for
+application gateways, private endpoints and PostgreSQL flexible servers to
+`InPlace`, and the supported capacity/region failures to `Fresh`. Adding a
+service rule must not require another service-specific execution branch.
+
+Strict discovery may omit a nested deployment only after a unique failed
+preflight Create operation in the complete parent history and explicit
+`DeploymentNotFound` from an exact child-record GET. A missing operations
+page alone is insufficient. An ID-less Graph service-principal Create may
+be ignored only when a successful operation and that exact deployment's
+exported template prove the matching literal existing declaration, extension,
+import and scope. This proof also applies during ordinary final cleanup;
+never reuse a parent deployment's export for a child. Both cleanup and retry
+classification read deployment operations with API `2025-04-01` to preserve
+extension metadata; record and resource-group reads remain unchanged.
 
 After a successful deployment, pass its exact REST outputs to case-local
 Pester assertions, then run `post.ps1`, then cleanup. Output envelopes support
@@ -1324,20 +1539,43 @@ owning `main.bicep`, discovered assertions and case-local `post.ps1`. This
 is not a fingerprint of every imported helper or the whole checkout.
 Save completion-started state before running authored scripts; interrupted
 or repeated completion must use `avm test cleanup`, not replay those scripts.
-`-KeepResources` runs assertions but skips both the post hook and cleanup.
+`-KeepResources` runs assertions but skips both the post hook and cleanup for
+all attempts; this is an explicit debugging exception to end-of-run cleanup.
+Cancellation or context-restoration failure also retains the complete saved
+evidence for deliberate cleanup rather than deleting possibly active resources.
 
 The private version-1 JSON state allows only target identifiers, status,
 verified group ownership tags and the small amount of resource metadata
 needed after deletion, plus the case path, source fingerprint and
-completion-started marker. It never stores credentials, parameter values,
+completion-started marker. An optional attempt journal records contiguous
+submission numbers, mode, naming ID, root ID, group and region. Validate its
+case/scope ownership, in-place identity reuse, fresh identity changes and
+coverage of every recorded root. Older version-1 states without the journal
+remain readable. The state never stores credentials, parameter values,
 deployment outputs or raw Azure responses. Create a unique local temporary
 file by default; an explicit path resolves against the caller's PowerShell
 location. Never overwrite an existing file during creation. Updates use a
 flushed, exclusive sibling temporary file followed by an atomic replacement,
 and retain the last valid state if serialization fails. State survives
 temporary-template and parameter-file cleanup.
+Failed/rejected root entries may additionally retain `recordDeletion` as
+`Pending` or `Complete`, only after all saved resources are post-processed.
+An accepted history DELETE is not confirmed absence. Persist progress and
+verify exact terminal record/404 responses. An exact `Deleting` record is
+allowed only during post-delete confirmation, consumes the existing bounded
+polling budget and never proves absence or permits pre-cleanup removal.
+Reject malformed confirmation responses without logging raw payloads.
+Cleanup-only recovery confirms
+pending deletion with GET without repeating DELETE or rediscovering those
+roots. Pending history deletion prevents a Complete outcome. These fields
+do not permit nested root entries or authorize another deployment retry.
 
 Capture post-removal metadata before deleting resources or their parents.
+Ordinary role assignments are removed by exact validated ARM ID with
+`DELETE ?api-version=2022-04-01`, without Graph principal resolution or broad
+role enumeration. Only typed HTTP 200, 204 or 404 confirms removal/absence;
+202 and malformed/error responses remain failures. Scheduled/PIM role cleanup
+retains its separate APIs.
 If the native SDK reports a plain, unclassified named-group failure without
 HTTP metadata, verify only that group with an exact ARM GET in the selected
 subscription. Treat it as absent only for HTTP 404 with the structured
@@ -1463,8 +1701,8 @@ prefer `VALIDATE_*` variables over secrets; the mapped tenant must be a GUID.
 Management group prefers variables `VALIDATE_MANAGEMENT_GROUP_ID`, then
 `ARM_MGMTGROUP_ID`, then those secrets. Malformed preferred values fail.
 Forward the pool explicitly to workflow selection, then explicit
-`SubscriptionId` and `TenantId` to native execution; native `-UseCiInputs`
-does not implicitly consume plural `VALIDATE_SUBSCRIPTION_IDS`.
+`SubscriptionId` and `TenantId` to native execution; shared phases must not
+reselect their target from ambient CI pools.
 Matrix preparation and deployment require integer package capability
 `PrivateData.AvmCapabilities.BicepTestSubscriptionSelection = 1`. The adapter
 calls public `Select-AvmTestSubscription` with the explicit caller repository,
@@ -1562,6 +1800,22 @@ edit module callers whose own files are main-push triggers, potentially
 starting fleet validation. Registry merging/cutover needs an approved rollout
 window. Do not retire registry platform-cleanup tests or native compatibility
 coverage solely because workflow source checks pass.
+Registry caller replacements must preserve the existing orchestration:
+experimental checks require both `PR: Run Checks` and `PR: Run E2E Tests`;
+ignored jobs exit before checkout, bootstrap or sign-in. The seeded matrix
+retains the original subscription index and canonical GUID-based identity.
+Main, preview and publish callers share the deployment implementation,
+per-module/subscription deployment locks, and a shared deployment-phase lock
+for management-group/tenant, linked or expression-valued nested templates.
+Publication retains its separate per-module lock. Initial login and renewal
+use OIDC with the selected subscription and tenant, without module-specific
+client-secret exceptions or credentials in outputs. Avm.Authoring consumes
+the caller's authenticated session; it does not sign in or renew credentials.
+Registry caller replacement and live qualification require separate approval.
+
+Package-owned PSRule parameter defaults are for static expansion only.
+In particular, the synthetic `builtInServicePrincipalObjectId` default must
+never populate native deployment parameters.
 
 ### Files inside the user's home
 
@@ -1640,6 +1894,19 @@ Schema enforced by `Test-AvmPins`:
   downloads their official Gallery ZIPs and uses `<Name>.psd1` as the entrypoint.
   Pester must be at least 5.5.0. Required module dependencies must match the
   configured names, versions and resolved paths before use.
+  Select exactly one exact-name module from `Import-Module -PassThru` output;
+  `ScriptsToProcess` initializer metadata is not the requested module.
+  Initializer failures still fail the import, and selected version, path and
+  dependency checks remain mandatory.
+- PowerShell module ZIP validation reads every entry and requires one root
+  manifest plus NuGet metadata identifying the exact pinned package/version.
+  A locally detected `InvalidDataException` while reading/extracting the ZIP
+  permits exactly one retry in a new staging directory. Apply this to each
+  pinned dependency as well as the requested module. Never retry checksum,
+  transport, permission, metadata or import failures as archive corruption.
+  A failed replacement must not remove the existing verified package before
+  validation; keep the lock, checksum/host/offline controls and atomic per-package
+  publication. Do not replace stable pins with dynamic prerelease resolution.
 - Both composite commands resolve and import-check all applicable prerequisites
   before metadata/step 1, after the module-upgrade and context/clean-tree guards.
   `pr-check -ExcludeSteps` removes prerequisites used only by excluded steps,
@@ -1649,7 +1916,20 @@ Schema enforced by `Test-AvmPins`:
   mechanism. Build prerequisites supply that same Pester pin, and all test
   runners, including isolated shards, import it through the shared resolver.
   Reject a different already-loaded module version with fresh-session guidance
-  before composite step 1.
+  before composite step 1. Pester must also have the configured module path:
+  reject even the same version from another path before importing a second
+  engine, and require a fresh PowerShell session.
+
+`PrivateData.AvmCapabilities.BicepRequiredResourceProviders = 1` identifies the
+native prerequisite contract above.
+`PrivateData.AvmCapabilities.PowerShellModuleArchiveRecovery = 1` identifies
+the managed module archive-recovery contract. Consumers require exact integer
+markers on the selected installed Avm.Authoring package, not on a separately
+checked-out workflow source tree. Existing `Get-AvmTool -Path` inspection and
+`Install-AvmTool -Path` installation are the dependency adapter boundary; no
+second provider parser, ZIP recovery implementation or wrapper-only public API
+is permitted. Capabilities are not evidence that a combined runtime/workflow
+package has been released or qualified.
 
 ### Repository tool versions
 
@@ -1734,6 +2014,18 @@ as `avm pre-commit` and `avm pr-check` emit their step start/result lines but
 suppress nested `Info` and `Pass` narration. `-Verbose`, `AVM_VERBOSE=1`, and
 GitHub Actions runner debug mode restore all nested narration. Warnings and
 errors are never suppressed.
+
+Terraform lint presents every finding at or above its failure threshold through
+the shared error logger when lint completes, before subsequent composition
+steps. This produces source-linked GitHub error annotations and visible local
+error diagnostics even when the underlying issue is a blocking warning.
+Preserve the original issue severity, threshold/status semantics and complete
+scope collection. Below-threshold canonical AVM notices remain advisory
+warnings. Final dispatcher and composition rendering must not repeat already
+presented findings; every finding remains in the structured result.
+
+Internal transform dependency copies suppress filesystem-provider progress
+bars; inspection-cache diagnostics remain available through verbose logging.
 
 Sensitive-output consumers can use `Invoke-AvmProcess -StreamOutput` with
 `OnStdOutLine` and `OnStdErrLine` callbacks to own both streams' incremental
@@ -1895,6 +2187,14 @@ Assume the user runs multiple `avm` invocations in parallel against different re
   - Verifies the certificate chain (no `-SkipCertificateCheck` — ever).
 - Download SHA256 verification is non-negotiable; mismatch throws `AvmToolException` with both expected and actual hashes in the message.
 
+Repository-sync team-existence discovery explicitly opts into HTTP 500, 502,
+503 and 504 retries through `Get-GitHubTransientRetryPatterns -ReadOnly`.
+Use this opt-in only for known read-only requests, never writes or command
+sequences containing writes: a server error does not prove a write failed.
+The shared GitHub CLI wrapper's default patterns, retry budgets, incremental
+delays and failure handling remain unchanged. Deterministic 404 and
+authentication/authorization failures do not gain retries.
+
 ---
 
 ## 17. Security
@@ -2051,6 +2351,8 @@ This section is the implementation-level expression of the **Security stance** p
   parameters; use another notation for illustrative paths.
 - Avoid Pester automatic-variable names such as `$matches` and `$eventArgs` for
   local test data.
+- Build runners fail on Pester setup/teardown block or test-container failures,
+  even when every individual test reports a pass.
 - Under strict mode, test property existence through
   `$object.PSObject.Properties[$name]`, and wrap possibly empty or single-item
   pipeline results in `@(...)` before using `.Count` or indexing.
@@ -2108,7 +2410,10 @@ This mock boundary includes Terraform's built-in provider. Applying fixtures
 that use `terraform_data` declare `terraform.io/builtin/terraform` explicitly,
 provide `mock_provider "terraform" {}`, and include its binding in every
 explicit run mapping that selects such a target. Provider-free setup targets
-do not acquire unrelated bindings. Before a native test process starts,
+do not acquire unrelated bindings. An inspected literal plan in a preservation
+regression may use unambiguous native built-in source proof for an authored mock without
+adding a source declaration; that proof does not cover another run's explicit
+or default apply command. Before a native test process starts,
 inspect every selected local target's provider sources and test declarations.
 Missing mocks, unproven sources, real test-provider configurations and partial,
 unknown or cross-provider mappings fail closed. Root test files outside the
@@ -2319,12 +2624,20 @@ including workflow and repository-management tests.
   satisfy `PSUseProcessBlockForPipelineCommand`.
 - Consumers wrap `Invoke-ScriptAnalyzer` results in `@(...)`; a no-finding
   result can otherwise be `$AutomationNull` on non-Windows hosts.
+- The build invokes publicly discovered builtin rules serially through
+  `IncludeRule`, retaining the original full inputs, settings, severities and
+  custom-rule discovery arguments. A final custom-only partition excludes
+  those builtins without enabling otherwise undiscovered custom rules.
+  Parser `DiagnosticRecord` findings are identified by `ParseError` severity,
+  not rule name, and retained once from the first full-input partition.
+  All non-parser findings, including duplicates, remain intact.
 - The build retry wrapper may retry only PSScriptAnalyzer's known transient
   `NullReferenceException` or a `CommandNotFoundException` whose `CommandName`
   is exactly `Get-Command`, including either failure inside an exception chain.
   Matching message text alone does not qualify a command-resolution failure.
   Both share the `AVM_LINT_MAX_ATTEMPTS` budget (eight total attempts by default)
-  and the existing 500 ms incremental backoff. Exhaustion rethrows the original
+  and the existing 500 ms incremental backoff. Each attempt covers the entire
+  serial pass; failed attempts emit no partial findings. Exhaustion rethrows the original
   final error; unrelated exceptions fail immediately. The wrapper must never
   retry or hide analyzer findings.
 - A `pre-commit` Pester suite runs:
@@ -2416,7 +2729,7 @@ does not emit telemetry; the consumer's Terraform apply does.
 
 - Comment-based help on every public function is the source of truth for command-level docs. A docs job generates `docs/reference/<cmdlet>.md` from it.
 - This repo treats generated public-cmdlet reference pages as part of the checked-in contract. Every public help, parameter, or exported-function change requires `./build.ps1 docs` followed by a commit of the updated Markdown files.
-- `./build.ps1 docs-check` compares the generated content without writing. It is part of `pre-commit`, `ci`, and `ci-tests`, so stale generated Markdown fails local and pull-request validation.
+- `./build.ps1 docs-check` compares the generated content without writing. It is part of `pre-commit`, `ci`, `ci-tests`, `ci-unit`, and `ci-coverage`, so stale generated Markdown fails local and pull-request validation.
 - The generated docs are for both human readers and agent consumers. Each page should document the cmdlet purpose, behaviour, and each parameter's role in plain language. Doc generation must preserve the public help semantics; do not hand-edit generated output to hide drift.
 - `docs/` in this repo holds:
   - `quality-spec.md` — this file and the only normative engineering document.

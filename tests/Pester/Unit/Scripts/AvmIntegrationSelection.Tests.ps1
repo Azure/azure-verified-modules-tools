@@ -15,6 +15,8 @@ Describe 'Integration group selection' {
         $all.Count | Should -BeGreaterThan 0
         $bicep.Count | Should -Be 8
         $bicep | Should -Contain (Join-Path $path 'BicepTestSubscriptionSelection.Integration.Tests.ps1')
+        $bicep | Should -Contain (Join-Path $path 'BicepMetadataPackaged.Integration.Tests.ps1')
+        $bicep | Should -Contain (Join-Path $path 'BicepModuleMetadata.Integration.Tests.ps1')
         $terraform.Count | Should -Be 2
         @($bicep | Where-Object { $_ -in $terraform }) | Should -HaveCount 0
         @(Compare-Object $all @($bicep + $terraform)) | Should -HaveCount 0

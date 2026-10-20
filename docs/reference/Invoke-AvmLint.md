@@ -19,6 +19,13 @@ the .avm/context.psd1 override file and the -Ecosystem filter.
 Returns an envelope with structured Issue records; callers should
 treat Status='fail' as a failed lint pass.
 
+Terraform findings at the failure threshold are also logged as
+source-linked errors when lint completes, before subsequent composition
+steps. The default threshold includes warnings and errors. This changes
+presentation only: Issue severity and the returned result stay intact.
+Advisory AVM notices remain warnings below the threshold, and final
+dispatcher output does not repeat findings already presented by lint.
+
 Routed by the dispatcher: 'avm lint'.
 
 ## CLI commands

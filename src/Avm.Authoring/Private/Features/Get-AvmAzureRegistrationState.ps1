@@ -18,7 +18,9 @@ function Get-AvmAzureRegistrationState {
         [Parameter(Mandatory)]
         [string] $Namespace,
 
-        [string] $Name
+        [string] $Name,
+
+        [scriptblock] $AssertIdentity
     )
 
     Set-StrictMode -Version 3.0
@@ -37,55 +39,42 @@ function Get-AvmAzureRegistrationState {
         )
     }
     $label = if ($Kind -eq 'Feature') { "$Namespace/$Name" } else { $Namespace }
-    $response = Invoke-AvmAzureCli -Cli $Cli -ArgumentList $arguments -Root $Root `
+    $response = Invoke-AvmAzureCli -Cli $Cli -ArgumentList $arguments -Root $Root -AssertIdentity $AssertIdentity `
         -Operation "inspect $Kind $label in subscription $SubscriptionId"
 
     try {
-        $data = ConvertFrom-Json -InputObject $response.StdOut -ErrorAction Stop
+        $data = ConvertFrom-AvmStrictJson -Json $response.StdOut -RejectCaseInsensitiveDuplicates
     }
-    catch {
+    catch [System.ArgumentException] {
         throw [AvmException]::new(
             "Azure CLI returned invalid JSON while inspecting $Kind $label in subscription $SubscriptionId.",
             'AVM1070',
             $_.Exception)
     }
-    if ($null -eq $data -or $data -isnot [pscustomobject]) {
-        throw [AvmException]::new(
-            "Azure CLI returned an unexpected JSON value while inspecting $Kind $label in subscription $SubscriptionId.",
-            'AVM1070')
-    }
-
     if ($Kind -eq 'Feature') {
         $expectedId = "/subscriptions/$SubscriptionId/providers/Microsoft.Features/providers/$Namespace/features/$Name"
-        $properties = $data.PSObject.Properties['properties']
-        $state = if ($null -ne $properties -and $null -ne $properties.Value) {
-            $properties.Value.PSObject.Properties['state']
-        }
-        else {
-            $null
-        }
-        if ($null -eq $data.PSObject.Properties['id'] -or
-            -not [string]::Equals([string]$data.id, $expectedId, [System.StringComparison]::OrdinalIgnoreCase) -or
-            $null -eq $data.PSObject.Properties['name'] -or
-            -not [string]::Equals([string]$data.name, $label, [System.StringComparison]::OrdinalIgnoreCase) -or
-            $null -eq $state -or
-            [string]::IsNullOrWhiteSpace([string]$state.Value)) {
+        $properties = $data['properties']
+        $state = $null
+        if ($properties -is [System.Collections.IDictionary]) { $state = $properties['state'] }
+        if ($data['id'] -isnot [string] -or $data['id'] -ine $expectedId -or
+            $data['name'] -isnot [string] -or $data['name'] -ine $label -or
+            $state -isnot [string] -or [string]::IsNullOrWhiteSpace($state)) {
             throw [AvmException]::new(
                 "Azure CLI returned an unexpected feature identity or state for $label in subscription $SubscriptionId.",
                 'AVM1070')
         }
     }
     else {
-        $state = $data.PSObject.Properties['registrationState']
-        if ($null -eq $data.PSObject.Properties['namespace'] -or
-            -not [string]::Equals([string]$data.namespace, $Namespace, [System.StringComparison]::OrdinalIgnoreCase) -or
-            $null -eq $state -or
-            [string]::IsNullOrWhiteSpace([string]$state.Value)) {
+        $state = $data['registrationState']
+        $expectedId = "/subscriptions/$SubscriptionId/providers/$Namespace"
+        if ($data['namespace'] -isnot [string] -or $data['namespace'] -ine $Namespace -or
+            ($data.Contains('id') -and ($data['id'] -isnot [string] -or $data['id'] -ine $expectedId)) -or
+            $state -isnot [string] -or [string]::IsNullOrWhiteSpace($state)) {
             throw [AvmException]::new(
                 "Azure CLI returned an unexpected provider identity or state for $Namespace in subscription $SubscriptionId.",
                 'AVM1070')
         }
     }
 
-    return [string]$state.Value
+    return $state
 }

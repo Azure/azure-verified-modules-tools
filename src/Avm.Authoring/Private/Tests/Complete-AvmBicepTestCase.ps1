@@ -83,13 +83,13 @@ function Complete-AvmBicepTestCase {
         try {
             if ($succeeded) {
                 $assertion = Invoke-AvmBicepAzureContext -SubscriptionId $SubscriptionId -TenantId $TenantId -ScriptBlock {
-                    $response = Invoke-AzRestMethod -Method GET `
-                        -Path ($deployment['id'] + '?api-version=2021-04-01') -ErrorAction Stop
-                    $document = $response.Content | ConvertFrom-Json -AsHashtable -ErrorAction Stop
-                    if ([int]$response.StatusCode -ne 200 -or
-                        $document -isnot [System.Collections.IDictionary] -or
-                        $document['id'] -ine $deployment['id'] -or
+                    $response = Invoke-AvmBicepRead -Activity 'Read assertion deployment outputs' -Read {
+                        Invoke-AzRestMethod -Method GET -Path ($deployment['id'] + '?api-version=2021-04-01') -ErrorAction Stop
+                    }
+                    $document = ConvertFrom-AvmBicepRestResponse -Response $response -Activity 'Read assertion deployment outputs'
+                    if ($document.Contains('error') -or $document['id'] -isnot [string] -or $document['id'] -ine $deployment['id'] -or
                         $document['properties'] -isnot [System.Collections.IDictionary] -or
+                        $document['properties']['provisioningState'] -isnot [string] -or
                         $document['properties']['provisioningState'] -cne 'Succeeded') {
                         throw [AvmProcessException]::new('The exact successful deployment could not be confirmed for assertions.')
                     }

@@ -18,7 +18,7 @@ function Get-AvmBicepWorkflowEnvironment {
         $value = [System.Environment]::GetEnvironmentVariable($entry.Environment, 'Process')
         if ([string]::IsNullOrEmpty($value)) { continue }
         try {
-            $parsed = ConvertFrom-Json -InputObject $value -AsHashtable -NoEnumerate -ErrorAction Stop
+            $parsed = ConvertFrom-AvmStrictJson -Json $value
         }
         catch [System.ArgumentException] {
             throw [AvmConfigurationException]::new("$($entry.Environment) must contain a JSON object.")

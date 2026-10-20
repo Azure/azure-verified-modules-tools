@@ -49,12 +49,17 @@ Describe 'Component: Bicep shared workflow native lifecycle' -Tag Component {
     }
     AfterEach { Remove-NativeBicepWorkflowFixture -Fixture $script:fixture }
 
-    It 'completes exhausted deployment once, retaining failure and cleaning every attempt after the final post' {
-        $script:fixture.CreateMode = 'failed'
+    It 'completes exhausted deployment once, retaining failure and cleaning every attempt after the final post (<Mode>)' -ForEach @(
+        @{ Mode = 'Fresh'; Failure = 'Regional'; Records = 3 }
+        @{ Mode = 'InPlace'; Failure = 'Transient'; Records = 1 }
+    ) {
+        $script:fixture.TransientResourceType = 'Microsoft.Network/privateEndpoints'
+        foreach ($attempt in 1..3) { $script:fixture.RetrySequence.Enqueue($Failure) }
         { Invoke-AvmWorkflowE2e @script:parameters -Phase Deploy -Example 'tests/e2e/defaults/main.test.bicep' -Confirm:$false } |
             Should -Throw '*did not pass*'
         $deployed = Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json
-        $deployed.deployments.Count | Should -Be 3
+        $deployed.deployments.Count | Should -Be $Records
+        $deployed.attempts.mode | Should -Be @('Initial', $Mode, $Mode)
         @($deployed.deployments | Where-Object status -NE 'Failed').Count | Should -Be 0
         @($script:fixture.Calls | Where-Object { $_ -match '^(post|pester|remove:|purge:|delete-record:)' }).Count | Should -Be 0
         $createdByAttempt = @(foreach ($deployment in $deployed.deployments) {
@@ -78,8 +83,8 @@ Describe 'Component: Bicep shared workflow native lifecycle' -Tag Component {
         $script:fixture.HookInput.AVM_E2E_DEPLOYMENT_NAME | Should -BeExactly $deployed.deployments[-1].id.Split('/')[-1]
         $completed = Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json
         $completed.status | Should -Be 'Complete'
-        $completed.deployments.Count | Should -Be 3
-        @($completed.resources | Where-Object { $_.id -in $createdByAttempt -and $_.removed }).Count | Should -Be 3
+        $completed.deployments.Count | Should -Be $Records
+        @($completed.resources | Where-Object { $_.id -in $createdByAttempt -and $_.removed }).Count | Should -Be $Records
         foreach ($phase in @('deploy', 'complete')) {
             (Get-Content -LiteralPath (Join-Path $script:parameters.ResultDirectory "$phase.json") -Raw | ConvertFrom-Json).Status |
                 Should -Be 'fail'
@@ -91,8 +96,12 @@ Describe 'Component: Bicep shared workflow native lifecycle' -Tag Component {
         $script:fixture.Calls.Count | Should -Be $callCount
     }
 
-    It 'keeps failed deployments when resource removal is disabled, without post or cleanup' {
-        $script:fixture.CreateMode = 'failed'
+    It 'keeps failed deployments when resource removal is disabled, without post or cleanup (<Mode>)' -ForEach @(
+        @{ Mode = 'Fresh'; Failure = 'Regional'; Records = 3 }
+        @{ Mode = 'InPlace'; Failure = 'Transient'; Records = 1 }
+    ) {
+        $script:fixture.TransientResourceType = 'Microsoft.Network/privateEndpoints'
+        foreach ($attempt in 1..3) { $script:fixture.RetrySequence.Enqueue($Failure) }
         { Invoke-AvmWorkflowE2e @script:parameters -Phase Deploy -Example 'tests/e2e/defaults/main.test.bicep' `
                 -RemoveDeployment $false -Confirm:$false } | Should -Throw '*did not pass*'
         { Invoke-AvmWorkflowE2e @script:parameters -Phase Complete -RemoveDeployment $false -Confirm:$false } |
@@ -100,8 +109,26 @@ Describe 'Component: Bicep shared workflow native lifecycle' -Tag Component {
         @($script:fixture.Calls | Where-Object { $_ -eq 'create' }).Count | Should -Be 3
         @($script:fixture.Calls | Where-Object { $_ -match '^(post|pester|remove:|purge:|delete-record:)' }).Count | Should -Be 0
         $stored = Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json
+        $stored.deployments.Count | Should -Be $Records
+        $stored.attempts.mode | Should -Be @('Initial', $Mode, $Mode)
         $stored.status | Should -Not -Be 'Complete'
         $stored.case.completionStarted | Should -BeTrue
+    }
+
+    It 'does not replay an unclassified failed deployment and still completes its final cleanup' {
+        $script:fixture.CreateMode = 'failed'
+        { Invoke-AvmWorkflowE2e @script:parameters -Phase Deploy -Example 'tests/e2e/defaults/main.test.bicep' -Confirm:$false } |
+            Should -Throw '*did not pass*'
+        $deployed = Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json
+        $deployed.deployments.Count | Should -Be 1
+        @($deployed.attempts.mode) | Should -Be @('Initial')
+        @($script:fixture.Calls | Where-Object { $_ -match '^(post|pester|remove:|purge:|delete-record:)' }).Count | Should -Be 0
+
+        { Invoke-AvmWorkflowE2e @script:parameters -Phase Complete -Confirm:$false } | Should -Throw '*did not pass*'
+        @($script:fixture.Calls | Where-Object { $_ -eq 'create' }).Count | Should -Be 1
+        @($script:fixture.Calls | Where-Object { $_ -eq 'post' }).Count | Should -Be 1
+        $script:fixture.Calls | Should -Not -Contain 'pester'
+        (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).status | Should -Be 'Complete'
     }
 
     It 'retains cancelled deployment state without starting final post or deletion' {

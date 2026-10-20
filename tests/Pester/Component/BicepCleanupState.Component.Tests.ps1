@@ -238,6 +238,72 @@ Describe 'Component: Bicep cleanup state and context' -Tag Component {
         }
     }
 
+    It 'rejects non-scalar or mismatched account evidence: <Field>, <Shape>' -ForEach @(
+        foreach ($field in @('id', 'tenantId', 'environmentName', 'state', 'user', 'principal')) {
+            foreach ($shape in @('missing', 'null', 'array', 'object', 'boolean', 'number', 'different')) {
+                @{ Field = $field; Shape = $shape }
+            }
+        }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Field = $Field; Shape = $Shape } {
+            param($Field, $Shape)
+            $script:currentContext.Subscription.Id = '00000000-0000-0000-0000-000000000001'
+            $account = @{
+                id = $script:currentContext.Subscription.Id; tenantId = $script:currentContext.Tenant.Id
+                environmentName = 'AzureCloud'; state = 'Enabled'; user = @{ name = 'test-principal' }
+            }
+            $container = if ($Field -eq 'principal') { $account.user } else { $account }
+            $key = if ($Field -eq 'principal') { 'name' } else { $Field }
+            $valid = $container[$key]
+            switch ($Shape) {
+                'missing' { $container.Remove($key) }
+                'null' { $container[$key] = $null }
+                'array' { $container[$key] = @($valid) }
+                'object' { $container[$key] = @{ value = $valid } }
+                'boolean' { $container[$key] = $true }
+                'number' { $container[$key] = 1 }
+                'different' { $container[$key] = 'foreign' }
+            }
+            $script:invalidAccountJson = $account | ConvertTo-Json -Depth 6 -Compress
+            Mock Invoke-AvmProcess { @{ ExitCode = 0; StdOut = $script:invalidAccountJson } }
+            { Assert-AvmBicepAzureIdentity -AzPath fake-az `
+                    -SubscriptionId $script:currentContext.Subscription.Id `
+                    -TenantId $script:currentContext.Tenant.Id } | Should -Throw '*same enabled subscription*'
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $TimeoutSec -eq 60 -and ($ArgumentList -join ' ') -ceq (
+                    'account show --subscription 00000000-0000-0000-0000-000000000001 --output json')
+            }
+            Should -Invoke Set-AzContext -Exactly 0
+        }
+    }
+
+    It 'rejects ambiguous account JSON: <Shape>' -ForEach @(
+        @{ Shape = 'array' }, @{ Shape = 'duplicate' }, @{ Shape = 'case duplicate' }, @{ Shape = 'escaped duplicate' }
+        @{ Shape = 'comment' }, @{ Shape = 'trailing comma' }, @{ Shape = 'null' }, @{ Shape = 'malformed' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Shape = $Shape } {
+            param($Shape)
+            $script:currentContext.Subscription.Id = '00000000-0000-0000-0000-000000000001'
+            $json = '{"id":"00000000-0000-0000-0000-000000000001","tenantId":"00000000-0000-0000-0000-000000000002","environmentName":"AzureCloud","state":"Enabled","user":{"name":"test-principal"}}'
+            $script:invalidAccountJson = switch ($Shape) {
+                'array' { "[$json]" }
+                'duplicate' { $json.Replace('"state":', '"state":"Disabled","state":') }
+                'case duplicate' { $json.Replace('"state":', '"State":"Disabled","state":') }
+                'escaped duplicate' { $json.Replace('"state":', '"\u0073tate":"Disabled","state":') }
+                'comment' { '/* account */' + $json }
+                'trailing comma' { $json.Replace('"test-principal"}', '"test-principal",}') }
+                'null' { 'null' }
+                'malformed' { '{' }
+            }
+            Mock Invoke-AvmProcess { @{ ExitCode = 0; StdOut = $script:invalidAccountJson } }
+            { Assert-AvmBicepAzureIdentity -AzPath fake-az `
+                    -SubscriptionId $script:currentContext.Subscription.Id `
+                    -TenantId $script:currentContext.Tenant.Id } | Should -Throw
+            Should -Invoke Invoke-AvmProcess -Exactly 1
+            Should -Invoke Set-AzContext -Exactly 0
+        }
+    }
+
     It 'persists removal before post-processing and retries only incomplete post-processing' {
         InModuleScope Avm.Authoring -Parameters @{ File = $script:statePath } {
             param($File)

@@ -280,6 +280,89 @@ Describe 'Invoke-Avm typed failure (F02)' {
     }
 }
 
+Describe 'Invoke-Avm presented lint terminal diagnostics' {
+    BeforeAll {
+        $script:presentedLintBody = @'
+$env:GITHUB_ACTIONS = 'true'
+$issue = [pscustomobject]@{
+    Severity = 'warning'; File = 'examples\default\variables.tf'; Line = 11; Column = 3
+    Code = 'terraform_unused_declarations'; Message = 'unused location'
+}
+Write-AvmLog '[terraform_unused_declarations] unused location' -Level Error -File $issue.File -Line $issue.Line -Column $issue.Column
+Register-AvmPresentedIssue -Issue $issue
+$lintResult = [pscustomobject]@{ Status = 'fail'; Issues = @($issue) }
+'@
+    }
+
+    It 'does not repeat an inline blocker for <Shape> under pwsh -<Mode>' -ForEach @(
+        @{ Shape = 'standalone lint'; Mode = 'File'; ResultExpression = '$lintResult' }
+        @{ Shape = 'standalone lint'; Mode = 'Command'; ResultExpression = '$lintResult' }
+        @{ Shape = 'composed lint'; Mode = 'File'; ResultExpression = "[pscustomobject]@{ Status = 'fail'; Steps = @([pscustomobject]@{ Step = 'lint'; Status = 'fail'; Error = `$null; Result = `$lintResult }) }" }
+        @{ Shape = 'composed lint'; Mode = 'Command'; ResultExpression = "[pscustomobject]@{ Status = 'fail'; Steps = @([pscustomobject]@{ Step = 'lint'; Status = 'fail'; Error = `$null; Result = `$lintResult }) }" }
+    ) {
+        $body = $script:presentedLintBody + "`n" + '$script:expectedDispatchResult = ' + $ResultExpression + "`n" + '$script:expectedDispatchResult'
+        $result = Invoke-AvmChildVerb -Mode $Mode -Body $body
+
+        $result.ExitCode | Should -Not -Be 0
+        $annotations = @($result.Output -split "`n" | Where-Object { $_ -like '::error*' })
+        $annotations.Count | Should -Be 1
+        $annotations[0] | Should -BeExactly '::error file=examples/default/variables.tf,line=11,col=3::[terraform_unused_declarations] unused location'
+        $result.Output | Should -Match 'avm spec-verb: fail'
+        $result.Output | Should -Not -Match 'Assert-AvmCommandSuccess\.ps1:\d+'
+
+        $capture = @'
+try {
+    avm spec-verb | Out-Null
+    'NO-THROW'
+} catch {
+    $exception = $_.Exception
+    $expected = & $module { $script:expectedDispatchResult }
+    'CAUGHT|{0}|{1}|{2}|{3}|{4}' -f $exception.GetType().Name, $exception.Verb, $exception.CommandStatus, $exception.Code, [object]::ReferenceEquals($expected, $exception.Result)
+    'RESULT|' + ($exception.Result | ConvertTo-Json -Depth 10 -Compress)
+    'MESSAGE|' + $exception.Message
+}
+'@
+        $caught = Invoke-AvmChildVerb -Mode $Mode -Body $body -Invocation $capture
+        $caught.ExitCode | Should -Be 0
+        $caught.Output | Should -Match 'CAUGHT\|AvmCommandException\|spec-verb\|fail\|AVM1040\|True'
+        $caught.Output | Should -Match "MESSAGE\|avm spec-verb reported Status 'fail'\."
+        $caught.Output | Should -Match 'unused location'
+        $caught.Output | Should -Not -Match 'NO-THROW'
+        @($caught.Output -split "`n" | Where-Object { $_ -like '::error*' }).Count | Should -Be 1
+        $jsonLine = @($caught.Output -split "`n" | Where-Object { $_ -like 'RESULT|*' })
+        $jsonLine.Count | Should -Be 1
+        $original = $jsonLine[0].Substring('RESULT|'.Length) | ConvertFrom-Json
+        $original.Status | Should -BeExactly 'fail'
+        $originalIssue = if ($Shape -eq 'standalone lint') { $original.Issues[0] } else { $original.Steps[0].Result.Issues[0] }
+        $originalIssue.Severity | Should -BeExactly 'warning'
+        $originalIssue.Code | Should -BeExactly 'terraform_unused_declarations'
+        $originalIssue.Message | Should -BeExactly 'unused location'
+    }
+
+    It 'retains a distinct <FailureKind> after an inline lint blocker' -ForEach @(
+        @{ FailureKind = 'issue'; ErrorExpression = '$null'; ResultExpression = "[pscustomobject]@{ Issues = @([pscustomobject]@{ Severity = 'error'; File = 'main.tf'; Line = 29; Column = 4; Message = 'distinct policy failure' }) }"; Annotation = "::error file=main.tf,line=29,col=4::Step 'check policy': error main.tf:29:4 distinct policy failure" }
+        @{ FailureKind = 'step error'; ErrorExpression = "'distinct policy failure'"; ResultExpression = '$lintResult'; Annotation = "::error::Step 'check policy': distinct policy failure" }
+    ) {
+        $suffix = @'
+[pscustomobject]@{
+    Status = 'fail'
+    Steps = @(
+        [pscustomobject]@{ Step = 'lint'; Status = 'fail'; Error = $null; Result = $lintResult }
+        [pscustomobject]@{ Step = 'check policy'; Status = 'error'; Error = __ERROR__; Result = __RESULT__ }
+    )
+}
+'@
+        $body = $script:presentedLintBody + "`n" + $suffix.Replace('__ERROR__', $ErrorExpression).Replace('__RESULT__', $ResultExpression)
+        $result = Invoke-AvmChildVerb -Mode File -Body $body
+
+        $result.ExitCode | Should -Not -Be 0
+        $annotations = @($result.Output -split "`n" | Where-Object { $_ -like '::error*' })
+        $annotations.Count | Should -Be 2
+        $annotations[0] | Should -BeExactly '::error file=examples/default/variables.tf,line=11,col=3::[terraform_unused_declarations] unused location'
+        $annotations[1] | Should -BeExactly $Annotation
+    }
+}
+
 Describe 'Invoke-Avm result rendering (F20/F21)' {
     It 'renders a successful result and its issues' {
         $body = @"

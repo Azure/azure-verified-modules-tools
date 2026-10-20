@@ -10,6 +10,8 @@ function Test-AvmBicepNativeDeployment {
 
         [string] $ResourceType,
 
+        [string] $SubscriptionId,
+
         [string] $ResourceLocation,
 
         [string] $TokenResourceLocation,
@@ -79,7 +81,8 @@ function Test-AvmBicepNativeDeployment {
         }
         catch {
             if (-not $canRetry -or $selection.IsGlobal -or $attempted.Count -ge $RetryLimit -or
-                -not (Test-AvmBicepRegionalValidationError -ErrorRecord $_)) { throw }
+                -not (Test-AvmBicepRegionalValidationError -ErrorRecord $_ -SubscriptionId $SubscriptionId `
+                        -ResourceLocation $selection.Location)) { throw }
             Write-AvmLog -Level Warning -Message (
                 "Regional validation failed in '$($selection.Location)'; selecting another eligible region ($($attempted.Count)/$RetryLimit).")
         }

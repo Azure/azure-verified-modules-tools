@@ -303,6 +303,13 @@ Describe 'terraform-module automatic checks and fork isolation' {
             if (-not $block.Success) { throw "Could not isolate the $name job block." }
             $script:jobs[$name] = $block.Value
         }
+        $unitRun = [regex]::Match(
+            $script:jobs['unit-test'],
+            '(?m)^      - name: Run unit tests\r?\n        shell: pwsh\r?\n        run: \|\r?\n(?<code>(?:^          .*\r?\n|^\r?\n)*)')
+        if (-not $unitRun.Success -or [string]::IsNullOrWhiteSpace($unitRun.Groups['code'].Value)) {
+            throw 'Could not isolate the unit-test script.'
+        }
+        $script:unitTestScript = [scriptblock]::Create(($unitRun.Groups['code'].Value -replace '(?m)^          ', ''))
         $run = [regex]::Match(
             $script:jobs['pr-check-fork'],
             '(?m)^      - name: Run PR check without policy\r?\n        shell: pwsh\r?\n        run: \|\r?\n(?<code>(?:^          .*\r?\n|^\r?\n)*)')
@@ -348,8 +355,42 @@ Describe 'terraform-module automatic checks and fork isolation' {
             $step.Contains('continue-on-error') | Should -BeFalse
         }
         $script:jobs['unit-test'] | Should -Not -Match 'Prepare test environment|ConvertFrom-Context|github\.event'
-        $script:jobs['unit-test'] | Should -Match '(?m)^          avm test unit\r?$'
+        $script:jobs['unit-test'] | Should -Match '(?m)^\s+avm test unit\r?$'
         $script:jobs['unit-test'] | Should -Match '(?m)^          persist-credentials: false\r?$'
+    }
+
+    It 'removes the workflow telemetry opt-out for the unit test command only' {
+        $previousTelemetry = [Environment]::GetEnvironmentVariable('TF_VAR_enable_telemetry', 'Process')
+        try {
+            [Environment]::SetEnvironmentVariable('TF_VAR_enable_telemetry', 'false', 'Process')
+            $script:unitTestTelemetry = $null
+            $result = & {
+                function Import-Module {
+                    param([string] $Name)
+                    $Name | Should -BeExactly 'Avm.Authoring'
+                }
+                function Invoke-UnitTestCommand {
+                    param([string] $Verb, [string] $Tier)
+                    $script:unitTestTelemetry = [Environment]::GetEnvironmentVariable('TF_VAR_enable_telemetry', 'Process')
+                    [pscustomobject]@{
+                        Verb = $Verb
+                        Tier = $Tier
+                    }
+                }
+                Set-Alias -Name avm -Value Invoke-UnitTestCommand -Scope Local
+
+                & $script:unitTestScript
+            }
+
+            $result.Verb | Should -BeExactly 'test'
+            $result.Tier | Should -BeExactly 'unit'
+            $script:unitTestTelemetry | Should -BeNullOrEmpty
+            $script:definition.env.TF_VAR_enable_telemetry | Should -BeExactly 'false'
+        }
+        finally {
+            $restore = if ($null -eq $previousTelemetry) { [NullString]::Value } else { $previousTelemetry }
+            [Environment]::SetEnvironmentVariable('TF_VAR_enable_telemetry', $restore, 'Process')
+        }
     }
 
     It 'selects the appropriate PR check using only the fork status' {
@@ -599,6 +640,13 @@ Describe 'CI workflow' {
         $script:ci | Should -Not -Match '(?m)^  coverage:\r?$'
         $script:ci | Should -Not -Match 'coverage-inputs'
         $script:ci | Should -Not -Match 'coverage-input\.zip'
+    }
+
+    It 'keeps both unit entry points behind the generated-documentation drift check' {
+        $buildPath = Join-Path $PSScriptRoot '..' '..' '..' '..' 'build' 'avm.build.ps1'
+        $build = Get-Content -LiteralPath $buildPath -Raw
+        $build | Should -Match "(?m)^task 'ci-unit' 'docs-check', layout, test\r?$"
+        $build | Should -Match "(?m)^task 'ci-coverage' 'docs-check', layout, coverage\r?$"
     }
 
     It 'uses the prerequisite installer in every CI test job type' {

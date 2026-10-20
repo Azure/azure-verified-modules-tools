@@ -4,6 +4,9 @@
       "name": "default",
       "order": -1,
       "testTenant": "bami",
+      "pullRequestBypassTeams": [
+        "azure-verified-modules-engineering-owners"
+      ],
       "entraGroups": [
         "avm-test-entra-readers",
         "avm-test-management-group-owners"

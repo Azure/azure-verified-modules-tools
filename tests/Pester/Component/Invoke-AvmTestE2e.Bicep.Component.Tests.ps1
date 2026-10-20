@@ -99,15 +99,15 @@ Describe 'Component: Bicep native end-to-end workflow' -Tag Component {
         $result.CleanupPending | Should -BeNullOrEmpty
     }
 
-    It 'keeps a failed deployment visible and runs the post hook once after all confirmed attempts' {
+    It 'keeps an unclassified failure visible without replay and runs the post hook once' {
         Set-Content -LiteralPath (Join-Path $script:fixture.Directory 'post.ps1') -Value 'exit 0'
         $script:fixture.CreateMode = 'failed'
         $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'fail'
-        @($script:fixture.Calls | Where-Object { $_ -eq 'create' }).Count | Should -Be 3
+        @($script:fixture.Calls | Where-Object { $_ -eq 'create' }).Count | Should -Be 1
         @($script:fixture.Calls | Where-Object { $_ -eq 'post' }).Count | Should -Be 1
         $result.CleanupPending | Should -BeNullOrEmpty
-        (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).deployments.Count | Should -Be 3
+        (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).deployments.Count | Should -Be 1
     }
 
     It 'does not resubmit or run hooks while a timed-out submission remains unconfirmed' {
@@ -202,7 +202,8 @@ Describe 'Component: Bicep native end-to-end workflow' -Tag Component {
     }
 
     It 'keeps the validated location and baseTime identical across deployment retries' {
-        $script:fixture.FailuresRemaining = 1
+        $script:fixture.RetrySequence.Enqueue('Transient')
+        $script:fixture.TransientResourceType = 'Microsoft.Network/applicationGateways'
         $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'pass'
         $inputs = @($script:fixture.NativeInputs)

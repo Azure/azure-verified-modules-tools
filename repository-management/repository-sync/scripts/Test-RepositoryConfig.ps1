@@ -113,7 +113,7 @@ $configuredRepositories += "unlisted-repository"
 foreach ($repository in $configuredRepositories) {
     $actualSettings = Resolve-RepositorySettings -repositoryConfig $actualConfig -repoId $repository
     Assert-Equal $defaultRef $actualSettings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowRef"] "The checked-in OIDC subject is incorrect for '$repository'."
-    $expectedBypassTeams = if ($repository -eq "avm-ptn-example-repo") { "azure-verified-modules-engineering-owners" } else { "" }
+    $expectedBypassTeams = "azure-verified-modules-engineering-owners"
     Assert-Equal $expectedBypassTeams ($actualSettings.PullRequestBypassTeams -join ",") "Unexpected pull-request bypass teams for '$repository'."
 }
 

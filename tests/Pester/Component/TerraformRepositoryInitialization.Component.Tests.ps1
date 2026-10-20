@@ -414,7 +414,9 @@ Describe 'Component: resumable Terraform avm init' -Tag Component {
 
         $fake.Admin = $true
         $third = Initialize-AvmModule @init
-        $third.Status | Should -Be 'pass'
+        $third.Status | Should -Be 'pass' -Because (
+            ($third.Steps | Where-Object Status -EQ 'fail' |
+                ForEach-Object { "$($_.Step): $($_.Error)" }) -join '; ')
         Get-TestRemoteLog -Bare $bare | Should -HaveCount 2
         ((Invoke-TestGit @('--git-dir', $bare, 'show', 'main:metadata.json')) -join "`n" | ConvertFrom-Json).telemetryIdPrefix |
             Should -BeExactly '46d3xtrf.res.abc1234'
@@ -498,7 +500,9 @@ Describe 'Component: resumable Terraform avm init' -Tag Component {
 
         $result = Initialize-AvmModule @init
 
-        $result.Status | Should -Be 'pass'
+        $result.Status | Should -Be 'pass' -Because (
+            $result.Steps | Where-Object Status -eq 'fail' | Select-Object Step, Error | ConvertTo-Json -Compress
+        )
         @($result.Steps | Where-Object { $_.Step -like 'organization rulesets*' }).Step |
             Should -Be 'organization rulesets: no earlier change to restore'
         $fake.OptOut | Should -Be 'true'

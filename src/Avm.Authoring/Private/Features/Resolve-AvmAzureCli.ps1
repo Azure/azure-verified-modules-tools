@@ -10,7 +10,7 @@ function Resolve-AvmAzureCli {
         Select-Object -First 1
     if (-not $command -or -not [System.IO.Path]::IsPathRooted([string]$command.Source)) {
         throw [AvmToolException]::new(
-            "Azure CLI is required to register features. Install 'az' and authenticate to the selected test subscription.")
+            "Azure CLI is required to register subscription features and providers. Install 'az' and authenticate to the selected test subscription.")
     }
 
     $path = $command.Source

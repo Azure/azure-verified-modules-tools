@@ -14,13 +14,16 @@ function Invoke-AvmAzureCli {
         [Parameter(Mandatory)]
         [string] $Operation,
 
-        [string] $PermissionHint = ''
+        [string] $PermissionHint = '',
+
+        [scriptblock] $AssertIdentity
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
     $arguments = [string[]]@($Cli.ArgumentPrefix) + $ArgumentList
+    if ($null -ne $AssertIdentity) { & $AssertIdentity }
     try {
         return Invoke-AvmProcess -FilePath $Cli.Path -ArgumentList $arguments `
             -WorkingDirectory $Root -EnvVars $Cli.EnvVars -TimeoutSec 60 -Label $Operation

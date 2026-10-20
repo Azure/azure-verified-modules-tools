@@ -35,6 +35,8 @@ function ConvertTo-AvmBicepCleanupState {
     }
 
     $deployments = [System.Collections.Generic.List[object]]::new()
+    $deletionRecords = 0
+    $pendingDeletions = 0
     $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($entry in $State['deployments']) {
         if ($entry -isnot [System.Collections.IDictionary] -or
@@ -47,11 +49,22 @@ function ConvertTo-AvmBicepCleanupState {
         if ($resource.type -ine 'Microsoft.Resources/deployments' -or -not $seen.Add($entry['id'])) {
             throw [AvmConfigurationException]::new('Cleanup deployment IDs must be distinct deployment resources.')
         }
-        $deployments.Add([ordered]@{
-                id                = $entry['id']
-                status            = $entry['status']
-                preflightRejected = $entry['preflightRejected']
-            })
+        $deployment = [ordered]@{
+            id                = $entry['id']
+            status            = $entry['status']
+            preflightRejected = $entry['preflightRejected']
+        }
+        if ($entry.Contains('recordDeletion')) {
+            if ($entry['recordDeletion'] -isnot [string] -or
+                $entry['recordDeletion'] -cnotin @('Pending', 'Complete') -or
+                $entry['status'] -cnotin @('Failed', 'Rejected')) {
+                throw [AvmConfigurationException]::new('Invalid deployment record deletion progress.')
+            }
+            $deployment['recordDeletion'] = $entry['recordDeletion']
+            $deletionRecords++
+            if ($entry['recordDeletion'] -ceq 'Pending') { $pendingDeletions++ }
+        }
+        $deployments.Add($deployment)
     }
 
     $groups = [System.Collections.Generic.List[object]]::new()
@@ -115,6 +128,10 @@ function ConvertTo-AvmBicepCleanupState {
         @($resources | Where-Object { -not $_['postProcessed'] }).Count -gt 0) {
         throw [AvmConfigurationException]::new('Complete cleanup state cannot contain unfinished resources.')
     }
+    if (($deletionRecords -gt 0 -and @($resources | Where-Object { -not $_['postProcessed'] }).Count -gt 0) -or
+        ($State['status'] -ceq 'Complete' -and $pendingDeletions -gt 0)) {
+        throw [AvmConfigurationException]::new('Deployment deletion progress requires removed resources and confirmed completion.')
+    }
     $document = [ordered]@{
         schemaVersion       = 1
         runId               = $State['runId']
@@ -126,19 +143,27 @@ function ConvertTo-AvmBicepCleanupState {
         ownedResourceGroups = $groups.ToArray()
         resources           = $resources.ToArray()
     }
+    if ($State.Contains('attempts') -and -not $State.Contains('case')) {
+        throw [AvmConfigurationException]::new('A Bicep attempt journal requires its case metadata.')
+    }
     if ($State.Contains('case')) {
         if ($State['case'] -isnot [System.Collections.IDictionary]) {
             throw [AvmConfigurationException]::new('Cleanup case metadata must be an object.')
         }
         $document['case'] = ConvertTo-AvmBicepCleanupCase -Case $State['case']
         $case = $document['case']
-        foreach ($entry in $deployments) {
-            $expectedId = Get-AvmBicepScopedDeploymentId -Scope $case['scope'] `
-                -SubscriptionId $State['subscriptionId'] -ResourceGroupName $case['resourceGroupName'] `
-                -ManagementGroupId $case['managementGroupId'] -DeploymentName $entry['id'].Split('/')[-1]
-            if ($entry['id'] -ine $expectedId -or
-                $entry['id'].Split('/')[-1] -cnotmatch ('^avm-e2e-' + $State['runId'] + '-t[1-3]$')) {
-                throw [AvmConfigurationException]::new('Cleanup deployment does not belong to its recorded case.')
+        if ($State.Contains('attempts')) {
+            $document['attempts'] = @(ConvertTo-AvmBicepAttemptJournal -State $State)
+        }
+        else {
+            foreach ($entry in $deployments) {
+                $expectedId = Get-AvmBicepScopedDeploymentId -Scope $case['scope'] `
+                    -SubscriptionId $State['subscriptionId'] -ResourceGroupName $case['resourceGroupName'] `
+                    -ManagementGroupId $case['managementGroupId'] -DeploymentName $entry['id'].Split('/')[-1]
+                if ($entry['id'] -ine $expectedId -or
+                    $entry['id'].Split('/')[-1] -cnotmatch ('^avm-e2e-' + $State['runId'] + '-t[1-3]$')) {
+                    throw [AvmConfigurationException]::new('Cleanup deployment does not belong to its recorded case.')
+                }
             }
         }
     }

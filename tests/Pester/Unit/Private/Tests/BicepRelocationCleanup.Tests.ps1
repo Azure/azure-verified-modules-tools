@@ -34,11 +34,11 @@ Describe 'Bicep relocation regional classification' {
             $script:respond = {
                 param($State, [object[]] $Operations)
                 $script:pages[$script:root + '?api-version=2021-04-01'] = @{ id = $script:root; properties = @{ provisioningState = $State } }
-                $script:pages[$script:root + '/operations?api-version=2021-04-01'] = @{ value = $Operations }
+                $script:pages[$script:root + '/operations?api-version=2025-04-01'] = @{ value = $Operations }
             }
             $script:failed = {
                 param($ErrorNode)
-                @{ properties = @{ provisioningState = 'Failed'; statusMessage = @{ error = $ErrorNode } } }
+                @{ properties = @{ provisioningOperation = 'Create'; provisioningState = 'Failed'; statusMessage = @{ error = $ErrorNode } } }
             }
         }
     }
@@ -46,11 +46,11 @@ Describe 'Bicep relocation regional classification' {
     It 'relocates only when every failed operation is regional, including wrapped failures' {
         InModuleScope Avm.Authoring {
             & $script:respond 'Failed' @(
-                @{ properties = @{ provisioningState = 'Succeeded' } }
+                @{ properties = @{ provisioningOperation = 'Read'; provisioningState = 'Succeeded' } }
                 & $script:failed $script:regional
                 & $script:failed @{ code = 'ResourceDeploymentFailure'; message = 'wrapped'; details = @($script:regional) }
             )
-            Test-AvmBicepRegionalDeploymentFailure -DeploymentId $script:root | Should -BeTrue
+            Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root | Should -BeExactly 'Regional'
         }
     }
 
@@ -62,15 +62,140 @@ Describe 'Bicep relocation regional classification' {
         InModuleScope Avm.Authoring -Parameters @{ Node = $Node } {
             param($Node)
             & $script:respond 'Failed' @((& $script:failed $script:regional), (& $script:failed $Node))
-            Test-AvmBicepRegionalDeploymentFailure -DeploymentId $script:root | Should -BeFalse
+            Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root | Should -BeExactly 'None'
         }
     }
 
     It 'does not read operations unless the deployment is exactly Failed' {
         InModuleScope Avm.Authoring {
             & $script:respond 'Canceled' @()
-            Test-AvmBicepRegionalDeploymentFailure -DeploymentId $script:root | Should -BeFalse
+            Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root | Should -BeExactly 'None'
             Should -Invoke Invoke-AzRestMethod -Exactly 1
+        }
+    }
+
+    It 'retries only a timed-out <Read> without rereading completed pages' -ForEach @(
+        @{ Read = 'root' }, @{ Read = 'first page' }, @{ Read = 'second page' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Read = $Read } {
+            param($Read)
+            & $script:respond 'Failed' @((& $script:failed $script:regional))
+            $script:rootPath = $script:root + '?api-version=2021-04-01'
+            $script:firstPage = $script:root + '/operations?api-version=2025-04-01'
+            $script:secondPage = $script:firstPage + '&page=2'
+            $script:pages[$script:firstPage].nextLink = $script:secondPage
+            $script:pages[$script:secondPage] = @{ value = @((& $script:failed $script:regional)) }
+            $script:timeoutPath = switch ($Read) {
+                'root' { $script:rootPath }
+                'first page' { $script:firstPage }
+                'second page' { $script:secondPage }
+            }
+            $script:readCounts = @{}
+            Mock Wait-AvmRetryDelay {}
+            Mock Invoke-AzRestMethod {
+                $script:readCounts[$Path] = 1 + [int]$script:readCounts[$Path]
+                if ($Path -ceq $script:timeoutPath -and $script:readCounts[$Path] -eq 1) {
+                    @{ StatusCode = 200; Content = '{"error":{"code":"partial-invalid-output"}}' }
+                    throw [TimeoutException]::new('Read timed out.')
+                }
+                @{ StatusCode = 200; Content = $script:pages[$Path] | ConvertTo-Json -Depth 20 -Compress }
+            }
+            Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root | Should -BeExactly 'Regional'
+            foreach ($path in @($script:rootPath, $script:firstPage, $script:secondPage)) {
+                $expected = if ($path -ceq $script:timeoutPath) { 2 } else { 1 }
+                $script:readCounts[$path] | Should -Be $expected
+            }
+            Should -Invoke Wait-AvmRetryDelay -Exactly 1
+            Should -Invoke Invoke-AzRestMethod -Exactly 0 -ParameterFilter { $Method -cne 'GET' }
+        }
+    }
+
+    It 'rejects singleton arrays where structured properties are required: <Field>' -ForEach @(
+        @{ Field = 'root properties' }, @{ Field = 'operation properties' }, @{ Field = 'status message' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Field = $Field } {
+            param($Field)
+            & $script:respond 'Failed' @((& $script:failed $script:regional))
+            $page = $script:pages[$script:root + '/operations?api-version=2025-04-01']
+            switch ($Field) {
+                'root properties' {
+                    $root = $script:pages[$script:root + '?api-version=2021-04-01']
+                    $root.properties = @($root.properties)
+                }
+                'operation properties' { $page.value[0].properties = @($page.value[0].properties) }
+                'status message' { $page.value[0].properties.statusMessage = @($page.value[0].properties.statusMessage) }
+            }
+            Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root | Should -BeExactly 'None'
+        }
+    }
+
+    It 'rejects operation pages containing success data and <Extra> simultaneously' -ForEach @(
+        @{ Extra = 'error' }, @{ Extra = 'unknown' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Extra = $Extra } {
+            param($Extra)
+            & $script:respond 'Failed' @((& $script:failed $script:regional))
+            $script:pages[$script:root + '/operations?api-version=2025-04-01'][$Extra] = @{ code = 'AuthorizationFailed' }
+            { Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root } | Should -Throw
+        }
+    }
+
+    It 'rejects ambiguous raw JSON on the second operation page: <Form>' -ForEach @(
+        @{ Form = 'duplicate code' }, @{ Form = 'escaped duplicate code' }, @{ Form = 'case-duplicate code' }
+        @{ Form = 'comment' }, @{ Form = 'trailing comma' }, @{ Form = 'array envelope' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Form = $Form } {
+            param($Form)
+            & $script:respond 'Failed' @((& $script:failed $script:regional))
+            $script:firstPage = $script:root + '/operations?api-version=2025-04-01'
+            $script:nextPage = $script:firstPage + '&page=2'
+            $script:pages[$script:firstPage].nextLink = $script:nextPage
+            $json = @{ value = @((& $script:failed $script:regional)) } | ConvertTo-Json -Depth 20 -Compress
+            $script:invalidPage = switch ($Form) {
+                'duplicate code' { $json.Replace('"code":', '"code":"AuthorizationFailed","code":') }
+                'escaped duplicate code' { $json.Replace('"code":', '"\u0063ode":"AuthorizationFailed","code":') }
+                'case-duplicate code' { $json.Replace('"code":', '"Code":"AuthorizationFailed","code":') }
+                'comment' { '/* unclassified */' + $json }
+                'trailing comma' { $json.Insert($json.Length - 1, ',') }
+                'array envelope' { '[' + $json + ']' }
+            }
+            Mock Invoke-AzRestMethod {
+                $content = if ($Path -eq $script:nextPage) { $script:invalidPage }
+                else { $script:pages[$Path] | ConvertTo-Json -Depth 20 }
+                @{ StatusCode = 200; Content = $content }
+            }
+            { Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root } | Should -Throw
+            Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter { $Path -eq $script:firstPage }
+            Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter { $Path -eq $script:nextPage }
+        }
+    }
+
+    It 'rejects untyped HTTP evidence for both the deployment and operation pages: <Kind>' -ForEach @(
+        @{ Kind = 'Boolean'; HttpStatus = $true }
+        @{ Kind = 'string'; HttpStatus = '200' }
+        @{ Kind = 'floating point'; HttpStatus = 200.1 }
+        @{ Kind = 'singleton array'; HttpStatus = @(200) }
+        @{ Kind = 'missing'; HttpStatus = $null }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ HttpStatus = $HttpStatus } {
+            param($HttpStatus)
+            & $script:respond 'Failed' @((& $script:failed $script:regional))
+            $script:invalidStatus = $HttpStatus
+            $script:invalidResponsePath = $script:root + '?api-version=2021-04-01'
+            Mock Invoke-AzRestMethod {
+                param($Path)
+                $response = [pscustomobject]@{
+                    StatusCode = 200
+                    Content = $script:pages[$Path] | ConvertTo-Json -Depth 20
+                }
+                if ($Path -eq $script:invalidResponsePath) { $response.StatusCode = $script:invalidStatus }
+                return $response
+            }
+            { Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root } |
+                Should -Throw '*invalid response or HTTP status*'
+            $script:invalidResponsePath = $script:root + '/operations?api-version=2025-04-01'
+            { Get-AvmBicepDeploymentRetryKind -DeploymentId $script:root } |
+                Should -Throw '*invalid response or HTTP status*'
         }
     }
 }
@@ -95,7 +220,7 @@ Describe 'Bicep strict relocation discovery' {
                 $script:pages[$Id + '?api-version=2021-04-01'] = @{
                     Status = 200; Body = @{ id = $Id; properties = @{ provisioningState = $State } }
                 }
-                $script:pages[$Id + '/operations?api-version=2021-04-01'] = @{ Status = 200; Body = @{ value = $Operations } }
+                $script:pages[$Id + '/operations?api-version=2025-04-01'] = @{ Status = 200; Body = @{ value = $Operations } }
             }
             $script:create = {
                 param($Id, $State = 'Succeeded')
@@ -138,7 +263,7 @@ Describe 'Bicep strict relocation discovery' {
             $script:pages[$script:nested + '?api-version=2021-04-01'] = @{
                 Status = 404; Body = @{ error = @{ code = 'DeploymentNotFound' } }
             }
-            $script:pages[$script:nested + '/operations?api-version=2021-04-01'] = $script:pages[$script:nested + '?api-version=2021-04-01']
+            $script:pages[$script:nested + '/operations?api-version=2025-04-01'] = $script:pages[$script:nested + '?api-version=2021-04-01']
             (Get-AvmBicepDeploymentCleanupTarget -DeploymentIds @($script:root)).Issues.Count | Should -Be 0
             $strict = Get-AvmBicepDeploymentCleanupTarget -DeploymentIds @($script:root) -RequireCompleteRemoval
             $strict.Issues.Count | Should -Be 1
@@ -176,12 +301,15 @@ Describe 'Bicep deployment record removal' {
     }
 
     It 'fails when <Label>' -ForEach @(
-        @{ Label = 'the record remains after every lookup'; Status = 200; Content = '{}'; Message = '*still exists*' }
+        @{ Label = 'the record remains after every lookup'; Status = 200; Content = 'present'; Message = '*still exists*' }
         @{ Label = 'a 404 has an unexpected code'; Status = 404; Content = '{"error":{"code":"AuthorizationFailed"}}'; Message = '*not confirmed*' }
         @{ Label = 'the lookup fails'; Status = 500; Content = '{}'; Message = '*HTTP 500*' }
     ) {
         InModuleScope Avm.Authoring -Parameters @{ Status = $Status; Content = $Content; Message = $Message } {
             param($Status, $Content, $Message)
+            if ($Content -eq 'present') {
+                $Content = @{ id = $script:root; properties = @{ provisioningState = 'Failed' } } | ConvertTo-Json
+            }
             $script:lookup = [pscustomobject]@{ StatusCode = $Status; Content = $Content }
             Mock Invoke-AzRestMethod {
                 param($Method)

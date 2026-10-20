@@ -6,6 +6,63 @@ Describe 'Terraform acceptance byte inventory' -Tag Component {
         . (Join-Path $PSScriptRoot '..' 'Helpers' 'TerraformAcceptance.ps1')
     }
 
+    Describe 'Terraform acceptance public pr-check contract' -Tag Component {
+        BeforeAll {
+            . (Join-Path $PSScriptRoot '..' 'Helpers' 'TerraformAcceptance.ps1')
+            function avm {
+                throw [System.InvalidOperationException]::new('The public dispatcher must be mocked.')
+            }
+        }
+
+        BeforeEach {
+            $script:result = [pscustomobject]@{
+                Status = 'pass'
+                Steps = @(
+                    foreach ($name in @('metadata', 'sync', 'format', 'transform', 'lint',
+                            'check policy', 'check convention', 'validate', 'docs')) {
+                        [pscustomobject]@{
+                            Step = $name
+                            Status = 'pass'
+                            Error = ''
+                            Result = [pscustomobject]@{ Evaluated = 1; Issues = @() }
+                        }
+                    }
+                )
+            }
+            Mock Assert-TerraformAcceptanceCredentials {}
+            Mock avm { $script:result }
+        }
+
+        It 'accepts all nine public steps with internal initialization and real policy evidence' {
+            $actual = Invoke-TerraformAcceptancePrCheck -Context ([pscustomobject]@{ Root = $TestDrive })
+
+            [object]::ReferenceEquals($actual, $script:result) | Should -BeTrue
+            Should -Invoke Assert-TerraformAcceptanceCredentials -Exactly 1
+            Should -Invoke avm -Exactly 1
+        }
+
+        It 'rejects <Failure> without treating initialization as a public step' -ForEach @(
+            @{ Failure = 'an extra initialization step' }
+            @{ Failure = 'a missing step' }
+            @{ Failure = 'an empty policy evaluation' }
+            @{ Failure = 'a policy issue' }
+        ) {
+            switch ($Failure) {
+                'an extra initialization step' {
+                    $script:result.Steps = @($script:result.Steps[0],
+                        [pscustomobject]@{ Step = 'initialize'; Status = 'pass'; Error = '' }) +
+                    $script:result.Steps[1..8]
+                }
+                'a missing step' { $script:result.Steps = $script:result.Steps[0..7] }
+                'an empty policy evaluation' { $script:result.Steps[5].Result.Evaluated = 0 }
+                'a policy issue' { $script:result.Steps[5].Result.Issues = @('Policy failed.') }
+            }
+
+            { Invoke-TerraformAcceptancePrCheck -Context ([pscustomobject]@{ Root = $TestDrive }) } |
+                Should -Throw
+        }
+    }
+
     BeforeEach {
         $script:root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $null = New-Item -ItemType Directory -Path $script:root

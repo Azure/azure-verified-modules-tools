@@ -757,13 +757,22 @@ function Invoke-AvmTerraformLint {
         foreach ($scopeResult in $scopeResults) {
             foreach ($issue in $scopeResult.Issues) {
                 $issues.Add($issue)
+                $presentationLevel = if ($failSeverities -contains $issue.Severity) {
+                    'Error'
+                }
+                elseif (Test-AvmInlineAvmNotice -Issue $issue) {
+                    'Warning'
+                }
+                else {
+                    $null
+                }
                 if (
-                    (Test-AvmInlineAvmNotice -Issue $issue) -and
+                    $presentationLevel -and
                     -not (Test-AvmIssuePresented -Issue $issue)
                 ) {
                     Write-AvmLog `
                         -Message ('[{0}] {1}' -f $issue.Code, $issue.Message) `
-                        -Level Warning `
+                        -Level $presentationLevel `
                         -File $issue.File `
                         -Line $issue.Line `
                         -Column $issue.Column

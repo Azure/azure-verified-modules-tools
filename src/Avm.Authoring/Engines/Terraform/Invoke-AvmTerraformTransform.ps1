@@ -22,8 +22,8 @@ function Resolve-AvmMapotfConfigDir {
 
     .PARAMETER Profile
         Config profile to resolve: common, module, root, module-call, variable-order, example,
-        utility-module, provider-cleanup, location-inspect, unit-test-inspect, unit-test,
-        or an optional test override.
+        utility-module, provider-cleanup, provider-restore, location-inspect, unit-test-inspect,
+        unit-test, or an optional test override.
 
     .PARAMETER Optional
         Return $null instead of throwing when the profile does not exist.
@@ -38,7 +38,7 @@ function Resolve-AvmMapotfConfigDir {
         [string] $Root,
 
         [Parameter(Mandatory)]
-        [ValidateSet('common', 'module', 'root', 'module-call', 'variable-order', 'example', 'utility-module', 'provider-cleanup', 'test', 'location-inspect', 'unit-test-inspect', 'unit-test')]
+        [ValidateSet('common', 'module', 'root', 'module-call', 'variable-order', 'example', 'utility-module', 'provider-cleanup', 'provider-restore', 'test', 'location-inspect', 'unit-test-inspect', 'unit-test')]
         [string] $ProfileName,
 
         [switch] $Optional
@@ -244,8 +244,11 @@ function Test-AvmTerraformProviderInUse {
         [string] $TestDirectory,
 
         [Parameter(Mandatory)]
-        [ValidateSet('modtm', 'random')]
-        [string] $Provider
+        [ValidateSet('modtm', 'random', 'time')]
+        [string] $Provider,
+
+        [AllowEmptyCollection()]
+        [string[]] $IncludeExamplePath = @()
     )
 
     Set-StrictMode -Version 3.0
@@ -254,7 +257,8 @@ function Test-AvmTerraformProviderInUse {
     $modulePrefix = $ModulePath + [System.IO.Path]::DirectorySeparatorChar
     $directories = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($target in $ModuleTargets) {
-        if ($target.Profiles -contains 'example' -and $target.Path -cne $ModulePath) {
+        if ($target.Profiles -contains 'example' -and $target.Path -cne $ModulePath -and
+            $target.Path -cnotin $IncludeExamplePath) {
             continue
         }
         if ($target.Path -cne $ModulePath -and
@@ -325,7 +329,8 @@ function Test-AvmTerraformScopedProviderInUse {
         [Parameter(Mandatory)] [object[]] $ModuleTargets,
         [AllowEmptyCollection()] [string[]] $TargetPaths = @(),
         [Parameter(Mandatory)] [hashtable] $Cache,
-        [Parameter(Mandatory)] [ValidateSet('modtm', 'random')] [string] $Provider,
+        [Parameter(Mandatory)] [ValidateSet('modtm', 'random', 'time')] [string] $Provider,
+        [switch] $IncludeSelectedExamples,
         [hashtable] $ProviderSources = @{}
     )
 
@@ -334,7 +339,7 @@ function Test-AvmTerraformScopedProviderInUse {
     $testDirectory = Split-Path -Parent $Scope.File.FullName
     $ownerPrefix = $Scope.Owner.Path + [System.IO.Path]::DirectorySeparatorChar
     $ownerScannedPaths = @($ModuleTargets | Where-Object {
-            $_.Profiles -notcontains 'example' -and
+            ($_.Profiles -notcontains 'example' -or ($IncludeSelectedExamples -and $_.Path -cin $TargetPaths)) -and
             $_.Path.StartsWith($ownerPrefix, [System.StringComparison]::Ordinal)
         } | ForEach-Object { $_.Path })
     if ($ProviderSources.Count -gt 0 -and
@@ -351,9 +356,14 @@ function Test-AvmTerraformScopedProviderInUse {
             continue
         }
         $key = "$Provider|$path|$testDirectory"
+        if ($IncludeSelectedExamples) {
+            $key += '|' + (ConvertTo-Json -InputObject @($TargetPaths | Sort-Object -Unique) -Compress)
+        }
         if (-not $Cache.ContainsKey($key)) {
+            $examples = if ($IncludeSelectedExamples) { $TargetPaths } else { @() }
             $Cache[$key] = Test-AvmTerraformProviderInUse `
-                -ModulePath $path -ModuleTargets $ModuleTargets -TestDirectory $testDirectory -Provider $Provider
+                -ModulePath $path -ModuleTargets $ModuleTargets -TestDirectory $testDirectory -Provider $Provider `
+                -IncludeExamplePath $examples
         }
         if ($Cache[$key]) {
             return $true
@@ -780,7 +790,11 @@ function Invoke-AvmTerraformTransform {
         Unknown run targets are rejected rather than rewritten.
         After those snapshots, the utility-module profile upgrades older exact
         Regions and Interfaces pins and migrates legacy naming calls in
-        compatibility mode. A fresh dependency inspection reconciles obsolete
+        modern mode. Set AVM_TF_UTILITY_MIGRATION=preserve to keep exact utility
+        sources, versions, inputs and migration-related provider bindings.
+        The default is migrate; other nonempty values are configuration errors.
+        Exact-pin validation and all other transforms remain enabled.
+        A fresh dependency inspection reconciles obsolete
         ModTM bindings and requirements in affected local callers before test
         migration, without rewriting downloaded sources or trusting stale
         initialization data.
@@ -884,6 +898,15 @@ function Invoke-AvmTerraformTransform {
             "Invoke-AvmTerraformTransform requires a terraform context (got Ecosystem='$($Context.Ecosystem)').")
     }
 
+    $utilityMigrationMode = $env:AVM_TF_UTILITY_MIGRATION
+    if ($utilityMigrationMode -and $utilityMigrationMode -cnotin @('migrate', 'preserve')) {
+        throw [AvmConfigurationException]::new(
+            "AVM_TF_UTILITY_MIGRATION must be 'migrate' or 'preserve', or unset.")
+    }
+    if ($utilityMigrationMode -ceq 'preserve') {
+        Write-AvmLog 'transform: preserving exact utility module selections' -Level Info | Out-Null
+    }
+
     $tool = Resolve-AvmTool -Name 'mapotf' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
     $profileDirs = @{
         common              = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'common'
@@ -894,6 +917,7 @@ function Invoke-AvmTerraformTransform {
         example             = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'example'
         'provider-cleanup'  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'provider-cleanup'
         'utility-module'    = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'utility-module'
+        'provider-restore'  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'provider-restore'
         'location-inspect'  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'location-inspect'
         'unit-test-inspect' = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'unit-test-inspect'
         'unit-test'         = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'unit-test'
@@ -977,7 +1001,8 @@ function Invoke-AvmTerraformTransform {
         $testTargets = @($targets | Where-Object { $_.Scope -eq 'test' })
         $exampleTargets = @($targets | Where-Object { $_.Scope -eq 'example' })
         $unitTestTargets = @($moduleTargets + $testTargets + $exampleTargets)
-        $utilityPlans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $unitTestTargets -Options $transformOptions)
+        $utilityPlans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $unitTestTargets -Options $transformOptions `
+                -PreserveSelections:($utilityMigrationMode -ceq 'preserve'))
         $transformOptions.UtilityTelemetryPaths = @($utilityPlans | Where-Object Telemetry | ForEach-Object { $_.Target.Path })
         $newLocationTargets = @(
             foreach ($target in $moduleTargets | Where-Object { $_.Profiles -notcontains 'root' }) {

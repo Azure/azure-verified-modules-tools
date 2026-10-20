@@ -1527,6 +1527,224 @@ rule "scope_rule" {
         $result.Issues[0].Column   | Should -Be 3
     }
 
+    It 'presents a blocking <Severity> finding as one located error at the <Threshold> threshold for <Code>' -TestCases @(
+        @{ Severity = 'warning'; Threshold = 'warning'; Code = 'terraform_unused_declarations' }
+        @{ Severity = 'error'; Threshold = 'warning'; Code = 'terraform_required_version' }
+        @{ Severity = 'error'; Threshold = 'error'; Code = 'terraform_required_version' }
+        @{ Severity = 'notice'; Threshold = 'notice'; Code = 'terraform_unused_declarations' }
+        @{ Severity = 'notice'; Threshold = 'notice'; Code = 'avm_interface_lock_deprecated' }
+    ) {
+        $json = @{
+            issues = @(@{
+                    rule = @{ name = $Code; severity = $Severity }
+                    message = 'Threshold diagnostic.'
+                    range = @{ filename = 'variables.tf'; start = @{ line = 17; column = 5 } }
+                })
+        } | ConvertTo-Json -Depth 8 -Compress
+        $probe = InModuleScope 'Avm.Authoring' -Parameters @{
+            C = $script:context; J = $json; Threshold = $Threshold
+        } {
+            param($C, $J, $Threshold)
+            $savedActions = $env:GITHUB_ACTIONS
+            try {
+                $env:GITHUB_ACTIONS = 'true'
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+                }
+                Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                    [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+                }
+                Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                    [pscustomobject]@{ ExitCode = 2; StdOut = $J; StdErr = '' }
+                }
+                $parameters = @{ Context = $C }
+                if ($Threshold -ne 'warning') {
+                    $parameters.MinimumFailureSeverity = $Threshold
+                }
+                $captured = @()
+                $result = Invoke-AvmTerraformLint @parameters -InformationVariable captured
+                Write-AvmResult -Result $result -Verb 'lint' -InformationVariable +captured
+                $composed = [pscustomobject]@{
+                    Status = 'fail'
+                    Steps = @([pscustomobject]@{ Step = 'lint'; Status = 'fail'; Result = $result })
+                }
+                Write-AvmResult -Result $composed -Verb 'pr-check' -InformationVariable +captured
+                [pscustomobject]@{
+                    Result = $result
+                    Info = @($captured | ForEach-Object { [string]$_.MessageData })
+                    Lines = @(ConvertTo-AvmResultLine -Result $composed -Verb 'pr-check')
+                    Json = $result | ConvertTo-Json -Depth 10
+                }
+            }
+            finally {
+                $env:GITHUB_ACTIONS = $savedActions
+            }
+        }
+
+        $probe.Result.Status | Should -Be 'fail'
+        $probe.Result.Issues | Should -HaveCount 1
+        $probe.Result.Issues[0].Severity | Should -Be $Severity
+        @($probe.Info | Where-Object { $_ -like '::error*' }) | Should -HaveCount 1
+        $probe.Info | Should -Contain "::error file=variables.tf,line=17,col=5::[$Code] Threshold diagnostic."
+        @($probe.Info | Where-Object { $_ -like '*Threshold diagnostic.*' }) | Should -HaveCount 1
+        ($probe.Lines -join "`n") | Should -Match ([regex]::Escape("[$Code] Threshold diagnostic."))
+        $probe.Json | Should -Not -Match 'Presented|Inline|Reported'
+    }
+
+    It 'presents a nonblocking warning only through ordinary rendering at the error threshold' {
+        $json = @'
+{ "issues": [ { "rule": { "name": "terraform_unused_declarations", "severity": "warning" }, "message": "Nonblocking warning.", "range": { "filename": "variables.tf", "start": { "line": 3, "column": 1 } } } ] }
+'@
+        $probe = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; J = $json } {
+            param($C, $J)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = $J; StdErr = '' }
+            }
+            Mock Write-AvmLog
+            $result = Invoke-AvmTerraformLint -Context $C -MinimumFailureSeverity error
+            Should -Invoke Write-AvmLog -Exactly 0 -ParameterFilter { $Level -eq 'Error' }
+            Test-AvmIssuePresented -Issue $result.Issues[0] | Should -BeFalse
+            [pscustomobject]@{
+                Result = $result
+                Lines = @(ConvertTo-AvmResultLine -Result $result -Verb 'lint')
+            }
+        }
+
+        $probe.Result.Status | Should -Be 'pass'
+        $probe.Result.Issues[0].Severity | Should -Be 'warning'
+        ($probe.Lines -join "`n") | Should -Match 'warning variables.tf:3:1 \[terraform_unused_declarations\] Nonblocking warning.'
+    }
+
+    It 'presents blocking findings in red with local source positions' {
+        $json = @'
+{ "issues": [ { "rule": { "name": "terraform_unused_declarations", "severity": "warning" }, "message": "Local blocking diagnostic.", "range": { "filename": "variables.tf", "start": { "line": 13, "column": 6 } } } ] }
+'@
+        $probe = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; J = $json } {
+            param($C, $J)
+            $savedActions = $env:GITHUB_ACTIONS
+            $savedForceColor = $env:CLICOLOR_FORCE
+            $savedNoColor = $env:NO_COLOR
+            try {
+                $env:GITHUB_ACTIONS = $null
+                $env:CLICOLOR_FORCE = '1'
+                $env:NO_COLOR = $null
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+                }
+                Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                    [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+                }
+                Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                    [pscustomobject]@{ ExitCode = 2; StdOut = $J; StdErr = '' }
+                }
+                $captured = @()
+                $result = Invoke-AvmTerraformLint -Context $C -InformationVariable captured
+                [pscustomobject]@{
+                    Result = $result
+                    Info = @($captured | ForEach-Object { [string]$_.MessageData })
+                }
+            }
+            finally {
+                $env:GITHUB_ACTIONS = $savedActions
+                $env:CLICOLOR_FORCE = $savedForceColor
+                $env:NO_COLOR = $savedNoColor
+            }
+        }
+
+        $escape = [char]27
+        $probe.Result.Status | Should -Be 'fail'
+        $probe.Result.Issues[0].Severity | Should -Be 'warning'
+        $probe.Info | Should -Contain (
+            "$escape[31m[terraform_unused_declarations] Local blocking diagnostic. (variables.tf, line 13, column 6)$escape[0m"
+        )
+    }
+
+    It 'presents blocking scope findings before later pr-check steps without duplication' {
+        foreach ($name in @('one', 'two', 'three', 'four')) {
+            $scope = Join-Path $script:moduleDir "examples\$name"
+            $null = New-Item -ItemType Directory -Path $scope -Force
+            Set-Content -LiteralPath (Join-Path $scope 'variables.tf') -Value 'variable "location" {}' -Encoding utf8NoBOM
+        }
+        $json = @'
+{ "issues": [ { "rule": { "name": "terraform_unused_declarations", "severity": "warning" }, "message": "Unused location.", "range": { "filename": "variables.tf", "start": { "line": 9, "column": 3 } } } ] }
+'@
+        $probe = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; J = $json } {
+            param($C, $J)
+            $script:lintScopeRuns = [System.Collections.Generic.List[string]]::new()
+            $script:lintPresentationEvents = [System.Collections.Generic.List[object]]::new()
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--init' } {
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '--format=json' } {
+                $script:lintScopeRuns.Add($WorkingDirectory)
+                if ($WorkingDirectory -match '[\\/]examples[\\/]') {
+                    return [pscustomobject]@{ ExitCode = 2; StdOut = $J; StdErr = '' }
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Mock Write-AvmLog {
+                param($Message, $Level, $File, $Line, $Column)
+                $script:lintPresentationEvents.Add([pscustomobject]@{
+                        Message = $Message; Level = $Level; File = $File; Line = $Line; Column = $Column
+                        ScopesCompleted = $script:lintScopeRuns.Count
+                    })
+            }
+            Mock Test-AvmModuleVersion
+            Mock Get-AvmModuleContextInternal { $C }
+            Mock Assert-AvmGitWorkingTreeClean
+            Mock Resolve-AvmCommandTool
+            Mock Test-AvmMetadataModules { [pscustomobject]@{ Status = 'pass'; Issues = @() } }
+            Mock Initialize-AvmTerraformCommand { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmSync { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmFormat { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmTransform { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmTest { [pscustomobject]@{ Status = 'pass' } }
+            Mock Invoke-AvmDocs { [pscustomobject]@{ Status = 'pass' } }
+
+            $result = Invoke-AvmPrCheck -Path $C.Root -Ecosystem terraform -ThrottleLimit 1
+            Should -Invoke Invoke-AvmCheckPolicy -Exactly 1
+            Should -Invoke Invoke-AvmDocs -Exactly 1
+            Write-AvmResult -Result $result -Verb 'pr-check'
+            [pscustomobject]@{
+                Result = $result
+                Events = $script:lintPresentationEvents.ToArray()
+                ScopeRuns = $script:lintScopeRuns.Count
+            }
+        }
+
+        $probe.Result.Status | Should -Be 'fail'
+        $lint = @($probe.Result.Steps | Where-Object Step -eq 'lint')[0]
+        $lint.Result.Issues | Should -HaveCount 4
+        @($lint.Result.Issues | Where-Object Severity -ne 'warning') | Should -HaveCount 0
+        $probe.ScopeRuns | Should -Be 5
+        $errors = @($probe.Events | Where-Object Level -eq 'Error')
+        $errors | Should -HaveCount 4
+        foreach ($entry in $errors) {
+            $entry.File | Should -Match '^examples/(one|two|three|four)/variables.tf$'
+            $entry.Line | Should -Be 9
+            $entry.Column | Should -Be 3
+            $entry.ScopesCompleted | Should -Be 5
+        }
+        $messages = @($probe.Events.Message)
+        $lastError = [array]::LastIndexOf($messages, '[terraform_unused_declarations] Unused location.')
+        $lintFinished = @($messages | Where-Object { $_ -match ': lint -> fail ' })[0]
+        $policyStarted = @($messages | Where-Object { $_ -match ': check policy \(started ' })[0]
+        $lastError | Should -BeLessThan ([array]::IndexOf($messages, $lintFinished))
+        $lastError | Should -BeLessThan ([array]::IndexOf($messages, $policyStarted))
+        @($messages | Where-Object { $_ -like '*Unused location.*' }) | Should -HaveCount 4
+    }
+
     It 'emits one located warning for a parsed AVM deprecated-interface notice while retaining a passing issue' {
         $ctx = $script:context
         $json = @'
