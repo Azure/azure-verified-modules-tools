@@ -7,10 +7,6 @@ on:
         description: Full tools commit SHA, identical to the caller's workflow revision.
         type: string
         required: true
-      avm-authoring-version:
-        description: Exact qualified Avm.Authoring release.
-        type: string
-        required: true
       workflowInput:
         type: string
         required: true
@@ -63,7 +59,6 @@ jobs:
         uses: ./.avm-tools/.github/actions/bicep-validation
         with:
           operation: Static
-          avm-authoring-version: ${{ inputs.avm-authoring-version }}
           modulePath: ${{ inputs.modulePath }}
 
   job_psrule_must:
@@ -89,7 +84,6 @@ jobs:
         uses: ./.avm-tools/.github/actions/bicep-validation
         with:
           operation: Policy
-          avm-authoring-version: ${{ inputs.avm-authoring-version }}
           modulePath: ${{ inputs.modulePath }}
           example: ${{ matrix.testCases.path }}
           baseline: ${{ matrix.baseline.baselineName }}
@@ -123,7 +117,6 @@ jobs:
         uses: ./.avm-tools/.github/actions/bicep-validation
         with:
           operation: Policy
-          avm-authoring-version: ${{ inputs.avm-authoring-version }}
           modulePath: ${{ inputs.modulePath }}
           example: ${{ matrix.testCases.path }}
           baseline: ${{ matrix.baseline.baselineName }}
@@ -147,7 +140,6 @@ jobs:
         id: selection
         uses: ./.avm-tools/.github/actions/bicep-subscription-selection
         with:
-          avm-authoring-version: ${{ inputs.avm-authoring-version }}
           modulePath: ${{ inputs.modulePath }}
           moduleTestFilePaths: ${{ inputs.moduleTestFilePaths }}
           displaySubscriptionNames: ${{ vars.VALIDATE_SUBSCRIPTION_IDS != '' || vars.TEST_SUBSCRIPTION_IDS != '' }}
@@ -183,7 +175,6 @@ jobs:
     uses: ./.github/workflows/bicep-module-deployment.yml
     with:
       tools-ref: ${{ inputs.tools-ref }}
-      avm-authoring-version: ${{ inputs.avm-authoring-version }}
       workflowInput: ${{ inputs.workflowInput }}
       modulePath: ${{ inputs.modulePath }}
       testCase: ${{ toJSON(matrix.testCases) }}
@@ -213,7 +204,6 @@ jobs:
       - name: Create module release tags
         uses: ./.avm-tools/.github/actions/bicep-release-tags
         with:
-          avm-authoring-version: ${{ inputs.avm-authoring-version }}
           modulePath: ${{ inputs.modulePath }}
           targetCommit: ${{ github.sha }}
         env:

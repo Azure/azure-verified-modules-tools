@@ -4,9 +4,6 @@ inputs:
   operation:
     description: Static or Policy.
     required: true
-  avm-authoring-version:
-    description: Exact qualified Avm.Authoring release.
-    required: true
   modulePath:
     description: Caller-relative module path.
     required: true
@@ -24,7 +21,6 @@ runs:
       shell: pwsh
       env:
         AVM_ACTION_PATH: ${{ github.action_path }}
-        AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
         OPERATION: ${{ inputs.operation }}
         MODULE_PATH: ${{ inputs.modulePath }}
         EXAMPLE: ${{ inputs.example }}
@@ -34,7 +30,7 @@ runs:
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Common.ps1')
         if ($env:OPERATION -cnotin @('Static', 'Policy')) { throw 'Unknown Bicep validation operation.' }
         $modulePath = Resolve-AvmWorkflowPath -Root $env:GITHUB_WORKSPACE -RelativePath $env:MODULE_PATH
-        Initialize-AvmWorkflow -Version $env:AVM_AUTHORING_VERSION -Profile $env:OPERATION -Path $modulePath -Confirm:$false
+        Initialize-AvmWorkflow -Profile $env:OPERATION -Path $modulePath -Confirm:$false
         $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes("$env:MODULE_PATH|$env:EXAMPLE|$env:BASELINE"))).ToLowerInvariant()
         Write-AvmWorkflowOutput -Name artifactKey -Value "$env:OPERATION-$key"
     - name: Run package validation

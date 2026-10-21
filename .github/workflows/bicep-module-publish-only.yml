@@ -7,10 +7,6 @@ on:
         description: Full tools commit SHA, identical to the caller's workflow revision.
         type: string
         required: true
-      avm-authoring-version:
-        description: Exact qualified Avm.Authoring release.
-        type: string
-        required: true
       modulePath:
         type: string
         required: true
@@ -86,7 +82,6 @@ jobs:
       - name: Create module release tags
         uses: ./.avm-tools/.github/actions/bicep-release-tags
         with:
-          avm-authoring-version: ${{ inputs.avm-authoring-version }}
           modulePath: ${{ inputs.modulePath }}
           baseCommit: ${{ inputs.baseCommit }}
           targetCommit: ${{ inputs.targetCommit }}

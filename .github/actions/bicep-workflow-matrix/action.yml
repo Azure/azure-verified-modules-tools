@@ -1,9 +1,6 @@
 name: Bicep workflow matrix
 description: Select changed or requested modules without running validation or deployment.
 inputs:
-  avm-authoring-version:
-    description: Exact qualified Avm.Authoring release.
-    required: true
   baseCommit:
     description: Previous commit SHA for push events; pull requests derive the tested merge's first parent.
     required: false
@@ -64,7 +61,6 @@ runs:
       shell: pwsh
       env:
         AVM_ACTION_PATH: ${{ github.action_path }}
-        AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
         BASE_COMMIT: ${{ inputs.baseCommit }}
         TARGET_COMMIT: ${{ inputs.targetCommit }}
         PULL_REQUEST_HEAD_COMMIT: ${{ inputs.pullRequestHeadCommit }}
@@ -79,7 +75,7 @@ runs:
       run: |
         $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Discovery.ps1')
-        Initialize-AvmWorkflow -Version $env:AVM_AUTHORING_VERSION -Profile Package -Confirm:$false
+        Initialize-AvmWorkflow -Profile Package -Confirm:$false
         $parameters = @{
           Root = $env:GITHUB_WORKSPACE; EventName = $env:EVENT_NAME
           BaseCommit = $env:BASE_COMMIT; TargetCommit = $env:TARGET_COMMIT; ModulePaths = $env:MODULE_PATHS

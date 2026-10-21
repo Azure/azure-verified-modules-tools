@@ -1,9 +1,6 @@
 name: Bicep module release tags
 description: Preview or create scoped Git tags consumed by the existing publication pipeline.
 inputs:
-  avm-authoring-version:
-    description: Exact qualified Avm.Authoring release.
-    required: true
   modulePath:
     description: Caller-relative module path.
     required: true
@@ -29,11 +26,10 @@ runs:
       shell: pwsh
       env:
         AVM_ACTION_PATH: ${{ github.action_path }}
-        AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
       run: |
         $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Common.ps1')
-        Initialize-AvmWorkflow -Version $env:AVM_AUTHORING_VERSION -Profile Package -Confirm:$false
+        Initialize-AvmWorkflow -Profile Package -Confirm:$false
     - name: Process module release tags
       shell: pwsh
       env:

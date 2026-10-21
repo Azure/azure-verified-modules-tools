@@ -100,16 +100,22 @@ function Install-AvmWorkflowModule {
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)] [string] $Name,
-        [Parameter(Mandatory)] [version] $Version,
+        [version] $Version,
         [switch] $Minimum
     )
 
+    $hasVersion = $PSBoundParameters.ContainsKey('Version')
+    if ($Minimum -and -not $hasVersion) {
+        throw [ArgumentException]::new('A minimum workflow dependency version requires an explicit version.')
+    }
+
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         $installed = @(Get-Module -ListAvailable -Name $Name | Where-Object {
-                ($Minimum -and $_.Version -ge $Version) -or $_.Version -eq $Version
+                -not $hasVersion -or ($Minimum -and $_.Version -ge $Version) -or $_.Version -eq $Version
             } | Sort-Object Version -Descending)
-        if ($installed.Count -gt 0) { return $installed[0] }
-        if (-not $PSCmdlet.ShouldProcess("$Name $Version", 'Install workflow dependency from PSGallery')) {
+        if ($hasVersion -and $installed.Count -gt 0) { return $installed[0] }
+        $target = if ($hasVersion) { "$Name $Version" } else { "$Name latest stable" }
+        if (-not $PSCmdlet.ShouldProcess($target, 'Install workflow dependency from PSGallery')) {
             return
         }
         try {
@@ -118,8 +124,21 @@ function Install-AvmWorkflowModule {
             if ([string]$repository.Uri -cne 'https://www.powershellgallery.com/api/v2') {
                 throw [InvalidOperationException]::new('PSGallery must use the official HTTPS repository.')
             }
-            Install-PSResource -Name $Name -Version $Version.ToString() -Repository PSGallery `
-                -Scope CurrentUser -TrustRepository -Quiet -ErrorAction Stop
+            $parameters = @{
+                Name            = $Name
+                Repository      = 'PSGallery'
+                Scope           = 'CurrentUser'
+                TrustRepository = $true
+                Quiet           = $true
+                ErrorAction     = 'Stop'
+            }
+            if ($hasVersion) { $parameters['Version'] = $Version.ToString() }
+            Install-PSResource @parameters
+            $installed = @(Get-Module -ListAvailable -Name $Name | Where-Object {
+                    -not $hasVersion -or ($Minimum -and $_.Version -ge $Version) -or $_.Version -eq $Version
+                } | Sort-Object Version -Descending)
+            if ($installed.Count -gt 0) { return $installed[0] }
+            throw [InvalidOperationException]::new("Installation did not provide $target.")
         }
         catch {
             if ($attempt -eq 3 -or $_.Exception.ToString() -notmatch
@@ -131,40 +150,48 @@ function Install-AvmWorkflowModule {
         }
     }
     $installed = @(Get-Module -ListAvailable -Name $Name | Where-Object {
-            ($Minimum -and $_.Version -ge $Version) -or $_.Version -eq $Version
+            -not $hasVersion -or ($Minimum -and $_.Version -ge $Version) -or $_.Version -eq $Version
         } | Sort-Object Version -Descending)
     if ($installed.Count -eq 0) {
-        throw [InvalidOperationException]::new("Installation did not provide $Name $Version.")
+        throw [InvalidOperationException]::new("Installation did not provide $target.")
     }
     return $installed[0]
 }
 
 function Import-AvmWorkflowPackage {
     [CmdletBinding()]
-    param([string] $Version = $env:AVM_AUTHORING_VERSION)
+    param()
 
-    if ($Version -cnotmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$' -or $Version -ceq '0.0.0') {
-        throw [ArgumentException]::new('avm-authoring-version must name an exact, qualified Avm.Authoring release; no release default is provided.')
+    $packages = @(Get-Module -ListAvailable -Name Avm.Authoring | Where-Object {
+            $privateData = $_.PrivateData
+            if ($privateData -is [Collections.IDictionary] -and $privateData.Contains('PSData')) {
+                $psData = $privateData['PSData']
+                if ($psData -is [Collections.IDictionary] -and $psData.Contains('Prerelease') -and
+                    -not [string]::IsNullOrWhiteSpace([string]$psData['Prerelease'])) {
+                    return $false
+                }
+            }
+            return $true
+        } | Sort-Object Version -Descending)
+    if ($packages.Count -eq 0) {
+        throw [InvalidOperationException]::new('No stable installed Avm.Authoring package is available to import.')
     }
-    Import-Module -FullyQualifiedName @{ ModuleName = 'Avm.Authoring'; RequiredVersion = $Version } -ErrorAction Stop
+    Import-Module -FullyQualifiedName @{ ModuleName = 'Avm.Authoring'; RequiredVersion = $packages[0].Version } `
+        -Force -ErrorAction Stop
 }
 
 function Initialize-AvmWorkflow {
     [CmdletBinding(SupportsShouldProcess)]
     param(
-        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Version,
         [Parameter(Mandatory)]
         [ValidateSet('Static', 'Policy', 'Deployment', 'Matrix', 'Package')]
         [string] $Profile,
         [string] $Path = $PWD.Path
     )
 
-    if ($Version -cnotmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$' -or $Version -ceq '0.0.0') {
-        throw [ArgumentException]::new('Set avm-authoring-version to the exact qualified release before running Bicep workflows.')
-    }
     if (-not $PSCmdlet.ShouldProcess("Bicep $Profile workflow", 'Prepare package and dependencies')) { return }
-    $null = Install-AvmWorkflowModule -Name Avm.Authoring -Version $Version -Confirm:$false
-    Import-AvmWorkflowPackage -Version $Version
+    $null = Install-AvmWorkflowModule -Name Avm.Authoring -Confirm:$false
+    Import-AvmWorkflowPackage
     if ($Profile -ne 'Package') {
         $requiredCapabilities = switch ($Profile) {
             Static { 'BicepPackagedCompliance' }
@@ -172,7 +199,7 @@ function Initialize-AvmWorkflow {
             Matrix { 'BicepTestSubscriptionSelection' }
             Deployment { 'BicepRequiredResourceProviders'; 'BicepTestSubscriptionSelection' }
         }
-        $package = Get-Module Avm.Authoring | Where-Object { $_.Version -eq [version]$Version } | Select-Object -First 1
+        $package = Get-Module Avm.Authoring | Select-Object -First 1
         $capabilities = if ($null -ne $package -and $package.PrivateData -is [Collections.IDictionary]) {
             $package.PrivateData['AvmCapabilities']
         }
@@ -239,7 +266,11 @@ function Initialize-AvmWorkflow {
     if ($Profile -notin @('Package', 'Matrix')) {
         $null = Install-AvmTool -Name bicep -Path $Path -SkipModuleVersionCheck
     }
-    Write-AvmWorkflowOutput -Name AVM_AUTHORING_VERSION -Value $Version -FilePath $env:GITHUB_ENV
+    $package = Get-Module Avm.Authoring | Select-Object -First 1
+    if ($null -eq $package) {
+        throw [InvalidOperationException]::new('The latest installed Avm.Authoring package was not imported.')
+    }
+    Write-AvmWorkflowOutput -Name AVM_AUTHORING_VERSION -Value $package.Version.ToString() -FilePath $env:GITHUB_ENV
 }
 
 function Invoke-AvmWorkflowProcess {

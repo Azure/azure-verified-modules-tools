@@ -1,9 +1,6 @@
 name: Bicep subscription selection
 description: Prepare secret-safe subscription and concurrency identities without Azure access.
 inputs:
-  avm-authoring-version:
-    description: Exact qualified Avm.Authoring release.
-    required: true
   modulePath:
     description: Caller-relative module path.
     required: true
@@ -28,7 +25,6 @@ runs:
       shell: pwsh
       env:
         AVM_ACTION_PATH: ${{ github.action_path }}
-        AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
         MODULE_PATH: ${{ inputs.modulePath }}
         MODULE_TEST_FILES: ${{ inputs.moduleTestFilePaths }}
         DISPLAY_SUBSCRIPTION_NAMES: ${{ inputs.displaySubscriptionNames }}
@@ -38,7 +34,7 @@ runs:
         $tests = ConvertFrom-Json -InputObject $env:MODULE_TEST_FILES -AsHashtable -NoEnumerate
         if ($tests -isnot [array]) { throw 'Deployment tests must be a JSON array.' }
         if (@($tests | Where-Object { -not (ConvertTo-AvmWorkflowBoolean $_.e2eIgnore) }).Count -gt 0) {
-          Initialize-AvmWorkflow -Version $env:AVM_AUTHORING_VERSION -Profile Matrix -Confirm:$false
+          Initialize-AvmWorkflow -Profile Matrix -Confirm:$false
         }
         $parameters = @{
           Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH; TestFiles = $tests
