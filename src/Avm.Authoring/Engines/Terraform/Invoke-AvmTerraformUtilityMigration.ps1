@@ -90,7 +90,7 @@ function Get-AvmTerraformUtilityMigrationPlan {
             Before       = $inspection
             Calls        = $calls
             Dependencies = @{}
-            Affected     = $calls.Count -gt 0
+            Affected     = $calls.Count -gt 0 -or ($inspection.requirements.Count -gt 0 -and $inspection.calls.Count -gt 0)
             Telemetry    = @($calls.Values | Where-Object Telemetry).Count -gt 0
         }
     }
@@ -294,7 +294,7 @@ function Invoke-AvmTerraformUtilityMigration {
     $cache = @{}
     $telemetryPaths = @($Plans | Where-Object Telemetry | ForEach-Object { $_.Target.Path })
     foreach ($scope in $Plans | Where-Object Affected) {
-        if (-not $PSCmdlet.ShouldProcess($scope.Target.Path, 'upgrade utility modules before telemetry transformation')) {
+        if (-not $PSCmdlet.ShouldProcess($scope.Target.Path, 'reconcile utility modules and provider contracts before telemetry transformation')) {
             continue
         }
         $inspection = Get-AvmTerraformUtilityInspection -Path $scope.Target.Path -Options $Options -Scope $scope.Target.Scope
@@ -319,7 +319,7 @@ function Invoke-AvmTerraformUtilityMigration {
             -ProviderSourceFacts $providerSourceFacts -CallsRequiringAzapi $azapiCalls
         Invoke-AvmTerraformUtilityNativeMigration -Path $scope.Target.Path -Scope $scope.Target.Scope -Options $Options `
             -ProviderSourceFacts $providerSourceFacts -ProviderConfigurationFacts @($facts.Configurations) `
-            -ProviderAliasFacts @($facts.Aliases) -CallsRequiringAzapi $azapiCalls
+            -ProviderAliasFacts @($facts.Aliases) -CallsRequiringAzapi $azapiCalls -ApplyUtilityMigration:($scope.Calls.Count -gt 0)
     }
 }
 
@@ -328,7 +328,8 @@ function Invoke-AvmTerraformUtilityProviderCleanup {
     param(
         [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Plans,
         [Parameter(Mandatory)] [object[]] $ModuleTargets,
-        [Parameter(Mandatory)] [object] $Options
+        [Parameter(Mandatory)] [object] $Options,
+        [hashtable] $RetainedProviderSources
     )
 
     Set-StrictMode -Version 3.0
@@ -405,6 +406,9 @@ function Invoke-AvmTerraformUtilityProviderCleanup {
         if ($providerWarnings.ContainsKey($path)) {
             $sources[$path] = @(Get-AvmTerraformUnitTestProviderSource -Path $path -ModuleTargets $ModuleTargets -Options $Options `
                     -ModuleProviderSources $moduleSources[$path] -ModuleManifests $manifests)
+        }
+        if ($null -ne $RetainedProviderSources) {
+            $RetainedProviderSources[$path] = @($moduleSources[$path].Values | ForEach-Object { $_ } | Sort-Object -Unique)
         }
         Invoke-AvmMapotfTransformTarget -Target ([pscustomobject]@{
                 Path = $path; Scope = $scope.Target.Scope; Profiles = @('variable-order', 'common')

@@ -572,6 +572,11 @@ function ConvertFrom-AvmTerraformProviderTree {
     $rootSeen = $false
     $testDepth = -1
     $moduleName = $null
+    $missingConfigurationWarning = 'Warning: Missing required provider configuration'
+    $redundantConfigurationWarning = 'Warning: Redundant empty provider block'
+    $allowedDiagnostics = @($redundantConfigurationWarning)
+    if ($AllowMissingProviderConfiguration) { $allowedDiagnostics += $missingConfigurationWarning }
+    $diagnostics = @([regex]::Matches($Text, '(?m)^(?:Warning|Error):[^\r\n]*') | ForEach-Object Value)
     foreach ($line in $Text -split '\r?\n') {
         if (-not $inConfiguration) {
             if ($line -ceq 'Providers required by configuration:') {
@@ -581,12 +586,15 @@ function ConvertFrom-AvmTerraformProviderTree {
         }
         if ($line -ceq 'Providers required by state:') { break }
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
-        if ($rootSeen -and $AllowMissingProviderConfiguration -and
-            $line -ceq 'Warning: Missing required provider configuration' -and
-            @([regex]::Matches($Text, '(?m)^(?:Warning|Error):[^\r\n]*') |
-                    Where-Object { $_.Value -cne 'Warning: Missing required provider configuration' }).Count -eq 0) {
-            $ProviderWarnings[$Path] = $true
-            Write-AvmLog "Provider source bindings in '$Path' need repair and a strict dependency recheck before mock migration." -Level Verbose | Out-Null
+        if ($rootSeen -and $line -cin $allowedDiagnostics -and
+            @($diagnostics | Where-Object { $_ -cnotin $allowedDiagnostics }).Count -eq 0) {
+            if ($missingConfigurationWarning -cin $diagnostics) {
+                $ProviderWarnings[$Path] = $true
+                Write-AvmLog "Provider source bindings in '$Path' need repair and a strict dependency recheck before mock migration." -Level Verbose | Out-Null
+            }
+            if ($redundantConfigurationWarning -cin $diagnostics) {
+                Write-AvmLog "Terraform reported a redundant empty provider block in '$Path'; preserving the authored configuration." -Level Warning | Out-Null
+            }
             break
         }
         if ($line -ceq '.' -and -not $rootSeen) {
@@ -597,7 +605,7 @@ function ConvertFrom-AvmTerraformProviderTree {
             '\A(?<prefix>[\u2502\u251c\u2514\u2500 \u00a0]+)(?<kind>provider|module|test|run)(?<value>.*)\z')
         if (-not $rootSeen -or -not $node.Success -or $node.Groups['prefix'].Length % 4 -ne 0) {
             throw [AvmConfigurationException]::new(
-                "Cannot inspect provider dependencies for '$Path': unexpected Terraform provider tree.")
+                "Cannot inspect provider dependencies for '$Path': unexpected Terraform provider tree node '$line'.")
         }
         $depth = $node.Groups['prefix'].Length / 4
         if ($testDepth -ge 0 -and $depth -gt $testDepth) { continue }
@@ -1004,7 +1012,7 @@ function Get-AvmTerraformUnitTestModtmRequirementPlan {
             throw [AvmConfigurationException]::new(
                 "Cannot preserve ModTM mocks for '$Path': update the module profile to expose native ModTM module-call inspection.")
         }
-        $bindings = @{}
+        $dependencies = [System.Collections.Generic.List[string]]::new()
         $dependencyVersions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
         foreach ($name in $ModuleProviderSources[$Path].psbase.Keys) {
             if (-not $ModuleProviderSources[$Path][$name].Contains($source)) { continue }
@@ -1058,28 +1066,18 @@ function Get-AvmTerraformUnitTestModtmRequirementPlan {
                 $call['mptf'] -isnot [System.Collections.IDictionary]) {
                 throw [AvmConfigurationException]::new("Cannot inspect ModTM provider bindings for '$Path' module '$name'.")
             }
-            if ($call.Contains('providers')) {
-                $mapping = ConvertFrom-AvmTerraformUnitTestProviderMapping -Expression $call.providers `
-                    -ProviderNames @() -MockProviderNames @() -AllowUnlistedProviders
-                if ($null -eq $mapping -or
-                    ($mapping.Bindings.ContainsKey('modtm') -and $mapping.Bindings['modtm'] -cne 'modtm')) {
-                    throw [AvmConfigurationException]::new(
-                        "Cannot preserve ModTM mocks for '$Path': module '$name' has computed, aliased, or cross-provider bindings that require review.")
-                }
-                if ($mapping.Bindings.ContainsKey('modtm')) { continue }
-            }
-            $bindings[$name] = '{ modtm = modtm }'
+            $dependencies.Add($name)
         }
+        $existingRequirement = $RequiredProviders[$Path].Contains('modtm')
+        if ($existingRequirement -and $dependencies.Count -eq 0) { return $null }
         if ($ModuleProviderSources[$Path].Count -eq 0) {
             throw [AvmConfigurationException]::new(
                 "Cannot preserve ModTM mocks for '$Path': no configuration dependency proves the missing source requirement.")
         }
-        $existingRequirement = $RequiredProviders[$Path].Contains('modtm')
-        if ($existingRequirement -and $bindings.Count -eq 0) { return $null }
-        $requirement = [ordered]@{ source = $source }
-        if ($existingRequirement -or
-            ($OriginalRequirements.ContainsKey($Path) -and $OriginalRequirements[$Path].Contains('modtm'))) {
-            $original = if ($existingRequirement) { $RequiredProviders[$Path].modtm } else { $OriginalRequirements[$Path].modtm }
+        $requirement = if ($existingRequirement) { $RequiredProviders[$Path].modtm } else { [ordered]@{ source = $source } }
+        if (-not $existingRequirement -and
+            $OriginalRequirements.ContainsKey($Path) -and $OriginalRequirements[$Path].Contains('modtm')) {
+            $original = $OriginalRequirements[$Path].modtm
             if ($original['source'] -notin @('Azure/modtm', $source) -or
                 ($null -ne $original['version'] -and $original['version'] -isnot [string]) -or
                 ($null -ne $original['configuration_aliases'] -and @($original.configuration_aliases).Count -gt 0)) {
@@ -1098,33 +1096,36 @@ function Get-AvmTerraformUnitTestModtmRequirementPlan {
             [Array]::Sort($versions, [System.StringComparer]::Ordinal)
             $requirement.version = $versions -join ', '
         }
-        $requirementAttributes = foreach ($attribute in $requirement.GetEnumerator()) {
+        $requirementAttributes = foreach ($attribute in $requirement.GetEnumerator() | Where-Object { -not $existingRequirement }) {
             $value = ConvertTo-Json -InputObject $attribute.Value -Compress
             "    $($attribute.Key) = $value"
         }
-        $requirementBody = "required_providers {`n  modtm = {`n$($requirementAttributes -join "`n")`n  }`n}`n"
+        $requirementBody = if ($existingRequirement) { '' } else {
+            "required_providers {`n  modtm = {`n$($requirementAttributes -join "`n")`n  }`n}`n"
+        }
         $bodyJson = ConvertTo-Json -InputObject $requirementBody -Compress
-        $bindingsJson = ConvertTo-Json -InputObject $bindings -Compress
+        $dependenciesJson = ConvertTo-Json -InputObject @($dependencies) -Compress
         $arguments = @(
             'transform', '--tf-dir', $Path, '--mptf-dir', $Options.ProfileDirs['provider-restore'],
             '--mptf-var', "unit_test_modtm_requirement=$bodyJson",
-            '--mptf-var', "unit_test_modtm_bindings=$bindingsJson"
+            '--mptf-var', "unit_test_modtm_dependencies=$dependenciesJson"
         )
         $capabilities = [System.Collections.Generic.List[string]]::new()
+        $requirementChanges = if ($existingRequirement) { 0 } else { 1 }
         $capabilities.Add(
             "try(length(transform.update_in_place.unit_test_modtm_requirement), 0) + " +
-            "try(length(transform.new_block.unit_test_modtm_requirement), 0) == 1")
-        $capabilities.Add(
-            "try(transform.update_in_place.unit_test_modtm_requirement[`"1`"].merge_object_attributes && " +
-            "transform.update_in_place.unit_test_modtm_requirement[`"1`"].dynamic_block_body == $bodyJson, " +
-            "try(transform.new_block.unit_test_modtm_requirement[`"1`"].body == $bodyJson, false))")
-        foreach ($name in $bindings.psbase.Keys) {
-            $nameJson = ConvertTo-Json -InputObject $name -Compress
-            $bindingJson = ConvertTo-Json -InputObject "providers = $($bindings[$name])`n" -Compress
+            "try(length(transform.new_block.unit_test_modtm_requirement), 0) == $requirementChanges")
+        if (-not $existingRequirement) {
             $capabilities.Add(
-                "try(transform.update_in_place.unit_test_modtm_bindings[$nameJson].merge_object_attributes && " +
-                "transform.update_in_place.unit_test_modtm_bindings[$nameJson].dynamic_block_body == $bindingJson, false)")
+                "try(transform.update_in_place.unit_test_modtm_requirement[`"1`"].merge_object_attributes && " +
+                "transform.update_in_place.unit_test_modtm_requirement[`"1`"].dynamic_block_body == $bodyJson, " +
+                "try(transform.new_block.unit_test_modtm_requirement[`"1`"].body == $bodyJson, false))")
         }
+        $capabilities.Add(
+            'alltrue([for name, binding in try(transform.update_in_place.unit_test_modtm_bindings, {}) : ' +
+            'contains(var.unit_test_modtm_dependencies, name) && ' +
+            'contains(keys(data.module.unit_test_modtm_calls.result[name]), "providers") && ' +
+            'binding.merge_object_attributes && binding.dynamic_block_body == "providers = { modtm = modtm }\n"])')
         $plan = [pscustomobject]@{
             Path         = $Path
             Arguments    = $arguments
@@ -1184,7 +1185,8 @@ function Invoke-AvmTerraformUnitTestMigration {
         [Parameter(Mandatory)] [string] $Root,
         [Parameter(Mandatory)] [object[]] $ModuleTargets,
         [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Snapshots,
-        [Parameter(Mandatory)] [object] $Options
+        [Parameter(Mandatory)] [object] $Options,
+        [hashtable] $RetainedProviderSources
     )
 
     Set-StrictMode -Version 3.0
@@ -1395,7 +1397,7 @@ function Invoke-AvmTerraformUnitTestMigration {
                         [Array]::Sort($bindingNames, [System.StringComparer]::Ordinal)
                         $implicitExpression = "{`n" +
                         (($bindingNames | ForEach-Object { "  $_ = $($defaultBindings[$_])" }) -join "`n") + "`n}"
-                        if ($missingRandomRequirements.Contains($targetPath) -or $missingModtmRequirements.Contains($targetPath)) {
+                        if ($missingRandomRequirements.Contains($targetPath)) {
                             $providerMockBindings[$name] = $implicitExpression
                         }
                         $implicitExpression
@@ -1613,6 +1615,15 @@ function Invoke-AvmTerraformUnitTestMigration {
         }
     }
 
+    if ($null -ne $RetainedProviderSources) {
+        foreach ($path in $retainedPaths) {
+            if ($requiredProviders[$path].modtm['source'] -in @('Azure/modtm', 'registry.terraform.io/azure/modtm')) {
+                $RetainedProviderSources[$path] = @(@($RetainedProviderSources[$path]) +
+                    'registry.terraform.io/azure/modtm' | Where-Object { $null -ne $_ } | Sort-Object -Unique)
+            }
+        }
+    }
+
     foreach ($plan in $modtmRequirementPlans.Values) {
         if ([string]::IsNullOrWhiteSpace($Options.ProfileDirs['common'])) {
             throw [AvmConfigurationException]::new("Cannot preserve ModTM mocks for '$($plan.Path)': the common ordering profile is required.")
@@ -1743,6 +1754,10 @@ function Invoke-AvmTerraformUnitTestMigration {
                 $arguments = $plan.Arguments + @('--mptf-dir', $Options.ProfileDirs['common'])
                 $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList $arguments `
                     -WorkingDirectory $plan.Path -EnvVars $Options.EnvVars
+                if ($null -ne $RetainedProviderSources) {
+                    $RetainedProviderSources[$plan.Path] = @(@($RetainedProviderSources[$plan.Path]) +
+                        'registry.terraform.io/azure/modtm' | Where-Object { $null -ne $_ } | Sort-Object -Unique)
+                }
             }
             finally {
                 $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList @('clean-backup', '--tf-dir', $plan.Path) `

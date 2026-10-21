@@ -714,7 +714,10 @@ scoped modules. Choose a valid region for the target cloud. Local module
 calls forward the parent's location when the child needs it and no location
 was authored, preserving
 per-item locations in multi-region modules. Instrumented children also
-receive the parent's opt-out, and supported example calls expose and forward
+receive `enable_telemetry = var.enable_telemetry` explicitly, overriding authored
+child-call values as well as the child's default. Forward this input whenever
+a local child exposes it, independently of whether the child requires location.
+Helpers without that input remain unchanged. Supported example calls expose and forward
 missing inputs. Only newly generated example `location` inputs default to
 `"eastus"`, so runnable examples remain usable by noninteractive plans.
 Authored example declarations, defaults, required inputs, and per-item regions
@@ -784,6 +787,43 @@ if absent, without replacing existing bindings or constraints. Removing the last
 obsolete ModTM binding removes the map rather than replacing it with a default
 AzAPI-only map. Terraform's built-in provider needs no generated
 `required_providers` declaration.
+
+The final `provider-inheritance` native profile removes a module call's entire nonempty `providers`
+map only when every entry forwards an unaliased default to the identical local
+name. This applies to every provider, including ModTM, AzAPI, AzureRM and
+Random, regardless of whether the child genuinely uses it. Preserve maps with
+any alias selection, aliased target key or different local-name binding in
+full, including their necessary identity entries and comments. Native object
+inspection determines these edits; PowerShell supplies only dependency facts.
+Native test `run` provider maps and mock declarations are not module-call maps
+and remain subject to the separate test-binding coverage rules.
+Run this profile separately after restoration and ordering across every module,
+example and test-wrapper scope. Planning removal and reordering together can
+restore attributes from the ordering transform's original block snapshot.
+Provider retirement in root and example/test-wrapper profiles must honor the
+existing conservative provider-configuration and alias facts as well as direct
+usage, so removing an identity map cannot retire an authored configuration's
+source or version on a subsequent pass.
+Include callers with existing provider requirements in native dependency
+inspection even when utility selections are preserved or need no migration.
+Run these scopes in provider-only mode when no utility upgrade is selected;
+preserving utility selections must not skip the evidence needed to retain
+their original provider source and version after final map removal.
+After map removal, run a separate native `provider-contract` pass to retire
+ordinary transitive-only declarations without lint exceptions. Preserve direct
+resource/data/ephemeral uses, authored configurations, configuration aliases,
+surviving explicit caller and mock bindings, and original source/version
+constraints proven to constrain a current dependency. Version protection
+requires the original and current source/version contracts to match; a newly
+generated constraint does not establish an authored contract. Retire a
+declaration only when pinned TFLint's native parser also reports it unused.
+This protects authored provider configurations without extending the existing
+PowerShell configuration-fact recognizer or adding a text parser. All
+declaration-edit and retention decisions remain in MaPoTF.
+When an owned unused-provider directive exists, inspect the scope in a
+temporary module-tree copy with only that exact directive blanked, preserving
+local dependency paths and native line/column ranges.
+Existing annotations must not hide a contract that is no longer needed.
 
 Capture native unit-test declarations and original provider evidence before
 utility edits. Inspect upgraded dependencies through fresh private Terraform
@@ -1124,8 +1164,28 @@ JSON tests, possible backend/cloud declarations and initialized backend
 metadata require review before dependency inspection;
 do not access remote state to construct mock mappings. The test
 owner's requirement does not cover a separately selected local target.
-Preserve assertions and mock defaults without restoring unused provider
-requirements or exempting them from lint. Verify native profile support for
+Preserve assertions and mock defaults without restoring unrelated unused provider
+requirements. A proven retained provider source/version contract may receive an
+inline `terraform_unused_required_providers` exception on that declaration only.
+Require fresh native source evidence and a surviving incoming explicit provider
+binding, native unit mock/type contract, or protected original version contract;
+child usage or an old declaration alone does not justify an exception.
+Inspect the current native test declarations
+after migration, not mocks that have already been retired.
+Use the pinned TFLint JSON source range to place the comment after final map
+cleanup; do not parse HCL in PowerShell or disable the rule for unrelated
+unused declarations. Insert multiple comments in reverse native source order
+so earlier edits cannot invalidate a later declaration's range.
+Transform therefore also requires pinned TFLint when inspecting provider
+retirement or retaining these contracts.
+Pre-commit and transform-only prerequisite selection must therefore include
+the pinned TFLint executable even when the lint step is excluded.
+Surface Terraform's known redundant-empty-provider deprecation while preserving
+the authored configuration; it is not a provider-tree node or permission to
+accept unknown diagnostics. Missing provider configurations still require the
+existing repair mode and a subsequent strict inspection. Unknown warnings,
+errors and alias/type failures remain blockers.
+Verify native profile support for
 the complete mapping before changing any test file, and keep repeated
 transforms and non-writing drift checks stable.
 Validate unsupported retired-identifier references before removing any mock
@@ -1134,13 +1194,17 @@ outside direct unit-test plans. A later migration or cleanup failure restores
 their full original bytes even in normal writing mode; explicitly report any
 file whose restoration cannot be verified.
 For unchanged ModTM dependencies, preserve the mock and every required run
-binding. A removed non-default provider source must not become an inferred
+binding. Proven default mocks continue to bind implicitly; restoring their
+ModTM source requirement alone must not manufacture a native test `run.providers`
+map. A removed non-default provider source must not become an inferred
 `hashicorp/modtm` source. Restore only a selected target's proven
 `Azure/modtm` requirement, retaining its original source and version when
-available, and bind the same provider explicitly to the actual dependencies
-that declare it. Known local intermediates may receive the same repair;
+available. Dependencies without an explicit module-call provider map inherit
+the default configuration; never synthesize identity forwarding maps for them.
+Augment only an existing explicit map that still needs a default ModTM entry,
+preserving its aliases, other bindings and comments. Known local intermediates may receive the same repair;
 known local callers and example wrappers also receive only their proven
-required source declaration and same-provider binding. Newly synthesized
+required source declaration and any necessary existing-map augmentation. Newly synthesized
 requirements preserve an available original version constraint; otherwise
 inherit only literal constraints from their proven same-source required
 dependencies or local targets. Combine distinct inherited constraints by
@@ -1789,10 +1853,10 @@ the test identity additional permissions. The marker does not qualify a
 release containing the other required runtime and policy interfaces.
 
 Keep `avm-validation` for selection/execution and `publish-approval` for tag
-approval. Per-target locks cover deployment, assertions and cleanup; shared
-tenant/management-group/linked-template scopes additionally take the shared
-outer lock. Queue rather than cancel. Pass full CI variables/secrets only to
-Deploy; retain generic `gci` and separate custom resource location from fixed
+approval. One per-case lifecycle lock covers deployment, assertions, post hooks,
+cleanup and cleanup-only recovery. Queue rather than cancel. The deployment
+job alone receives full CI variables/secrets, including its pre-login isolation
+input check. Retain generic `gci` and separate custom resource location from fixed
 `WestEurope` metadata location. Renewal precedes Complete after either a
 successful or failed Deploy. Native completion validates saved state, runs
 the final terminal deployment's post hook once, and then cleans every attempt;
@@ -1847,14 +1911,157 @@ Registry caller replacements must preserve the existing orchestration:
 experimental checks require both `PR: Run Checks` and `PR: Run E2E Tests`;
 ignored jobs exit before checkout, bootstrap or sign-in. The seeded matrix
 retains the original subscription index and canonical GUID-based identity.
-Main, preview and publish callers share the deployment implementation,
-per-module/subscription deployment locks, and a shared deployment-phase lock
-for management-group/tenant, linked or expression-valued nested templates.
-Publication retains its separate per-module lock. Initial login and renewal
+Main, preview and publish callers share the deployment implementation and the
+reviewed isolation policy below. Publication retains its separate per-module
+lock. Initial login and renewal
 use OIDC with the selected subscription and tenant, without module-specific
 client-secret exceptions or credentials in outputs. Avm.Authoring consumes
 the caller's authenticated session; it does not sign in or renew credentials.
 Registry caller replacement and live qualification require separate approval.
+
+#### Deployment-test concurrency and contributor isolation contract
+
+ARM scope type is not a contention domain. Management-group/tenant scope,
+nested deployments and locally stored template expressions never independently
+request serialization. Ownership inspection accepts inline templates and exact
+lexical parent `variables('name')` object references, not a general ARM
+expression evaluator. Matrix selection still compiles active tests and uses the
+unchanged native subscription selector, reservation checks and identity binding.
+
+An exact case-local `isolation.json` records the source review that establishes
+isolation. It is not a generated certificate, a naming-only claim, or proof from
+a checksum. Its review must cover the complete deployable source/dependency
+closure, active branches, scripts, hooks, assertions, fixtures and cleanup:
+
+```json
+{
+  "version": 1,
+  "evidence": {
+    "resources": "Identify every owned resource/group and nested deployment, and explain its run/case-derived identity.",
+    "cleanup": "Explain why recorded Create operations and all hook/service cleanup affect only owned resources.",
+    "sharedState": "Identify all shared reads and mutations, including settings and imported fixtures; explain why no undeclared shared target is mutated.",
+    "identity": "Explain init/idem identity reuse, InPlace identity preservation and Fresh attempt ownership."
+  }
+}
+```
+
+Contributors must replace those example descriptions with concrete source
+references and meaningful behavioral tests under the owning module. Updating
+the sources requires re-reviewing the contract in the same change; four strings
+are a review declaration, not an automated semantic verifier. Unique root
+deployment names alone never qualify. Inspect fixed resource/assignment names,
+cross-scope resources, auxiliary groups, deployment scripts and provider-managed
+infrastructure. ARM `Create` may update an existing resource: operation history
+alone does not prove ownership. Existing shared fixtures must stay read-only.
+
+A declaration alone never unlocks a case. Selection requires a qualified native
+package exposing `RequireResourceIsolation` and checks the compiled ownership
+boundary. The first supported mutable boundary is flattened
+`Microsoft.Storage/storageAccounts` resources and their children inside a fresh
+native-created resource group. Native creation refuses a pre-existing group,
+verifies its exact ID/run tag, and rechecks ownership before every submission,
+including InPlace. Nested deployments must stay in that group and have
+inspectable templates. Resource scope escapes, test-created groups, unproved
+provider types/service-managed infrastructure, deployment scripts, post hooks
+and required feature/provider registrations retain diagnostic fallback.
+Assertions still require source review as read-only; arbitrary authored code is
+not sandboxed. Empty templates without nested mutations can qualify at any
+scope; scope type alone is not an ownership or contention finding.
+
+The workflow passes `RequireResourceIsolation` on every reviewed deployment.
+The native package repeats structural checks before Azure access and persists
+the boundary in cleanup-state schema 2. Older recovery packages reject that
+version instead of silently discarding the guard; ordinary states remain
+schema 1. Operation traversal checks every Create target before following a
+nested deployment or accepting a deletion target. Recovery and cleanup verify
+the persisted boundary and ownership tags; foreign IDs and unsupported provider
+cleanup are refused. Known owned resources may still be cleaned after an
+out-of-bound operation is rejected, but uncertain parent-group cleanup remains
+pending. This initial boundary does not qualify arbitrary Azure providers.
+
+Reviewed cases run concurrently by default within or across subscriptions.
+The workflow overrides the effective `namePrefix` token with
+`<prefix>#_avmE2eSuffix_#`, using the native ten-hex suffix from the per-case
+32-hex naming ID. Prefixes are lowercase alphanumeric, one to three characters
+(`gci` by default); provider-specific final-name bounds still need module tests.
+Root deployment/group naming retains the full native ID. Repeated cases/runs
+get distinct contexts, InPlace preserves the exact context, and Fresh creates
+another owned context whose resources remain tracked until final cleanup.
+Authored sequential init/idem deployments retain their existing shared
+within-case identity; tools never rewrites or strips them.
+
+Before login, the native CI alias resolver checks effective variables/secrets
+against compiled test parameters. Reviewed execution rejects any matching CI
+parameter override, implicit CI Key Vault parameter lookup or custom local
+token other than the workflow-controlled prefix. These can invalidate reviewed
+default naming or fixture assumptions. Unrelated CI entries are harmless.
+Cases needing such overrides retain fallback until their effective-input
+ownership can be established; do not silently disable inputs or assume safety.
+Explicit native scope and location inputs remain supported.
+
+An actual shared mutation adds one optional `sharedTarget` containing the
+absolute ARM resource/singleton-setting ID. Only `#_subscriptionId_#` is
+substituted, from the selected subscription; fixed cross-subscription IDs remain
+fixed. The lock key hashes cloud, canonical tenant and case-insensitive target
+ID, not module, case, allocation index or run. Different modules and competing
+runs in the same caller repository using the same target therefore serialize
+through final cleanup/recovery. A target declaration does not authorize a
+mutation outside the enforced native boundary. Unsupported shared mutations
+still retain fallback. Every user of that target must declare the same
+identity, including parent/child settings that contend. Multiple independent
+shared targets, non-ARM settings, dynamic/unidentifiable targets and cross-repo
+coordination are not supported by this one-lock workflow contract: retain
+fallback or use a separately reviewed external lifecycle coordinator. Do not
+invent module names as shared-target IDs.
+
+Missing isolation evidence emits a visible diagnostic; malformed declarations
+fail. Unverified cases retain the legacy inner module/subscription lock, with
+the additional outer module-wide fallback retained among unverified cases when discovery
+finds mutable tenant/management-group templates or uninspectable external
+templates. Empty scope templates and inspectable lexical variable indirection
+do not independently require that broader fallback. These are migration-only
+compatibility protections for unestablished ownership, not scope-based proof
+of contention. Reviewed cases never inherit those fallback locks.
+
+A repository-wide fallback would broaden serialization for unrelated modules
+and subscriptions without establishing mixed-population protection, so it is
+not used. Legacy fallback keys, verified-case keys and declared shared-target
+keys are distinct: they do not coordinate undeclared overlap across modules,
+between old/new workflow revisions, or between reviewed and unverified cases.
+The shared-target guarantee covers competing executions that declare the same
+target under this contract, not every possible legacy user of that target.
+Migration must prove there is no overlap or migrate/coordinate every actual
+target user before enabling parallel execution. Recheck mode and lock identity
+before authentication.
+Ignored cases require neither isolation evidence nor subscription/compiler
+preparation. `sharedScope=false` remains only a compatibility output; there is
+no shared-scope outer lock or automatic module/subscription lock for reviewed
+cases. Keeping both legacy levels for unverified cases preserves their existing
+same-subscription coordination when another run has a different case matrix.
+
+All three deployment matrices cap active legs at four independently of target
+locking, with fail-fast disabled. This bounds each module invocation, not total
+fleet/API pressure across runs or modules. Existing publication locks, pool
+routing, reserved/HCI protections and ordinary cleanup remain unchanged.
+The job-level queue never cancels an older lifecycle. GitHub releases the lock
+when the job ends even after uncertain cleanup; recover pending state under the
+same target lock before reusing shared infrastructure. Reviewed shared-target
+execution rejects `removeDeployment=false` before login: `KeepResources` is not
+safe shared-target handoff. Locks are repository-local, not an Azure lease.
+
+Rollout requires a qualified native package supporting `RequireResourceIsolation`,
+naming tokens, retry identity and boundary-enforced schema-2 cleanup/recovery, a coordinated immutable tools workflow
+pin, module-owned isolation evidence/tests, and a separately approved validation
+window. Allow existing campaigns/cleanup to finish before mixing lock revisions;
+never cancel or dispatch campaigns as part of this migration. In particular,
+subscription-scope ACA sources need review of auxiliary/service-created groups,
+certificate scripts, fixed assignment names and effective input overrides; the
+tooling change does not activate any registry case: ACA defaults/max remain
+fallback, including at the existing `ba9af85f` tools pin. Fresh test-created RG
+absence and provider-created managed-environment infrastructure are not proved
+by those sources or by recursive Create history. A compatible package/pin does
+not supply that missing proof automatically. Local behavioral fixtures qualify
+selection/identity/cleanup contracts, not live ARM behavior or fleet capacity.
 
 Package-owned PSRule parameter defaults are for static expansion only.
 In particular, the synthetic `builtInServicePrincipalObjectId` default must

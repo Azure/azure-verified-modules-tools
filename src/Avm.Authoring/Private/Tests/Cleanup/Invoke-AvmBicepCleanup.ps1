@@ -54,6 +54,7 @@ function Invoke-AvmBicepCleanup {
         SearchRetryLimit       = $SearchRetryLimit
         SearchRetryInterval    = $SearchRetryInterval
         RequireCompleteRemoval = $RequireCompleteRemoval
+        IsolationState         = $state
     }
     $removalOptions = @{
         RetryLimit             = $RemovalRetryLimit

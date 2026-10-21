@@ -156,6 +156,12 @@ function Invoke-AvmTestE2e {
         existing file and the explicitly matching subscription and tenant.
     .PARAMETER KeepResources
         Bicep-only: run assertions but retain every attempt, skipping post and cleanup.
+    .PARAMETER RequireResourceIsolation
+        Bicep-only: require an inspectable, contained storage-resource template
+        in a fresh native-owned group, or an empty template at any scope.
+        Refuse unproved scope escapes, scripts, hooks and provider-managed
+        infrastructure. Recheck group ownership before submission and constrain
+        recursive cleanup/recovery to the persisted ownership boundary.
     .PARAMETER DeploymentRetryLimit
         Bicep total submission attempts, one to three, capped by packaged policy.
         Only exact Failed deployments with complete eligible evidence can retry;
@@ -183,6 +189,8 @@ function Invoke-AvmTestE2e {
         avm test e2e --phase Complete --cleanup-state-path cleanup.json --subscription-id $testSubscriptionId --tenant-id $testTenantId
     .EXAMPLE
         avm test e2e --max-retry 0 --ecosystem terraform
+    .EXAMPLE
+        Invoke-AvmTestE2e -Path . -Ecosystem bicep -RequireResourceIsolation -SubscriptionId $testSubscriptionId -TenantId $testTenantId -Location eastus -ResourceGroupPrefix avm-e2e
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([pscustomobject])]
@@ -219,6 +227,7 @@ function Invoke-AvmTestE2e {
         [string] $Phase = 'All',
         [string] $CleanupStatePath,
         [switch] $KeepResources,
+        [switch] $RequireResourceIsolation,
         [ValidateRange(1, 3)]
         [int] $DeploymentRetryLimit = 3,
         [ValidateRange(1, 3)]
@@ -237,7 +246,7 @@ function Invoke-AvmTestE2e {
         'Recurse', 'SubscriptionId', 'TenantId', 'ManagementGroupId', 'Location',
         'ResourceLocation', 'ResourceGroupPrefix', 'TokenFile', 'Tokens', 'ParameterFile', 'Parameters',
         'UseCiInputs', 'TestSubscriptionIds', 'SubscriptionSelectionSeed', 'SubscriptionJobIndex',
-        'Phase', 'CleanupStatePath', 'KeepResources', 'DeploymentRetryLimit', 'ValidationRetryLimit'
+        'Phase', 'CleanupStatePath', 'KeepResources', 'DeploymentRetryLimit', 'ValidationRetryLimit', 'RequireResourceIsolation'
     )
     switch ($context.Ecosystem) {
         'bicep' {

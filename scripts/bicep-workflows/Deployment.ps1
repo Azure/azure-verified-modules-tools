@@ -1,5 +1,6 @@
 . (Join-Path $PSScriptRoot 'Common.ps1')
 . (Join-Path $PSScriptRoot '..' '..' 'repository-management' 'shared' 'TestTenant.ps1')
+. (Join-Path $PSScriptRoot 'Isolation.ps1')
 
 function Get-AvmWorkflowModuleIdentity {
     [CmdletBinding()]
@@ -76,36 +77,6 @@ function Select-AvmWorkflowSubscription {
     return $selected[0]
 }
 
-function Test-AvmWorkflowSharedScope {
-    [CmdletBinding()]
-    param([Parameter(Mandatory)] [Collections.IDictionary] $Template)
-
-    if ($Template['$schema'] -match '/(?:managementGroup|tenant)DeploymentTemplate\.json#?$') { return $true }
-    $resources = if ($Template['resources'] -is [Collections.IDictionary]) {
-        @($Template.resources.Values)
-    }
-    else { @($Template['resources']) }
-    foreach ($resource in $resources) {
-        if ($null -eq $resource) { continue }
-        if ($resource -isnot [Collections.IDictionary]) {
-            throw [ArgumentException]::new('Compiled deployment resources must be objects.')
-        }
-        if ($resource['type'] -ieq 'Microsoft.Resources/deployments') {
-            $properties = $resource['properties']
-            if ($properties -isnot [Collections.IDictionary]) {
-                throw [ArgumentException]::new('Compiled nested deployments must have properties.')
-            }
-            if ($properties['templateLink'] -or $properties['template'] -is [string]) { return $true }
-            if ($properties['template'] -is [Collections.IDictionary] -and
-                (Test-AvmWorkflowSharedScope -Template $properties.template)) { return $true }
-        }
-        if ($resource['resources'] -and (Test-AvmWorkflowSharedScope -Template @{ resources = $resource.resources })) {
-            return $true
-        }
-    }
-    return $false
-}
-
 function Get-AvmWorkflowDeploymentMatrix {
     [CmdletBinding()]
     param(
@@ -121,8 +92,9 @@ function Get-AvmWorkflowDeploymentMatrix {
     )
 
     $active = @($TestFiles | Where-Object { -not (ConvertTo-AvmWorkflowBoolean -Value $_.e2eIgnore) })
-    $shared = $false
+    $moduleKey = $ModulePath.Replace('\', '/').Trim('/').ToLowerInvariant()
     $selections = @{}
+    $isolations = @{}
     $identity = $null
     if ($active.Count -gt 0) {
         $identity = Get-AvmWorkflowModuleIdentity -Root $Root -ModulePath $ModulePath `
@@ -134,21 +106,20 @@ function Get-AvmWorkflowDeploymentMatrix {
                 -Example $test.path -PoolJson $PoolJson -FallbackSubscriptionId $FallbackSubscriptionId `
                 -RandomSeed $RandomSeed -CaseIndex $index
         }
-        $module = Resolve-AvmWorkflowPath -Root $Root -RelativePath $ModulePath
-        $tool = Get-AvmTool -Name bicep -Path $module -SkipModuleVersionCheck
-        if ($tool.Status -ceq 'not-installed') {
-            $null = Install-AvmTool -Name bicep -Path $module -SkipModuleVersionCheck -Confirm:$false
-            $tool = Get-AvmTool -Name bicep -Path $module -SkipModuleVersionCheck
-        }
-        if ($tool.Status -ne 'installed') { throw [InvalidOperationException]::new('The managed Bicep compiler is not installed.') }
-        foreach ($test in $active) {
-            $path = Resolve-AvmWorkflowPath -Root $Root -RelativePath "$ModulePath/$($test.path)"
-            $result = Invoke-AvmWorkflowProcess -FilePath $tool.Path -ArgumentList @('build', $path, '--stdout') -WorkingDirectory $Root
-            $template = ConvertFrom-Json -InputObject $result.StdOut -AsHashtable
-            if (Test-AvmWorkflowSharedScope -Template $template) { $shared = $true }
+        for ($index = 0; $index -lt $TestFiles.Count; $index++) {
+            $test = $TestFiles[$index]
+            if (ConvertTo-AvmWorkflowBoolean -Value $test.e2eIgnore) { continue }
+            $compiled = Get-AvmWorkflowCompiledTest -Root $Root -ModulePath $ModulePath -TestPath $test.path
+            $isolations[$index] = Get-AvmWorkflowIsolation -Root $Root -ModulePath $ModulePath -TestPath $test.path `
+                -TenantId $identity.tenantId -SubscriptionId $selections[$index].SubscriptionId -CompiledTemplate $compiled `
+                -OwnerPath $selections[$index].ModulePath -FallbackGroup "avm-deploy-$moduleKey-$($selections[$index].Key)"
+            if ($isolations[$index].isolationMode -eq 'fallback') {
+                Write-Warning "$($test.path): $($isolations[$index].isolationDiagnostic)"
+            }
+            else { Write-Information "$($test.path): $($isolations[$index].isolationDiagnostic)" -InformationAction Continue }
         }
     }
-    $moduleKey = $ModulePath.Replace('\', '/').Trim('/').ToLowerInvariant()
+    $legacyModuleLock = @($isolations.Values | Where-Object { $_.isolationMode -eq 'fallback' -and $_.fallbackModuleLock }).Count -gt 0
     $matrix = @(for ($index = 0; $index -lt $TestFiles.Count; $index++) {
             $test = $TestFiles[$index]
             if ($test.path -isnot [string] -or $test.name -isnot [string] -or
@@ -163,6 +134,7 @@ function Get-AvmWorkflowDeploymentMatrix {
                 identityKey = ''
                 subscriptionName = 'Deployment disabled'
                 concurrencyGroup = "avm-deploy-$moduleKey-ignored-$([guid]::NewGuid().ToString('N'))"
+                isolationMode = 'ignored'; isolationDiagnostic = 'Deployment disabled.'
             }
             if (-not $ignored) {
                 $selected = $selections[$index]
@@ -173,13 +145,16 @@ function Get-AvmWorkflowDeploymentMatrix {
                 $entry.subscriptionModulePath = $selected.ModulePath
                 $entry.identityKey = $identity.identityKey
                 $entry.subscriptionName = if ($DisplaySubscriptionNames) { $selected.Name } else { "Configured subscription $($selected.Index + 1)" }
-                $entry.concurrencyGroup = "avm-deploy-$moduleKey-$($selected.Key)"
+                foreach ($key in $isolations[$index].Keys) { $entry[$key] = $isolations[$index][$key] }
+                if ($entry.isolationMode -eq 'fallback') {
+                    $entry.fallbackModuleLock = $legacyModuleLock
+                }
             }
             $entry
         })
     return @{
         deploymentMatrix = ConvertTo-Json -InputObject $matrix -Depth 10 -Compress
-        sharedScope = $shared.ToString().ToLowerInvariant()
+        sharedScope = 'false'
     }
 }
 
@@ -221,6 +196,16 @@ function Get-AvmWorkflowAuthentication {
     $ownerPath = Resolve-AvmWorkflowPath -Root $Root -RelativePath $selected.ModulePath
     $example = [IO.Path]::GetRelativePath($ownerPath, $testPath).Replace('\', '/')
     $null = Resolve-AvmWorkflowPath -Root $ownerPath -RelativePath $example
+    $moduleKey = $ModulePath.Replace('\', '/').Trim('/').ToLowerInvariant()
+    $isolation = Get-AvmWorkflowIsolation -Root $Root -ModulePath $ModulePath -TestPath $TestCase.path `
+        -TenantId $identity.tenantId -SubscriptionId $selected.SubscriptionId -OwnerPath $selected.ModulePath `
+        -FallbackGroup "avm-deploy-$moduleKey-$($selected.Key)"
+    if ($TestCase['isolationMode'] -cne $isolation.isolationMode -or
+        ($isolation.isolationMode -ne 'isolated' -and $TestCase['concurrencyGroup'] -cne $isolation.concurrencyGroup) -or
+        ($isolation.isolationMode -eq 'fallback' -and $isolation.fallbackModuleLock -and $TestCase['fallbackModuleLock'] -ne $true) -or
+        ($isolation.isolationMode -eq 'isolated' -and $TestCase['concurrencyGroup'] -cnotmatch '^avm-deploy-isolated-[0-9a-f]{32}$')) {
+        throw [ArgumentException]::new('Isolation evidence or lifecycle lock changed after selection. Rerun selection before authentication.')
+    }
     return @{
         subscriptionId = $selected.SubscriptionId
         tenantId = $identity.tenantId

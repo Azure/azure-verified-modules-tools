@@ -298,6 +298,7 @@ Describe 'Component: Bicep shared workflow target and authentication boundaries'
             path = 'tests/e2e/defaults/main.test.bicep'; name = 'defaults'; e2eIgnore = $false
             subscriptionIndex = $entry.Index; subscriptionKey = $entry.Key
             selectionSeed = 9; caseIndex = 0; subscriptionModulePath = $entry.ModulePath
+            isolationMode = 'fallback'; concurrencyGroup = "avm-deploy-$script:modulePath-$($entry.Key)"
         }
         $script:mapping = [ordered]@{
             $script:modulePath = $script:client
@@ -339,19 +340,6 @@ Describe 'Component: Bicep shared workflow target and authentication boundaries'
         $result.sharedScope | Should -BeExactly 'false'
         Should -Invoke Get-AvmTool -Times 0 -Exactly
         Should -Invoke Invoke-AvmWorkflowProcess -Times 0 -Exactly
-    }
-
-    It 'detects tenant, management-group, linked and expression-based nested templates' {
-        foreach ($nested in @(
-                @{ template = @{ '$schema' = 'https://schema.management.azure.com/schemas/2019-08-01/tenantDeploymentTemplate.json#' } }
-                @{ template = @{ '$schema' = 'https://schema.management.azure.com/schemas/2019-08-01/managementGroupDeploymentTemplate.json#' } }
-                @{ templateLink = @{ uri = 'https://example.invalid/template.json' } }
-                @{ template = '[variables(''nestedTemplate'')]' }
-            )) {
-            Test-AvmWorkflowSharedScope -Template @{ resources = @{ nested = @{ type = 'Microsoft.Resources/deployments'; properties = $nested } } } |
-                Should -BeTrue
-        }
-        Test-AvmWorkflowSharedScope -Template @{ resources = @() } | Should -BeFalse
     }
 
     It 'rejects malformed preferred pools instead of falling back (<Value>)' -ForEach @(
@@ -802,6 +790,9 @@ Describe 'Component: Bicep shared workflow native phase forwarding' -Tag Compone
         Mock Invoke-AvmTestUnit { [pscustomobject]@{ Status = 'pass'; RunsTotal = 1; RunsSkipped = 0; RunsFiltered = 0; Issues = @() } }
         Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Status = 'pass'; TestsSelected = 1; BaselinesExecuted = 1; Issues = @() } }
         Mock Invoke-AvmTestCleanup { [pscustomobject]@{ Status = 'pass' } }
+        Mock Get-AvmWorkflowCompiledTest {
+            '{"$schema":"https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#","resources":[]}'
+        }
         Mock Get-AzContext {
             [pscustomobject]@{
                 Subscription = @{ Id = $script:subscription }; Tenant = @{ Id = $script:tenant }
@@ -891,6 +882,7 @@ Describe 'Component: Bicep shared workflow native phase forwarding' -Tag Compone
             path = $requestedExample; identityKey = $identity.identityKey; subscriptionIndex = $selected.Index
             subscriptionKey = $selected.Key; subscriptionModulePath = $selected.ModulePath
             selectionSeed = 0; caseIndex = 0
+            isolationMode = 'fallback'; concurrencyGroup = "avm-deploy-$script:modulePath-$($selected.Key)"
         }
         $auth = Get-AvmWorkflowAuthentication -Root $script:root -ModulePath $script:modulePath -TestCase $case `
             -PoolJson $pool -ModuleClientIds $mapping -TenantId $script:tenant
@@ -969,6 +961,7 @@ Describe 'Component: Bicep shared workflow native phase forwarding' -Tag Compone
             $case = @{
                 path = $example; identityKey = $identity.identityKey; subscriptionIndex = $target.Index; subscriptionKey = $target.Key
                 selectionSeed = 0; caseIndex = 0; subscriptionModulePath = $target.ModulePath
+                isolationMode = 'fallback'; concurrencyGroup = "avm-deploy-$modulePath-$($target.Key)"
             }
             $auth = Get-AvmWorkflowAuthentication -Root $script:root -ModulePath $modulePath -TestCase $case `
                 -ModuleClientIds $json -PoolJson $pool -TenantId $script:tenant

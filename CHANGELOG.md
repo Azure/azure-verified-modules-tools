@@ -458,6 +458,19 @@ section when cutting a release.
 
 ### Fixed
 
+- Local Terraform calls forward the parent's telemetry decision even when the
+  child exposes `enable_telemetry` without a location input. Freshly instrumented
+  direct and nested children explicitly inherit the root opt-out on the first
+  transform; helpers without the input and test-wrapper exclusions are retained.
+- Shared Terraform provider restoration no longer creates default ModTM
+  forwarding maps for genuine child dependencies. A final native generation pass
+  removes wholly same-name default-provider maps across all providers while
+  preserving complete alias/remap maps, authored provider requirements and
+  native test mock/run bindings. Proven retained provider contracts receive only
+  a declaration-scoped unused-provider exception located by pinned TFLint;
+  ordinary child usage and unrelated unused declarations do not qualify.
+  Requires the native MaPoTF object-inspection capability; this source change
+  does not repair an already released package.
 - Terraform lint and Conftest staging copies no longer render file-copy
   progress bars, including source trees, cached modules, lint configurations
   and policy exemptions. Verbose diagnostics and copy failures remain visible

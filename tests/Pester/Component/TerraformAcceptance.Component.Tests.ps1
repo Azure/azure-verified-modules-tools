@@ -72,6 +72,9 @@ Describe 'Terraform acceptance byte inventory' -Tag Component {
     }
 
     BeforeEach {
+        Mock Invoke-TerraformAcceptanceGit {
+            [pscustomobject]@{ StdOut = 'diff --git a/main.tf b/main.tf' }
+        }
         $script:root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $null = New-Item -ItemType Directory -Path $script:root
         foreach ($fileName in @('main.tf', 'README.md', '.env', '.gitignore', '.terraform.lock.hcl')) {
@@ -81,6 +84,40 @@ Describe 'Terraform acceptance byte inventory' -Tag Component {
         $script:context = [pscustomobject]@{
             Root = $script:root
             ConfigurationDirectories = @('', 'examples/default')
+        }
+    }
+
+    It 'includes the native diff when rejecting changed authored bytes' {
+        [IO.File]::WriteAllText((Join-Path $script:root 'main.tf'), "changed`n")
+        { Assert-TerraformAcceptanceFiles -Context $script:context -Expected $script:before } |
+            Should -Throw '*modified: main.tf*diff --git a/main.tf b/main.tf*'
+        Should -Invoke Invoke-TerraformAcceptanceGit -Exactly 1 -ParameterFilter {
+            $Arguments -join ' ' -ceq 'diff --no-ext-diff --no-color --'
+        }
+    }
+
+    It 'creates native Windows test module cache parents before fixture initialization' -Skip:(-not $IsWindows) {
+        $manifest = Join-Path $PSScriptRoot '..' '..' '..' 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
+        Import-Module -Name $manifest -Force
+        $context = $null
+        try {
+            Mock Resolve-AvmTool -ModuleName Avm.Authoring { [pscustomobject]@{ Path = 'fixture-terraform' } }
+            Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
+                $parent = Join-Path $WorkingDirectory '.terraform' 'modules' 'test.tests' 'unit'
+                if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+                    throw [IO.DirectoryNotFoundException]::new('Native test module cache parent is absent.')
+                }
+                [pscustomobject]@{ StdOut = '' }
+            }
+            $context = New-TerraformAcceptanceContext -Source $script:root -Name 'windows-bootstrap' -InitializeLock
+            Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                $ArgumentList -join ' ' -ceq 'init -backend=false -input=false -no-color -test-directory=tests/unit'
+            }
+            @($context.Authored.Keys | Where-Object { $_ -like '.terraform/*' }) | Should -HaveCount 0
+        }
+        finally {
+            if ($null -ne $context) { Remove-TerraformAcceptanceContext -Context $context }
+            Remove-Module Avm.Authoring -Force
         }
     }
 

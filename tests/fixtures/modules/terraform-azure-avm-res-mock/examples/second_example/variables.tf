@@ -1,3 +1,7 @@
+variable "policy_fixture_name" {
+  type = string
+}
+
 variable "enable_telemetry" {
   type        = bool
   default     = true

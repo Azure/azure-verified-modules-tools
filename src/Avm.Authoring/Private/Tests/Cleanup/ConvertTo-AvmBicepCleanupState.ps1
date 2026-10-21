@@ -10,7 +10,7 @@ function ConvertTo-AvmBicepCleanupState {
     $ErrorActionPreference = 'Stop'
 
     if (($State['schemaVersion'] -isnot [int] -and $State['schemaVersion'] -isnot [long]) -or
-        $State['schemaVersion'] -ne 1) {
+        ($State['schemaVersion'] -ne 1 -and ($State['schemaVersion'] -ne 2 -or -not $State.Contains('isolationBoundary')))) {
         throw [AvmConfigurationException]::new('Unsupported Bicep cleanup state version.')
     }
     foreach ($name in @('runId', 'tenantId', 'subscriptionId', 'environment', 'status')) {
@@ -133,7 +133,7 @@ function ConvertTo-AvmBicepCleanupState {
         throw [AvmConfigurationException]::new('Deployment deletion progress requires removed resources and confirmed completion.')
     }
     $document = [ordered]@{
-        schemaVersion       = 1
+        schemaVersion       = $State['schemaVersion']
         runId               = $State['runId']
         tenantId            = $State['tenantId']
         subscriptionId      = $State['subscriptionId']
@@ -142,6 +142,19 @@ function ConvertTo-AvmBicepCleanupState {
         deployments         = $deployments.ToArray()
         ownedResourceGroups = $groups.ToArray()
         resources           = $resources.ToArray()
+    }
+    if ($State.Contains('isolationBoundary')) {
+        if ($State['schemaVersion'] -ne 2 -or $State['isolationBoundary'] -cnotin @('Empty', 'OwnedResourceGroup') -or
+            -not $State.Contains('case') -or
+            ($State['isolationBoundary'] -ceq 'OwnedResourceGroup' -and $State['case']['scope'] -cne 'group') -or
+            @($groups | Where-Object { $_['runId'] -cne $State['runId'] -or
+                    $_['id'].Split('/')[2] -ine $State['subscriptionId'] }).Count -gt 0) {
+            throw [AvmConfigurationException]::new('Invalid verified resource isolation boundary.')
+        }
+        $document['isolationBoundary'] = $State['isolationBoundary']
+        Assert-AvmBicepIsolationBoundary -State $State -ResourceIds @(
+            @($deployments | ForEach-Object { $_['id'] }) + @($resources | ForEach-Object { $_['id'] })
+        )
     }
     if ($State.Contains('attempts') -and -not $State.Contains('case')) {
         throw [AvmConfigurationException]::new('A Bicep attempt journal requires its case metadata.')

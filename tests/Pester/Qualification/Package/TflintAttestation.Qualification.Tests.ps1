@@ -232,7 +232,12 @@ output "deprecated_lock" {
         $deprecatedIssue.Severity | Should -Be 'notice'
         $deprecatedIssue.File | Should -Be 'variables.tf'
         $deprecatedIssue.Message | Should -Match 'v0\.19\.0 migration window'
-        @($run.DeprecatedWarnings).Count | Should -Be 3
+        $providerWarnings = @(
+            foreach ($line in @(5, 10, 15)) {
+                "TFLint inline ignore comment found for rule(s): terraform_unused_required_providers. (tests/wrapper/terraform.tf, line $line)"
+            }
+        )
+        @($run.DeprecatedWarnings).Count | Should -Be (3 + $providerWarnings.Count)
         @($run.DeprecatedWarnings | Where-Object {
                 $_ -match '\[avm_interface_lock_deprecated\].*v0\.19\.0 migration window'
             }).Count | Should -Be 1
@@ -246,7 +251,11 @@ output "deprecated_lock" {
         ($run.DeprecatedSummary -join "`n") | Should -Not -Match 'avm_interface_lock_deprecated|v0\.19\.0 migration window'
 
         $run.CanonicalResult.Status | Should -Be 'pass'
-        @($run.CanonicalWarnings).Count | Should -Be 1
+        @($run.CanonicalWarnings).Count | Should -Be (1 + $providerWarnings.Count)
+        foreach ($warning in $providerWarnings) {
+            @($run.DeprecatedWarnings | Where-Object { $_ -ceq $warning }) | Should -HaveCount 1
+            @($run.CanonicalWarnings | Where-Object { $_ -ceq $warning }) | Should -HaveCount 1
+        }
         @($run.CanonicalWarnings | Where-Object {
                 $_ -ceq "TFLint override disables rule 'avm_output_resource_id_required'."
             }).Count | Should -Be 1

@@ -52,10 +52,15 @@ runs:
         AVM_ACTION_PATH: ${{ github.action_path }}
         MODULE_PATH: ${{ inputs.modulePath }}
         TEST_CASE: ${{ inputs.testCase }}
+        WORKFLOW_INPUT: ${{ inputs.workflowInput }}
         POOL_JSON: ${{ inputs.subscriptionPool }}
         FALLBACK_SUBSCRIPTION_ID: ${{ inputs.fallbackSubscriptionId }}
         VALIDATE_MODULE_CLIENT_IDS: ${{ inputs.moduleClientIds }}
         VALIDATE_TENANT_ID: ${{ inputs.tenantId }}
+        TOKEN_NAMEPREFIX: ${{ inputs.tokenNamePrefix }}
+        AVM_CI_VARIABLES: ${{ inputs.githubVariables }}
+        AVM_CI_SECRETS: ${{ inputs.githubSecrets }}
+        CI_KEY_VAULT_NAME: ${{ inputs.ciKeyVaultName }}
       run: |
         $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Deployment.ps1')
@@ -68,6 +73,13 @@ runs:
           ModuleClientIds = $env:VALIDATE_MODULE_CLIENT_IDS; TenantId = $env:VALIDATE_TENANT_ID
         }
         $auth = Get-AvmWorkflowAuthentication @parameters
+        if ($case.isolationMode -ne 'fallback') {
+          $compiled = Get-AvmWorkflowCompiledTest -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH -TestPath $case.path
+          $workflowInput = ConvertFrom-AvmWorkflowScalarInput -Json $env:WORKFLOW_INPUT
+          Assert-AvmWorkflowIsolationInput -IsolationMode $case.isolationMode -CompiledTemplate $compiled -RemoveDeployment (ConvertTo-AvmWorkflowBoolean $workflowInput.removeDeployment)
+        }
+        $prefix = Get-AvmWorkflowNamePrefix -IsolationMode $case.isolationMode -Prefix $env:TOKEN_NAMEPREFIX
+        Write-AvmWorkflowOutput -Name namePrefix -Value $prefix
         Write-Output "::add-mask::$($auth.subscriptionId)"
         foreach ($entry in $auth.GetEnumerator()) { Write-AvmWorkflowOutput -Name $entry.Key -Value $entry.Value }
         $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes("$env:MODULE_PATH|$($case.path)"))).ToLowerInvariant()
@@ -113,11 +125,13 @@ runs:
         MODULE_PATH: ${{ steps.auth.outputs.modulePath }}
         WORKFLOW_INPUT: ${{ inputs.workflowInput }}
         SELECTED_EXAMPLE: ${{ steps.auth.outputs.example }}
+        ISOLATION_MODE: ${{ fromJSON(inputs.testCase).isolationMode }}
         ARM_SUBSCRIPTION_ID: ${{ steps.auth.outputs.subscriptionId }}
         ARM_TENANT_ID: ${{ steps.context.outputs.tenantId }}
         ARM_CLIENT_ID: ${{ steps.auth.outputs.clientId }}
         ARM_MGMTGROUP_ID: ${{ inputs.managementGroupId }}
         TOKEN_NAMEPREFIX: ${{ inputs.tokenNamePrefix }}
+        localToken_namePrefix: ${{ steps.auth.outputs.namePrefix }}
         CI_KEY_VAULT_NAME: ${{ inputs.ciKeyVaultName }}
         AVM_CI_VARIABLES: ${{ inputs.githubVariables }}
         AVM_CI_SECRETS: ${{ inputs.githubSecrets }}
@@ -131,6 +145,7 @@ runs:
           SubscriptionId = $env:ARM_SUBSCRIPTION_ID; TenantId = $env:ARM_TENANT_ID; ClientId = $env:ARM_CLIENT_ID
           ManagementGroupId = $env:ARM_MGMTGROUP_ID; CustomLocation = $workflowInput['customLocation']
           RemoveDeployment = ConvertTo-AvmWorkflowBoolean $workflowInput.removeDeployment
+          RequireResourceIsolation = $env:ISOLATION_MODE -ne 'fallback'
           StatePath = Join-Path $env:RUNNER_TEMP 'avm-bicep-state' 'state.json'
           ResultDirectory = Join-Path $env:RUNNER_TEMP 'avm-bicep-results'
         }

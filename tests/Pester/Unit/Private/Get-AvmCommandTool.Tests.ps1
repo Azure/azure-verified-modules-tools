@@ -10,7 +10,7 @@ AfterAll { Remove-Module Avm.Authoring -Force }
 
 Describe 'Get-AvmCommandTool complete prerequisites' {
     It 'selects only the dependencies needed by <Command> <Ecosystem>' -ForEach @(
-        @{ Command = 'pre-commit'; Ecosystem = 'terraform'; Names = @('mapotf', 'terraform', 'terraform-docs', 'Pester') }
+        @{ Command = 'pre-commit'; Ecosystem = 'terraform'; Names = @('mapotf', 'terraform', 'terraform-docs', 'tflint', 'Pester') }
         @{ Command = 'pr-check'; Ecosystem = 'terraform'; Names = @('conftest', 'mapotf', 'terraform', 'terraform-docs', 'tflint', 'Pester') }
         @{ Command = 'pre-commit'; Ecosystem = 'bicep'; Names = @('bicep', 'Pester') }
         @{ Command = 'pr-check'; Ecosystem = 'bicep'; Names = @('bicep', 'Pester', 'powershell-yaml', 'PSRule', 'PSRule.Rules.Azure') }
@@ -40,7 +40,7 @@ Describe 'Get-AvmCommandTool excluded steps' {
         @{ Ecosystem = 'terraform'; Step = 'metadata'; Names = @('Pester') }
         @{ Ecosystem = 'terraform'; Step = 'sync'; Names = @() }
         @{ Ecosystem = 'terraform'; Step = 'format'; Names = @('terraform') }
-        @{ Ecosystem = 'terraform'; Step = 'transform'; Names = @('mapotf', 'terraform') }
+        @{ Ecosystem = 'terraform'; Step = 'transform'; Names = @('mapotf', 'terraform', 'tflint') }
         @{ Ecosystem = 'terraform'; Step = 'lint'; Names = @('terraform', 'tflint') }
         @{ Ecosystem = 'terraform'; Step = 'check policy'; Names = @('conftest', 'terraform') }
         @{ Ecosystem = 'terraform'; Step = 'check convention'; Names = @() }
@@ -84,7 +84,7 @@ Describe 'Get-AvmCommandTool excluded steps' {
 
     It 'retains shared tools for <Ecosystem> after excluding <Exclusions>' -ForEach @(
         @{ Ecosystem = 'terraform'; Exclusions = @('check policy'); Names = @('mapotf', 'terraform', 'terraform-docs', 'tflint', 'Pester') }
-        @{ Ecosystem = 'terraform'; Exclusions = @('CHECK POLICY', 'Lint', 'lint', 'docs'); Names = @('mapotf', 'terraform', 'Pester') }
+        @{ Ecosystem = 'terraform'; Exclusions = @('CHECK POLICY', 'Lint', 'lint', 'docs'); Names = @('mapotf', 'terraform', 'tflint', 'Pester') }
         @{ Ecosystem = 'bicep'; Exclusions = @('metadata', 'check policy'); Names = @('bicep', 'Pester', 'powershell-yaml') }
         @{ Ecosystem = 'bicep'; Exclusions = @('check convention'); Names = @('bicep', 'Pester', 'PSRule', 'PSRule.Rules.Azure') }
     ) {

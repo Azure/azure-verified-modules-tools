@@ -37,7 +37,12 @@ function Assert-TerraformAcceptanceFiles {
             if (-not $Expected.ContainsKey($path)) { "added: $path" }
         }
     )
-    $changes | Should -HaveCount 0 -Because ($changes -join "`n")
+    $details = $changes -join "`n"
+    if ($changes.Count -gt 0) {
+        $diff = Invoke-TerraformAcceptanceGit -Root $Context.Root -Arguments @('diff', '--no-ext-diff', '--no-color', '--')
+        $details += "`n" + $diff.StdOut
+    }
+    $changes | Should -HaveCount 0 -Because $details
 }
 
 function Invoke-TerraformAcceptanceGit {
@@ -92,6 +97,10 @@ function New-TerraformAcceptanceContext {
     }
     try {
         if ($InitializeLock) {
+            if ($IsWindows) {
+                # Terraform 1.16.5 reuses downloads with Mkdir on Windows test-file module keys.
+                $null = [IO.Directory]::CreateDirectory((Join-Path $root '.terraform' 'modules' 'test.tests' 'unit'))
+            }
             $null = & (Get-Module Avm.Authoring) {
                 param($Root)
                 $tool = Resolve-AvmTool -Name terraform

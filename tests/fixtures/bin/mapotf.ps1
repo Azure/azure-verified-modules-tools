@@ -25,6 +25,11 @@ switch ($args[0]) {
             Write-Output '{"calls":{},"variables":{},"requirements":{},"resources":{},"data_sources":{},"ephemeral":{},"migration":{"review":{},"calls":{}}}'
             exit 0
         }
+        if ($evalIndex -ge 0 -and
+            $args[$evalIndex + 1] -ceq '{ calls = local.provider_contract_call_bindings, requirements = local.provider_contract_requirements }') {
+            Write-Output '{"calls":{},"requirements":{}}'
+            exit 0
+        }
         $fileIndex = [array]::IndexOf($args, '--test-file')
         $rootIndex = [array]::IndexOf($args, '--tf-dir')
         if ($fileIndex -lt 0 -or $rootIndex -lt 0 -or

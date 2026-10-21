@@ -69,6 +69,10 @@ function Invoke-AvmBicepNativeTestCase {
         $handle = New-AvmBicepCleanupState -SubscriptionId $Item.SubscriptionId -TenantId $TenantId `
             -Environment $environmentName -RunId $Item.RunId -Path $executionOptions.StatePath -Confirm:$false
         $state = $handle.State
+        if (Get-AvmPropertyValue -InputObject $Item -Name 'IsolationBoundary') {
+            $state['schemaVersion'] = 2
+            $state['isolationBoundary'] = $Item.IsolationBoundary
+        }
         $state['attempts'] = @()
         $groupName = if ($Item.Scope -eq 'group') { '{0}-{1}' -f $executionOptions.ResourceGroupPrefix, $Item.RunId } else { '' }
         $state['case'] = [ordered]@{
@@ -160,6 +164,10 @@ function Invoke-AvmBicepNativeTestCase {
                     (($validated.CanRelocate -or $groupCanRelocate) -and
                     $validated.AttemptedRegions.Count -lt $executionOptions.ValidationRetryLimit)
                 }
+                if ($state.Contains('isolationBoundary') -and $Item.Scope -eq 'group') {
+                    $groupId = '/subscriptions/{0}/resourceGroups/{1}' -f $Item.SubscriptionId, $groupName
+                    Assert-AvmBicepCleanupGroupOwnership -State $state -ResourceId $groupId -RequireExisting
+                }
                 $deployed = New-AvmBicepNativeDeployment -State $state -StatePath $handle.Path `
                     -DeploymentInput $validated.DeploymentInput -Attempt $attempt -Mode $mode -NamingId $attemptInput.NamingId `
                     -RecoveryDeadlineUtc $executionOptions.RecoveryDeadlineUtc `
@@ -169,7 +177,7 @@ function Invoke-AvmBicepNativeTestCase {
 
                 # ARM can overwrite nested operation history even when the next root name changes.
                 $snapshot = Get-AvmBicepDeploymentCleanupTarget -DeploymentIds @($deployed.DeploymentId) `
-                    -RequireCompleteRemoval -SearchRetryLimit 1 -SearchRetryInterval 0
+                    -RequireCompleteRemoval -SearchRetryLimit 1 -SearchRetryInterval 0 -IsolationState $state
                 $state['resources'] = @(Get-AvmBicepCleanupResourceRecord -Existing $state['resources'] -ResourceIds $snapshot.ResourceIds)
                 Save-AvmBicepCleanupState -State $state -Path $handle.Path -Confirm:$false
                 if ($snapshot.Issues.Count -gt 0) {
