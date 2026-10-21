@@ -1,7 +1,3 @@
-variable "policy_fixture_name" {
-  type = string
-}
-
 resource "azapi_resource" "policy_fixture" {
   location  = "westus3"
   name      = var.policy_fixture_name

@@ -260,9 +260,28 @@ run "legacy_naming" {
                 -ConfigurationDirectories $context.ConfigurationDirectories
             $null = Invoke-TerraformAcceptanceGit -Root $context.Root -Arguments @('add', '--force', 'examples/default/.terraform.lock.hcl')
             $null = Invoke-TerraformAcceptanceGit -Root $context.Root -Arguments @('commit', '--quiet', '-m', 'test: locked legacy example selections')
+            $providerMaps = @(
+                "  providers = {`n    azapi  = azapi`n    modtm  = modtm`n    random = random`n  }`n"
+                "  providers = {`n    random = random`n  }`n"
+            )
+            $expectedConfiguration = @{}
+            $expectedRoot = Join-Path $TestDrive 'preserved-configuration'
+            foreach ($name in @('main.tf', 'examples/default/main.tf', 'terraform.tf', 'examples/default/terraform.tf')) {
+                $content = [IO.File]::ReadAllText((Join-Path $context.Root $name))
+                if ($name.EndsWith('main.tf', [StringComparison]::Ordinal)) {
+                    foreach ($mapping in $providerMaps) { $content = $content.Replace($mapping, '') }
+                }
+                $path = Join-Path $expectedRoot $name
+                $null = New-Item -ItemType Directory -Path (Split-Path -Path $path -Parent) -Force
+                [IO.File]::WriteAllText($path, $content, [Text.UTF8Encoding]::new($false))
+                $expectedConfiguration[$name] = $content
+            }
+            $null = Invoke-UtilityProcess -Root $context.Root -Arguments @('fmt', '-recursive', '-no-color', $expectedRoot)
+            foreach ($name in @($expectedConfiguration.Keys)) {
+                $expectedConfiguration[$name] = [IO.File]::ReadAllText((Join-Path $expectedRoot $name))
+            }
             $protected = @{}
-            foreach ($name in @('main.tf', 'terraform.tf', 'variables.tf', 'outputs.tf', '.terraform.lock.hcl',
-                    'examples/default/main.tf', 'examples/default/terraform.tf', 'examples/default/.terraform.lock.hcl',
+            foreach ($name in @('variables.tf', 'outputs.tf', '.terraform.lock.hcl', 'examples/default/.terraform.lock.hcl',
                     'examples/default/variables.tf',
                     'tests/unit/legacy.tftest.hcl')) {
                 $protected[$name] = (Get-FileHash -LiteralPath (Join-Path $context.Root $name) -Algorithm SHA256).Hash
@@ -272,6 +291,14 @@ run "legacy_naming" {
                 foreach ($name in $protected.Keys) {
                     (Get-FileHash -LiteralPath (Join-Path $context.Root $name) -Algorithm SHA256).Hash |
                         Should -BeExactly $protected[$name] -Because "$name must remain byte-identical on pre-commit $iteration"
+                }
+                foreach ($name in $expectedConfiguration.Keys) {
+                    $content = [IO.File]::ReadAllText((Join-Path $context.Root $name))
+                    if ($name.EndsWith('terraform.tf', [StringComparison]::Ordinal)) {
+                        $content = $content.Replace("    # tflint-ignore: terraform_unused_required_providers`n", '')
+                    }
+                    $content | Should -BeExactly $expectedConfiguration[$name] `
+                        -Because "$name may change only for default-map removal and the retained ModTM source annotation"
                 }
                 if ($iteration -eq 1) {
                     $null = Invoke-TerraformAcceptanceGit -Root $context.Root -Arguments @('add', '--all')

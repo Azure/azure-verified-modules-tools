@@ -42,7 +42,7 @@ if ($args -contains '--init') {
 
 if ($args -contains '--format' -or $args -contains '--format=json') {
     # Empty issues array — Invoke-AvmTerraformLint parses this as a pass.
-    Write-Output '{"issues":[]}'
+    Write-Output '{"issues":[],"errors":[]}'
     exit 0
 }
 

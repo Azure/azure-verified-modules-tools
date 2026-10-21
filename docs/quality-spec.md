@@ -714,7 +714,10 @@ scoped modules. Choose a valid region for the target cloud. Local module
 calls forward the parent's location when the child needs it and no location
 was authored, preserving
 per-item locations in multi-region modules. Instrumented children also
-receive the parent's opt-out, and supported example calls expose and forward
+receive `enable_telemetry = var.enable_telemetry` explicitly, overriding authored
+child-call values as well as the child's default. Forward this input whenever
+a local child exposes it, independently of whether the child requires location.
+Helpers without that input remain unchanged. Supported example calls expose and forward
 missing inputs. Only newly generated example `location` inputs default to
 `"eastus"`, so runnable examples remain usable by noninteractive plans.
 Authored example declarations, defaults, required inputs, and per-item regions
@@ -784,6 +787,43 @@ if absent, without replacing existing bindings or constraints. Removing the last
 obsolete ModTM binding removes the map rather than replacing it with a default
 AzAPI-only map. Terraform's built-in provider needs no generated
 `required_providers` declaration.
+
+The final `provider-inheritance` native profile removes a module call's entire nonempty `providers`
+map only when every entry forwards an unaliased default to the identical local
+name. This applies to every provider, including ModTM, AzAPI, AzureRM and
+Random, regardless of whether the child genuinely uses it. Preserve maps with
+any alias selection, aliased target key or different local-name binding in
+full, including their necessary identity entries and comments. Native object
+inspection determines these edits; PowerShell supplies only dependency facts.
+Native test `run` provider maps and mock declarations are not module-call maps
+and remain subject to the separate test-binding coverage rules.
+Run this profile separately after restoration and ordering across every module,
+example and test-wrapper scope. Planning removal and reordering together can
+restore attributes from the ordering transform's original block snapshot.
+Provider retirement in root and example/test-wrapper profiles must honor the
+existing conservative provider-configuration and alias facts as well as direct
+usage, so removing an identity map cannot retire an authored configuration's
+source or version on a subsequent pass.
+Include callers with existing provider requirements in native dependency
+inspection even when utility selections are preserved or need no migration.
+Run these scopes in provider-only mode when no utility upgrade is selected;
+preserving utility selections must not skip the evidence needed to retain
+their original provider source and version after final map removal.
+After map removal, run a separate native `provider-contract` pass to retire
+ordinary transitive-only declarations without lint exceptions. Preserve direct
+resource/data/ephemeral uses, authored configurations, configuration aliases,
+surviving explicit caller and mock bindings, and original source/version
+constraints proven to constrain a current dependency. Version protection
+requires the original and current source/version contracts to match; a newly
+generated constraint does not establish an authored contract. Retire a
+declaration only when pinned TFLint's native parser also reports it unused.
+This protects authored provider configurations without extending the existing
+PowerShell configuration-fact recognizer or adding a text parser. All
+declaration-edit and retention decisions remain in MaPoTF.
+When an owned unused-provider directive exists, inspect the scope in a
+temporary module-tree copy with only that exact directive blanked, preserving
+local dependency paths and native line/column ranges.
+Existing annotations must not hide a contract that is no longer needed.
 
 Capture native unit-test declarations and original provider evidence before
 utility edits. Inspect upgraded dependencies through fresh private Terraform
@@ -1124,8 +1164,28 @@ JSON tests, possible backend/cloud declarations and initialized backend
 metadata require review before dependency inspection;
 do not access remote state to construct mock mappings. The test
 owner's requirement does not cover a separately selected local target.
-Preserve assertions and mock defaults without restoring unused provider
-requirements or exempting them from lint. Verify native profile support for
+Preserve assertions and mock defaults without restoring unrelated unused provider
+requirements. A proven retained provider source/version contract may receive an
+inline `terraform_unused_required_providers` exception on that declaration only.
+Require fresh native source evidence and a surviving incoming explicit provider
+binding, native unit mock/type contract, or protected original version contract;
+child usage or an old declaration alone does not justify an exception.
+Inspect the current native test declarations
+after migration, not mocks that have already been retired.
+Use the pinned TFLint JSON source range to place the comment after final map
+cleanup; do not parse HCL in PowerShell or disable the rule for unrelated
+unused declarations. Insert multiple comments in reverse native source order
+so earlier edits cannot invalidate a later declaration's range.
+Transform therefore also requires pinned TFLint when inspecting provider
+retirement or retaining these contracts.
+Pre-commit and transform-only prerequisite selection must therefore include
+the pinned TFLint executable even when the lint step is excluded.
+Surface Terraform's known redundant-empty-provider deprecation while preserving
+the authored configuration; it is not a provider-tree node or permission to
+accept unknown diagnostics. Missing provider configurations still require the
+existing repair mode and a subsequent strict inspection. Unknown warnings,
+errors and alias/type failures remain blockers.
+Verify native profile support for
 the complete mapping before changing any test file, and keep repeated
 transforms and non-writing drift checks stable.
 Validate unsupported retired-identifier references before removing any mock
@@ -1134,13 +1194,17 @@ outside direct unit-test plans. A later migration or cleanup failure restores
 their full original bytes even in normal writing mode; explicitly report any
 file whose restoration cannot be verified.
 For unchanged ModTM dependencies, preserve the mock and every required run
-binding. A removed non-default provider source must not become an inferred
+binding. Proven default mocks continue to bind implicitly; restoring their
+ModTM source requirement alone must not manufacture a native test `run.providers`
+map. A removed non-default provider source must not become an inferred
 `hashicorp/modtm` source. Restore only a selected target's proven
 `Azure/modtm` requirement, retaining its original source and version when
-available, and bind the same provider explicitly to the actual dependencies
-that declare it. Known local intermediates may receive the same repair;
+available. Dependencies without an explicit module-call provider map inherit
+the default configuration; never synthesize identity forwarding maps for them.
+Augment only an existing explicit map that still needs a default ModTM entry,
+preserving its aliases, other bindings and comments. Known local intermediates may receive the same repair;
 known local callers and example wrappers also receive only their proven
-required source declaration and same-provider binding. Newly synthesized
+required source declaration and any necessary existing-map augmentation. Newly synthesized
 requirements preserve an available original version constraint; otherwise
 inherit only literal constraints from their proven same-source required
 dependencies or local targets. Combine distinct inherited constraints by

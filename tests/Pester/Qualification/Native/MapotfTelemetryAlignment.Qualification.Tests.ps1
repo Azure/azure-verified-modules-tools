@@ -440,10 +440,7 @@ run "explicit" {
             ($after.runs[$name].assert.mptf.attributes | ConvertTo-Json -Depth 10 -Compress) |
                 Should -BeExactly ($before.runs[$name].assert.mptf.attributes | ConvertTo-Json -Depth 10 -Compress)
         }
-        $after.runs.implicit.mptf.attributes.providers | Should -Match '\balz\s*=\s*alz\b'
-        $after.runs.implicit.mptf.attributes.providers | Should -Match '\bazapi\s*=\s*azapi\b'
-        $after.runs.implicit.mptf.attributes.providers | Should -Match '\bmodtm\s*=\s*modtm\b'
-        $after.runs.implicit.mptf.attributes.providers | Should -Not -Match '\b(random|time)\s*='
+        $after.runs.implicit.mptf.attributes.Contains('providers') | Should -BeFalse
         $after.runs.explicit.mptf.attributes.providers |
             Should -BeExactly $before.runs.explicit.mptf.attributes.providers
         $after.mock_providers.Keys | Should -Not -Contain 'alz'
@@ -498,6 +495,14 @@ terraform {
         Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
 resource "time_static" "current" {}
 module "published" {
+  source = "./.published/dependency"
+  providers = {
+    azapi  = azapi
+    modtm  = modtm
+    random = random
+  }
+}
+module "implicit" {
   source = "./.published/dependency"
 }
 '@
@@ -642,10 +647,16 @@ run "aliases" {
         $before.runs.defaults.mptf.attributes.Contains('providers') | Should -BeFalse
         [IO.File]::ReadAllText($requirements) | Should -Not -Match '(?m)^\s*terraform\s*='
         (Invoke-TelemetryEngine -Root $root).Status | Should -BeExactly 'pass'
+        $calls = (Invoke-TelemetryProcess -FilePath $script:mapotfPath -Root $root -ArgumentList @(
+            'debug', '--tf-dir', $root, '--mptf-dir', (Join-Path $script:profilesRoot 'provider-inheritance'),
+            '--eval', 'data.module.provider_inheritance.result'
+        )).StdOut | ConvertFrom-Json -AsHashtable
+        $calls.published.Contains('providers') | Should -BeFalse
+        $calls.implicit.Contains('providers') | Should -BeFalse
         $after = (Invoke-TelemetryProcess -FilePath $script:mapotfPath -Root $root -ArgumentList $inspectionArguments).
             StdOut | ConvertFrom-Json -AsHashtable
         [IO.File]::ReadAllText($requirements) | Should -Not -Match '(?m)^\s*terraform\s*='
-        $after.runs.defaults.mptf.attributes.providers | Should -Match '\bterraform\s*=\s*terraform\b'
+        $after.runs.defaults.mptf.attributes.Contains('providers') | Should -BeFalse
         $after.runs.aliases.mptf.attributes.providers | Should -BeExactly $before.runs.aliases.mptf.attributes.providers
         foreach ($name in $before.runs.Keys) {
             $after.runs[$name].mptf.attributes.command | Should -BeExactly 'plan'
@@ -655,7 +666,8 @@ run "aliases" {
         $result = Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $root `
             -ArgumentList @('test', '-no-color', '-test-directory=tests/unit')
         $result.StdOut | Should -Match 'Success! 2 passed, 0 failed'
-        (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -BeExactly 'pass'
+        $drift = Invoke-TelemetryEngine -Root $root -CheckDrift
+        $drift.Status | Should -BeExactly 'pass' -Because ($drift.Changed -join ', ')
         (Invoke-TelemetryEngine -Root $root).Changed | Should -BeNullOrEmpty
         [IO.File]::ReadAllBytes($published) | Should -Be $publishedBytes
         [IO.File]::ReadAllBytes($lockPath) | Should -Be $lock

@@ -217,6 +217,12 @@ Describe 'Module Resources packaging' {
             'provider-restore' = @(
                 'retain_modtm_test_provider.mptf.hcl'
             )
+            'provider-inheritance' = @(
+                'inherit_default_providers.mptf.hcl'
+            )
+            'provider-contract' = @(
+                'retain_provider_contracts.mptf.hcl'
+            )
             'unit-test-inspect' = @(
                 'inspect.mptf.hcl'
             )

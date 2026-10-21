@@ -22,7 +22,7 @@ function Resolve-AvmMapotfConfigDir {
 
     .PARAMETER Profile
         Config profile to resolve: common, module, root, module-call, variable-order, example,
-        utility-module, provider-cleanup, provider-restore, location-inspect, unit-test-inspect,
+        utility-module, provider-cleanup, provider-restore, provider-inheritance, provider-contract, location-inspect, unit-test-inspect,
         unit-test, or an optional test override.
 
     .PARAMETER Optional
@@ -38,7 +38,7 @@ function Resolve-AvmMapotfConfigDir {
         [string] $Root,
 
         [Parameter(Mandatory)]
-        [ValidateSet('common', 'module', 'root', 'module-call', 'variable-order', 'example', 'utility-module', 'provider-cleanup', 'provider-restore', 'test', 'location-inspect', 'unit-test-inspect', 'unit-test')]
+        [ValidateSet('common', 'module', 'root', 'module-call', 'variable-order', 'example', 'utility-module', 'provider-cleanup', 'provider-restore', 'provider-inheritance', 'provider-contract', 'test', 'location-inspect', 'unit-test-inspect', 'unit-test')]
         [string] $ProfileName,
 
         [switch] $Optional
@@ -625,6 +625,237 @@ function Set-AvmRequiredLocationLintDirective {
     }
 }
 
+function Get-AvmTerraformProviderContractBinding {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][object[]] $Targets,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Snapshots,
+        [Parameter(Mandatory)][object] $Options,
+        [hashtable] $Requirements
+    )
+
+    Set-StrictMode -Version 3.0
+    $bindings = @{}
+    foreach ($target in $Targets) {
+        $bindings[$target.Path] = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    }
+    foreach ($target in $Targets) {
+        $result = Invoke-AvmProcess -FilePath $Options.ToolPath -WorkingDirectory $target.Path -EnvVars $Options.EnvVars -ArgumentList @(
+            'debug', '--tf-dir', $target.Path, '--mptf-dir', $Options.ProfileDirs['provider-contract'],
+            '--eval', '{ calls = local.provider_contract_call_bindings, requirements = local.provider_contract_requirements }'
+        )
+        try {
+            $inspection = ConvertFrom-Json -InputObject $result.StdOut -AsHashtable -ErrorAction Stop
+        }
+        catch {
+            throw [AvmConfigurationException]::new("Cannot inspect incoming provider contracts in '$($target.Path)': invalid native JSON.")
+        }
+        if ($inspection -isnot [System.Collections.IDictionary] -or
+            $inspection['calls'] -isnot [System.Collections.IDictionary] -or
+            $inspection['requirements'] -isnot [System.Collections.IDictionary]) {
+            throw [AvmConfigurationException]::new("Cannot inspect incoming provider contracts in '$($target.Path)': invalid native calls.")
+        }
+        if ($null -ne $Requirements) { $Requirements[$target.Path] = $inspection.requirements }
+        foreach ($call in $inspection.calls.Values) {
+            if ($call -isnot [System.Collections.IDictionary] -or $call['source'] -isnot [string] -or
+                $call['providers'] -isnot [System.Collections.IList] -or
+                @($call.providers | Where-Object { $_ -isnot [string] -or [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
+                throw [AvmConfigurationException]::new("Cannot inspect incoming provider contracts in '$($target.Path)': invalid native bindings.")
+            }
+            if (-not ($call.source.StartsWith('./', [StringComparison]::Ordinal) -or
+                    $call.source.StartsWith('../', [StringComparison]::Ordinal))) { continue }
+            $path = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath($call.source, $target.Path))
+            if (-not $bindings.ContainsKey($path)) { continue }
+            foreach ($provider in $call.providers) { $null = $bindings[$path].Add(($provider -split '\.', 2)[0]) }
+        }
+    }
+    foreach ($snapshot in $Snapshots) {
+        $inspection = Get-AvmTerraformUnitTestInspection -Scope $snapshot.Scope -ModuleTargets $Targets -Options $Options
+        foreach ($path in @($snapshot.Scope.Owner.Path) + @($inspection.test.run_modules.Values | ForEach-Object { $_.dir })) {
+            if (-not $bindings.ContainsKey($path)) { continue }
+            foreach ($provider in $inspection.test.mock_providers.Keys) {
+                $null = $bindings[$path].Add(($provider -split '\.', 2)[0])
+            }
+        }
+    }
+    return $bindings
+}
+
+function Get-AvmProviderContractLintInspection {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][hashtable] $EnvVars,
+        [string] $Root = $Path,
+        [switch] $AllowPathFallback
+    )
+
+    Set-StrictMode -Version 3.0
+    $tool = Resolve-AvmTool -Name tflint -AllowPathFallback:$AllowPathFallback
+    $inspectionRoot = Join-Path ([IO.Path]::GetTempPath()) ('avm-provider-lint-' + [guid]::NewGuid().ToString('N'))
+    $configPath = Join-Path $inspectionRoot '.tflint.hcl'
+    try {
+        $null = [IO.Directory]::CreateDirectory($inspectionRoot)
+        $workingDirectory = $Path
+        $sanitized = @{}
+        foreach ($file in Get-ChildItem -LiteralPath $Path -File | Where-Object {
+                $_.Name.EndsWith('.tf', [StringComparison]::Ordinal) -or
+                $_.Name.EndsWith('.tf.json', [StringComparison]::Ordinal)
+            }) {
+            $content = [IO.File]::ReadAllText($file.FullName)
+            $copy = [regex]::Replace(
+                $content, '(?m)^[\t ]*# tflint-ignore: terraform_unused_required_providers[\t ]*(?=\r?$)',
+                { param($match) ' ' * $match.Length })
+            if ($copy -cne $content) { $sanitized[$file.Name] = $copy }
+        }
+        if ($sanitized.Count -gt 0) {
+            $relative = [IO.Path]::GetRelativePath($Root, $Path)
+            if ([IO.Path]::IsPathRooted($relative) -or @($relative -split '[\\/]' | Where-Object { $_ -eq '..' }).Count -gt 0) {
+                throw [AvmConfigurationException]::new("Cannot stage unused provider inspection outside '$Root': '$Path'.")
+            }
+            $sourceRoot = Join-Path $inspectionRoot 'source'
+            $WhatIfPreference = $false
+            Copy-AvmTerraformModuleTree -SourceRoot $Root -DestinationRoot $sourceRoot
+            $workingDirectory = Join-Path $sourceRoot $relative
+            foreach ($name in $sanitized.Keys) {
+                [IO.File]::WriteAllText((Join-Path $workingDirectory $name), $sanitized[$name], [Text.UTF8Encoding]::new($false))
+            }
+        }
+        [IO.File]::WriteAllText($configPath, @'
+plugin "terraform" {
+  enabled = true
+  preset  = "recommended"
+}
+'@, [Text.UTF8Encoding]::new($false))
+        $result = Invoke-AvmProcess -FilePath $tool.Path -WorkingDirectory $workingDirectory -EnvVars $EnvVars -ArgumentList @(
+            '--config', $configPath, '--only=terraform_unused_required_providers', '--format=json', '--force'
+        )
+        try {
+            $inspection = ConvertFrom-Json -InputObject $result.StdOut -AsHashtable -ErrorAction Stop
+        }
+        catch {
+            throw [AvmConfigurationException]::new("Cannot inspect unused provider declarations in '$Path': invalid TFLint JSON.")
+        }
+        if ($inspection -isnot [System.Collections.IDictionary] -or
+            $inspection['issues'] -isnot [System.Collections.IList] -or
+            $inspection['errors'] -isnot [System.Collections.IList] -or $inspection.errors.Count -gt 0) {
+            throw [AvmConfigurationException]::new("Cannot inspect unused provider declarations in '$Path': invalid TFLint inspection.")
+        }
+        foreach ($issue in $inspection.issues) {
+            if ($issue -isnot [System.Collections.IDictionary] -or $issue['rule'] -isnot [System.Collections.IDictionary] -or
+                $issue.rule['name'] -isnot [string] -or $issue['message'] -isnot [string]) {
+                throw [AvmConfigurationException]::new("Cannot inspect unused provider declarations in '$Path': invalid native issue.")
+            }
+            if ($issue['range'] -is [System.Collections.IDictionary] -and
+                $issue.range['filename'] -is [string] -and [IO.Path]::IsPathRooted($issue.range.filename) -and
+                [IO.Path]::GetDirectoryName($issue.range.filename) -ceq [IO.Path]::TrimEndingDirectorySeparator($workingDirectory)) {
+                $issue.range.filename = Join-Path $Path ([IO.Path]::GetFileName($issue.range.filename))
+            }
+        }
+        return $inspection
+    }
+    finally {
+        if (Test-Path -LiteralPath $inspectionRoot -PathType Container) {
+            Remove-Item -LiteralPath $inspectionRoot -Recurse -Force -ErrorAction Stop -ProgressAction SilentlyContinue -WhatIf:$false
+        }
+    }
+}
+
+function Set-AvmProviderContractLintDirective {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][hashtable] $ProviderSources,
+        [Parameter(Mandatory)][hashtable] $ProviderBindings,
+        [Parameter(Mandatory)][object] $Options,
+        [hashtable] $OriginalRequirements = @{},
+        [switch] $AllowPathFallback
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    $directive = '# tflint-ignore: terraform_unused_required_providers'
+    foreach ($root in $ProviderSources.Keys | Sort-Object) {
+        $bindings = @(if ($ProviderBindings.ContainsKey($root)) { $ProviderBindings[$root] })
+        $original = if ($OriginalRequirements.ContainsKey($root)) { $OriginalRequirements[$root] } else { @{} }
+        $native = Invoke-AvmProcess -FilePath $Options.ToolPath -WorkingDirectory $root -EnvVars $Options.EnvVars -ArgumentList @(
+            'debug', '--tf-dir', $root, '--mptf-dir', $Options.ProfileDirs['provider-contract'],
+            '--mptf-var', ('provider_contract_sources={0}' -f (ConvertTo-Json -InputObject @($ProviderSources[$root]) -Compress)),
+            '--mptf-var', ('provider_contract_bindings={0}' -f (ConvertTo-Json -InputObject $bindings -Compress)),
+            '--mptf-var', ('provider_contract_original_requirements={0}' -f (
+                    ConvertTo-Json -InputObject $original -Depth 20 -Compress)),
+            '--eval', 'local.provider_contract_names'
+        )
+        try {
+            $providers = ConvertFrom-Json -InputObject $native.StdOut -NoEnumerate -ErrorAction Stop
+        }
+        catch {
+            throw [AvmConfigurationException]::new("Cannot inspect retained provider contracts in '$root': invalid native JSON.")
+        }
+        if ($providers -isnot [System.Collections.IList] -or
+            @($providers | Where-Object { $_ -isnot [string] -or [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
+            throw [AvmConfigurationException]::new("Cannot inspect retained provider contracts in '$root': invalid native provider names.")
+        }
+        if ($providers.Count -eq 0) { continue }
+        $sourceRoot = if ($Options.PSObject.Properties['Root']) { $Options.Root } else { $root }
+        $inspection = Get-AvmProviderContractLintInspection -Path $root -Root $sourceRoot `
+            -EnvVars $Options.EnvVars -AllowPathFallback:$AllowPathFallback
+        $selected = [System.Collections.Generic.List[object]]::new()
+        foreach ($issue in $inspection.issues) {
+            if ($issue -isnot [System.Collections.IDictionary] -or
+                $issue['rule'] -isnot [System.Collections.IDictionary] -or
+                $issue.rule['name'] -isnot [string] -or $issue['message'] -isnot [string]) {
+                throw [AvmConfigurationException]::new("Cannot annotate retained provider contracts in '$root': invalid native issue.")
+            }
+            if ($issue.rule.name -cne 'terraform_unused_required_providers') { continue }
+            foreach ($provider in $providers) {
+                if ($issue.message -ceq "provider '$provider' is declared in required_providers but not used by the module") {
+                    if ($issue['range'] -isnot [System.Collections.IDictionary] -or
+                        $issue.range['filename'] -isnot [string] -or
+                        $issue.range['start'] -isnot [System.Collections.IDictionary]) {
+                        throw [AvmConfigurationException]::new("Cannot annotate retained provider contracts in '$root': missing native source range.")
+                    }
+                    $selected.Add([pscustomobject]@{ Provider = $provider; Range = $issue['range'] })
+                }
+            }
+        }
+        foreach ($issue in $selected | Sort-Object @{ Expression = { $_.Range.filename } },
+            @{ Expression = { $_.Range.start.line }; Descending = $true }) {
+            $range = $issue.Range
+            if ($range -isnot [System.Collections.IDictionary] -or
+                $range['filename'] -isnot [string] -or $range['start'] -isnot [System.Collections.IDictionary]) {
+                throw [AvmConfigurationException]::new("Cannot annotate retained provider contracts in '$root': missing native source range.")
+            }
+            $path = [System.IO.Path]::GetFullPath($range.filename, $root)
+            if ([System.IO.Path]::GetDirectoryName($path) -cne [System.IO.Path]::TrimEndingDirectorySeparator($root) -or
+                [System.IO.Path]::GetExtension($path) -cne '.tf') {
+                throw [AvmConfigurationException]::new("Cannot annotate retained provider contracts in '$root': unexpected native source path '$path'.")
+            }
+            $content = [System.IO.File]::ReadAllText($path)
+            $lines = @($content -split '\r?\n')
+            $line = $range.start['line']
+            $column = $range.start['column']
+            if (($line -isnot [int] -and $line -isnot [long]) -or $line -lt 1 -or $line -gt $lines.Count -or
+                ($column -isnot [int] -and $column -isnot [long]) -or $column -lt 1 -or
+                $column + $issue.Provider.Length - 1 -gt $lines[$line - 1].Length -or
+                $lines[$line - 1].Substring($column - 1, $issue.Provider.Length) -cne $issue.Provider -or
+                -not [string]::IsNullOrWhiteSpace($lines[$line - 1].Substring(0, $column - 1))) {
+                throw [AvmConfigurationException]::new("Cannot annotate retained provider contracts in '$path': invalid native source range.")
+            }
+            if ($line -gt 1 -and $lines[$line - 2].Trim() -ceq $directive) { continue }
+            $offset = [regex]::Matches($content, '(?m)^')[$line - 1].Index
+            $indent = $lines[$line - 1].Substring(0, $column - 1)
+            $lineEnding = if ($content.Contains("`r`n")) { "`r`n" } else { "`n" }
+            if ($PSCmdlet.ShouldProcess($path, 'annotate the proven retained provider contract for TFLint')) {
+                [System.IO.File]::WriteAllText(
+                    $path, $content.Insert($offset, $indent + $directive + $lineEnding), [System.Text.UTF8Encoding]::new($false))
+            }
+        }
+    }
+}
+
 function Set-AvmTelemetryTagLintDirective {
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)][object[]] $Targets)
@@ -734,6 +965,25 @@ function Invoke-AvmMapotfTransformTarget {
     }
     $transformArguments.Add('--tf-dir')
     $transformArguments.Add($Target.Path)
+    if ($Target.Profiles -contains 'root' -or $Target.Profiles -contains 'provider-cleanup') {
+        $providerFacts = Get-AvmTerraformUtilityProviderConfigurationFact -Path $Target.Path
+        $retainedConfigurations = @(@($providerFacts.Configurations) + @($providerFacts.Aliases) | Sort-Object -Unique)
+        $transformArguments.Add('--mptf-var')
+        $transformArguments.Add('retained_provider_configurations=' + (ConvertTo-Json -InputObject $retainedConfigurations -Compress))
+    }
+    if ($Target.Profiles -contains 'provider-contract') {
+        $variables = @{
+            provider_contract_cleanup               = $true
+            provider_contract_sources               = @($Options.ProviderContractSources[$Target.Path])
+            provider_contract_bindings              = @($Options.ProviderContractBindings[$Target.Path])
+            provider_contract_unused                = @($Options.ProviderContractUnused[$Target.Path])
+            provider_contract_original_requirements = $Options.ProviderContractOriginalRequirements[$Target.Path]
+        }
+        foreach ($name in $variables.Keys) {
+            $transformArguments.Add('--mptf-var')
+            $transformArguments.Add($name + '=' + (ConvertTo-Json -InputObject $variables[$name] -Depth 20 -Compress))
+        }
+    }
     if ($Target.Scope -eq 'test' -and $Target.Profiles -contains 'module-call') {
         $transformArguments.Add('--mptf-var')
         $transformArguments.Add('test_wrapper=true')
@@ -810,6 +1060,9 @@ function Invoke-AvmTerraformTransform {
         including known local callers and example wrappers, without restoring
         unrelated unused requirements. Proven same-provider aliases and local
         literal source client defaults retain their authored values.
+        A separate final provider-inheritance pass removes wholly same-name
+        default module-call provider maps across every discovered scope.
+        Alias/remap maps remain intact, including their default entries.
         Telemetry references and empty random mocks in direct unit tests
         with no remaining random provider usage are migrated. Custom mocks
         that cannot be removed safely fail with an actionable error. The
@@ -909,19 +1162,21 @@ function Invoke-AvmTerraformTransform {
 
     $tool = Resolve-AvmTool -Name 'mapotf' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
     $profileDirs = @{
-        common              = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'common'
-        module              = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'module'
-        root                = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'root'
-        'module-call'       = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'module-call'
-        'variable-order'    = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'variable-order'
-        example             = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'example'
-        'provider-cleanup'  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'provider-cleanup'
-        'utility-module'    = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'utility-module'
-        'provider-restore'  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'provider-restore'
-        'location-inspect'  = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'location-inspect'
-        'unit-test-inspect' = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'unit-test-inspect'
-        'unit-test'         = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'unit-test'
-        test                = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'test' -Optional
+        common                 = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'common'
+        module                 = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'module'
+        root                   = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'root'
+        'module-call'          = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'module-call'
+        'variable-order'       = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'variable-order'
+        example                = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'example'
+        'provider-cleanup'     = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'provider-cleanup'
+        'provider-inheritance' = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'provider-inheritance'
+        'provider-contract'    = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'provider-contract'
+        'utility-module'       = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'utility-module'
+        'provider-restore'     = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'provider-restore'
+        'location-inspect'     = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'location-inspect'
+        'unit-test-inspect'    = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'unit-test-inspect'
+        'unit-test'            = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'unit-test'
+        test                   = Resolve-AvmMapotfConfigDir -Root $Context.Root -ProfileName 'test' -Optional
     }
     $targets = @(Get-AvmTerraformTransformTarget -Root $Context.Root)
     Write-AvmLog ("transform: discovered {0} target(s)" -f $targets.Count) -Level Verbose | Out-Null
@@ -988,6 +1243,7 @@ function Invoke-AvmTerraformTransform {
             -ErrorAction Stop
 
         $transformOptions = [pscustomobject]@{
+            Root                   = $Context.Root
             ToolPath               = $tool.Path
             TerraformPath          = $terraform.Path
             ProfileDirs            = $profileDirs
@@ -1004,6 +1260,19 @@ function Invoke-AvmTerraformTransform {
         $utilityPlans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $unitTestTargets -Options $transformOptions `
                 -PreserveSelections:($utilityMigrationMode -ceq 'preserve'))
         $transformOptions.UtilityTelemetryPaths = @($utilityPlans | Where-Object Telemetry | ForEach-Object { $_.Target.Path })
+        $originalProviderRequirements = @{}
+        foreach ($target in $unitTestTargets) { $originalProviderRequirements[$target.Path] = @{} }
+        foreach ($scope in $utilityPlans) {
+            $contracts = @{}
+            foreach ($name in $scope.Before.requirements.Keys) {
+                $contracts[$name] = @{
+                    source  = [string]$scope.Before.requirements[$name]['source']
+                    version = [string]$scope.Before.requirements[$name]['version']
+                }
+            }
+            $originalProviderRequirements[$scope.Target.Path] = $contracts
+        }
+        $transformOptions | Add-Member -NotePropertyName ProviderContractOriginalRequirements -NotePropertyValue $originalProviderRequirements
         $newLocationTargets = @(
             foreach ($target in $moduleTargets | Where-Object { $_.Profiles -notcontains 'root' }) {
                 if ($null -eq (Get-AvmTerraformLocationInspection -Path $target.Path -Options $transformOptions)) {
@@ -1057,9 +1326,58 @@ function Invoke-AvmTerraformTransform {
                     -ThrottleLimit $ThrottleLimit
             }
         }
-        Invoke-AvmTerraformUtilityProviderCleanup -Plans $utilityPlans -ModuleTargets $unitTestTargets -Options $transformOptions
+        $retainedProviderSources = @{}
+        Invoke-AvmTerraformUtilityProviderCleanup -Plans $utilityPlans -ModuleTargets $unitTestTargets -Options $transformOptions `
+            -RetainedProviderSources $retainedProviderSources
         Invoke-AvmTerraformUnitTestMigration -Root $Context.Root -ModuleTargets $unitTestTargets `
-            -Snapshots $unitSnapshots -Options $transformOptions
+            -Snapshots $unitSnapshots -Options $transformOptions -RetainedProviderSources $retainedProviderSources
+        $inheritanceTargets = @($targets | ForEach-Object {
+                [pscustomobject]@{
+                    Path     = $_.Path
+                    Scope    = $_.Scope
+                    Profiles = @('provider-inheritance')
+                }
+            })
+        Invoke-AvmParallel -InputObject $inheritanceTargets -FunctionName 'Invoke-AvmMapotfTransformTarget' `
+            -Argument $transformOptions -ThrottleLimit $ThrottleLimit
+        $contractRequirements = @{}
+        $providerBindings = Get-AvmTerraformProviderContractBinding -Targets $unitTestTargets `
+            -Snapshots $unitSnapshots -Options $transformOptions -Requirements $contractRequirements
+        foreach ($target in $unitTestTargets) {
+            if (-not $retainedProviderSources.ContainsKey($target.Path)) { $retainedProviderSources[$target.Path] = @() }
+            if (-not $providerBindings.ContainsKey($target.Path)) { $providerBindings[$target.Path] = @() }
+        }
+        $contractUnused = @{}
+        foreach ($target in $unitTestTargets) {
+            $unused = [System.Collections.Generic.List[string]]::new()
+            if ($contractRequirements.ContainsKey($target.Path) -and $contractRequirements[$target.Path].Count -gt 0) {
+                $inspection = Get-AvmProviderContractLintInspection -Path $target.Path -Root $Context.Root `
+                    -EnvVars $mapotfEnv -AllowPathFallback:$AllowPathFallback
+                foreach ($issue in $inspection.issues) {
+                    if ($issue.rule.name -cne 'terraform_unused_required_providers') { continue }
+                    foreach ($name in $contractRequirements[$target.Path].Keys) {
+                        if ($issue.message -ceq "provider '$name' is declared in required_providers but not used by the module") {
+                            $unused.Add($name)
+                        }
+                    }
+                }
+            }
+            $contractUnused[$target.Path] = $unused.ToArray()
+        }
+        $transformOptions | Add-Member -NotePropertyMembers @{
+            ProviderContractSources  = $retainedProviderSources
+            ProviderContractBindings = $providerBindings
+            ProviderContractUnused   = $contractUnused
+        }
+        $contractTargets = @($targets | ForEach-Object {
+                [pscustomobject]@{ Path = $_.Path; Scope = $_.Scope; Profiles = @('provider-contract') }
+            })
+        Invoke-AvmParallel -InputObject $contractTargets -FunctionName 'Invoke-AvmMapotfTransformTarget' `
+            -Argument $transformOptions -ThrottleLimit $ThrottleLimit
+        if (@($retainedProviderSources.Values | ForEach-Object { $_ }).Count -gt 0) {
+            Set-AvmProviderContractLintDirective -ProviderSources $retainedProviderSources -ProviderBindings $providerBindings `
+                -Options $transformOptions -OriginalRequirements $originalProviderRequirements -AllowPathFallback:$AllowPathFallback
+        }
         Set-AvmTelemetryTagLintDirective -Targets $moduleTargets
         if ($newLocationTargets.Count -gt 0) {
             Set-AvmRequiredLocationLintDirective -Targets $newLocationTargets -Options $transformOptions

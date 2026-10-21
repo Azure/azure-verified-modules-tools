@@ -133,6 +133,36 @@ Providers required by state:
             }
         }
 
+        It 'surfaces a redundant empty configuration without permitting other diagnostics: <Diagnostic>' -ForEach @(
+            @{ Diagnostic = ''; Repair = $false; Accept = $true }
+            @{ Diagnostic = 'Warning: Missing required provider configuration'; Repair = $true; Accept = $true }
+            @{ Diagnostic = 'Warning: Missing required provider configuration'; Repair = $false; Accept = $false }
+            @{ Diagnostic = 'Warning: Unknown alias'; Repair = $true; Accept = $false }
+            @{ Diagnostic = 'Error: Provider type mismatch'; Repair = $true; Accept = $false }
+        ) {
+            $text = "Providers required by configuration:`n.`n" +
+            "`u{2514}`u{2500}`u{2500} provider[registry.terraform.io/azure/modtm]`n`n" +
+            "Warning: Redundant empty provider block`n$Diagnostic`n"
+            InModuleScope Avm.Authoring -Parameters @{ Text = $text; Repair = $Repair; Accept = $Accept; Diagnostic = $Diagnostic } {
+                param($Text, $Repair, $Accept, $Diagnostic)
+                Mock Write-AvmLog
+                $warnings = @{}
+                if ($Accept) {
+                    @(ConvertFrom-AvmTerraformProviderTree -Text $Text -Path target `
+                            -AllowMissingProviderConfiguration:$Repair -ProviderWarnings $warnings) |
+                        Should -Be @('registry.terraform.io/azure/modtm')
+                    Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter { $Level -ceq 'Warning' }
+                    $warnings.ContainsKey('target') | Should -Be ($Diagnostic -ne '')
+                }
+                else {
+                    { ConvertFrom-AvmTerraformProviderTree -Text $Text -Path target `
+                            -AllowMissingProviderConfiguration:$Repair -ProviderWarnings $warnings } |
+                        Should -Throw -ExceptionType ([AvmConfigurationException])
+                    Should -Invoke Write-AvmLog -Exactly 0 -ParameterFilter { $Level -ceq 'Warning' }
+                }
+            }
+        }
+
         It 'fails before Terraform for potentially stateful or uninspectable configuration: <Shape>' -TestCases @(
             @{ Shape = 'inline backend'; File = 'main.tf'; Text = 'terraform { backend "azurerm" {} }' }
             @{ Shape = 'backend separated by comments'; File = 'backend.tf'; Text = 'terraform { backend /* preserve */ "azurerm" {} }' }
@@ -535,7 +565,7 @@ Providers required by state:
                     { Get-AvmTerraformUnitTestModtmRequirementPlan @parameters -ModuleManifests @{} } |
                         Should -Throw '*freshly inspected dependency manifest is missing*'
                     $plan = Get-AvmTerraformUnitTestModtmRequirementPlan @parameters -ModuleManifests $manifests
-                    $plan.Arguments | Should -Contain 'unit_test_modtm_bindings={"published":"{ modtm = modtm }"}'
+                    $plan.Arguments | Should -Contain 'unit_test_modtm_dependencies=["published"]'
                     $parameters.RequiredProviders[$Fixture.Child].modtm.source | Should -BeExactly 'Azure/modtm'
                     $parameters.RequiredProviders[$Fixture.Child].modtm.version | Should -BeExactly '~> 0.3'
                     $manifests[$Fixture.Child] | Should -BeExactly $Fixture.Options.EnvVars.AVM_TEST_FRESH_MANIFEST
@@ -622,7 +652,7 @@ Providers required by state:
                 InModuleScope Avm.Authoring -Parameters @{ Parameters = $script:dependencyParameters } {
                     param($Parameters)
                     $plan = Get-AvmTerraformUnitTestModtmRequirementPlan @Parameters
-                    $plan.Arguments | Should -Contain 'unit_test_modtm_bindings={"regions":"{ modtm = modtm }"}'
+                    $plan.Arguments | Should -Contain 'unit_test_modtm_dependencies=["regions"]'
                     $requirement = $Parameters.RequiredProviders[$Parameters.Path].modtm
                     $requirement.source | Should -BeExactly 'registry.terraform.io/azure/modtm'
                     $requirement.version | Should -BeExactly '~> 0.3'
@@ -768,9 +798,16 @@ Providers required by state:
                     $requirement.source | Should -BeIn @('Azure/modtm', 'registry.terraform.io/azure/modtm')
                     $attributes = "    source = `"$($requirement.source)`"`n"
                     if ($Expected) { $attributes += "    version = `"$Expected`"`n" }
-                    $body | Should -BeExactly "required_providers {`n  modtm = {`n$attributes  }`n}`n"
+                    if ($Parameters.RequiredProviders[$Caller].modtm.Contains('version')) {
+                        $body | Should -BeExactly "required_providers {`n  modtm = {`n$attributes  }`n}`n"
+                    }
+                    else {
+                        $body | Should -BeExactly ''
+                    }
                     $body | Should -Not -Match '\\u003[ce]'
-                    $plan.Capabilities.Contains("dynamic_block_body == $encoded") | Should -BeTrue
+                    if ($body) {
+                        $plan.Capabilities.Contains("dynamic_block_body == $encoded") | Should -BeTrue
+                    }
                 }
                 Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -ceq 'debug' }
                 Should -Invoke Invoke-AvmTerraformInit -Exactly 0
@@ -1138,7 +1175,7 @@ Context 'migration decisions' {
                 }
 
                 It 'preserves a proven built-in mock in a <Mapping> map' -TestCases @(
-                    @{ Mapping = 'newly generated'; Authored = $false }
+                    @{ Mapping = 'implicit default'; Authored = $false }
                     @{ Mapping = 'complete authored'; Authored = $true }
                 ) {
                     param($Authored)
@@ -1150,16 +1187,8 @@ Context 'migration decisions' {
                         }
                     }
                     Invoke-UnitMigrationFixture -Fixture $script:fixture
-                    if ($Authored) {
-                        Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
-                            $UnitTestPlans[0].ProviderMockBindings.Count -eq 0 -and $UnitTestPlans[0].MockMigrationValidated
-                        }
-                    }
-                    else {
-                        Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
-                            $UnitTestPlans[0].ProviderMockBindings.root -ceq "{`n  alz = alz`n  azapi = azapi`n  modtm = modtm`n  terraform = terraform`n}" -and
-                            $UnitTestPlans[0].ProviderMockBindings.child -ceq $UnitTestPlans[0].ProviderMockBindings.root
-                        }
+                    Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                        $UnitTestPlans[0].ProviderMockBindings.Count -eq 0 -and $UnitTestPlans[0].MockMigrationValidated
                     }
                 }
 
@@ -1169,7 +1198,7 @@ Context 'migration decisions' {
                     }
                     Invoke-UnitMigrationFixture -Fixture $script:fixture
                     Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
-                        $UnitTestPlans[0].ProviderMockBindings.root -notmatch '\bterraform\s*='
+                        $UnitTestPlans[0].ProviderMockBindings.Count -eq 0
                     }
                 }
 
@@ -1226,15 +1255,13 @@ Context 'migration decisions' {
                 }
             }
 
-            It 'preserves the real library configuration and implicit local defaults when generating mappings' {
+            It 'preserves the real library configuration and implicit local defaults without generating mappings' {
                 $before = $script:fixture.After.test | ConvertTo-Json -Depth 20 -Compress
                 Invoke-UnitMigrationFixture -Fixture $script:fixture
                 ($script:fixture.After.test | ConvertTo-Json -Depth 20 -Compress) | Should -BeExactly $before
                 Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
                     $UnitTestPlans[0].RetainModtmMock -and
-                    $UnitTestPlans[0].ProviderMockBindings.Count -eq 2 -and
-                    $UnitTestPlans[0].ProviderMockBindings.root -ceq "{`n  alz = alz`n  azapi = azapi`n  modtm = modtm`n}" -and
-                    $UnitTestPlans[0].ProviderMockBindings.child -ceq "{`n  alz = alz`n  azapi = azapi`n  modtm = modtm`n}"
+                    $UnitTestPlans[0].ProviderMockBindings.Count -eq 0 -and $UnitTestPlans[0].MockMigrationValidated
                 }
             }
 
@@ -1244,7 +1271,7 @@ Context 'migration decisions' {
                 }
                 Invoke-UnitMigrationFixture -Fixture $script:fixture
                 Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
-                    $UnitTestPlans[0].ProviderMockBindings.root -ceq "{`n  alz = alz`n  azapi = azapi`n  modtm = modtm`n}"
+                    $UnitTestPlans[0].ProviderMockBindings.Count -eq 0 -and $UnitTestPlans[0].MockMigrationValidated
                 }
             }
 
@@ -1622,8 +1649,18 @@ Context 'migration decisions' {
                 Invoke-UnitMigrationFixture -Fixture $script:fixture
                 Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
                     $UnitTestPlans[0].AddDefaultAzapiMock -and $UnitTestPlans[0].RetainModtmMock -and
-                    $UnitTestPlans[0].ProviderMockBindings.root.Contains('azapi = azapi') -and
-                    $UnitTestPlans[0].ProviderMockBindings.root.Contains('modtm = modtm')
+                    $UnitTestPlans[0].MockMigrationValidated
+                }
+                if ($Explicit) {
+                    Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                        $UnitTestPlans[0].ProviderMockBindings.root.Contains('azapi = azapi') -and
+                        $UnitTestPlans[0].ProviderMockBindings.root.Contains('modtm = modtm')
+                    }
+                }
+                else {
+                    Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                        $UnitTestPlans[0].ProviderMockBindings.Count -eq 0
+                    }
                 }
             }
 
@@ -1703,7 +1740,7 @@ Context 'migration decisions' {
                 }
             }
 
-            It 'binds all required mocks when the selected target inherits ModTM without declaring it' {
+            It 'preserves implicit required mocks when the selected target inherits ModTM without declaring it' {
                 Mock Get-AvmTerraformUnitTestRequiredProvider -ModuleName Avm.Authoring {
                     @{ azapi = @{ source = 'Azure/azapi' } }
                 }
@@ -1711,14 +1748,12 @@ Context 'migration decisions' {
                     $RequiredProviders[$Path].modtm = @{ source = 'registry.terraform.io/azure/modtm' }
                 }
                 Invoke-UnitMigrationFixture -Fixture $script:fixture
-                Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
-                    $ArgumentList[0] -eq 'transform' -and
-                    @($ArgumentList | Where-Object {
-                            $_ -like 'provider_mock_bindings=*' -and $_.Contains('modtm = modtm') -and $_.Contains('azapi = azapi')
-                        }).Count -eq 1
+                Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter {
+                    $ArgumentList[0] -eq 'transform'
                 }
                 Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
-                    $UnitTestPlans[0].RetainModtmMock -and $UnitTestPlans[0].ProviderMockBindings.Count -eq 2
+                    $UnitTestPlans[0].RetainModtmMock -and $UnitTestPlans[0].ProviderMockBindings.Count -eq 0 -and
+                    $UnitTestPlans[0].MockMigrationValidated
                 }
             }
 

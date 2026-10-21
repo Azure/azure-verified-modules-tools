@@ -1,3 +1,8 @@
+variable "retained_provider_configurations" {
+  type    = set(string)
+  default = []
+}
+
 data "terraform" "cleanup_providers" {}
 data "resource" "cleanup_resources" {}
 data "data" "cleanup_data" {}
@@ -31,7 +36,7 @@ locals {
 }
 
 transform "remove_block_element" "drop_modtm_provider" {
-  for_each             = local.modtm_provider_exists && length(local.modtm_resources) == 0 && length(local.modtm_data) == 0 && length(local.modtm_ephemeral) == 0 && !local.cleanup_modtm_provider_call_used ? toset([1]) : toset([])
+  for_each             = local.modtm_provider_exists && length(local.modtm_resources) == 0 && length(local.modtm_data) == 0 && length(local.modtm_ephemeral) == 0 && !local.cleanup_modtm_provider_call_used && !contains(var.retained_provider_configurations, "modtm") ? toset([1]) : toset([])
   target_block_address = "terraform"
   paths                = ["required_providers.modtm"]
 }
