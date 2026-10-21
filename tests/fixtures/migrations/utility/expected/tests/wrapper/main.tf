@@ -1,8 +1,5 @@
 module "test" {
   source = "../../"
-  providers = {
-    azapi = azapi
-  }
 
   location                 = var.location
   create_example_resources = var.create_example_resources

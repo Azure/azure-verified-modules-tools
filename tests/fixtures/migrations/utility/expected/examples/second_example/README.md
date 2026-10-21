@@ -5,9 +5,6 @@
 ```hcl
 module "test" {
   source = "../../"
-  providers = {
-    azapi = azapi
-  }
 
   location              = "westus3"
   create_mock_resources = false
