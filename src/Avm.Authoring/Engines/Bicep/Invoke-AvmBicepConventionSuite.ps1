@@ -75,8 +75,6 @@ function Invoke-AvmBicepConventionSuite {
         if ($scopeCount -gt 0) {
             $Convention.CodeownerInput = Get-AvmBicepCodeownerInput -RepositoryRoot $Convention.RepositoryRoot
             $files += Join-Path $suiteDirectory 'Ownership.Tests.ps1'
-            $Convention.ChildPublishInput = Get-AvmBicepChildPublishInput -RepositoryRoot $Convention.RepositoryRoot `
-                -Scopes @($Convention.Scopes)
             $files += Join-Path $suiteDirectory 'ChildPublish.Tests.ps1'
             $Convention.VersionInputs = @(foreach ($scope in @($Convention.Scopes)) {
                     $versionInput = Get-AvmBicepVersionInput -Scope $scope

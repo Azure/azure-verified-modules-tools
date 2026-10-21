@@ -1643,7 +1643,7 @@ creating state; a failing command does not mean no resources exist.
 Tools owns the six reusable `bicep-module*.yml` workflows, their composite
 actions and `scripts/bicep-workflows` support. The registry retains module
 callers, source, authored tests and configuration, including
-`.avm/child-module-publish-allowed-list.json` with the existing child approvals.
+its legacy child-publication approval configuration and validator.
 Shared native validation and execution belong to the released `Avm.Authoring`
 package, not registry utilities or copied compliance scripts.
 Reserved Azure Local cases retain the registry-local prepared-environment

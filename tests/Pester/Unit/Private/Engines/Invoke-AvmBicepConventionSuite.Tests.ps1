@@ -181,13 +181,3 @@ Describe 'Invoke-AvmBicepConventionSuite' {
         }
     }
 }
-
-Describe 'Get-AvmBicepChildPublishAllowlist' {
-    It 'reports an unreadable allowlist directory as a configuration error' {
-        InModuleScope 'Avm.Authoring' {
-            Mock Get-ChildItem { throw [System.UnauthorizedAccessException]::new('denied') }
-            { Get-AvmBicepChildPublishAllowlist -RepositoryRoot $TestDrive } |
-                Should -Throw -ExceptionType ([AvmConfigurationException]) -ExpectedMessage '*denied*'
-        }
-    }
-}
