@@ -124,6 +124,10 @@ section when cutting a release.
 
 ### Changed
 
+- Native Bicep convention validation no longer requires the repository-root
+  child publication allow-list or evaluates child membership. Versioned child
+  modules still require an exact, regular `version.json`, valid version data,
+  and a valid changelog; registry-owned legacy approval validation is unchanged.
 - Native Bicep e2e with `-UseCiInputs` uses the configured management-group
   target when `-ManagementGroupId` is omitted. Explicit values always win,
   including invalid values that must fail validation rather than falling back.
