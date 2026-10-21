@@ -732,6 +732,11 @@ newer calls are left alone. Missing pins, ranges, prereleases and computed
 versions on these sources require review, not a guessed version. Custom
 registries, Git sources and local modules are not rewritten as registry calls.
 Root, child, example and discovered test-wrapper scopes share this phase.
+The MaPoTF profile owns source recognition, exact-pin selection, version
+rewrites and required utility inputs. PowerShell only schedules scopes,
+surfaces the profile's review result before any writes, and obtains necessary
+external dependency facts; it must not reconstruct utility HCL fragments or
+reimplement source/version selection.
 These are fixed one-off migration targets, not latest-release lookups or an
 automatic progression to future utility versions.
 
@@ -793,6 +798,11 @@ and empty mocks only when resources, data, ephemeral blocks, provider
 configurations, bindings and the fresh dependency trees prove them unused.
 Retain genuine ModTM dependencies, custom mocks, state-only `removed` blocks
 and legitimate Random use. Existing safe mock-review rules still apply.
+The utility MaPoTF profile owns literal provider-map entry inspection, targeted
+ModTM removal, conditional AzAPI insertion and declared-requirement retirement.
+PowerShell supplies only fresh dependency-tree and provider-configuration facts,
+surfaces the profile's literal-map review before writing, and must not parse,
+rebuild or replace authored provider-map expressions.
 An intermediate native missing-provider-configuration warning may be tracked
 while repairing proven source bindings. All other diagnostics remain fatal,
 and a strict dependency recheck must pass before mock migration.
@@ -2058,8 +2068,11 @@ scope collection. Below-threshold canonical AVM notices remain advisory
 warnings. Final dispatcher and composition rendering must not repeat already
 presented findings; every finding remains in the structured result.
 
-Internal transform dependency copies suppress filesystem-provider progress
-bars; inspection-cache diagnostics remain available through verbose logging.
+Internal Terraform source, module-cache, lint-configuration and policy staging
+copies suppress filesystem-provider progress bars per operation without changing
+the caller's progress preference. Transform dependency copies follow the same
+rule; copy and inspection-cache diagnostics remain available through verbose
+logging. Copy errors retain their existing terminating behavior.
 
 Sensitive-output consumers can use `Invoke-AvmProcess -StreamOutput` with
 `OnStdOutLine` and `OnStdErrLine` callbacks to own both streams' incremental

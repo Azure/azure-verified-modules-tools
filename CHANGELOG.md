@@ -38,6 +38,12 @@ section when cutting a release.
   genuine ModTM dependencies and non-telemetry Random use; newer versions,
   authored controls and custom module sources remain intact. Ambiguous version
   constraints require review.
+- Pinned MaPoTF to `0.5.0`, with official SHA256 hashes for all supported
+  platforms. Utility migration now uses MaPoTF's literal provider-object
+  inspection and per-entry removal to retire proven ModTM bindings while
+  preserving authored aliases, comments and unrelated expressions. Conditional
+  AzAPI bindings and provider requirements are now native profile decisions;
+  PowerShell retains only scope orchestration and external dependency facts.
 - `avm test e2e` validates and previews eligible Bicep examples before Create.
   Resource-group cases use tagged disposable groups; a narrow subset of
   subscription, management-group and tenant cases requires explicit targets
@@ -452,6 +458,10 @@ section when cutting a release.
 
 ### Fixed
 
+- Terraform lint and Conftest staging copies no longer render file-copy
+  progress bars, including source trees, cached modules, lint configurations
+  and policy exemptions. Verbose diagnostics and copy failures remain visible
+  without changing the caller's progress preference.
 - Native Bicep documentation preserves the registry generator's indentation
   for object-valued parameter metadata examples.
 - Native Bicep test inputs and assertion outputs preserve authored JSON strings,

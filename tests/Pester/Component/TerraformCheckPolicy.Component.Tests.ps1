@@ -10,6 +10,62 @@ AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
+Describe 'Copy-AvmTerraformModuleTree' -Tag Component {
+    It 'copies source bytes without progress and preserves verbose diagnostics with verbose=<VerboseMode>' -ForEach @(
+        @{ VerboseMode = $false }
+        @{ VerboseMode = $true }
+    ) {
+        param($VerboseMode)
+        $source = Join-Path $TestDrive 'copy-source'
+        $destination = Join-Path $TestDrive 'copy-destination'
+        $null = New-Item -ItemType Directory -Path (Join-Path $source 'modules' 'child') -Force
+        $file = Join-Path $source 'modules' 'child' 'main.tf'
+        [System.IO.File]::WriteAllText($file, "locals { value = `"copied`" }`n")
+
+        InModuleScope Avm.Authoring -Parameters @{
+            Source = $source; Destination = $destination; VerboseMode = $VerboseMode
+        } {
+            param($Source, $Destination, $VerboseMode)
+            $script:stagingCopyCommand = Get-Command -Name 'Microsoft.PowerShell.Management\Copy-Item' -CommandType Cmdlet
+            Mock Copy-Item { & $script:stagingCopyCommand @PesterBoundParameters }
+            $ProgressPreference = 'Continue'
+
+            $records = @(Copy-AvmTerraformModuleTree -SourceRoot $Source -DestinationRoot $Destination `
+                    -Verbose:$VerboseMode 4>&1)
+
+            $ProgressPreference | Should -Be 'Continue'
+            if ($VerboseMode) {
+                @($records | Where-Object { $_.Message -like 'module-tree: copied 1 file(s)*' }).Count |
+                    Should -Be 1
+            }
+            else {
+                $records | Should -BeNullOrEmpty
+            }
+            Should -Invoke Copy-Item -Exactly 1 -ParameterFilter {
+                $ProgressAction -eq 'SilentlyContinue' -and $ErrorAction -eq 'Stop' -and $Force
+            }
+        }
+
+        (Get-FileHash -LiteralPath (Join-Path $destination 'modules' 'child' 'main.tf')).Hash |
+            Should -BeExactly (Get-FileHash -LiteralPath $file).Hash
+    }
+
+    It 'propagates staging copy failures' {
+        $source = Join-Path $TestDrive 'failing-copy-source'
+        $destination = Join-Path $TestDrive 'failing-copy-destination'
+        $null = New-Item -ItemType Directory -Path $source -Force
+        Set-Content -LiteralPath (Join-Path $source 'main.tf') -Value 'locals {}'
+
+        InModuleScope Avm.Authoring -Parameters @{ Source = $source; Destination = $destination } {
+            param($Source, $Destination)
+            Mock Copy-Item { throw [System.IO.IOException]::new('staging copy failed') }
+
+            { Copy-AvmTerraformModuleTree -SourceRoot $Source -DestinationRoot $Destination } |
+                Should -Throw -ExceptionType ([System.IO.IOException]) -ExpectedMessage '*staging copy failed*'
+        }
+    }
+}
+
 Describe 'Get-AvmConftestOverrideWarning' -Tag Component {
     It 'reports one warning per rule and exception file' {
         $root = Join-Path $TestDrive 'conftest-warning-root'
@@ -173,6 +229,8 @@ Describe 'Invoke-AvmTerraformCheckPolicy' -Tag Component {
         } {
             param($C, $Cache, $Aprl, $Avmsec)
             $calls = [System.Collections.Generic.List[object]]::new()
+            $script:policyCopyCommand = Get-Command -Name 'Microsoft.PowerShell.Management\Copy-Item' -CommandType Cmdlet
+            Mock Copy-Item { & $script:policyCopyCommand @PesterBoundParameters }
             $script:providerCacheLock = $null
             Mock Resolve-AvmTool {
                 if ($Name -eq 'conftest') {
@@ -229,6 +287,13 @@ Describe 'Invoke-AvmTerraformCheckPolicy' -Tag Component {
             }
 
             $result = Invoke-AvmTerraformCheckPolicy -Context $C
+            Should -Invoke Copy-Item -Exactly 1 -ParameterFilter {
+                $LiteralPath -eq (Join-Path $Avmsec 'avm_exceptions.rego.bak') -and
+                $ProgressAction -eq 'SilentlyContinue' -and $ErrorAction -eq 'Stop'
+            }
+            Should -Invoke Copy-Item -Exactly 0 -ParameterFilter {
+                $ProgressAction -ne 'SilentlyContinue'
+            }
             [pscustomobject]@{
                 Result = $result
                 Calls  = $calls.ToArray()
