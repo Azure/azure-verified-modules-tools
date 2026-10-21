@@ -1718,10 +1718,9 @@ send reserved cases to ordinary native execution. This routing exception does
 not permit a legacy shared-identity fallback.
 
 Callers pin every tools `uses` reference and `tools-ref` to the same full
-immutable commit SHA and supply an exact qualified `avm-authoring-version`.
-There is no floating, development-version or missing-release fallback.
-The tools checkout does not supply the runtime module: each native phase
-imports the selected PSGallery package. Package qualification must exercise
+immutable commit SHA. The tools checkout does not supply the runtime module:
+each native phase installs and imports the latest stable PSGallery
+`Avm.Authoring` package. Package qualification must exercise
 the workflow adapter with that runtime, including InPlace/Fresh retries and
 final-only cleanup; interface-parameter checks alone do not prove this behavior.
 Nested reusable calls remain relative to that tools revision. Executable
@@ -1765,8 +1764,8 @@ dependencies, then confirm readiness. Do not maintain a second package
 downloader, custom repository or direct policy dependency installation in
 workflow support. The native installer owns checksum validation, download
 staging, bounded local archive-corruption recovery and atomic publication.
-Retain the selected release's exact dependency pins and repository overrides,
-not a new floating prerelease lookup. Bootstrap or import failures are errors
+Retain the installed release's exact dependency pins and repository overrides,
+not a prerelease lookup. Bootstrap or import failures are errors
 even for advisory baselines; advisory rule findings remain warnings.
 
 Only requested, nonignored Azure cases require identity selection. Static,

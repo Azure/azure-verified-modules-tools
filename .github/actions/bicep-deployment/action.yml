@@ -1,9 +1,6 @@
 name: Bicep native deployment
 description: Authenticate the preselected target, run native deployment/completion, and preserve recovery state.
 inputs:
-  avm-authoring-version:
-    description: Exact qualified Avm.Authoring release.
-    required: true
   modulePath:
     description: >-
       Caller-relative module or family path. Native selection resolves the exact
@@ -53,7 +50,6 @@ runs:
       shell: pwsh
       env:
         AVM_ACTION_PATH: ${{ github.action_path }}
-        AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
         MODULE_PATH: ${{ inputs.modulePath }}
         TEST_CASE: ${{ inputs.testCase }}
         WORKFLOW_INPUT: ${{ inputs.workflowInput }}
@@ -70,7 +66,7 @@ runs:
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Deployment.ps1')
         $case = ConvertFrom-Json -InputObject $env:TEST_CASE -AsHashtable
         if (ConvertTo-AvmWorkflowBoolean $case.e2eIgnore) { throw 'Ignored tests must not enter deployment authentication.' }
-        Initialize-AvmWorkflow -Version $env:AVM_AUTHORING_VERSION -Profile Matrix -Confirm:$false
+        Initialize-AvmWorkflow -Profile Matrix -Confirm:$false
         $parameters = @{
           Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH; TestCase = $case
           PoolJson = $env:POOL_JSON; FallbackSubscriptionId = $env:FALLBACK_SUBSCRIPTION_ID
@@ -93,13 +89,12 @@ runs:
       shell: pwsh
       env:
         AVM_ACTION_PATH: ${{ github.action_path }}
-        AVM_AUTHORING_VERSION: ${{ inputs.avm-authoring-version }}
         MODULE_PATH: ${{ steps.auth.outputs.modulePath }}
       run: |
         $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Common.ps1')
         $modulePath = Resolve-AvmWorkflowPath -Root $env:GITHUB_WORKSPACE -RelativePath $env:MODULE_PATH
-        Initialize-AvmWorkflow -Version $env:AVM_AUTHORING_VERSION -Profile Deployment -Path $modulePath -Confirm:$false
+        Initialize-AvmWorkflow -Profile Deployment -Path $modulePath -Confirm:$false
         $null = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'avm-bicep-state') -Force
     - name: Sign in with OIDC
       id: login_oidc

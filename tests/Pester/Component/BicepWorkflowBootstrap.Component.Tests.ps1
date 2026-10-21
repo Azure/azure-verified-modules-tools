@@ -129,14 +129,9 @@ Describe 'Component: Bicep isolated workflow bootstrap' -Tag Component {
         Test-Path -LiteralPath $script:outputPath | Should -BeFalse
     }
 
-    It 'imports only the exact installed version when the requested release is <Availability>' -ForEach @(
-        @{ Availability = 'available'; Available = $true }
-        @{ Availability = 'missing'; Available = $false }
-    ) {
+    It 'imports the newest installed package instead of retaining an older import' {
         $moduleRoot = Join-Path $script:fixture 'installed' 'Avm.Authoring'
-        $versions = @('9.9.9')
-        if ($Available) { $versions += '1.2.3' }
-        foreach ($version in $versions) {
+        foreach ($version in @('1.2.3', '9.9.9')) {
             $directory = Join-Path $moduleRoot $version
             $null = New-Item -ItemType Directory -Path $directory -Force
             [IO.File]::WriteAllText((Join-Path $directory 'Avm.Authoring.psd1'),
@@ -154,8 +149,8 @@ Describe 'Component: Bicep isolated workflow bootstrap' -Tag Component {
         $commonPath = (Join-Path $script:support 'scripts' 'bicep-workflows' 'Common.ps1').Replace("'", "''")
         [IO.File]::WriteAllText($scriptPath, @"
 . '$commonPath'
-Import-Module -FullyQualifiedName @{ ModuleName = 'Avm.Authoring'; RequiredVersion = '9.9.9' }
-Import-AvmWorkflowPackage -Version '1.2.3'
+Import-Module -FullyQualifiedName @{ ModuleName = 'Avm.Authoring'; RequiredVersion = '1.2.3' }
+Import-AvmWorkflowPackage
 Get-FixtureRelease
 "@)
         $result = InModuleScope Avm.Authoring -Parameters @{
@@ -165,15 +160,8 @@ Get-FixtureRelease
             Invoke-AvmProcess -FilePath $Executable -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $Script) `
                 -EnvVars $Environment -IgnoreExitCode
         }
-        if ($Available) {
-            $result.ExitCode | Should -Be 0 -Because $result.StdErr
-            $result.StdOut.Trim() | Should -BeExactly '1.2.3'
-        }
-        else {
-            $result.ExitCode | Should -Not -Be 0
-            $result.StdErr | Should -Match '1[.]2[.]3'
-            $result.StdErr | Should -Not -Match 'Caller source must never load'
-            $result.StdOut | Should -BeNullOrEmpty
-        }
+        $result.ExitCode | Should -Be 0 -Because $result.StdErr
+        $result.StdOut.Trim() | Should -BeExactly '9.9.9'
+        $result.StdErr | Should -Not -Match 'Caller source must never load'
     }
 }

@@ -13,7 +13,7 @@ BeforeAll {
     $script:unrelatedPath = 'avm/res/mock/unrelated'
     $script:savedEnvironment = @{}
     foreach ($name in @(
-            'AVM_ACTION_PATH', 'AVM_AUTHORING_VERSION', 'BASE_COMMIT', 'TARGET_COMMIT', 'PULL_REQUEST_HEAD_COMMIT',
+        'AVM_ACTION_PATH', 'BASE_COMMIT', 'TARGET_COMMIT', 'PULL_REQUEST_HEAD_COMMIT',
             'EVENT_NAME', 'MODULE_PATHS', 'CREATE_RELEASE_TAG', 'PUBLISH_ONLY', 'CUSTOM_LOCATION',
             'STATIC_VALIDATION', 'DEPLOYMENT_VALIDATION', 'REMOVE_DEPLOYMENT', 'GITHUB_WORKSPACE', 'GITHUB_OUTPUT'
         )) {
@@ -99,8 +99,8 @@ BeforeAll {
     $bootstrapStub = @'
 function Initialize-AvmWorkflow {
     [CmdletBinding(SupportsShouldProcess)]
-    param([string] $Version, [string] $Profile)
-    if ($Version -cne '1.2.3' -or $Profile -cne 'Package') {
+    param([string] $Profile)
+    if ($Profile -cne 'Package') {
         throw [InvalidOperationException]::new('Unexpected fixture package initialization.')
     }
 }
@@ -124,7 +124,6 @@ AfterAll {
 Describe 'Component: Bicep workflow tested-merge matrix action' -Tag Component {
     BeforeEach {
         $env:AVM_ACTION_PATH = $script:supportAction
-        $env:AVM_AUTHORING_VERSION = '1.2.3'
         $env:BASE_COMMIT = $script:originalBase
         $env:PULL_REQUEST_HEAD_COMMIT = $script:requestHead
         $env:EVENT_NAME = 'pull_request'

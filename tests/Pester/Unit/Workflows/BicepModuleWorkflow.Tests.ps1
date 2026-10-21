@@ -22,10 +22,9 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             @($workflow.on.Keys) | Should -Be @('workflow_call')
             $workflow.name | Should -Match '^Reusable: Bicep Module'
             $workflow.permissions.Count | Should -Be 0
-            foreach ($inputName in @('tools-ref', 'avm-authoring-version')) {
-                $workflow.on.workflow_call.inputs[$inputName].required | Should -BeTrue
-                $workflow.on.workflow_call.inputs[$inputName].Contains('default') | Should -BeFalse
-            }
+            $workflow.on.workflow_call.inputs['tools-ref'].required | Should -BeTrue
+            $workflow.on.workflow_call.inputs['tools-ref'].Contains('default') | Should -BeFalse
+            $workflow.on.workflow_call.inputs.Contains('avm-authoring-version') | Should -BeFalse
         }
     }
 
@@ -57,12 +56,12 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         }
     }
 
-    It 'keeps nested reusable calls relative and forwards both immutable contracts' {
+    It 'keeps nested reusable calls relative and forwards the immutable tools contract' {
         foreach ($name in @('bicep-module', 'bicep-module-preview', 'bicep-module-publish')) {
             $job = $script:workflows[$name].jobs.job_module_deploy_validation
             $job.uses | Should -BeExactly './.github/workflows/bicep-module-deployment.yml'
             $job.with.'tools-ref' | Should -BeExactly '${{ inputs.tools-ref }}'
-            $job.with.'avm-authoring-version' | Should -BeExactly '${{ inputs.avm-authoring-version }}'
+            $job.with.Contains('avm-authoring-version') | Should -BeFalse
             $job.secrets | Should -BeExactly 'inherit'
         }
     }
@@ -309,11 +308,12 @@ Describe 'Bicep required checks and deployment guards' {
         $action.inputs.moduleClientIds.required | Should -BeTrue
         $action.inputs.Contains('clientId') | Should -BeFalse
         $action.inputs.Contains('azureCredentials') | Should -BeFalse
+        $action.inputs.Contains('avm-authoring-version') | Should -BeFalse
         $auth = $action.runs.steps | Where-Object { $_['id'] -eq 'auth' }
-        $auth.env.AVM_AUTHORING_VERSION | Should -BeExactly '${{ inputs.avm-authoring-version }}'
+        $auth.env.Contains('AVM_AUTHORING_VERSION') | Should -BeFalse
         $auth.env.VALIDATE_MODULE_CLIENT_IDS | Should -BeExactly '${{ inputs.moduleClientIds }}'
         $auth.run | Should -Match 'ModuleClientIds = \$env:VALIDATE_MODULE_CLIENT_IDS'
-        $auth.run | Should -Match 'Initialize-AvmWorkflow .* -Profile Matrix '
+        $auth.run | Should -Match 'Initialize-AvmWorkflow -Profile Matrix '
         $auth.run.IndexOf('Initialize-AvmWorkflow') | Should -BeLessThan $auth.run.IndexOf('Get-AvmWorkflowAuthentication')
         $logins = @($action.runs.steps | Where-Object { $_['uses'] -like 'azure/login@*' })
         $logins.Count | Should -Be 2

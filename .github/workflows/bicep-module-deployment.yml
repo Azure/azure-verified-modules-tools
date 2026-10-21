@@ -7,10 +7,6 @@ on:
         description: Full tools commit SHA, identical to the caller's workflow revision.
         type: string
         required: true
-      avm-authoring-version:
-        description: Exact qualified Avm.Authoring release.
-        type: string
-        required: true
       workflowInput:
         type: string
         required: true
@@ -79,7 +75,6 @@ jobs:
         if: ${{ !fromJSON(inputs.testCase).e2eIgnore }}
         uses: ./.avm-tools/.github/actions/bicep-deployment
         with:
-          avm-authoring-version: ${{ inputs.avm-authoring-version }}
           modulePath: ${{ inputs.modulePath }}
           workflowInput: ${{ inputs.workflowInput }}
           testCase: ${{ inputs.testCase }}
