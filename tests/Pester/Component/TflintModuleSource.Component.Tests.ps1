@@ -51,9 +51,17 @@ rule "avm_terraform_module_source_required" {
             ConfigDir = $script:configDir
         } {
             param($Root, $ConfigDir)
+            $script:configCopyCommand = Get-Command -Name 'Microsoft.PowerShell.Management\Copy-Item' -CommandType Cmdlet
+            Mock Copy-Item { & $script:configCopyCommand @PesterBoundParameters }
             $scopes = @(Get-AvmTflintScope -Root $Root -ConfigDir $ConfigDir)
             $set = New-AvmTflintConfigSet -Root $Root -BaseConfigDir $ConfigDir -Scopes $scopes
             try {
+                Should -Invoke Copy-Item -Exactly 2 -ParameterFilter {
+                    $ProgressAction -eq 'SilentlyContinue'
+                }
+                Should -Invoke Copy-Item -Exactly 0 -ParameterFilter {
+                    $ProgressAction -ne 'SilentlyContinue'
+                }
                 foreach ($scope in $scopes) {
                     $name = if ($set.ScopeConfigNames.ContainsKey($scope.RelPath)) {
                         $set.ScopeConfigNames[$scope.RelPath]

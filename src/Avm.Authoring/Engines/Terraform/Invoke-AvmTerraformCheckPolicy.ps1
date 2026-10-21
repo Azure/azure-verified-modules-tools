@@ -349,7 +349,8 @@ function Invoke-AvmTerraformCheckPolicy {
             -LiteralPath $defaultExceptionSource `
             -Destination (Join-Path $defaultExceptions 'avm_exceptions.rego') `
             -Force `
-            -ErrorAction Stop
+            -ErrorAction Stop `
+            -ProgressAction SilentlyContinue
 
         for ($exampleIndex = 0; $exampleIndex -lt $activeExamples.Count; $exampleIndex++) {
             $sourceExample = $activeExamples[$exampleIndex]
