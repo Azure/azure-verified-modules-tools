@@ -19,14 +19,16 @@ Describe 'Terraform ModTM restoration module enumeration' {
         @{ Label = 'keys'; Role = 'retained'; RetainedLabel = $true }
         @{ Label = 'Keys'; Role = 'retained'; RetainedLabel = $true }
         @{ Label = 'KEYS'; Role = 'retained'; RetainedLabel = $true }
+        @{ Label = 'dependency'; Role = 'retained with authored aliases'; RetainedLabel = $true; Existing = $true }
     ) {
-        param($Label, $RetainedLabel)
+        param($Label, $RetainedLabel, $Existing = $false)
         InModuleScope Avm.Authoring -Parameters @{
             Root = (Join-Path $TestDrive 'module')
             Label = $Label
             RetainedLabel = $RetainedLabel
+            Existing = $Existing
         } {
-            param($Root, $Label, $RetainedLabel)
+            param($Root, $Label, $RetainedLabel, $Existing)
             $retainedName = if ($RetainedLabel) { $Label } else { 'avm_interfaces' }
             $otherName = if ($RetainedLabel) { 'other' } else { $Label }
             $dependency = Join-Path $Root '.published' 'interfaces'
@@ -76,14 +78,25 @@ Describe 'Terraform ModTM restoration module enumeration' {
                 PlanningPaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
                 BindDependencies = $true
             }
+            $authored = @{ source = 'Azure/modtm'; version = '= 0.3.5'; configuration_aliases = @('modtm.owner') }
+            if ($Existing) {
+                $parameters.RequiredProviders[$Root].modtm = $authored
+            }
 
             $plan = Get-AvmTerraformUnitTestModtmRequirementPlan @parameters
 
-            $expectedBindings = ConvertTo-Json -Compress -InputObject @{ $retainedName = '{ modtm = modtm }' }
-            $plan.Arguments | Should -Contain "unit_test_modtm_bindings=$expectedBindings"
-            $plan.Capabilities | Should -Match ([regex]::Escape("unit_test_modtm_bindings[`"$retainedName`"]"))
+            $expectedDependencies = ConvertTo-Json -Compress -InputObject @($retainedName)
+            $plan.Arguments | Should -Contain "unit_test_modtm_dependencies=$expectedDependencies"
+            $plan.Arguments | Should -Not -Match '^unit_test_modtm_bindings='
+            $plan.Capabilities | Should -Match 'contains\(keys\(data.module.unit_test_modtm_calls.result\[name\]\), "providers"\)'
             $parameters.RequiredProviders[$Root].modtm.source | Should -BeExactly 'Azure/modtm'
-            $parameters.RequiredProviders[$Root].modtm.version | Should -BeExactly '~> 0.3'
+            if ($Existing) {
+                $parameters.RequiredProviders[$Root].modtm | Should -Be $authored
+                $plan.Arguments | Should -Contain 'unit_test_modtm_requirement=""'
+            }
+            else {
+                $parameters.RequiredProviders[$Root].modtm.version | Should -BeExactly '~> 0.3'
+            }
             $parameters.ModuleManifests[$Root] | Should -BeExactly $manifest
             $calls[$retainedName].version | Should -BeExactly '0.5.0'
             $parameters.Plans[$Root] | Should -Be $plan

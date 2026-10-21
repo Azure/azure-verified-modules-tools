@@ -3,9 +3,9 @@ variable "unit_test_modtm_requirement" {
   default = ""
 }
 
-variable "unit_test_modtm_bindings" {
-  type    = map(string)
-  default = {}
+variable "unit_test_modtm_dependencies" {
+  type    = set(string)
+  default = []
 }
 
 data "module" "unit_test_modtm_calls" {}
@@ -14,6 +14,11 @@ data "terraform" "unit_test_modtm" {}
 
 locals {
   provider_terraform_block_exists = try(data.terraform.unit_test_modtm.block != null, false)
+  unit_test_modtm_provider_entries = {
+    for name, call in data.module.unit_test_modtm_calls.result : name => object_entries(call.providers)
+    if contains(var.unit_test_modtm_dependencies, name) && contains(keys(call), "providers") &&
+    can(object_entries(try(call.providers, {})))
+  }
 }
 
 transform "update_in_place" "unit_test_modtm_requirement" {
@@ -32,8 +37,14 @@ transform "new_block" "unit_test_modtm_requirement" {
 }
 
 transform "update_in_place" "unit_test_modtm_bindings" {
-  for_each                = var.unit_test_modtm_bindings
+  for_each = {
+    for name, entries in local.unit_test_modtm_provider_entries : name => entries
+    if !contains(keys(entries), "modtm") && anytrue([
+      for provider, configuration in entries :
+      strcontains(provider, ".") || configuration != provider
+    ])
+  }
   target_block_address    = "module.${each.key}"
   merge_object_attributes = true
-  dynamic_block_body      = "providers = ${each.value}\n"
+  dynamic_block_body      = "providers = { modtm = modtm }\n"
 }

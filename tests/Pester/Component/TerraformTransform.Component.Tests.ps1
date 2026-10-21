@@ -30,6 +30,7 @@ Describe 'Invoke-AvmTerraformTransform' -Tag Component {
         Mock Get-AvmTerraformLocationInspection -ModuleName 'Avm.Authoring' { $null }
         Mock Get-AvmTerraformUnitTestSnapshot -ModuleName 'Avm.Authoring' { @() }
         Mock Get-AvmTerraformUtilityMigrationPlan -ModuleName 'Avm.Authoring' { @() }
+        Mock Get-AvmTerraformProviderContractBinding -ModuleName 'Avm.Authoring' { @{} }
     }
 
     It 'rejects a non-terraform context' {
@@ -66,7 +67,7 @@ Describe 'Invoke-AvmTerraformTransform' -Tag Component {
                 Should -Invoke Get-AvmTerraformUtilityMigrationPlan -Exactly 1 -ParameterFilter {
                     [bool]$PreserveSelections -eq $Preserve
                 }
-                Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter { $ArgumentList[0] -eq 'transform' }
+                Should -Invoke Invoke-AvmProcess -Exactly 4 -ParameterFilter { $ArgumentList[0] -eq 'transform' }
             }
         }
         finally {
@@ -109,18 +110,29 @@ Describe 'Invoke-AvmTerraformTransform' -Tag Component {
             Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
             Mock Get-AvmTerraformUtilityMigrationPlan {
                 $script:utilityPhases.Add('inspect')
-                @([pscustomobject]@{ Target = [pscustomobject]@{ Path = $C.Root }; Telemetry = $true })
+                @([pscustomobject]@{ Target = [pscustomobject]@{ Path = $C.Root }; Telemetry = $true; Before = @{ requirements = @{} } })
             }
             Mock Get-AvmTerraformUnitTestSnapshot { $script:utilityPhases.Add('snapshot'); @() }
             Mock Invoke-AvmTerraformUtilityMigration { $script:utilityPhases.Add('upgrade') }
-            Mock Invoke-AvmParallel { $script:utilityPhases.Add('source') }
+            Mock Invoke-AvmParallel {
+                if ($InputObject[0].Profiles -contains 'provider-inheritance') {
+                    $script:utilityPhases.Add('inheritance')
+                }
+                elseif ($InputObject[0].Profiles -contains 'provider-contract') {
+                    $script:utilityPhases.Add('contracts')
+                }
+                else {
+                    $script:utilityPhases.Add('source')
+                }
+            }
             Mock Invoke-AvmTerraformUtilityProviderCleanup { $script:utilityPhases.Add('providers') }
             Mock Invoke-AvmTerraformUnitTestMigration {
                 $script:utilityPhases.Add('mocks')
                 $Options.UtilityTelemetryPaths | Should -Be @($C.Root)
             }
             $null = Invoke-AvmTerraformTransform -Context $C
-            $script:utilityPhases.ToArray() | Should -Be @('inspect', 'snapshot', 'upgrade', 'source', 'source', 'providers', 'mocks')
+            $script:utilityPhases.ToArray() | Should -Be @(
+                'inspect', 'snapshot', 'upgrade', 'source', 'source', 'providers', 'mocks', 'inheritance', 'contracts')
         }
     }
 
@@ -177,6 +189,12 @@ Describe 'Invoke-AvmTerraformTransform' -Tag Component {
         @($result.Issues).Count  | Should -Be 0
 
         InModuleScope 'Avm.Authoring' {
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList[0] -eq 'transform' -and
+                $ArgumentList -contains '/fake/provider-inheritance' -and
+                $ArgumentList -notcontains '/fake/common' -and
+                $ArgumentList -notcontains '/fake/provider-restore'
+            }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
                 $FilePath -eq '/fake/mapotf' -and
                 $ArgumentList[0] -eq 'transform' -and
@@ -327,7 +345,7 @@ variable "location" {
                 $ArgumentList -notcontains '/fake/root' -and
                 $ArgumentList -notcontains '/fake/module'
             }
-            Should -Invoke Invoke-AvmProcess -Exactly 4 -ParameterFilter {
+            Should -Invoke Invoke-AvmProcess -Exactly 8 -ParameterFilter {
                 $ArgumentList[0] -eq 'transform' -and
                 $WorkingDirectory -ne $Example -and
                 $ArgumentList -notcontains '/fake/example'
@@ -366,7 +384,8 @@ variable "location" {
                 $InputObject.Count -eq 2 -and
                 $ThrottleLimit -eq 4
             }
-            $script:transformBatches.ToArray() | Should -Be @('root,module', 'module', 'root', 'example,example')
+            $script:transformBatches.ToArray() |
+                Should -Be @('root,module', 'module', 'root', 'example,example', 'root,module,example,example', 'root,module,example,example')
         }
     }
 
@@ -399,7 +418,7 @@ variable "location" {
 
                 Invoke-AvmTerraformTransform -Context $C -ThrottleLimit 4 | Out-Null
 
-                Should -Invoke Invoke-AvmParallel -Exactly 4 -ParameterFilter {
+                Should -Invoke Invoke-AvmParallel -Exactly 6 -ParameterFilter {
                     $ThrottleLimit -eq 4 -and
                     [string]::IsNullOrWhiteSpace([string]$Argument.EnvVars.TF_PLUGIN_CACHE_DIR) -and
                     $Argument.EnvVars.ContainsKey('TF_DATA_DIR') -and
@@ -448,7 +467,7 @@ variable "location" {
 
                 Invoke-AvmTerraformTransform -Context $C -ThrottleLimit 4 -CheckDrift:$CheckDrift | Out-Null
 
-                Should -Invoke Invoke-AvmParallel -Exactly 4 -ParameterFilter {
+                Should -Invoke Invoke-AvmParallel -Exactly 6 -ParameterFilter {
                     $Argument.EnvVars.MAPOTF_PROVIDER_SCHEMA_CACHE_DIR -ceq (Join-Path $expectedCache 'mapotf-provider-schema') -and
                     $Argument.EnvVars.MAPOTF_MODULE_SOURCE_CACHE_DIR -ceq (Join-Path $expectedCache 'mapotf-module-source') -and
                     -not $Argument.EnvVars.ContainsKey('MAPOTF_MODULE_SOURCE_CACHE') -and
@@ -497,8 +516,10 @@ variable "location" {
             Invoke-AvmTerraformTransform -Context $C -ThrottleLimit 4 | Out-Null
 
             $script:wrapperTransformBatches.ToArray() |
-                Should -Be @(("$($C.Root)|$child"), $child, $C.Root, $example, $inner, $wrapper)
-            Should -Invoke Invoke-AvmParallel -Exactly 6 -ParameterFilter { $ThrottleLimit -eq 4 }
+                Should -Be @(("$($C.Root)|$child"), $child, $C.Root, $example, $inner, $wrapper,
+                    ("$($C.Root)|$child|$example|$wrapper|$inner"),
+                    ("$($C.Root)|$child|$example|$wrapper|$inner"))
+            Should -Invoke Invoke-AvmParallel -Exactly 8 -ParameterFilter { $ThrottleLimit -eq 4 }
         }
     }
 
@@ -528,7 +549,7 @@ variable "location" {
                 ([array]::IndexOf($ArgumentList, '/fake/variable-order')) -lt ([array]::IndexOf($ArgumentList, '/fake/provider-cleanup'))
             }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
-                $ArgumentList -notcontains '--mptf-var'
+                $ArgumentList -notcontains 'test_wrapper=true'
             }
         }
     }
@@ -1591,7 +1612,7 @@ run "telemetry" {
 
         $result.Status | Should -Be 'pass'
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter {
+            Should -Invoke Invoke-AvmProcess -Exactly 4 -ParameterFilter {
                 $ArgumentList[0] -eq 'transform' -and $RetryNetworkFailure -and $IgnoreExitCode
             }
             Should -Invoke Start-Sleep -Exactly 0
@@ -1890,6 +1911,232 @@ variable "unrelated" {
                 Should -Throw -ExceptionType ([AvmConfigurationException])
         }
         Get-Content -LiteralPath $script:locationFile -Raw | Should -BeExactly $before
+    }
+}
+
+Describe 'Get-AvmProviderContractLintInspection' -Tag Component {
+    It 'inspects past owned directives without modifying source and cleans its stage: failure=<Failure>' -ForEach @(
+        @{ Failure = $false }
+        @{ Failure = $true }
+    ) {
+        $root = Join-Path $TestDrive 'source'
+        $scope = Join-Path $root 'examples' 'default'
+        $null = New-Item -ItemType Directory -Path $scope -Force
+        $source = @(
+            'terraform {'
+            '  required_providers {'
+            '    # tflint-ignore: terraform_unused_required_providers'
+            '    modtm = { source = "Azure/modtm" }'
+            '  }'
+            '}'
+            '# tflint-ignore: terraform_unused_declarations'
+            'locals { authored = true }'
+        ) -join "`r`n"
+        $path = Join-Path $scope 'main.tf'
+        [IO.File]::WriteAllText($path, $source, [Text.UTF8Encoding]::new($false))
+        InModuleScope Avm.Authoring -Parameters @{ Root = $root; Scope = $scope; Source = $source; Failure = $Failure } {
+            param($Root, $Scope, $Source, $Failure)
+            Mock Resolve-AvmTool { [pscustomobject]@{ Path = 'tflint' } }
+            Mock Invoke-AvmProcess {
+                $config = $ArgumentList[[array]::IndexOf($ArgumentList, '--config') + 1]
+                $script:providerInspectionStage = [IO.Path]::GetDirectoryName($config)
+                $WorkingDirectory | Should -Not -BeExactly $Scope
+                [IO.File]::ReadAllText((Join-Path $WorkingDirectory 'main.tf')) | Should -BeExactly (
+                    $Source.Replace('# tflint-ignore: terraform_unused_required_providers',
+                        ' ' * '# tflint-ignore: terraform_unused_required_providers'.Length))
+                $ArgumentList | Should -Contain '--only=terraform_unused_required_providers'
+                if ($Failure) { throw [AvmProcessException]::new('native inspection failed') }
+                [pscustomobject]@{ StdOut = '{"issues":[],"errors":[]}' }
+            }
+            if ($Failure) {
+                { Get-AvmProviderContractLintInspection -Path $Scope -Root $Root -EnvVars @{} } |
+                    Should -Throw '*native inspection failed*'
+            }
+            else {
+                (Get-AvmProviderContractLintInspection -Path $Scope -Root $Root -EnvVars @{}).issues.Count | Should -Be 0
+            }
+            Test-Path -LiteralPath $script:providerInspectionStage | Should -BeFalse
+        }
+        [IO.File]::ReadAllText($path) | Should -BeExactly $source
+    }
+}
+
+Describe 'Set-AvmProviderContractLintDirective' -Tag Component {
+    BeforeEach {
+        $script:sourceLintRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $script:sourceLintRoot
+        $script:sourceLintFile = Join-Path $script:sourceLintRoot 'terraform.tf'
+        $script:sourceLintContent = @'
+terraform {
+  required_providers {
+    modtm = {
+      source  = "Azure/modtm" # keep the source
+      version = "= 0.3.5"
+    }
+    random = {
+      source = "hashicorp/random"
+    }
+  }
+}
+'@
+        $script:sourceLintInspection = @{
+            errors = @()
+            issues = @(
+                @{
+                    rule = @{ name = 'terraform_unused_required_providers' }
+                    message = "provider 'modtm' is declared in required_providers but not used by the module"
+                    range = @{ filename = 'terraform.tf'; start = @{ line = 3; column = 5 } }
+                }
+                @{
+                    rule = @{ name = 'terraform_unused_required_providers' }
+                    message = "provider 'random' is declared in required_providers but not used by the module"
+                    range = @{ filename = 'terraform.tf'; start = @{ line = 7; column = 5 } }
+                }
+            )
+        }
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:sourceLintRoot } {
+            param($Root)
+            $script:contractOptions = [pscustomobject]@{
+                ToolPath = 'mapotf'; ProfileDirs = @{ 'provider-contract' = 'contract' }; EnvVars = @{}
+            }
+            $script:contractSources = @{ $Root = @('registry.terraform.io/azure/modtm') }
+            $script:contractBindings = @{ $Root = @('modtm') }
+        }
+    }
+
+    It 'annotates only the proven native ModTM range with <Ending> line endings' -TestCases @(
+        @{ Ending = 'LF'; Separator = "`n" }
+        @{ Ending = 'CRLF'; Separator = "`r`n" }
+    ) {
+        param($Separator)
+        $source = $script:sourceLintContent.Replace("`r`n", "`n").Replace("`n", $Separator)
+        [IO.File]::WriteAllText($script:sourceLintFile, $source, [Text.UTF8Encoding]::new($false))
+        InModuleScope Avm.Authoring -Parameters @{
+            Root = $script:sourceLintRoot; Inspection = $script:sourceLintInspection; Source = $source
+        } {
+            param($Root, $Inspection, $Source)
+            Mock Resolve-AvmTool { [pscustomobject]@{ Path = 'tflint' } }
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{ StdOut = if ($FilePath -ceq 'mapotf') { '["modtm"]' } else { $Inspection | ConvertTo-Json -Depth 10 -Compress } }
+            }
+            Set-AvmProviderContractLintDirective -ProviderSources $script:contractSources -ProviderBindings $script:contractBindings `
+                -Options $script:contractOptions -WhatIf
+            [IO.File]::ReadAllText((Join-Path $Root 'terraform.tf')) | Should -BeExactly $Source
+            Set-AvmProviderContractLintDirective -ProviderSources $script:contractSources -ProviderBindings $script:contractBindings `
+                -Options $script:contractOptions
+        }
+        $expected = $source.Replace('    modtm = {',
+            "    # tflint-ignore: terraform_unused_required_providers${Separator}    modtm = {")
+        [IO.File]::ReadAllText($script:sourceLintFile) | Should -BeExactly $expected
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:sourceLintRoot } {
+            param($Root)
+            Mock Resolve-AvmTool { [pscustomobject]@{ Path = 'tflint' } }
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{ StdOut = if ($FilePath -ceq 'mapotf') { '["modtm"]' } else { '{"issues":[],"errors":[]}' } }
+            }
+            Set-AvmProviderContractLintDirective -ProviderSources $script:contractSources -ProviderBindings $script:contractBindings `
+                -Options $script:contractOptions
+        }
+        [IO.File]::ReadAllText($script:sourceLintFile) | Should -BeExactly $expected
+    }
+
+    It 'annotates multiple proven declarations without shifting their native ranges' {
+        [IO.File]::WriteAllText($script:sourceLintFile, $script:sourceLintContent, [Text.UTF8Encoding]::new($false))
+        InModuleScope Avm.Authoring -Parameters @{ Inspection = $script:sourceLintInspection } {
+            param($Inspection)
+            Mock Resolve-AvmTool { [pscustomobject]@{ Path = 'tflint' } }
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{
+                    StdOut = if ($FilePath -ceq 'mapotf') { '["modtm","random"]' }
+                    else { $Inspection | ConvertTo-Json -Depth 10 -Compress }
+                }
+            }
+            Set-AvmProviderContractLintDirective -ProviderSources $script:contractSources -ProviderBindings $script:contractBindings `
+                -Options $script:contractOptions
+        }
+        $expected = $script:sourceLintContent.Replace('    modtm = {',
+            "    # tflint-ignore: terraform_unused_required_providers`n    modtm = {").Replace('    random = {',
+            "    # tflint-ignore: terraform_unused_required_providers`n    random = {")
+        [IO.File]::ReadAllText($script:sourceLintFile).Replace("`r`n", "`n") |
+            Should -BeExactly $expected.Replace("`r`n", "`n")
+    }
+
+    It 'leaves unused-provider warnings active without native contract proof' {
+        [IO.File]::WriteAllText($script:sourceLintFile, $script:sourceLintContent, [Text.UTF8Encoding]::new($false))
+        InModuleScope Avm.Authoring {
+            Mock Resolve-AvmTool { [pscustomobject]@{ Path = 'tflint' } }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ StdOut = '[]' } }
+            Set-AvmProviderContractLintDirective -ProviderSources $script:contractSources -ProviderBindings $script:contractBindings `
+                -Options $script:contractOptions
+            Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $FilePath -ceq 'tflint' }
+        }
+        [IO.File]::ReadAllText($script:sourceLintFile) | Should -BeExactly $script:sourceLintContent
+    }
+
+    It 'rejects invalid native contract names: <Json>' -TestCases @(
+        @{ Json = 'not-json' }
+        @{ Json = '{}' }
+        @{ Json = '[""]' }
+        @{ Json = '[null]' }
+    ) {
+        param($Json)
+        [IO.File]::WriteAllText($script:sourceLintFile, $script:sourceLintContent, [Text.UTF8Encoding]::new($false))
+        InModuleScope Avm.Authoring -Parameters @{ Json = $Json } {
+            param($Json)
+            Mock Resolve-AvmTool { [pscustomobject]@{ Path = 'tflint' } }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ StdOut = $Json } }
+            { Set-AvmProviderContractLintDirective -ProviderSources $script:contractSources -ProviderBindings $script:contractBindings `
+                    -Options $script:contractOptions } | Should -Throw -ExceptionType ([AvmConfigurationException])
+        }
+        [IO.File]::ReadAllText($script:sourceLintFile) | Should -BeExactly $script:sourceLintContent
+    }
+
+    It 'rejects invalid native inspection <Json> without changing source' -TestCases @(
+        @{ Json = 'not-json' }
+        @{ Json = '[]' }
+        @{ Json = '{"issues":[]}' }
+        @{ Json = '{"issues":[],"errors":[{}]}' }
+        @{ Json = '{"issues":[{}],"errors":[]}' }
+    ) {
+        param($Json)
+        [IO.File]::WriteAllText($script:sourceLintFile, $script:sourceLintContent)
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:sourceLintRoot; Json = $Json } {
+            param($Root, $Json)
+            Mock Resolve-AvmTool { [pscustomobject]@{ Path = 'tflint' } }
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{ StdOut = if ($FilePath -ceq 'mapotf') { '["modtm"]' } else { $Json } }
+            }
+            { Set-AvmProviderContractLintDirective -ProviderSources $script:contractSources -ProviderBindings $script:contractBindings `
+                    -Options $script:contractOptions } |
+                Should -Throw -ExceptionType ([AvmConfigurationException])
+        }
+        [IO.File]::ReadAllText($script:sourceLintFile) | Should -BeExactly $script:sourceLintContent
+    }
+
+    It 'rejects unsafe native source ranges: <Name>' -TestCases @(
+        @{ Name = 'outside scope'; File = '../outside.tf'; Line = 3; Column = 5 }
+        @{ Name = 'JSON source'; File = 'terraform.tf.json'; Line = 3; Column = 5 }
+        @{ Name = 'missing line'; File = 'terraform.tf'; Line = 0; Column = 5 }
+        @{ Name = 'past EOF'; File = 'terraform.tf'; Line = 99; Column = 5 }
+        @{ Name = 'wrong declaration'; File = 'terraform.tf'; Line = 7; Column = 5 }
+        @{ Name = 'wrong column'; File = 'terraform.tf'; Line = 3; Column = 1 }
+    ) {
+        param($File, $Line, $Column)
+        [IO.File]::WriteAllText($script:sourceLintFile, $script:sourceLintContent)
+        $script:sourceLintInspection.issues[0].range = @{ filename = $File; start = @{ line = $Line; column = $Column } }
+        InModuleScope Avm.Authoring -Parameters @{
+            Root = $script:sourceLintRoot; Inspection = $script:sourceLintInspection
+        } {
+            param($Root, $Inspection)
+            Mock Resolve-AvmTool { [pscustomobject]@{ Path = 'tflint' } }
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{ StdOut = if ($FilePath -ceq 'mapotf') { '["modtm"]' } else { $Inspection | ConvertTo-Json -Depth 10 -Compress } }
+            }
+            { Set-AvmProviderContractLintDirective -ProviderSources $script:contractSources -ProviderBindings $script:contractBindings `
+                    -Options $script:contractOptions } |
+                Should -Throw -ExceptionType ([AvmConfigurationException])
+        }
+        [IO.File]::ReadAllText($script:sourceLintFile) | Should -BeExactly $script:sourceLintContent
     }
 }
 

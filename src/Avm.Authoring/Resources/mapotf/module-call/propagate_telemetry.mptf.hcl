@@ -33,7 +33,7 @@ locals {
   }
   telemetry_calls = {
     for name, source in try(data.module_source.local_calls, {}) : name => local.local_calls[name]
-    if !var.test_wrapper && contains(keys(source.variables), "location") && contains(keys(source.variables), "enable_telemetry")
+    if !var.test_wrapper && contains(keys(source.variables), "enable_telemetry")
   }
   missing_location_calls = {
     for name, call in local.location_calls : name => call
@@ -80,7 +80,7 @@ transform "new_block" "parent_enable_telemetry" {
 transform "reorder_attributes" "expand_inline_calls" {
   for_each = {
     for name, call in local.local_calls : name => call
-    if contains(keys(local.location_calls), name) && call.mptf.range.start_line == call.mptf.range.end_line
+    if (contains(keys(local.location_calls), name) || contains(keys(local.telemetry_calls), name)) && call.mptf.range.start_line == call.mptf.range.end_line
   }
   target_block_address     = "module.${each.key}"
   sort_body_alphabetically = false

@@ -15,7 +15,7 @@ function Get-AvmCommandTool {
 
     $tools = switch ("$Command/$Ecosystem") {
         'pre-commit/bicep' { @('bicep', 'Pester') }
-        'pre-commit/terraform' { @('mapotf', 'terraform', 'terraform-docs', 'Pester') }
+        'pre-commit/terraform' { @('mapotf', 'terraform', 'terraform-docs', 'tflint', 'Pester') }
         'pr-check/bicep' { @('bicep', 'Pester', 'powershell-yaml', 'PSRule', 'PSRule.Rules.Azure') }
         'pr-check/terraform' { @('conftest', 'mapotf', 'terraform', 'terraform-docs', 'tflint', 'Pester') }
     }
@@ -37,7 +37,7 @@ function Get-AvmCommandTool {
                     'mapotf'         = @('transform')
                     'terraform'      = @('format', 'transform', 'lint', 'check policy', 'validate')
                     'terraform-docs' = @('docs')
-                    'tflint'         = @('lint')
+                    'tflint'         = @('transform', 'lint')
                     'Pester'         = @('metadata')
                 }
             }

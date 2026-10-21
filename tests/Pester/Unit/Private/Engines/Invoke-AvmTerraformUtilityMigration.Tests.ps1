@@ -113,6 +113,41 @@ Describe 'Terraform utility migration planning' {
         }
     }
 
+    It 'inspects retained ModTM contracts without enabling utility upgrades: <Preserve>' -ForEach @(
+        @{ Preserve = $true; Version = '0.12.0' }
+        @{ Preserve = $false; Version = '99.0.0' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Preserve = $Preserve; Version = $Version } {
+            param($Preserve, $Version)
+            $script:utilityInspection.requirements.modtm = @{ source = 'Azure/modtm'; version = '~> 0.3' }
+            $script:utilityInspection.calls.original = @{
+                source = 'Azure/avm-utl-regions/azurerm'; version = $Version
+                providers = '{ modtm = modtm, azapi = azapi.original }'
+            }
+            $before = $script:utilityInspection | ConvertTo-Json -Depth 10
+            $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets `
+                    -Options $script:utilityOptions -PreserveSelections:$Preserve)
+            $plans | Should -HaveCount 1
+            $plans[0].Affected | Should -BeTrue
+            $plans[0].Telemetry | Should -BeFalse
+            $plans[0].Calls.Count | Should -Be 0
+            Invoke-AvmTerraformUtilityMigration -Plans $plans -Options $script:utilityOptions
+            Should -Invoke Invoke-AvmTerraformUtilityNativeMigration -Exactly 1 -ParameterFilter {
+                -not $ApplyUtilityMigration
+            }
+            Should -Invoke Get-AvmTerraformUtilityProviderSource -Exactly 0
+            ($script:utilityInspection | ConvertTo-Json -Depth 10) | Should -BeExactly $before
+        }
+    }
+
+    It 'does not select leaf provider requirements for dependency inspection' {
+        InModuleScope Avm.Authoring {
+            $script:utilityInspection.requirements.modtm = @{ source = 'Azure/modtm'; version = '~> 0.3' }
+            @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets `
+                    -Options $script:utilityOptions) | Should -HaveCount 0
+        }
+    }
+
     It 'plans literal exact pins without guessing: <Version>' -TestCases @(
         @{ Version = '0.1.0'; Upgrade = $true; ExpectedCount = 1 }
         @{ Version = '= 0.12.0'; Upgrade = $true; ExpectedCount = 1 }
