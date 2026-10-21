@@ -5,12 +5,15 @@ function Assert-AvmBicepCleanupGroupOwnership {
         [System.Collections.IDictionary] $State,
 
         [Parameter(Mandatory)]
-        [string] $ResourceId
+        [string] $ResourceId,
+
+        [switch] $RequireExisting
     )
 
     Set-StrictMode -Version 3.0
     $ownerTag = (Get-AvmBicepConfiguration)['e2e']['ownershipTag']
     $ErrorActionPreference = 'Stop'
+    Assert-AvmBicepIsolationBoundary -State $State -ResourceIds @($ResourceId)
 
     foreach ($owned in $State['ownedResourceGroups']) {
         if ($ResourceId -ine $owned['id'] -and
@@ -19,6 +22,9 @@ function Assert-AvmBicepCleanupGroupOwnership {
         }
         $group = Invoke-AvmBicepCleanupLookup -Command Get-AzResourceGroup `
             -Parameters @{ Name = $owned['id'].Split('/')[-1] }
+        if ($null -eq $group -and $RequireExisting) {
+            throw [AvmConfigurationException]::new('The verified attempt-owned group is missing before submission.')
+        }
         if ($null -ne $group -and
             ((Get-AvmPropertyValue -InputObject $group -Name 'ResourceId') -ine $owned['id'] -or
             (Get-AvmPropertyValue -InputObject (

@@ -30,6 +30,7 @@ function Invoke-AvmBicepTestE2e {
         [string] $Phase = 'All',
         [string] $CleanupStatePath,
         [switch] $KeepResources,
+        [switch] $RequireResourceIsolation,
         [ValidateRange(1, 3)]
         [int] $DeploymentRetryLimit = 3,
         [ValidateRange(1, 3)]
@@ -185,6 +186,9 @@ function Invoke-AvmBicepTestE2e {
                 $case = $cases[$index]
                 $subscription = $selections[$index]
                 $requirements = $requirementsByModule[$case.ModuleRoot]
+                if ($RequireResourceIsolation -and ($requirements.Features.Count -gt 0 -or $requirements.Providers.Count -gt 0)) {
+                    throw [AvmConfigurationException]::new('Isolation cannot mutate shared feature/provider registration settings. Retain fallback until registration ownership is established.')
+                }
                 $runId = [guid]::NewGuid().ToString('N')
                 $tokenMap = Get-AvmBicepTestTokenMap -Root $Context.Root -SubscriptionId $subscription.SubscriptionId `
                     -TenantId $TenantId -ManagementGroupId $ManagementGroupId -RunId $runId `
@@ -194,6 +198,13 @@ function Invoke-AvmBicepTestE2e {
                 $templatePath = Join-Path $runDirectory ("$index.json")
                 $template = New-AvmBicepTestTemplate -SourcePath $case.Path -DestinationPath $templatePath `
                     -BicepPath $bicep.Path -Tokens $tokenMap -DeferTokens -Confirm:$false
+                $boundary = ''
+                if ($RequireResourceIsolation) {
+                    $boundary = Assert-AvmBicepResourceIsolationTemplate -Template $template.Template
+                    if (Test-Path -LiteralPath (Join-Path (Split-Path $case.Path -Parent) 'post.ps1')) {
+                        throw [AvmConfigurationException]::new('Isolation cannot establish ownership of an arbitrary post hook.')
+                    }
+                }
                 if ($template.Scope -eq 'group' -and [string]::IsNullOrWhiteSpace($ResourceGroupPrefix)) {
                     throw [AvmConfigurationException]::new('Resource-group Bicep e2e cases require -ResourceGroupPrefix.')
                 }
@@ -240,13 +251,14 @@ function Invoke-AvmBicepTestE2e {
                 $prepared.Add([pscustomobject]@{
                         Case = $case; Scope = $template.Scope; SubscriptionId = $subscription.SubscriptionId
                         RunId = $runId; TemplatePath = $templatePath; Template = $template.Template
-                        TemplateContent = [System.IO.File]::ReadAllText($templatePath)
+                        TemplateContent   = [System.IO.File]::ReadAllText($templatePath)
                         Parameters = $attemptInputs[0].Parameters; ReferenceParameters = $attemptInputs[0].ReferenceParameters
-                        AttemptInputs = $attemptInputs.ToArray(); RetryPolicy = $retryPolicy
+                        AttemptInputs     = $attemptInputs.ToArray(); RetryPolicy = $retryPolicy
                         RequiredFeatures = $requirements.Features; RequiredProviders = $requirements.Providers
+                        IsolationBoundary = $boundary
                         Tokens = $tokenMap; TokenResourceLocation = $tokenLocation; ResourceType = $resourceType
-                        SourceHash      = Get-AvmBicepTestSourceHash -Case $case
-                        AssertionFiles  = [string[]]@(Get-AvmBicepE2eAssertionFile -CasePath $case.Path)
+                        SourceHash        = Get-AvmBicepTestSourceHash -Case $case
+                        AssertionFiles    = [string[]]@(Get-AvmBicepE2eAssertionFile -CasePath $case.Path)
                     })
             }
             $registeredFeatures = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)

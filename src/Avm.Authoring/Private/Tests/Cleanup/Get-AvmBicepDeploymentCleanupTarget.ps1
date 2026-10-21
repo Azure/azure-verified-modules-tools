@@ -13,6 +13,8 @@ function Get-AvmBicepDeploymentCleanupTarget {
         [ValidateRange(0, 3600)]
         [int] $SearchRetryInterval = 60,
 
+        [System.Collections.IDictionary] $IsolationState = @{},
+
         # A retry snapshot requires terminal records and complete Create history, but deletes nothing.
         [switch] $RequireCompleteRemoval
     )
@@ -23,6 +25,7 @@ function Get-AvmBicepDeploymentCleanupTarget {
     $records = [System.Collections.Generic.Dictionary[string, hashtable]]::new(
         [System.StringComparer]::OrdinalIgnoreCase)
     foreach ($deployment in ConvertTo-AvmBicepCleanupResource -ResourceIds $DeploymentIds) {
+        Assert-AvmBicepIsolationBoundary -State $IsolationState -ResourceIds @($deployment.resourceId)
         if ($deployment.type -ine 'Microsoft.Resources/deployments') {
             throw [AvmConfigurationException]::new("Not a deployment ID: $($deployment.resourceId)")
         }
@@ -139,6 +142,7 @@ function Get-AvmBicepDeploymentCleanupTarget {
                             throw [AvmProcessException]::new("Deployment operation has an invalid target ID: $($record.Id)")
                         }
                         foreach ($resource in @(Resolve-AvmBicepCleanupResource -ResourceId $targetId)) {
+                            Assert-AvmBicepIsolationBoundary -State $IsolationState -ResourceIds @($resource.resourceId)
                             if ($resource.type -ieq 'Microsoft.Resources/deployments') {
                                 if (-not $records.ContainsKey($resource.resourceId)) {
                                     $records.Add($resource.resourceId, @{

@@ -18,7 +18,7 @@ outputs:
     description: Test cases carrying original subscription positions and digests.
     value: ${{ steps.selection.outputs.deploymentMatrix }}
   sharedScope:
-    description: Whether an outer shared-scope deployment lock is required.
+    description: Compatibility output, always false; lifecycle locks are per-case concurrencyGroup values.
     value: ${{ steps.selection.outputs.sharedScope }}
 runs:
   using: composite
