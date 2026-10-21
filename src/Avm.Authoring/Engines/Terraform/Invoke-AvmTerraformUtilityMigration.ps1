@@ -3,16 +3,22 @@ function Get-AvmTerraformUtilityInspection {
     [OutputType([hashtable])]
     param(
         [Parameter(Mandatory)] [string] $Path,
-        [Parameter(Mandatory)] [object] $Options
+        [Parameter(Mandatory)] [object] $Options,
+        [ValidateSet('root', 'module', 'example', 'test')] [string] $Scope = 'module',
+        [switch] $PreserveSelections
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
     $expression = '{ calls = data.module.utility.result, variables = data.variable.utility.result, ' +
     'requirements = data.terraform.utility.required_providers, resources = data.resource.utility.result, ' +
-    'data_sources = data.data.utility.result, ephemeral = data.ephemeral.utility.result }'
+    'data_sources = data.data.utility.result, ephemeral = data.ephemeral.utility.result, migration = { ' +
+    'review = local.utility_review_calls, calls = { for name, call in local.utility_selected_calls : name => { telemetry = !call.legacy_naming, provider_source = call.legacy_naming ? "Azure/avm-utl-naming/azure" : call.source, provider_version = call.target_version } } } }'
     $result = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList @(
-        'debug', '--tf-dir', $Path, '--mptf-dir', $Options.ProfileDirs['utility-module'], '--eval', $expression
+        'debug', '--tf-dir', $Path, '--mptf-dir', $Options.ProfileDirs['utility-module'],
+        '--mptf-var', ('target_scope="{0}"' -f $Scope),
+        '--mptf-var', ('preserve_selections={0}' -f $PreserveSelections.ToString().ToLowerInvariant()),
+        '--eval', $expression
     ) -WorkingDirectory $Path -EnvVars $Options.EnvVars
     try {
         $inspection = ConvertFrom-Json -InputObject $result.StdOut -AsHashtable -ErrorAction Stop
@@ -34,6 +40,11 @@ function Get-AvmTerraformUtilityInspection {
             throw [AvmConfigurationException]::new("Cannot inspect utility module call '$name' in '$Path': missing native source metadata.")
         }
     }
+    if ($inspection['migration'] -isnot [System.Collections.IDictionary] -or
+        $inspection.migration['review'] -isnot [System.Collections.IDictionary] -or
+        $inspection.migration['calls'] -isnot [System.Collections.IDictionary]) {
+        throw [AvmConfigurationException]::new("Cannot inspect utility module calls in '$Path': update the utility-module profile to expose native migration decisions.")
+    }
     return $inspection
 }
 
@@ -48,39 +59,30 @@ function Get-AvmTerraformUtilityMigrationPlan {
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
-    $versions = @{
-        'azure/avm-utl-regions/azurerm'  = '0.13.0'
-        'azure/avm-utl-interfaces/azure' = '0.9.0'
-        'azure/naming/azurerm'           = '0.2.0'
-    }
     $scopes = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
     foreach ($target in $Targets) {
-        $inspection = Get-AvmTerraformUtilityInspection -Path $target.Path -Options $Options
+        $inspection = Get-AvmTerraformUtilityInspection -Path $target.Path -Options $Options -Scope $target.Scope `
+            -PreserveSelections:$PreserveSelections
+        if ($inspection.migration.review.Count -gt 0) {
+            $names = @($inspection.migration.review.Keys | Sort-Object) -join "', '"
+            throw [AvmConfigurationException]::new(
+                "Utility module '$names' in '$($target.Path)' requires review: use a literal exact version pin before automatic migration; ranges, missing versions and expressions are not rewritten.")
+        }
         $calls = @{}
-        foreach ($name in $inspection.calls.Keys) {
-            $call = $inspection.calls[$name]
-            $source = $call.source.ToLowerInvariant() -creplace '^registry[.]terraform[.]io/', ''
-            if (-not $versions.ContainsKey($source)) { continue }
-            $pin = [regex]::Match([string]$call['version'], '\A(?:=\s*)?(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)\z')
-            if (-not $pin.Success) {
+        foreach ($name in $inspection.migration.calls.Keys) {
+            $migrationCall = $inspection.migration.calls[$name]
+            if ($migrationCall -isnot [System.Collections.IDictionary] -or
+                $migrationCall['provider_source'] -isnot [string] -or
+                [string]::IsNullOrWhiteSpace($migrationCall.provider_source) -or
+                $migrationCall['provider_version'] -isnot [string] -or
+                [string]::IsNullOrWhiteSpace($migrationCall.provider_version)) {
                 throw [AvmConfigurationException]::new(
-                    "Utility module '$name' in '$($target.Path)' requires review: use a literal exact version pin before automatic migration; ranges, missing versions and expressions are not rewritten.")
+                    "Cannot inspect utility module call '$name' in '$($target.Path)': missing native provider dependency metadata.")
             }
-            $version = $pin.Value -creplace '^=\s*', ''
-            $parsedVersion = $null
-            if (-not [version]::TryParse($version, [ref]$parsedVersion)) {
-                throw [AvmConfigurationException]::new("Utility module '$name' in '$($target.Path)' has an unsupported version pin that requires review.")
-            }
-            if ($PreserveSelections) { continue }
-            $legacyNaming = $source -ceq 'azure/naming/azurerm'
-            if (-not $legacyNaming -and $parsedVersion -gt [version]$versions[$source]) { continue }
-            $upgrade = $legacyNaming -or $parsedVersion -lt [version]$versions[$source]
             $calls[$name] = [pscustomobject]@{
-                Source       = if ($legacyNaming) { 'Azure/avm-utl-naming/azure' } else { $call.source }
-                Version      = if ($upgrade) { $versions[$source] } else { $version }
-                Upgrade      = $upgrade
-                LegacyNaming = $legacyNaming
-                Telemetry    = -not $legacyNaming
+                Telemetry       = [bool]$migrationCall.telemetry
+                ProviderSource  = [string]$migrationCall.provider_source
+                ProviderVersion = [string]$migrationCall.provider_version
             }
         }
         $scopes[$target.Path] = [pscustomobject]@{
@@ -154,53 +156,39 @@ function Get-AvmTerraformUtilityMigrationPlan {
     return $ordered.ToArray()
 }
 
-function Invoke-AvmTerraformUtilityPatch {
+function Invoke-AvmTerraformUtilityNativeMigration {
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [ValidateSet('root', 'module', 'example', 'test')] [string] $Scope,
         [Parameter(Mandatory)] [object] $Options,
-        [hashtable] $Updates = @{},
-        [hashtable] $Mappings = @{},
-        [string[]] $RemoveMaps = @(),
-        [hashtable] $Inputs = @{},
-        [string] $Requirement = '',
-        [string[]] $RemoveRequirements = @()
+        [hashtable] $ProviderSourceFacts = @{},
+        [string[]] $ProviderConfigurationFacts = @(),
+        [string[]] $ProviderAliasFacts = @(),
+        [AllowEmptyCollection()] [string[]] $CallsRequiringAzapi = @(),
+        [switch] $ProviderFactsComplete,
+        [bool] $ApplyUtilityMigration = $true
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
-    if ($Updates.Count + $Mappings.Count + $RemoveMaps.Count + $Inputs.Count + $Requirement.Length + $RemoveRequirements.Count -eq 0) {
-        return
-    }
     $variables = [ordered]@{
-        module_updates       = $Updates
-        provider_mappings    = $Mappings
-        remove_provider_maps = @($RemoveMaps)
-        new_inputs           = $Inputs
-        provider_requirement = $Requirement
-        remove_requirements  = @($RemoveRequirements)
+        provider_source_facts        = $ProviderSourceFacts
+        provider_configuration_facts = @($ProviderConfigurationFacts)
+        provider_alias_facts         = @($ProviderAliasFacts)
+        calls_requiring_azapi        = @($CallsRequiringAzapi)
+        provider_facts_complete      = [bool]$ProviderFactsComplete
+        apply_utility_migration      = [bool]$ApplyUtilityMigration
     }
-    $arguments = @('transform', '--tf-dir', $Path, '--mptf-dir', $Options.ProfileDirs['utility-module'])
+    $arguments = @(
+        'transform', '--tf-dir', $Path, '--mptf-dir', $Options.ProfileDirs['utility-module'],
+        '--mptf-var', ('target_scope="{0}"' -f $Scope)
+    )
     foreach ($entry in $variables.GetEnumerator()) {
         $json = (ConvertTo-Json -InputObject $entry.Value -Depth 10 -Compress).Replace('${', '$${').Replace('%{', '%%{')
         $arguments += @('--mptf-var', "$($entry.Key)=$json")
     }
-    $capabilities = @'
-alltrue(concat(
-  [for name, body in var.module_updates : try(transform.update_in_place.utility_calls[name].target_block_address == "module.${name}" && transform.update_in_place.utility_calls[name].dynamic_block_body == body, false)],
-  [for name, mapping in var.provider_mappings : try(!transform.update_in_place.utility_provider_mappings[name].merge_object_attributes && transform.update_in_place.utility_provider_mappings[name].target_block_address == "module.${name}" && transform.update_in_place.utility_provider_mappings[name].dynamic_block_body == "providers = ${mapping}\n", false)],
-  [for name in var.remove_provider_maps : try(transform.remove_block_element.utility_provider_maps[name].target_block_address == "module.${name}" && jsonencode(transform.remove_block_element.utility_provider_maps[name].paths) == jsonencode(["providers"]), false)],
-  [for name, mode in var.new_inputs : try(transform.new_block[name == "location" ? "utility_location_${mode}" : "utility_enable_telemetry"][name].new_block_type == "variable" && jsonencode(transform.new_block[name == "location" ? "utility_location_${mode}" : "utility_enable_telemetry"][name].labels) == jsonencode([name]) && transform.new_block[name == "location" ? "utility_location_${mode}" : "utility_enable_telemetry"][name].filename == "variables.tf", false)],
-  [for name in var.remove_requirements : try(transform.remove_block_element.utility_requirements[name].target_block_address == "terraform" && jsonencode(transform.remove_block_element.utility_requirements[name].paths) == jsonencode(["required_providers.${name}"]), false)],
-  [length(var.provider_requirement) == 0 || try(transform.update_in_place.utility_requirement["1"].merge_object_attributes && transform.update_in_place.utility_requirement["1"].dynamic_block_body == var.provider_requirement, try(transform.new_block.utility_requirement["1"].body == "\n${var.provider_requirement}", false))]
-))
-'@
-    $check = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList (@('debug') + $arguments[1..($arguments.Count - 1)] + @('--eval', $capabilities)) `
-        -WorkingDirectory $Path -EnvVars $Options.EnvVars
-    if ($check.StdOut.Trim() -cne 'true') {
-        throw [AvmConfigurationException]::new("Cannot safely migrate utility modules in '$Path': update MaPoTF and the utility-module profile to support the exact native patches.")
-    }
-    if ($PSCmdlet.ShouldProcess($Path, 'migrate authored utility module calls and proven unused provider requirements')) {
+    if ($PSCmdlet.ShouldProcess($Path, 'apply native utility source, version, and input migration')) {
         $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList $arguments `
             -WorkingDirectory $Path -EnvVars $Options.EnvVars
     }
@@ -232,36 +220,66 @@ function Get-AvmTerraformUtilityProviderSource {
     return $Cache[$key]
 }
 
-function Get-AvmTerraformUtilityProviderMapping {
+function Get-AvmTerraformUtilityProviderConfigurationFact {
     [CmdletBinding()]
-    [OutputType([pscustomobject])]
+    [OutputType([hashtable])]
     param(
-        [Parameter(Mandatory)] [object] $Call,
-        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $ProviderSources,
-        [Parameter(Mandatory)] [string] $Path,
-        [Parameter(Mandatory)] [string] $Name
+        [Parameter(Mandatory)] [string] $Path
     )
 
     Set-StrictMode -Version 3.0
-    if (@($ProviderSources | Where-Object { $_ -match '/modtm$' -and $_ -ine 'registry.terraform.io/azure/modtm' }).Count -gt 0) {
-        throw [AvmConfigurationException]::new("Cannot migrate utility module '$Name' in '$Path': an unexpected ModTM provider source requires review.")
+    $facts = @{
+        Configurations = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        Aliases        = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     }
-    if (-not $Call.Contains('providers') -or $ProviderSources -contains 'registry.terraform.io/azure/modtm') { return $null }
-    $mapping = ConvertFrom-AvmTerraformUnitTestProviderMapping -Expression $Call.providers `
-        -ProviderNames @() -AllowUnlistedProviders -RetiredProviderNames modtm
-    if ($null -eq $mapping) {
+    foreach ($file in Get-ChildItem -LiteralPath $Path -File -Filter '*.tf') {
+        $text = [System.IO.File]::ReadAllText($file.FullName)
+        foreach ($match in [regex]::Matches($text, '(?m)^\s*provider\s+"(?<name>modtm|random)"\s*\{')) {
+            $null = $facts.Configurations.Add($match.Groups['name'].Value)
+        }
+        if ($text -match '(?m)^\s*configuration_aliases\s*=') {
+            $null = $facts.Aliases.Add('modtm')
+            $null = $facts.Aliases.Add('random')
+        }
+    }
+    return $facts
+}
+
+function Assert-AvmTerraformUtilityProviderMappingReview {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [object] $Options,
+        [Parameter(Mandatory)] [hashtable] $ProviderSourceFacts,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $CallsRequiringAzapi
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+    $facts = Get-AvmTerraformUtilityProviderConfigurationFact -Path $Path
+    $arguments = @(
+        'debug', '--tf-dir', $Path, '--mptf-dir', $Options.ProfileDirs['utility-module'],
+        '--mptf-var', ('provider_source_facts={0}' -f (ConvertTo-Json -InputObject $ProviderSourceFacts -Depth 10 -Compress)),
+        '--mptf-var', ('provider_configuration_facts={0}' -f (ConvertTo-Json -InputObject @($facts.Configurations) -Compress)),
+        '--mptf-var', ('provider_alias_facts={0}' -f (ConvertTo-Json -InputObject @($facts.Aliases) -Compress)),
+        '--mptf-var', ('calls_requiring_azapi={0}' -f (ConvertTo-Json -InputObject @($CallsRequiringAzapi) -Compress)),
+        '--eval', 'local.provider_mapping_review'
+    )
+    $result = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList $arguments `
+        -WorkingDirectory $Path -EnvVars $Options.EnvVars
+    try {
+        $review = ConvertFrom-Json -InputObject $result.StdOut -AsHashtable -ErrorAction Stop
+    }
+    catch {
         throw [AvmConfigurationException]::new(
-            "Cannot migrate utility module '$Name' in '$Path': computed, aliased target keys or cross-provider module bindings require review.")
+            "Cannot inspect utility provider mappings in '$Path': invalid native JSON. $($_.Exception.Message)")
     }
-    if (-not $mapping.Changed) { return $null }
-    $remainingCount = $mapping.Bindings.Count - 1
-    $expression = $mapping.Expression
-    if ($remainingCount -gt 0 -and $ProviderSources -contains 'registry.terraform.io/azure/azapi' -and
-        -not $mapping.Bindings.ContainsKey('azapi')) {
-        $expression = $expression.Insert($expression.LastIndexOf('}'), "`n  azapi = azapi`n")
-        $remainingCount++
+    if ($review.Count -gt 0) {
+        $names = @($review.Keys | Sort-Object) -join "', '"
+        throw [AvmConfigurationException]::new(
+            "Utility module '$names' in '$Path' has a provider mapping that requires review: use literal provider keys before automatic migration.")
     }
-    return [pscustomobject]@{ Expression = $expression; Changed = $true; RemoveMap = $remainingCount -eq 0 }
+    return $facts
 }
 
 function Invoke-AvmTerraformUtilityMigration {
@@ -276,80 +294,32 @@ function Invoke-AvmTerraformUtilityMigration {
     $cache = @{}
     $telemetryPaths = @($Plans | Where-Object Telemetry | ForEach-Object { $_.Target.Path })
     foreach ($scope in $Plans | Where-Object Affected) {
-        $updates = @{}
-        $mappings = @{}
-        $removeMaps = [System.Collections.Generic.List[string]]::new()
-        $inputs = @{}
-        $requiresAzapi = $false
+        if (-not $PSCmdlet.ShouldProcess($scope.Target.Path, 'upgrade utility modules before telemetry transformation')) {
+            continue
+        }
+        $inspection = Get-AvmTerraformUtilityInspection -Path $scope.Target.Path -Options $Options -Scope $scope.Target.Scope
+        $providerSourceFacts = @{}
         foreach ($name in $scope.Calls.Keys) {
             $plan = $scope.Calls[$name]
-            $call = $scope.Before.calls[$name]
-            $body = [System.Collections.Generic.List[string]]::new()
-            if ($plan.Upgrade) { $body.Add('version = "' + $plan.Version + '"') }
-            if ($plan.LegacyNaming) {
-                $body.Add('source = "' + $plan.Source + '"')
-                if ($call.Contains('legacy_mode')) { $body.Add('legacy_mode = false') }
+            $call = $inspection.calls[$name]
+            if (-not $call.Contains('providers')) { continue }
+            $providerCall = [pscustomobject]@{
+                Source = $plan.ProviderSource; Version = $plan.ProviderVersion; Telemetry = $plan.Telemetry
             }
-            if ($plan.Telemetry) {
-                if (-not $call.Contains('location')) {
-                    $body.Add('location = var.location')
-                    if (-not $scope.Before.variables.Contains('location')) {
-                        $inputs.location = if ($scope.Target.Scope -ceq 'example') { 'example' } else { 'required' }
-                    }
-                }
-                if ($scope.Target.Scope -cne 'test' -and -not $call.Contains('enable_telemetry')) {
-                    $body.Add('enable_telemetry = var.enable_telemetry')
-                    if (-not $scope.Before.variables.Contains('enable_telemetry')) {
-                        $inputs.enable_telemetry = 'default'
-                    }
-                }
+            $sources = @(Get-AvmTerraformUtilityProviderSource -Call $providerCall -Options $Options -Cache $cache)
+            if (@($sources | Where-Object { $_ -match '/modtm$' -and $_ -ine 'registry.terraform.io/azure/modtm' }).Count -gt 0) {
+                throw [AvmConfigurationException]::new(
+                    "Cannot migrate utility module '$name' in '$($scope.Target.Path)': an unexpected ModTM provider source requires review.")
             }
-            if ($call.Contains('providers')) {
-                $bindings = ConvertFrom-AvmTerraformUnitTestProviderMapping -Expression $call.providers -ProviderNames @() -AllowUnlistedProviders
-                if ($null -eq $bindings) {
-                    throw [AvmConfigurationException]::new("Cannot migrate utility module '$name' in '$($scope.Target.Path)': its provider mapping requires review.")
-                }
-                if ($bindings.Bindings.ContainsKey('modtm')) {
-                    $sources = @(Get-AvmTerraformUtilityProviderSource -Call $plan -Options $Options -Cache $cache)
-                    $mapping = Get-AvmTerraformUtilityProviderMapping -Call $call -ProviderSources $sources -Path $scope.Target.Path -Name $name
-                    if ($null -ne $mapping) {
-                        if ($mapping.RemoveMap) { $removeMaps.Add($name) }
-                        else { $mappings[$name] = $mapping.Expression }
-                    }
-                }
-            }
-            if ($body.Count -gt 0) { $updates[$name] = ($body -join "`n") + "`n" }
+            $providerSourceFacts[$name] = $sources
         }
         $localTelemetryCalls = @($scope.Dependencies.Keys | Where-Object { $scope.Dependencies[$_] -cin $telemetryPaths })
-        if ($scope.Telemetry -or $localTelemetryCalls.Count -gt 0) {
-            $azapiCalls = @($scope.Before.calls.Keys | Where-Object {
-                    ($scope.Calls.ContainsKey($_) -and $scope.Calls[$_].Telemetry) -or
-                    $_ -cin $localTelemetryCalls
-                })
-            foreach ($name in $azapiCalls) {
-                $call = $scope.Before.calls[$name]
-                $expression = if ($mappings.ContainsKey($name)) { $mappings[$name] }
-                elseif ($call.Contains('providers') -and -not $removeMaps.Contains($name)) { $call.providers }
-                else { continue }
-                $mapping = ConvertFrom-AvmTerraformUnitTestProviderMapping -Expression $expression -ProviderNames @() -AllowUnlistedProviders
-                if ($null -eq $mapping) {
-                    throw [AvmConfigurationException]::new("Cannot introduce AzAPI for utility module '$name' in '$($scope.Target.Path)': review its provider mapping.")
-                }
-                if (-not $mapping.Bindings.ContainsKey('azapi')) {
-                    $mappings[$name] = $expression.Insert($expression.LastIndexOf('}'), "`n  azapi = azapi`n")
-                }
-                $requiresAzapi = $true
-                $null = $removeMaps.Remove($name)
-            }
-        }
-        $requirement = ''
-        if ($requiresAzapi -and -not $scope.Before.requirements.Contains('azapi')) {
-            $requirement = "required_providers {`n  azapi = {`n    source = `"Azure/azapi`"`n    version = `"~> 2.12`"`n  }`n}`n"
-        }
-        if ($PSCmdlet.ShouldProcess($scope.Target.Path, 'upgrade utility modules before telemetry transformation')) {
-            Invoke-AvmTerraformUtilityPatch -Path $scope.Target.Path -Options $Options -Updates $updates `
-                -Mappings $mappings -RemoveMaps $removeMaps.ToArray() -Inputs $inputs -Requirement $requirement
-        }
+        $azapiCalls = @($scope.Calls.Keys | Where-Object { $scope.Calls[$_].Telemetry }) + $localTelemetryCalls
+        $facts = Assert-AvmTerraformUtilityProviderMappingReview -Path $scope.Target.Path -Options $Options `
+            -ProviderSourceFacts $providerSourceFacts -CallsRequiringAzapi $azapiCalls
+        Invoke-AvmTerraformUtilityNativeMigration -Path $scope.Target.Path -Scope $scope.Target.Scope -Options $Options `
+            -ProviderSourceFacts $providerSourceFacts -ProviderConfigurationFacts @($facts.Configurations) `
+            -ProviderAliasFacts @($facts.Aliases) -CallsRequiringAzapi $azapiCalls
     }
 }
 
@@ -377,65 +347,40 @@ function Invoke-AvmTerraformUtilityProviderCleanup {
         $path = $scope.Target.Path
         if (-not $PSCmdlet.ShouldProcess($path, 'retire utility-only provider references using fresh dependency evidence')) { continue }
         $inspection = Get-AvmTerraformUtilityInspection -Path $path -Options $Options
-        $mappings = @{}
-        $removeMaps = [System.Collections.Generic.List[string]]::new()
-        $requiresAzapi = $false
+        $providerSourceFacts = @{}
         foreach ($name in $scope.Dependencies.Keys) {
             $dependency = $scope.Dependencies[$name]
             if (-not $sources.ContainsKey($dependency)) { continue }
-            $mapping = Get-AvmTerraformUtilityProviderMapping -Call $inspection.calls[$name] `
-                -ProviderSources $sources[$dependency] -Path $path -Name $name
-            if ($null -ne $mapping) {
-                if ($mapping.RemoveMap) { $removeMaps.Add($name) }
-                else { $mappings[$name] = $mapping.Expression }
-                if (-not $mapping.RemoveMap -and $sources[$dependency] -contains 'registry.terraform.io/azure/azapi') {
-                    $requiresAzapi = $true
-                }
+            $unexpectedModtmSources = @($sources[$dependency] | Where-Object {
+                    $_ -match '/modtm$' -and $_ -ine 'registry.terraform.io/azure/modtm'
+                })
+            if ($unexpectedModtmSources.Count -gt 0) {
+                throw [AvmConfigurationException]::new(
+                    "Cannot migrate local utility module '$name' in '$path': an unexpected ModTM provider source requires review.")
             }
+            $providerSourceFacts[$name] = @($sources[$dependency])
         }
-        $requirement = ''
-        if ($requiresAzapi -and -not $inspection.requirements.Contains('azapi')) {
-            $requirement = "required_providers {`n  azapi = {`n    source = `"Azure/azapi`"`n    version = `"~> 2.12`"`n  }`n}`n"
-        }
-        Invoke-AvmTerraformUtilityPatch -Path $path -Options $Options -Mappings $mappings `
-            -RemoveMaps $removeMaps.ToArray() -Requirement $requirement
-        $inspection = Get-AvmTerraformUtilityInspection -Path $path -Options $Options
+        $azapiCalls = @($providerSourceFacts.Keys | Where-Object {
+                $providerSourceFacts[$_] -contains 'registry.terraform.io/azure/azapi'
+            })
+        $facts = Assert-AvmTerraformUtilityProviderMappingReview -Path $path -Options $Options `
+            -ProviderSourceFacts $providerSourceFacts -CallsRequiringAzapi $azapiCalls
+        Invoke-AvmTerraformUtilityNativeMigration -Path $path -Scope $scope.Target.Scope -Options $Options `
+            -ProviderSourceFacts $providerSourceFacts -ProviderConfigurationFacts @($facts.Configurations) `
+            -ProviderAliasFacts @($facts.Aliases) -CallsRequiringAzapi $azapiCalls -ApplyUtilityMigration:$false
         $moduleSources[$path] = @{}
         $sources[$path] = @(Get-AvmTerraformUnitTestProviderSource -Path $path -ModuleTargets $ModuleTargets -Options $Options `
                 -ModuleProviderSources $moduleSources[$path] -ModuleManifests $manifests `
                 -AllowMissingProviderConfiguration -ProviderWarnings $providerWarnings)
+        $facts = Get-AvmTerraformUtilityProviderConfigurationFact -Path $path
+        Invoke-AvmTerraformUtilityNativeMigration -Path $path -Scope $scope.Target.Scope -Options $Options `
+            -ProviderSourceFacts $moduleSources[$path] -ProviderConfigurationFacts @($facts.Configurations) `
+            -ProviderAliasFacts @($facts.Aliases) -ProviderFactsComplete -ApplyUtilityMigration:$false
+        $inspection = Get-AvmTerraformUtilityInspection -Path $path -Options $Options
         $requirements[$path] = $inspection.requirements
-        $retire = @(
-            foreach ($provider in @('modtm', 'random')) {
-                $source = if ($provider -ceq 'modtm') { 'registry.terraform.io/azure/modtm' } else { 'registry.terraform.io/hashicorp/random' }
-                if (-not $inspection.requirements.Contains($provider)) { continue }
-                $declared = [string]$inspection.requirements[$provider]['source']
-                if ($declared.ToLowerInvariant() -cnotin @($source, $source.Substring('registry.terraform.io/'.Length))) { continue }
-                $used = @(
-                    foreach ($kind in @('resources', 'data_sources', 'ephemeral')) {
-                        $inspection[$kind].Keys | Where-Object { $_.StartsWith("$($provider)_", [System.StringComparison]::Ordinal) }
-                    }
-                    foreach ($providers in $moduleSources[$path].Values) {
-                        $providers | Where-Object { $_ -ceq $source }
-                    }
-                    foreach ($call in $inspection.calls.Values) {
-                        if ($call.Contains('providers') -and $call.providers -cmatch "\b$provider\b") { $provider }
-                    }
-                    foreach ($file in Get-ChildItem -LiteralPath $path -File -Filter '*.tf') {
-                        $text = [System.IO.File]::ReadAllText($file.FullName)
-                        if ($text -cmatch ('\bprovider\s+"' + $provider + '"') -or $text -cmatch '\bconfiguration_aliases\s*=') { $provider }
-                    }
-                )
-                if ($used.Count -eq 0) { $provider }
-            }
-        )
-        if ($retire.Count -gt 0) {
-            Invoke-AvmTerraformUtilityPatch -Path $path -Options $Options -RemoveRequirements $retire
-            $requirements[$path] = Get-AvmTerraformUnitTestRequiredProvider -Path $path -Options $Options
-            $sources[$path] = @(Get-AvmTerraformUnitTestProviderSource -Path $path -ModuleTargets $ModuleTargets -Options $Options `
-                    -ModuleProviderSources $moduleSources[$path] -ModuleManifests $manifests `
-                    -AllowMissingProviderConfiguration -ProviderWarnings $providerWarnings)
-        }
+        $sources[$path] = @(Get-AvmTerraformUnitTestProviderSource -Path $path -ModuleTargets $ModuleTargets -Options $Options `
+                -ModuleProviderSources $moduleSources[$path] -ModuleManifests $manifests `
+                -AllowMissingProviderConfiguration -ProviderWarnings $providerWarnings)
         if ($sources[$path] -contains 'registry.terraform.io/azure/modtm') {
             $null = Get-AvmTerraformUnitTestModtmRequirementPlan -Path $path -ModuleTargets $ModuleTargets `
                 -Options $Options -RequiredProviders $requirements -ProviderSources $sources `
