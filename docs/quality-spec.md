@@ -2068,8 +2068,11 @@ scope collection. Below-threshold canonical AVM notices remain advisory
 warnings. Final dispatcher and composition rendering must not repeat already
 presented findings; every finding remains in the structured result.
 
-Internal transform dependency copies suppress filesystem-provider progress
-bars; inspection-cache diagnostics remain available through verbose logging.
+Internal Terraform source, module-cache, lint-configuration and policy staging
+copies suppress filesystem-provider progress bars per operation without changing
+the caller's progress preference. Transform dependency copies follow the same
+rule; copy and inspection-cache diagnostics remain available through verbose
+logging. Copy errors retain their existing terminating behavior.
 
 Sensitive-output consumers can use `Invoke-AvmProcess -StreamOutput` with
 `OnStdOutLine` and `OnStdErrLine` callbacks to own both streams' incremental

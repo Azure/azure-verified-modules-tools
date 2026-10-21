@@ -29,7 +29,7 @@ function Copy-AvmTerraformModuleTree {
         if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
             $null = New-Item -ItemType Directory -Path $parent -Force -ErrorAction Stop
         }
-        Copy-Item -LiteralPath $file.FullName -Destination $destination -Force -ErrorAction Stop
+        Copy-Item -LiteralPath $file.FullName -Destination $destination -Force -ErrorAction Stop -ProgressAction SilentlyContinue
         $copied++
     }
     Write-AvmLog ("module-tree: copied {0} file(s) to {1}" -f $copied, $DestinationRoot) -Level Verbose | Out-Null

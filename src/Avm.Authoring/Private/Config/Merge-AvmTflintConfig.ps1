@@ -447,7 +447,7 @@ function New-AvmTflintConfigSet {
                     -DestinationPath $destinationPath
             }
             else {
-                Copy-Item -LiteralPath $basePath -Destination $destinationPath
+                Copy-Item -LiteralPath $basePath -Destination $destinationPath -ProgressAction SilentlyContinue
             }
             if ($name -ceq 'avm.tflint.hcl') {
                 $null = Test-AvmTflintRootClassConfiguration -Path $destinationPath -ModuleClass $RootModuleClass

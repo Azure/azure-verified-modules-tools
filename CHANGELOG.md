@@ -454,6 +454,10 @@ section when cutting a release.
 
 ### Fixed
 
+- Terraform lint and Conftest staging copies no longer render file-copy
+  progress bars, including source trees, cached modules, lint configurations
+  and policy exemptions. Verbose diagnostics and copy failures remain visible
+  without changing the caller's progress preference.
 - Native Bicep documentation preserves the registry generator's indentation
   for object-valued parameter metadata examples.
 - Native Bicep test inputs and assertion outputs preserve authored JSON strings,
