@@ -771,8 +771,14 @@ from an independent `var.location`, never from that same utility's outputs.
 New reusable inputs remain required; only new example inputs default to
 `eastus`. Preserve authored locations and opt-outs, including existing utility
 example telemetry defaults. Test wrappers receive no new telemetry control.
-Introduce an explicit AzAPI source and binding when a telemetry-free caller
-needs them, without replacing existing bindings or constraints.
+Callers that use AzAPI only through child modules rely on implicit default
+provider inheritance; do not introduce a parent requirement or provider map
+solely for that transitive dependency. When an existing explicit map must be
+retained, add the newly required AzAPI binding and its parent source declaration
+if absent, without replacing existing bindings or constraints. Removing the last
+obsolete ModTM binding removes the map rather than replacing it with a default
+AzAPI-only map. Terraform's built-in provider needs no generated
+`required_providers` declaration.
 
 Capture native unit-test declarations and original provider evidence before
 utility edits. Inspect upgraded dependencies through fresh private Terraform

@@ -18,11 +18,6 @@ locals {
 module "shared_interfaces" {
   source  = "Azure/avm-utl-interfaces/azure"
   version = "0.9.0"
-  providers = {
-    # Preserve this owner comment while retiring only its unused binding.
-
-    azapi = azapi
-  }
 
   location         = var.location
   enable_telemetry = var.enable_telemetry
