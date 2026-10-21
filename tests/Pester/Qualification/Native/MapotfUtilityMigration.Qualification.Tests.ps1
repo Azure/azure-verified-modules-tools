@@ -380,4 +380,55 @@ run "modern" {
         $result = Invoke-UtilityProcess -Root $script:root -Arguments @('test', '-no-color', '-test-directory=tests/unit')
         $result.StdOut | Should -Match 'Success! 1 passed'
     }
+
+    It 'uses native provider-map operations without rebuilding authored bindings' {
+        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value @'
+terraform {
+  required_providers {
+    modtm = {
+      source  = "Azure/modtm"
+      version = "~> 0.3"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+  }
+}
+
+module "regions" {
+  source           = "Azure/avm-utl-regions/azurerm"
+  version          = "0.13.0"
+  location         = "eastus"
+  enable_telemetry = false
+  providers = {
+    # preserve this binding
+    "azapi.owner" = azapi.owner
+    modtm         = modtm
+    random        = random.owner
+  }
+}
+'@
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:root; Options = $script:options } {
+            param($Root, $Options)
+            $arguments = @(
+                'transform', '--tf-dir', $Root, '--mptf-dir', $Options.ProfileDirs['utility-module'],
+                '--mptf-var', 'provider_source_facts={"regions":["registry.terraform.io/azure/azapi"]}',
+                '--mptf-var', 'calls_requiring_azapi=["regions"]',
+                '--mptf-var', 'provider_facts_complete=true'
+            )
+            $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList $arguments `
+                -WorkingDirectory $Root -EnvVars $Options.EnvVars
+            $first = [IO.File]::ReadAllBytes((Join-Path $Root 'main.tf'))
+            $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList $arguments `
+                -WorkingDirectory $Root -EnvVars $Options.EnvVars
+            [IO.File]::ReadAllBytes((Join-Path $Root 'main.tf')) | Should -Be $first
+        }
+        $content = [IO.File]::ReadAllText($script:main)
+        $content | Should -Match '# preserve this binding'
+        $content | Should -Match '"azapi.owner"\s*=\s*azapi.owner'
+        $content | Should -Match 'random\s*=\s*random.owner'
+        $content | Should -Match 'azapi\s*=\s*azapi'
+        $content | Should -Not -Match '(?m)^\s*modtm\s*='
+    }
 }

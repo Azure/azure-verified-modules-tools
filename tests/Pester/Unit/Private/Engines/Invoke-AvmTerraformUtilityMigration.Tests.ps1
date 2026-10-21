@@ -10,6 +10,52 @@ AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
+function global:New-UtilityMigrationInspection {
+    param(
+        [Parameter(Mandatory)] [hashtable] $Inspection,
+        [switch] $PreserveSelections
+    )
+
+    $result = @{}
+    foreach ($entry in $Inspection.GetEnumerator()) {
+        $result[$entry.Key] = $entry.Value
+    }
+    $targetVersions = @{
+        'azure/avm-utl-regions/azurerm'  = [version]'0.13.0'
+        'azure/avm-utl-interfaces/azure' = [version]'0.9.0'
+        'azure/naming/azurerm'           = [version]'0.2.0'
+    }
+    $review = @{}
+    $calls = @{}
+    foreach ($name in $result.calls.Keys) {
+        $call = $result.calls[$name]
+        $source = ([string]$call.source).ToLowerInvariant() -creplace '^registry[.]terraform[.]io/', ''
+        if (-not $targetVersions.ContainsKey($source)) { continue }
+        $match = [regex]::Match([string]$call.version, '\A(?:=\s*)?(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)\z')
+        if (-not $match.Success) {
+            $review[$name] = @{}
+            continue
+        }
+        try {
+            $version = [version]($match.Value -creplace '^=\s*', '')
+        }
+        catch {
+            $review[$name] = @{}
+            continue
+        }
+        $legacy = $source -ceq 'azure/naming/azurerm'
+        if (-not $PreserveSelections -and ($legacy -or $version -le $targetVersions[$source])) {
+            $calls[$name] = @{
+                telemetry        = -not $legacy
+                provider_source  = if ($legacy) { 'Azure/avm-utl-naming/azure' } else { $call.source }
+                provider_version = $targetVersions[$source].ToString()
+            }
+        }
+    }
+    $result.migration = @{ review = $review; calls = $calls }
+    return $result
+}
+
 Describe 'Terraform utility migration planning' {
     BeforeEach {
         InModuleScope Avm.Authoring -Parameters @{ Root = "$TestDrive" } {
@@ -25,8 +71,13 @@ Describe 'Terraform utility migration planning' {
                 resources = @{}; data_sources = @{}; ephemeral = @{}
             }
             $script:utilityTargets = @([pscustomobject]@{ Path = $Root; Scope = 'root'; Profiles = @('root', 'module', 'common') })
-            Mock Get-AvmTerraformUtilityInspection { $script:utilityInspection }
+            Mock Get-AvmTerraformUtilityInspection {
+                New-UtilityMigrationInspection -Inspection $script:utilityInspection -PreserveSelections:$PreserveSelections
+            }
             Mock Get-ChildItem { @() }
+            Mock Invoke-AvmTerraformUtilityNativeMigration {}
+            Mock Get-AvmTerraformUtilityProviderSource { @() }
+            Mock Assert-AvmTerraformUtilityProviderMappingReview { @{ Configurations = @(); Aliases = @() } }
         }
     }
 
@@ -75,9 +126,8 @@ Describe 'Terraform utility migration planning' {
             $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets -Options $script:utilityOptions)
             $plans | Should -HaveCount $ExpectedCount
             if ($ExpectedCount) {
-                $plans[0].Calls.renamed.Upgrade | Should -Be $Upgrade
-                $plans[0].Calls.renamed.Version | Should -BeExactly '0.13.0'
-                $plans[0].Before | Should -Be $script:utilityInspection
+                $plans[0].Calls.renamed.Telemetry | Should -BeTrue
+                $plans[0].Before.calls.renamed.source | Should -BeExactly 'registry.terraform.io/Azure/avm-utl-regions/azurerm'
             }
         }
     }
@@ -99,6 +149,48 @@ Describe 'Terraform utility migration planning' {
         }
     }
 
+    It 'surfaces a later native review before applying any selected scope' {
+        InModuleScope Avm.Authoring {
+            $child = Join-Path $script:utilityRoot 'modules' 'review'
+            $script:utilityInspections = @{
+                $script:utilityRoot = @{
+                    calls = @{ regions = @{ source = 'Azure/avm-utl-regions/azurerm'; version = '0.12.0' } }
+                    variables = @{}; requirements = @{}; resources = @{}; data_sources = @{}; ephemeral = @{}
+                }
+                $child = @{
+                    calls = @{ interfaces = @{ source = 'Azure/avm-utl-interfaces/azure'; version = '~> 0.8' } }
+                    variables = @{}; requirements = @{}; resources = @{}; data_sources = @{}; ephemeral = @{}
+                }
+            }
+            Mock Get-AvmTerraformUtilityInspection {
+                $inspection = $script:utilityInspections[$Path]
+                $inspection.migration = if ($Path -ceq $child) {
+                    @{ review = @{ interfaces = @{} }; calls = @{} }
+                }
+                else {
+                    @{
+                        review = @{}
+                        calls  = @{
+                            regions = @{
+                                telemetry        = $true
+                                provider_source  = 'Azure/avm-utl-regions/azurerm'
+                                provider_version = '0.13.0'
+                            }
+                        }
+                    }
+                }
+                $inspection
+            }
+            $targets = @(
+                [pscustomobject]@{ Path = $script:utilityRoot; Scope = 'root' }
+                [pscustomobject]@{ Path = $child; Scope = 'module' }
+            )
+            { Get-AvmTerraformUtilityMigrationPlan -Targets $targets -Options $script:utilityOptions } |
+                Should -Throw '*requires review*'
+            Should -Invoke Invoke-AvmTerraformUtilityNativeMigration -Exactly 0
+        }
+    }
+
     It 'limits the naming conversion to old sources and preserves AVM version/mode: <Version>, <Mode>' -ForEach @(
         @{ Version = '0.2.0'; Mode = $true }
         @{ Version = '0.2.0'; Mode = $false }
@@ -111,15 +203,10 @@ Describe 'Terraform utility migration planning' {
             $script:utilityInspection.calls.modern = @{ source = 'Azure/avm-utl-naming/azure'; version = $Version; legacy_mode = $Mode }
             $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets -Options $script:utilityOptions)
             $plans[0].Calls.Count | Should -Be 1
-            $plans[0].Calls.old.Source | Should -BeExactly 'Azure/avm-utl-naming/azure'
-            $plans[0].Calls.old.Version | Should -BeExactly '0.2.0'
-            $plans[0].Calls.old.LegacyNaming | Should -BeTrue
-            Mock Invoke-AvmTerraformUtilityPatch {
-                $Updates.Keys | Should -Be @('old')
-                $Updates.old | Should -BeExactly "version = `"0.2.0`"`nsource = `"Azure/avm-utl-naming/azure`"`n"
-            }
+            $plans[0].Calls.old.Telemetry | Should -BeFalse
+            Mock Invoke-AvmTerraformUtilityNativeMigration { $Scope | Should -BeExactly 'root' }
             Invoke-AvmTerraformUtilityMigration -Plans $plans -Options $script:utilityOptions
-            Should -Invoke Invoke-AvmTerraformUtilityPatch -Exactly 1
+            Should -Invoke Invoke-AvmTerraformUtilityNativeMigration -Exactly 1
             $script:utilityInspection.calls.modern.version | Should -BeExactly $Version
             $script:utilityInspection.calls.modern.legacy_mode | Should -Be $Mode
         }
@@ -136,13 +223,9 @@ Describe 'Terraform utility migration planning' {
                 source = 'Azure/naming/azurerm'; version = '0.4.2'; legacy_mode = $Mode
             }
             $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets -Options $script:utilityOptions)
-            Mock Invoke-AvmTerraformUtilityPatch {
-                $Updates.names | Should -BeExactly (
-                    "version = `"0.2.0`"`nsource = `"Azure/avm-utl-naming/azure`"`nlegacy_mode = false`n"
-                )
-            }
+            Mock Invoke-AvmTerraformUtilityNativeMigration { $Scope | Should -BeExactly 'root' }
             Invoke-AvmTerraformUtilityMigration -Plans $plans -Options $script:utilityOptions
-            Should -Invoke Invoke-AvmTerraformUtilityPatch -Exactly 1
+            Should -Invoke Invoke-AvmTerraformUtilityNativeMigration -Exactly 1
         }
     }
 
@@ -177,8 +260,7 @@ Describe 'Terraform utility migration planning' {
             $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets -Options $script:utilityOptions)
             $plans | Should -HaveCount $Expected
             if ($Expected) {
-                $plans[0].Calls.contracts.Upgrade | Should -Be $Upgrade
-                $plans[0].Calls.contracts.Version | Should -BeExactly '0.9.0'
+                $plans[0].Calls.contracts.Telemetry | Should -BeTrue
             }
         }
     }
@@ -194,16 +276,9 @@ Describe 'Terraform utility migration planning' {
             $script:utilityTargets[0].Scope = $Scope
             $script:utilityInspection.calls.choose_region = @{ source = 'Azure/avm-utl-regions/azurerm'; version = '0.12.0' }
             $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets -Options $script:utilityOptions)
-            Mock Invoke-AvmTerraformUtilityPatch {
-                $Inputs.location | Should -BeExactly $Location
-                $Inputs.ContainsKey('enable_telemetry') | Should -Be $Telemetry
-                $expected = "version = `"0.13.0`"`nlocation = var.location`n"
-                if ($Telemetry) { $expected += "enable_telemetry = var.enable_telemetry`n" }
-                $Updates.choose_region | Should -BeExactly $expected
-                $Updates.choose_region | Should -Not -Match 'module\.choose_region'
-            }
+            Mock Invoke-AvmTerraformUtilityNativeMigration { $Scope | Should -BeExactly $Scope }
             Invoke-AvmTerraformUtilityMigration -Plans $plans -Options $script:utilityOptions
-            Should -Invoke Invoke-AvmTerraformUtilityPatch -Exactly 1
+            Should -Invoke Invoke-AvmTerraformUtilityNativeMigration -Exactly 1
         }
     }
 
@@ -220,12 +295,7 @@ Describe 'Terraform utility migration planning' {
                 $script:utilityInspection.requirements.azapi = @{ source = 'Azure/azapi'; version = '~> 2.4' }
             }
             $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets -Options $script:utilityOptions)
-            Mock Invoke-AvmTerraformUtilityPatch {
-                $Mappings.Count | Should -Be 0
-                $Requirement | Should -BeNullOrEmpty
-            }
             Invoke-AvmTerraformUtilityMigration -Plans $plans -Options $script:utilityOptions
-            Should -Invoke Invoke-AvmTerraformUtilityPatch -Exactly 1
             if ($Declared) {
                 $script:utilityInspection.requirements.azapi.version | Should -BeExactly '~> 2.4'
             }
@@ -248,14 +318,8 @@ Describe 'Terraform utility migration planning' {
                 $script:utilityInspection.requirements.azapi = @{ source = 'Azure/azapi'; version = '~> 2.4' }
             }
             $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets -Options $script:utilityOptions)
-            Mock Invoke-AvmTerraformUtilityPatch {
-                $Mappings.interfaces | Should -Match 'random = random.original /\* keep random \*/'
-                $Mappings.interfaces | Should -Match 'azapi = azapi'
-                if ($Declared) { $Requirement | Should -BeNullOrEmpty }
-                else { $Requirement | Should -Match 'source = "Azure/azapi"' }
-            }
             Invoke-AvmTerraformUtilityMigration -Plans $plans -Options $script:utilityOptions
-            Should -Invoke Invoke-AvmTerraformUtilityPatch -Exactly 1
+            Should -Invoke Invoke-AvmTerraformUtilityNativeMigration -Exactly 1
         }
     }
 
@@ -269,12 +333,8 @@ Describe 'Terraform utility migration planning' {
             }
             $script:utilityInspection.requirements.azapi = @{ source = 'Azure/azapi'; version = '~> 2.12' }
             $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets -Options $script:utilityOptions)
-            Mock Invoke-AvmTerraformUtilityPatch {
-                $Mappings.Count | Should -Be 0
-                $Requirement | Should -BeNullOrEmpty
-            }
             Invoke-AvmTerraformUtilityMigration -Plans $plans -Options $script:utilityOptions
-            Should -Invoke Invoke-AvmTerraformUtilityPatch -Exactly 1
+            Should -Invoke Invoke-AvmTerraformUtilityNativeMigration -Exactly 1
         }
     }
 
@@ -291,18 +351,14 @@ Describe 'Terraform utility migration planning' {
                     requirements = @{}; variables = @{}
                 }
             }
-            Mock Get-AvmTerraformUtilityInspection { $script:utilityInspections[$Path] }
+            Mock Get-AvmTerraformUtilityInspection { New-UtilityMigrationInspection -Inspection $script:utilityInspections[$Path] }
             $targets = @(
                 [pscustomobject]@{ Path = $script:utilityRoot; Scope = 'example'; Profiles = @('example') }
                 [pscustomobject]@{ Path = $child; Scope = 'module'; Profiles = @('module') }
             )
             $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $targets -Options $script:utilityOptions)
-            Mock Invoke-AvmTerraformUtilityPatch {
-                $Mappings.Count | Should -Be 0
-                $Requirement | Should -BeNullOrEmpty
-            }
             Invoke-AvmTerraformUtilityMigration -Plans $plans -Options $script:utilityOptions
-            Should -Invoke Invoke-AvmTerraformUtilityPatch -Exactly 2
+            Should -Invoke Invoke-AvmTerraformUtilityNativeMigration -Exactly 2
         }
     }
 
@@ -318,12 +374,9 @@ Describe 'Terraform utility migration planning' {
                 location = $Location; enable_telemetry = $Telemetry; for_each = 'var.regions'
             }
             $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets -Options $script:utilityOptions)
-            Mock Invoke-AvmTerraformUtilityPatch {
-                $Updates.choose_region | Should -BeExactly "version = `"0.13.0`"`n"
-                $Inputs.Count | Should -Be 0
-            }
+            Mock Invoke-AvmTerraformUtilityNativeMigration { $Scope | Should -BeExactly 'root' }
             Invoke-AvmTerraformUtilityMigration -Plans $plans -Options $script:utilityOptions
-            Should -Invoke Invoke-AvmTerraformUtilityPatch -Exactly 1
+            Should -Invoke Invoke-AvmTerraformUtilityNativeMigration -Exactly 1
         }
     }
 
@@ -337,15 +390,9 @@ Describe 'Terraform utility migration planning' {
             $script:utilityInspection.variables.location = @{ type = 'string'; default = 'authored' }
             $script:utilityInspection.variables.enable_telemetry = @{ type = 'bool'; default = $false }
             $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:utilityTargets -Options $script:utilityOptions)
-            Mock Invoke-AvmTerraformUtilityPatch {
-                $Inputs.Count | Should -Be 0
-                $Updates.names | Should -BeExactly ("version = `"0.2.0`"`n" +
-                    "source = `"Azure/avm-utl-naming/azure`"`n")
-                $Updates.regions | Should -BeExactly ("version = `"0.13.0`"`n" +
-                    "location = var.location`nenable_telemetry = var.enable_telemetry`n")
-            }
+            Mock Invoke-AvmTerraformUtilityNativeMigration { $Scope | Should -BeExactly 'root' }
             Invoke-AvmTerraformUtilityMigration -Plans $plans -Options $script:utilityOptions
-            Should -Invoke Invoke-AvmTerraformUtilityPatch -Exactly 1
+            Should -Invoke Invoke-AvmTerraformUtilityNativeMigration -Exactly 1
         }
     }
 
@@ -358,7 +405,7 @@ Describe 'Terraform utility migration planning' {
                 $child              = @{ calls = @{ arbitrary = @{ source = 'Azure/avm-utl-interfaces/azure'; version = '0.8.0' } }; requirements = @{} }
                 $wrapper            = @{ calls = @{ parent = @{ source = '../..' } }; requirements = @{} }
             }
-            Mock Get-AvmTerraformUtilityInspection { $script:utilityInspections[$Path] }
+            Mock Get-AvmTerraformUtilityInspection { New-UtilityMigrationInspection -Inspection $script:utilityInspections[$Path] }
             $targets = @(
                 [pscustomobject]@{ Path = $wrapper; Scope = 'test' }
                 [pscustomobject]@{ Path = $script:utilityRoot; Scope = 'root' }
@@ -386,7 +433,7 @@ Describe 'Terraform utility migration planning' {
                     requirements = @{}
                 }
             }
-            Mock Get-AvmTerraformUtilityInspection { $script:utilityInspections[$Path] }
+            Mock Get-AvmTerraformUtilityInspection { New-UtilityMigrationInspection -Inspection $script:utilityInspections[$Path] }
             $targets = @(
                 [pscustomobject]@{ Path = $example; Scope = 'example' }
                 [pscustomobject]@{ Path = $script:utilityRoot; Scope = 'root' }
@@ -426,7 +473,7 @@ Describe 'Terraform utility migration planning' {
                 $wrapper = @{ calls = @{ complete = @{ source = '../../examples/complete' } }; requirements = @{} }
                 $unrelated = @{ calls = @{}; requirements = @{} }
             }
-            Mock Get-AvmTerraformUtilityInspection { $script:utilityInspections[$Path] }
+            Mock Get-AvmTerraformUtilityInspection { New-UtilityMigrationInspection -Inspection $script:utilityInspections[$Path] }
             $targets = @(
                 [pscustomobject]@{ Path = $wrapper; Scope = 'test' }
                 [pscustomobject]@{ Path = $complete; Scope = 'example' }
@@ -451,43 +498,6 @@ Describe 'Terraform utility migration planning' {
                 Should -Throw '*cyclic local module calls*'
         }
     }
-
-    It 'fails a selected native profile capability check before any writing invocation' {
-        InModuleScope Avm.Authoring {
-            Mock Invoke-AvmProcess { [pscustomobject]@{ StdOut = 'false' } }
-            { Invoke-AvmTerraformUtilityPatch -Path $script:utilityRoot -Options $script:utilityOptions `
-                    -Updates @{ region = 'version = "0.13.0"' } } | Should -Throw '*exact native patches*'
-            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -ceq 'debug' }
-            Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -ceq 'transform' }
-        }
-    }
-
-    It 'skips empty patches and honors WhatIf without writing' {
-        InModuleScope Avm.Authoring {
-            Mock Invoke-AvmProcess { [pscustomobject]@{ StdOut = 'true' } }
-            Invoke-AvmTerraformUtilityPatch -Path $script:utilityRoot -Options $script:utilityOptions
-            Should -Invoke Invoke-AvmProcess -Exactly 0
-            Invoke-AvmTerraformUtilityPatch -Path $script:utilityRoot -Options $script:utilityOptions `
-                -RemoveMaps region -WhatIf
-            Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -ceq 'transform' }
-        }
-    }
-
-    It 'passes exact serialized patches to native transforms without evaluating expressions' {
-        InModuleScope Avm.Authoring {
-            Mock Invoke-AvmProcess { [pscustomobject]@{ StdOut = 'true' } }
-            Invoke-AvmTerraformUtilityPatch -Path $script:utilityRoot -Options $script:utilityOptions `
-                -Updates @{ region = 'location = var.location' } -Mappings @{ region = '{ azapi = azapi.unit /* ${authored} */ }' } `
-                -RemoveMaps retired -RemoveRequirements modtm -Inputs @{ location = 'required' }
-            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
-                $ArgumentList[0] -ceq 'transform' -and
-                ($ArgumentList -join "`n").Contains('$${authored}') -and
-                $ArgumentList -contains 'remove_requirements=["modtm"]' -and
-                $ArgumentList -contains 'remove_provider_maps=["retired"]'
-            }
-        }
-    }
-
 
 }
 
@@ -565,7 +575,9 @@ Describe 'Terraform utility provider mapping proof' {
                 }
             }
             Mock Get-ChildItem { @() }
-            Mock Invoke-AvmTerraformUtilityPatch
+            Mock Invoke-AvmTerraformUtilityNativeMigration
+            Mock Assert-AvmTerraformUtilityProviderMappingReview { @{ Configurations = @(); Aliases = @() } }
+            Mock Get-AvmTerraformUtilityProviderConfigurationFact { @{ Configurations = @(); Aliases = @() } }
             Mock Get-AvmTerraformUnitTestModtmRequirementPlan
             Mock Invoke-AvmMapotfTransformTarget
             Mock Get-AvmTerraformUnitTestProviderSource {
@@ -577,75 +589,25 @@ Describe 'Terraform utility provider mapping proof' {
             }
             { Invoke-AvmTerraformUtilityProviderCleanup -Plans @($scope) -ModuleTargets @($target) -Options $options } |
                 Should -Throw '*still incomplete*'
-            Should -Invoke Get-AvmTerraformUnitTestProviderSource -Exactly 1 -ParameterFilter { $AllowMissingProviderConfiguration }
+            Should -Invoke Get-AvmTerraformUnitTestProviderSource -Exactly 2 -ParameterFilter { $AllowMissingProviderConfiguration }
             Should -Invoke Get-AvmTerraformUnitTestProviderSource -Exactly 1 -ParameterFilter { -not $AllowMissingProviderConfiguration }
             Should -Invoke Invoke-AvmMapotfTransformTarget -Exactly 0
         }
     }
 
-    It 'removes only unused same-provider ModTM mappings and preserves other expressions and comments' {
+    It 'surfaces native provider-map review before a transform writes' {
         InModuleScope Avm.Authoring {
-            $expression = @'
-{
-  modtm = modtm.unit # retain the annotation
-  azapi = azapi.secondary
-  random = random
-}
-'@
-            $mapping = Get-AvmTerraformUtilityProviderMapping -Path 'fixture' -Name 'renamed' `
-                -Call @{ providers = $expression } -ProviderSources @('registry.terraform.io/azure/azapi')
-            $mapping.Changed | Should -BeTrue
-            $mapping.Expression | Should -Match '# retain the annotation'
-            $mapping.Expression | Should -Match 'azapi = azapi.secondary'
-            $mapping.Expression | Should -Match 'random = random'
-            $mapping.Expression | Should -Not -Match 'modtm\s*='
-            Get-AvmTerraformUtilityProviderMapping -Path 'fixture' -Name 'renamed' `
-                -Call @{ providers = $expression } -ProviderSources @('registry.terraform.io/azure/modtm') |
-                Should -BeNullOrEmpty
-        }
-    }
-
-    It 'restores inheritance when the retired ModTM binding was the entire map' {
-        InModuleScope Avm.Authoring {
-            $mapping = Get-AvmTerraformUtilityProviderMapping -Path 'fixture' -Name 'regions' `
-                -Call @{ providers = '{ modtm = modtm }' } `
-                -ProviderSources @('registry.terraform.io/azure/azapi')
-            $mapping.RemoveMap | Should -BeTrue
-            $mapping.Expression | Should -Not -Match 'azapi'
-        }
-    }
-
-    It 'adds AzAPI when another authored binding requires retaining the explicit map' {
-        InModuleScope Avm.Authoring {
-            $mapping = Get-AvmTerraformUtilityProviderMapping -Path 'fixture' -Name 'interfaces' `
-                -Call @{ providers = '{ modtm = modtm, random = random.original }' } `
-                -ProviderSources @('registry.terraform.io/azure/azapi', 'registry.terraform.io/hashicorp/random')
-            $mapping.RemoveMap | Should -BeFalse
-            $mapping.Expression | Should -Match 'random = random.original'
-            $mapping.Expression | Should -Match 'azapi = azapi'
-            $mapping.Expression | Should -Not -Match 'modtm\s*='
-        }
-    }
-
-    It 'requires review for an unprovable mapping: <Expression>' -TestCases @(
-        @{ Expression = '{ modtm = azapi }' }
-        @{ Expression = '{ modtm.unit = modtm.unit }' }
-        @{ Expression = 'local.providers' }
-        @{ Expression = '{ modtm = modtm, modtm = modtm }' }
-    ) {
-        param($Expression)
-        InModuleScope Avm.Authoring -Parameters @{ Expression = $Expression } {
-            param($Expression)
-            { Get-AvmTerraformUtilityProviderMapping -Path 'fixture' -Name 'renamed' `
-                    -Call @{ providers = $Expression } -ProviderSources @() } | Should -Throw '*require review*'
-        }
-    }
-
-    It 'does not infer that an unexpected ModTM source is safe to remove' {
-        InModuleScope Avm.Authoring {
-            { Get-AvmTerraformUtilityProviderMapping -Path 'fixture' -Name 'renamed' `
-                    -Call @{ providers = '{ modtm = modtm }' } -ProviderSources @('example.com/custom/modtm') } |
-                Should -Throw '*provider source*'
+            $options = [pscustomobject]@{
+                ToolPath = 'mapotf'; EnvVars = @{}; ProfileDirs = @{ 'utility-module' = 'profile' }
+            }
+            Mock Get-AvmTerraformUtilityProviderConfigurationFact { @{ Configurations = @(); Aliases = @() } }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ StdOut = '{"regions":{}}' } }
+            {
+                Assert-AvmTerraformUtilityProviderMappingReview -Path 'fixture' -Options $options `
+                    -ProviderSourceFacts @{ regions = @('registry.terraform.io/azure/azapi') } `
+                    -CallsRequiringAzapi regions
+            } | Should -Throw '*requires review*'
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -ceq 'debug' }
         }
     }
 }

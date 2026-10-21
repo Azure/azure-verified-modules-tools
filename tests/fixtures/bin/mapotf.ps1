@@ -22,7 +22,7 @@ switch ($args[0]) {
     'debug' {
         $evalIndex = [array]::IndexOf($args, '--eval')
         if ($evalIndex -ge 0 -and $args[$evalIndex + 1].Contains('data.module.utility.result')) {
-            Write-Output '{"calls":{},"variables":{},"requirements":{},"resources":{},"data_sources":{},"ephemeral":{}}'
+            Write-Output '{"calls":{},"variables":{},"requirements":{},"resources":{},"data_sources":{},"ephemeral":{},"migration":{"review":{},"calls":{}}}'
             exit 0
         }
         $fileIndex = [array]::IndexOf($args, '--test-file')
