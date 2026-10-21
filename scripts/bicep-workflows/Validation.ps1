@@ -42,7 +42,8 @@ function Invoke-AvmWorkflowE2e {
         [string] $Example,
         [string] $ManagementGroupId,
         [string] $CustomLocation,
-        [bool] $RemoveDeployment = $true
+        [bool] $RemoveDeployment = $true,
+        [switch] $RequireResourceIsolation
     )
 
     $path = Resolve-AvmWorkflowPath -Root $Root -RelativePath $ModulePath
@@ -58,6 +59,7 @@ function Invoke-AvmWorkflowE2e {
         $parameters.Location = 'WestEurope'
         $parameters.ResourceGroupPrefix = 'avm'
         $parameters.UseCiInputs = $true
+        if ($RequireResourceIsolation) { $parameters.RequireResourceIsolation = $true }
         if (-not [string]::IsNullOrEmpty($ManagementGroupId)) { $parameters.ManagementGroupId = $ManagementGroupId }
         if (-not [string]::IsNullOrEmpty($CustomLocation)) { $parameters.ResourceLocation = $CustomLocation }
     }

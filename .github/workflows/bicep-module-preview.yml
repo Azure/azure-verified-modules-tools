@@ -150,7 +150,6 @@ jobs:
     if: inputs.moduleTestFilePaths != '' && inputs.moduleTestFilePaths != '[]' && fromJSON(inputs.workflowInput).deploymentValidation == 'true'
     outputs:
       deploymentMatrix: ${{ steps.selection.outputs.deploymentMatrix }}
-      sharedScope: ${{ steps.selection.outputs.sharedScope }}
     steps:
       - *validate-tools-ref
       - *checkout-caller
@@ -187,10 +186,11 @@ jobs:
       - job_psrule_must
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix:
         testCases: ${{ fromJSON(needs.job_initialize_subscription_selection.outputs.deploymentMatrix) }}
     concurrency:
-      group: ${{ needs.job_initialize_subscription_selection.outputs.sharedScope == 'true' && !matrix.testCases.e2eIgnore && format('avm-deploy-{0}-shared', inputs.modulePath) || format('avm-deploy-{0}-run-{1}-{2}-{3}', inputs.modulePath, github.run_id, github.run_attempt, strategy.job-index) }}
+      group: ${{ matrix.testCases.isolationMode == 'fallback' && matrix.testCases.fallbackModuleLock && format('avm-deploy-{0}-shared', inputs.modulePath) || format('avm-deploy-{0}-run-{1}-{2}-{3}', inputs.modulePath, github.run_id, github.run_attempt, strategy.job-index) }}
       queue: max
     uses: ./.github/workflows/bicep-module-deployment.yml
     with:

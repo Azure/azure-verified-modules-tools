@@ -92,7 +92,7 @@ Listing does not resolve tools or credentials. An absent tier is
 ## Syntax
 
 ```powershell
-Invoke-AvmTestE2e [[-Path] <string>] [-Ecosystem <string>] [-AllowPathFallback] [-Example <string[]>] [-List] [-MaxRetry <int>] [-Recurse] [-SubscriptionId <string>] [-TenantId <string>] [-ManagementGroupId <string>] [-Location <string>] [-ResourceLocation <string>] [-ResourceGroupPrefix <string>] [-TokenFile <string>] [-Tokens <IDictionary>] [-ParameterFile <string>] [-Parameters <IDictionary>] [-UseCiInputs] [-TestSubscriptionIds <string>] [-SubscriptionSelectionSeed <int>] [-SubscriptionJobIndex <int>] [-Phase <string>] [-CleanupStatePath <string>] [-KeepResources] [-DeploymentRetryLimit <int>] [-ValidationRetryLimit <int>] [-SkipModuleVersionCheck] [-WhatIf] [-Confirm] [<CommonParameters>]
+Invoke-AvmTestE2e [[-Path] <string>] [-Ecosystem <string>] [-AllowPathFallback] [-Example <string[]>] [-List] [-MaxRetry <int>] [-Recurse] [-SubscriptionId <string>] [-TenantId <string>] [-ManagementGroupId <string>] [-Location <string>] [-ResourceLocation <string>] [-ResourceGroupPrefix <string>] [-TokenFile <string>] [-Tokens <IDictionary>] [-ParameterFile <string>] [-Parameters <IDictionary>] [-UseCiInputs] [-TestSubscriptionIds <string>] [-SubscriptionSelectionSeed <int>] [-SubscriptionJobIndex <int>] [-Phase <string>] [-CleanupStatePath <string>] [-KeepResources] [-RequireResourceIsolation] [-DeploymentRetryLimit <int>] [-ValidationRetryLimit <int>] [-SkipModuleVersionCheck] [-WhatIf] [-Confirm] [<CommonParameters>]
 ```
 
 ## Parameters
@@ -294,6 +294,23 @@ Bicep All (default), Deploy, or Complete for caller-owned sign-in renewal.
 ### -Recurse
 
 Bicep-only: include child-module test cases.
+
+| Property | Value |
+| --- | --- |
+| Type | `Switch` |
+| Required | false |
+| Position | named |
+| Default value | False |
+| Accept pipeline input | false |
+| Accept wildcard characters | false |
+
+### -RequireResourceIsolation
+
+Bicep-only: require an inspectable, contained storage-resource template
+in a fresh native-owned group, or an empty template at any scope.
+Refuse unproved scope escapes, scripts, hooks and provider-managed
+infrastructure. Recheck group ownership before submission and constrain
+recursive cleanup/recovery to the persisted ownership boundary.
 
 | Property | Value |
 | --- | --- |
@@ -511,6 +528,12 @@ avm test e2e --phase Complete --cleanup-state-path cleanup.json --subscription-i
 
 ```powershell
 avm test e2e --max-retry 0 --ecosystem terraform
+```
+
+### EXAMPLE 6
+
+```powershell
+Invoke-AvmTestE2e -Path . -Ecosystem bicep -RequireResourceIsolation -SubscriptionId $testSubscriptionId -TenantId $testTenantId -Location eastus -ResourceGroupPrefix avm-e2e
 ```
 
 ## Outputs

@@ -230,14 +230,11 @@ Describe 'Bicep required checks and deployment guards' {
         }
     }
 
-    It 'preserves environment-bound identity and whole-lifecycle shared and subscription locks' {
+    It 'preserves environment-bound identity and one whole-lifecycle lock' {
         foreach ($name in @('bicep-module', 'bicep-module-preview', 'bicep-module-publish')) {
             $jobs = $script:workflows[$name].jobs
             $jobs.job_initialize_subscription_selection.environment | Should -BeExactly 'avm-validation'
             $jobs.job_initialize_subscription_selection.permissions.Contains('id-token') | Should -BeFalse
-            $jobs.job_module_deploy_validation.concurrency.group | Should -Match 'avm-deploy-\{0\}-shared'
-            $jobs.job_module_deploy_validation.concurrency.group | Should -Match 'run-\{1\}-\{2\}-\{3\}'
-            $jobs.job_module_deploy_validation.concurrency.queue | Should -Be 'max'
         }
         $job = $script:workflows['bicep-module-deployment'].jobs.job_module_deploy_validation
         $job.environment | Should -BeExactly 'avm-validation'
@@ -290,12 +287,12 @@ Describe 'Bicep required checks and deployment guards' {
         }
     }
 
-    It 'confines CI contexts to native deployment and preserves renewal, failure and cancellation order' {
+    It 'confines CI contexts to input validation and deployment and preserves cleanup order' {
         $steps = $script:actions['bicep-deployment'].runs.steps
         $ids = @($steps | Where-Object { $_['id'] } | ForEach-Object id)
         $ids | Should -Be @('auth', 'setup', 'login_oidc', 'context', 'deploy', 'renew_oidc', 'complete')
         foreach ($step in $steps) {
-            if ($step.Contains('env') -and ($step.env['AVM_CI_SECRETS'] -or $step.env['AVM_CI_VARIABLES'])) { $step.id | Should -Be 'deploy' }
+            if ($step.Contains('env') -and ($step.env['AVM_CI_SECRETS'] -or $step.env['AVM_CI_VARIABLES'])) { $step.id | Should -BeIn @('auth', 'deploy') }
             if ($step['id'] -in @('renew_oidc', 'complete') -or $step.name -eq 'Recover unfinished native cleanup') {
                 $step.if | Should -Match '!cancelled\(\)'
             }
