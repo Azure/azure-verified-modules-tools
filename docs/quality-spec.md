@@ -1874,6 +1874,25 @@ parent ordering, same-target tag reuse, conflicting-tag failures and
 reconciliation of uncertain pushes without mutation replay. Preview cannot
 create or push tags.
 
+Shared pending-release support compares each tracked compiled/versioned module,
+including versioned children, against its own latest semantic-version source
+tag across all version lines. A manual pending release includes publishable
+`main.json` or `version.json` changes older than the latest main commit, but
+not docs, metadata, authored source or test-only edits. A module without a
+release tag is an initial release of its tracked compiled/versioned files;
+do not substitute the target's parent, force unchanged modules or infer that
+an ADO handoff tag proves MCR publication completed.
+Validate complete history and each selected tag's commit ancestry; unavailable,
+invalid or failed history/tag reads are errors, not empty successful selections.
+Recheck independent child/parent baselines inside the existing module publication
+lock, create changed children before parents, and retain tag version, reuse,
+conflict and push-reconciliation semantics. Explicit before/after push discovery
+and existing leaf defaults remain unchanged. Shared support exposes pending
+discovery and tagging without adding workflow events, authentication,
+deployment, publication activation or a caller-facing mode/input surface.
+New orchestration must consume a durable, separately merged support commit;
+never pin support to an orphanable premerge head.
+
 Publishing an executable candidate is not a package release, federation apply
 or registry cutover. Moving deployment to tools changes `job_workflow_ref`
 to the exact tools deployment workflow at the immutable caller pin; it only
