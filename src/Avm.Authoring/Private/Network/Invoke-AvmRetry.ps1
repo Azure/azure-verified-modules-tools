@@ -6,14 +6,16 @@ function Invoke-AvmRetry {
         Retries only failures classified as Transient by Get-AvmNetworkFailureKind,
         using exponential backoff with jitter capped by Resources/network.json and
         at least any server Retry-After delay. Cancellation and permanent errors
-        are rethrown immediately. A Retry-After longer than the configured cap is
-        not waited for. After the final attempt the original error is rethrown,
-        unless it carries Data['AvmResult'], which is then returned so callers can
-        report the last response themselves. Retry progress is written only to
-        the verbose stream. After retries are exhausted, the original exception
-        is preserved with a concise user-facing error detail. -RetryQuiet leaves
-        the original error detail unchanged for advisory callers that report
-        failure themselves.
+        are rethrown immediately. A caller may use -RetryOnPermanentFailure to
+        classify a specific permanent failure as retryable; cancellation remains
+        non-retryable. A Retry-After longer than the configured cap is not waited
+        for. After the final attempt the original error is rethrown, unless it
+        carries Data['AvmResult'], which is then returned so callers can report
+        the last response themselves. Retry progress is written only to the
+        verbose stream. After retries are exhausted, the original exception is
+        preserved with a concise user-facing error detail unless a caller-classified
+        permanent failure already has one. -RetryQuiet leaves the original error
+        detail unchanged for advisory callers that report failure themselves.
 
         Only wrap reads or operations that are safe to repeat. Never wrap
         deployments, creates or other mutations whose outcome may be ambiguous.
@@ -27,6 +29,7 @@ function Invoke-AvmRetry {
         [Parameter(Mandatory)] [string] $RetryActivity,
         [int] $RetryMaxAttempts = 0,
         [double] $RetryInitialDelaySeconds = -1,
+        [scriptblock] $RetryOnPermanentFailure,
         [switch] $RetryQuiet
     )
 
@@ -44,7 +47,13 @@ function Invoke-AvmRetry {
         catch {
             $retryError = $_
             $retryKind = Get-AvmNetworkFailureKind -ErrorRecord $retryError
-            if ($retryKind -ne 'Transient') { throw }
+            if ($retryKind -eq 'Cancelled') { throw }
+
+            $retryCallerClassified = $false
+            if ($retryKind -eq 'Permanent' -and $null -ne $RetryOnPermanentFailure) {
+                $retryCallerClassified = & $RetryOnPermanentFailure $retryError
+            }
+            if ($retryKind -eq 'Permanent' -and -not $retryCallerClassified) { throw }
 
             $retryAfter = Get-AvmRetryAfterDelay -ErrorRecord $retryError
             $retryTooLong = $null -ne $retryAfter -and $retryAfter -gt $retryPolicy.MaxRetryAfterSeconds
@@ -52,7 +61,7 @@ function Invoke-AvmRetry {
                 $retryReason = if ($retryTooLong) { "server asked to wait $([math]::Round($retryAfter))s, above the $($retryPolicy.MaxRetryAfterSeconds)s limit" } else { "$retryAttempt attempts" }
                 Write-Verbose ("{0} failed after {1}: {2}" -f $RetryActivity, $retryReason, $retryError.Exception.Message)
                 if ($retryError.Exception.Data.Contains('AvmResult')) { return $retryError.Exception.Data['AvmResult'] }
-                if (-not $RetryQuiet) {
+                if (-not $RetryQuiet -and -not ($retryCallerClassified -and $null -ne $retryError.ErrorDetails)) {
                     $retryError.ErrorDetails = [System.Management.Automation.ErrorDetails]::new(
                         (Get-AvmRetryFailureMessage -Activity $RetryActivity -ErrorRecord $retryError -Attempts $retryAttempt))
                 }
@@ -62,8 +71,9 @@ function Invoke-AvmRetry {
             $retryCap = [math]::Min($retryPolicy.MaxDelaySeconds, $retryBaseDelay * [math]::Pow(2, $retryAttempt - 1))
             $retryDelay = ($retryCap / 2) + (Get-Random -Minimum 0.0 -Maximum ([math]::Max($retryCap / 2, 0.001)))
             if ($null -ne $retryAfter) { $retryDelay = [math]::Max($retryDelay, $retryAfter) }
-            $retryMessage = "{0} hit a transient failure (attempt {1} of {2}); retrying in {3:0.#}s: {4}" -f
-            $RetryActivity, $retryAttempt, $retryLimit, $retryDelay, $retryError.Exception.Message
+            $retryFailureKind = if ($retryKind -eq 'Transient') { 'transient' } else { 'caller-classified' }
+            $retryMessage = "{0} hit a {1} failure (attempt {2} of {3}); retrying in {4:0.#}s: {5}" -f
+            $RetryActivity, $retryFailureKind, $retryAttempt, $retryLimit, $retryDelay, $retryError.Exception.Message
             Write-Verbose $retryMessage
             Wait-AvmRetryDelay -Seconds $retryDelay
         }

@@ -2846,6 +2846,15 @@ may select that checkout. Released-source, scheduled and apply runs retain
 bounded Gallery installation retries. Missing or incompatible checkout
 modules fail explicitly; they must not fall back to a release.
 
+Build prerequisite installation uses the shared bounded retry policy. Exact-pinned
+PowerShell Gallery prerequisites may additionally retry a caller-scoped HTTP 404
+only when the rendered diagnostic contains the observed `Response status code does
+not indicate success: 404 (Not Found)` or `HTTP 404` response text and an exact
+`www.powershellgallery.com/api/v2/FindPackagesById` or `/api/v2/package/` request
+endpoint. The same exact pin is reused on each attempt, and exhaustion rethrows
+the original error. Generic 404 responses, authentication failures and
+cancellation remain permanent or non-retryable under the shared classifier.
+
 ### Coverage
 
 - 70% line coverage on `src/Avm.Authoring/` minimum, enforced via Pester `CodeCoverage`. CI build fails below the floor.
