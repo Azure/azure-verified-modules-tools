@@ -29,6 +29,347 @@ AfterAll {
     }
 }
 
+Describe 'Component: Bicep PR entrypoint admission and routing' -Tag Component {
+    BeforeAll {
+        Import-Module -FullyQualifiedName @{ ModuleName = 'powershell-yaml'; RequiredVersion = '0.4.12' }
+        $script:prEntrypoint = ConvertFrom-Yaml (Get-Content -LiteralPath (
+                Join-Path $script:repoRoot '.github' 'workflows' 'bicep-pr-check.yml') -Raw)
+        $script:entrypointEnvironment = @{}
+        foreach ($name in @('GITHUB_WORKSPACE', 'GITHUB_OUTPUT', 'EVENT_NAME', 'REPOSITORY', 'HEAD_REPOSITORY',
+                'PR_LABELS', 'PULL_REQUEST_HEAD_COMMIT', 'TARGET_COMMIT', 'MODULE_PATHS')) {
+            $script:entrypointEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+        }
+        function Test-AvmEntrypointCondition {
+            param([string] $Condition, [hashtable] $Outputs = @{})
+            $action = $script:eventAction
+            $label = $script:eventLabel
+            $eventName = $env:EVENT_NAME
+            $repository = $env:REPOSITORY
+            $eventActions = @()
+            if ($Condition -match "contains\(fromJSON\('([^']+)'\), github.event.action\)") {
+                $eventActions = @(ConvertFrom-Json -InputObject $Matches[1])
+                $Condition = $Condition.Replace($Matches[0], '($eventActions -ccontains $action)')
+            }
+            $expression = $Condition.Replace('!cancelled()', '$true').
+                Replace('github.event_name', '$eventName').Replace('github.repository', '$repository').
+                Replace('github.event.action', '$action').Replace('github.event.label.name', '$label').
+                Replace('&&', '-and').Replace('||', '-or').Replace('!=', '-cne').Replace('==', '-ceq')
+            $expression = [regex]::Replace($expression, 'needs\.initialize\.outputs\.([A-Za-z]+)', {
+                    param($match) '$Outputs[''' + $match.Groups[1].Value + ''']'
+                })
+            return & ([scriptblock]::Create($expression))
+        }
+        function Invoke-AvmPrEntrypointFixture {
+            if (-not (Test-AvmEntrypointCondition -Condition $script:prEntrypoint.jobs.initialize.if)) {
+                return @{ routes = @() }
+            }
+            . ([scriptblock]::Create($script:prEntrypoint.jobs.initialize.steps[-1].run))
+            $outputs = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
+            $outputs.routes = @(foreach ($name in @('check', 'check_legacy', 'check_fork')) {
+                    if (Test-AvmEntrypointCondition -Condition $script:prEntrypoint.jobs[$name].if -Outputs $outputs) {
+                        $name
+                    }
+                })
+            return $outputs
+        }
+    }
+
+    AfterAll {
+        foreach ($name in $script:entrypointEnvironment.Keys) {
+            $value = $script:entrypointEnvironment[$name]
+            [Environment]::SetEnvironmentVariable($name, $(if ($null -eq $value) { [NullString]::Value } else { $value }))
+        }
+    }
+
+    BeforeEach {
+        $script:entrypointRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $support = Join-Path $script:entrypointRoot '.avm-tools' 'scripts' 'bicep-workflows'
+        $registry = Join-Path $script:entrypointRoot 'utilities' 'pipelines' 'sharedScripts'
+        $null = New-Item -ItemType Directory -Path $support, $registry -Force
+        foreach ($path in @('avm/res/mock/widget', 'avm/res/mock/reserved')) {
+            $folder = Join-Path $script:entrypointRoot $path
+            $null = New-Item -ItemType Directory -Path $folder -Force
+            [IO.File]::WriteAllText((Join-Path $folder 'main.bicep'), '')
+        }
+        $discoveryPath = (Join-Path $script:repoRoot 'scripts' 'bicep-workflows' 'Discovery.ps1').Replace("'", "''")
+        $stub = @'
+function Initialize-AvmWorkflow {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string] $Profile)
+    if ($Profile -cne 'Package') { throw 'Unexpected protected dependency preparation.' }
+    $script:entrypointBootstraps++
+}
+function Invoke-AvmWorkflowGitRead {
+    param([string] $Root, [string[]] $Arguments, [switch] $Remote, [switch] $AllowFailure)
+    $text = switch ($Arguments[0]) {
+        'rev-parse' { 'a' * 40 }
+        'rev-list' { ('a' * 40), ('b' * 40), ('c' * 40) -join ' ' }
+        'cat-file' { '' }
+        'diff' { $script:entrypointChanges }
+        default { throw "Unexpected Git operation: $($Arguments[0])" }
+    }
+    [pscustomobject]@{ ExitCode = 0; StdOut = $text; StdErr = '' }
+}
+'@
+        [IO.File]::WriteAllText((Join-Path $support 'Discovery.ps1'), ". '$discoveryPath'`n$stub")
+        [IO.File]::WriteAllText((Join-Path $registry 'Get-TestSubscriptionTag.ps1'), @'
+function Get-TestSubscriptionTag {
+    param([string] $ModulePath, [string] $RepoRootPath)
+    if ($script:reservationFailure) { throw [ArgumentException]::new('Invalid reservation fixture.') }
+    if ($ModulePath -ceq 'avm/res/mock/reserved') { return 'Azure Local' }
+    return 'General'
+}
+'@)
+        $script:entrypointBootstraps = 0
+        $script:reservationFailure = $false
+        $script:entrypointChanges = "avm/res/mock/widget/main.bicep`navm/res/mock/reserved/main.bicep"
+        $script:eventAction = 'synchronize'
+        $script:eventLabel = ''
+        $env:GITHUB_WORKSPACE = $script:entrypointRoot
+        $env:GITHUB_OUTPUT = Join-Path $script:entrypointRoot 'outputs'
+        $env:EVENT_NAME = 'pull_request'
+        $env:REPOSITORY = 'Azure/bicep-registry-modules'
+        $env:HEAD_REPOSITORY = $env:REPOSITORY
+        $env:PR_LABELS = '[]'
+        $env:PULL_REQUEST_HEAD_COMMIT = 'c' * 40
+        $env:TARGET_COMMIT = 'a' * 40
+        $env:MODULE_PATHS = ''
+        $env:AVM_FIXTURE_EMPTY_SELECTION = 'false'
+        Mock Install-Module {}
+        Mock Import-Module {}
+        Mock Install-PSResource { $script:entrypointBootstraps++ }
+        Mock Get-Module {
+            [pscustomobject]@{
+                PrivateData = @{ AvmCapabilities = @{ BicepWorkflowOrchestration = 1 } }
+            }
+        } -ParameterFilter { $Name -eq 'Avm.Authoring' }
+        Mock Initialize-AvmBicepWorkflowMatrix {
+            param(
+                [string] $Root,
+                [string] $EventName,
+                [string] $TargetCommit,
+                [string] $PullRequestHeadCommit,
+                [string] $ModulePaths,
+                [bool] $StaticValidation,
+                [bool] $DeploymentValidation,
+                [bool] $RemoveDeployment
+            )
+            $selectedPaths = [Collections.Generic.List[string]]::new()
+            if ($ModulePaths) {
+                foreach ($selectedPath in ($ModulePaths -split ',')) {
+                    $null = $selectedPaths.Add($selectedPath.Trim())
+                }
+            }
+            elseif ($EventName -eq 'workflow_dispatch') {
+                throw 'Manual module selection is required.'
+            }
+            elseif ($env:AVM_FIXTURE_EMPTY_SELECTION -eq 'true') {
+                $null = $selectedPaths
+            }
+            else {
+                foreach ($selectedPath in @('avm/res/mock/widget', 'avm/res/mock/reserved')) {
+                    $null = $selectedPaths.Add($selectedPath)
+                }
+            }
+            $include = [Collections.Generic.List[object]]::new()
+            foreach ($selectedModulePath in $selectedPaths) {
+                $null = $include.Add([pscustomobject]@{
+                    ModulePath = $selectedModulePath
+                    TestFiles = @()
+                    PolicyTestFiles = @()
+                })
+            }
+            [pscustomobject]@{
+                BaseCommit = $null
+                TargetCommit = $TargetCommit
+                WorkflowInput = [ordered]@{
+                    customLocation = $null
+                    staticValidation = $StaticValidation.ToString().ToLowerInvariant()
+                    deploymentValidation = $DeploymentValidation.ToString().ToLowerInvariant()
+                    removeDeployment = $RemoveDeployment.ToString().ToLowerInvariant()
+                }
+                ModuleMatrix = [pscustomobject]@{ Include = $include }
+            }
+        }
+    }
+
+    It 'runs automatic static checks without either label on <Action>' -ForEach @(
+        @{ Action = 'opened' }
+        @{ Action = 'reopened' }
+        @{ Action = 'synchronize' }
+    ) {
+        $script:eventAction = $Action
+        $output = Invoke-AvmPrEntrypointFixture
+        $output.routes | Should -Be @('check', 'check_legacy')
+        $controls = $output.workflowInput | ConvertFrom-Json
+        $controls.staticValidation | Should -BeExactly 'true'
+        $controls.deploymentValidation | Should -BeExactly 'false'
+        $controls.removeDeployment | Should -BeExactly 'true'
+    }
+
+    It 'admits E2E with only its own label and forwards it to both implementations' {
+        $script:eventAction = 'labeled'
+        $script:eventLabel = 'PR: Run E2E Tests'
+        $env:PR_LABELS = '["PR: Run E2E Tests"]'
+        $output = Invoke-AvmPrEntrypointFixture
+        $output.routes | Should -Be @('check', 'check_legacy')
+        ($output.workflowInput | ConvertFrom-Json).deploymentValidation | Should -BeExactly 'true'
+        ($output.sharedModuleMatrix | ConvertFrom-Json).include.modulePath | Should -Be 'avm/res/mock/widget'
+        ($output.localModuleMatrix | ConvertFrom-Json).include.modulePath | Should -Be 'avm/res/mock/reserved'
+    }
+
+    It 'ignores unrelated label events before bootstrap or discovery (<Label>)' -ForEach @(
+        @{ Label = 'PR: Run Checks' }
+        @{ Label = 'bug' }
+    ) {
+        $script:eventAction = 'labeled'
+        $script:eventLabel = $Label
+        $env:PR_LABELS = '["PR: Run E2E Tests"]'
+        (Invoke-AvmPrEntrypointFixture).routes | Should -HaveCount 0
+        $script:entrypointBootstraps | Should -Be 0
+        Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
+    }
+
+    It 'routes forks only to public static checks with <Labels>' -ForEach @(
+        @{ Labels = '[]' }
+        @{ Labels = '["PR: Run E2E Tests"]' }
+    ) {
+        $env:HEAD_REPOSITORY = 'fork/bicep-registry-modules'
+        $env:PR_LABELS = $Labels
+        $output = Invoke-AvmPrEntrypointFixture
+        $output.routes | Should -Be @('check_fork')
+        ($output.workflowInput | ConvertFrom-Json).deploymentValidation | Should -BeExactly 'false'
+    }
+
+    It 'runs full manual checks for explicit paths without PR metadata or label lookup' {
+        $env:EVENT_NAME = 'workflow_dispatch'
+        $env:HEAD_REPOSITORY = ''
+        $env:PR_LABELS = 'null'
+        $env:PULL_REQUEST_HEAD_COMMIT = ''
+        $env:MODULE_PATHS = 'avm/res/mock/reserved, avm/res/mock/widget'
+        $output = Invoke-AvmPrEntrypointFixture
+        $output.routes | Should -Be @('check', 'check_legacy')
+        $controls = $output.workflowInput | ConvertFrom-Json
+        $controls.staticValidation | Should -BeExactly 'true'
+        $controls.deploymentValidation | Should -BeExactly 'true'
+        $controls.removeDeployment | Should -BeExactly 'true'
+        $controls.customLocation | Should -BeNullOrEmpty
+        $output.baseCommit | Should -BeNullOrEmpty
+    }
+
+    It 'rejects manual dispatch without module paths rather than selecting everything' {
+        $env:EVENT_NAME = 'workflow_dispatch'
+        { Invoke-AvmPrEntrypointFixture } | Should -Throw
+        Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
+    }
+
+    It 'returns an empty selection without expanding a check matrix' {
+        $env:AVM_FIXTURE_EMPTY_SELECTION = 'true'
+        $output = Invoke-AvmPrEntrypointFixture
+        $output.routes | Should -HaveCount 0
+        $output.hasModules | Should -BeExactly 'false'
+    }
+
+    It 'does not emit partial routes when reservation lookup fails' {
+        $script:reservationFailure = $true
+        { Invoke-AvmPrEntrypointFixture } | Should -Throw '*reservation fixture*'
+        Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
+    }
+
+    It 'denies unsupported automatic events and nonupstream automatic callers' {
+        $env:EVENT_NAME = 'push'
+        (Invoke-AvmPrEntrypointFixture).routes | Should -HaveCount 0
+        $env:EVENT_NAME = 'pull_request'
+        $env:REPOSITORY = 'fork/bicep-registry-modules'
+        (Invoke-AvmPrEntrypointFixture).routes | Should -HaveCount 0
+        $script:entrypointBootstraps | Should -Be 0
+    }
+}
+
+Describe 'Component: Bicep release entrypoint discovery and publication' -Tag Component {
+    BeforeAll {
+        $script:releaseEntrypoint = ConvertFrom-Yaml (Get-Content -LiteralPath (
+                Join-Path $script:repoRoot '.github' 'workflows' 'bicep-release.yml') -Raw)
+        $script:releaseEntrypointEnvironment = @{}
+        foreach ($name in @('GITHUB_WORKSPACE', 'GITHUB_OUTPUT', 'EVENT_NAME', 'BASE_COMMIT', 'TARGET_COMMIT')) {
+            $script:releaseEntrypointEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+        }
+    }
+
+    AfterAll {
+        foreach ($name in $script:releaseEntrypointEnvironment.Keys) {
+            $value = $script:releaseEntrypointEnvironment[$name]
+            [Environment]::SetEnvironmentVariable($name, $(if ($null -eq $value) { [NullString]::Value } else { $value }))
+        }
+    }
+
+    BeforeEach {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $support = Join-Path $root '.avm-tools' 'scripts' 'bicep-workflows'
+        $null = New-Item -ItemType Directory -Path $support -Force
+        [IO.File]::WriteAllText((Join-Path $support 'Release.ps1'), @'
+function Initialize-AvmWorkflow {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string] $Profile)
+    if ($Profile -cne 'Package') { throw 'Unexpected protected dependency preparation.' }
+    $script:releaseEntrypointBootstraps++
+}
+function Initialize-AvmWorkflowReleaseMatrix {
+    param([string] $Root, [string] $EventName, [string] $TargetCommit, [string] $BaseCommit)
+    $script:releaseEntrypointInvocation = @{
+        Root = $Root; EventName = $EventName; TargetCommit = $TargetCommit; BaseCommit = $BaseCommit
+    }
+    @{ include = @(@{ modulePath = 'avm/res/mock/widget' }) }
+}
+function Write-AvmWorkflowOutput {
+    param([string] $Name, [string] $Value)
+    [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "$Name=$Value`n")
+}
+'@)
+        $script:releaseEntrypointBootstraps = 0
+        $script:releaseEntrypointInvocation = $null
+        $env:GITHUB_WORKSPACE = $root
+        $env:GITHUB_OUTPUT = Join-Path $root 'outputs'
+        $env:EVENT_NAME = 'workflow_dispatch'
+        $env:BASE_COMMIT = ''
+        $env:TARGET_COMMIT = 'a' * 40
+        Mock Install-Module {}
+        Mock Import-Module {}
+        Mock Install-PSResource { $script:releaseEntrypointBootstraps++ }
+        Mock Get-Module {
+            [pscustomobject]@{
+                PrivateData = @{ AvmCapabilities = @{ BicepWorkflowOrchestration = 1 } }
+            }
+        } -ParameterFilter { $Name -eq 'Avm.Authoring' }
+        Mock Initialize-AvmBicepReleaseMatrix {
+            param([string] $Root, [string] $EventName, [string] $TargetCommit, [string] $BaseCommit)
+            $script:releaseEntrypointInvocation = @{
+                Root = $Root; EventName = $EventName; TargetCommit = $TargetCommit; BaseCommit = $BaseCommit
+            }
+            [pscustomobject]@{ Include = @([pscustomobject]@{ ModulePath = 'avm/res/mock/widget' }) }
+        }
+    }
+
+    It 'discovers each pending module independently for manual releases' {
+        . ([scriptblock]::Create($script:releaseEntrypoint.jobs.initialize.steps[-1].run))
+        $outputs = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
+        $script:releaseEntrypointBootstraps | Should -Be 1
+        $script:releaseEntrypointInvocation.EventName | Should -BeExactly 'workflow_dispatch'
+        $script:releaseEntrypointInvocation.TargetCommit | Should -BeExactly ('a' * 40)
+        $script:releaseEntrypointInvocation.BaseCommit | Should -BeNullOrEmpty
+        ($outputs.moduleMatrix | ConvertFrom-Json).include.modulePath | Should -BeExactly 'avm/res/mock/widget'
+        $outputs.hasModules | Should -BeExactly 'true'
+    }
+
+    It 'forwards the explicit push range instead of manual pending discovery input' {
+        $env:EVENT_NAME = 'push'
+        $env:BASE_COMMIT = 'b' * 40
+        . ([scriptblock]::Create($script:releaseEntrypoint.jobs.initialize.steps[-1].run))
+        $script:releaseEntrypointInvocation.EventName | Should -BeExactly 'push'
+        $script:releaseEntrypointInvocation.BaseCommit | Should -BeExactly ('b' * 40)
+    }
+}
+
 Describe 'Component: Bicep shared workflow discovery and defaults' -Tag Component {
     BeforeEach {
         $script:root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
@@ -37,7 +378,7 @@ Describe 'Component: Bicep shared workflow discovery and defaults' -Tag Componen
         [IO.File]::WriteAllText((Join-Path $script:root $script:modulePath 'main.bicep'), '')
         [IO.File]::WriteAllText((Join-Path $folder 'main.test.bicep'), '')
         Mock Invoke-AvmWorkflowProcess { throw 'Unexpected process invocation.' }
-        Mock Invoke-AvmWorkflowGitRead {
+        Mock Invoke-AvmBicepWorkflowGit -ModuleName Avm.Authoring {
             if ($Arguments[0] -eq 'rev-parse') {
                 return [pscustomobject]@{ ExitCode = 0; StdOut = 'a' * 40; StdErr = '' }
             }
@@ -197,7 +538,7 @@ on:
     }
 
     It 'uses the visible static-only all-module fallback for a missing push base' {
-        Mock Invoke-AvmWorkflowGitRead {
+        Mock Invoke-AvmBicepWorkflowGit -ModuleName Avm.Authoring {
             [pscustomobject]@{ ExitCode = 0; StdOut = "$script:modulePath/main.bicep"; StdErr = '' }
         } -ParameterFilter { $Arguments[0] -eq 'ls-tree' }
         $output = Initialize-AvmWorkflowMatrix -Root $script:root -EventName push -TargetCommit ('a' * 40) -BaseCommit ('0' * 40)
@@ -217,14 +558,14 @@ on:
 
     It 'fetches a missing base once and uses the recovered commit for changed-file selection' {
         $script:hasBase = $false
-        Mock Invoke-AvmWorkflowGitRead {
+        Mock Invoke-AvmBicepWorkflowGit -ModuleName Avm.Authoring {
             [pscustomobject]@{ ExitCode = $(if ($script:hasBase) { 0 } else { 1 }); StdOut = ''; StdErr = '' }
         } -ParameterFilter { $Arguments[0] -eq 'cat-file' }
-        Mock Invoke-AvmWorkflowGitRead {
+        Mock Invoke-AvmBicepWorkflowGit -ModuleName Avm.Authoring {
             $script:hasBase = $true
             [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
         } -ParameterFilter { $Arguments[0] -eq 'fetch' }
-        Mock Invoke-AvmWorkflowGitRead {
+        Mock Invoke-AvmBicepWorkflowGit -ModuleName Avm.Authoring {
             [pscustomobject]@{ ExitCode = 0; StdOut = "$script:modulePath/main.bicep`n"; StdErr = '' }
         } -ParameterFilter { $Arguments[0] -eq 'diff' }
         $result = Initialize-AvmWorkflowMatrix -Root $script:root -EventName pull_request -TargetCommit ('a' * 40) `
@@ -232,7 +573,7 @@ on:
         $result.baseCommit | Should -BeExactly ('b' * 40)
         $result.hasModules | Should -BeExactly 'true'
         $result.includeAllVersionedModules | Should -BeExactly 'false'
-        Should -Invoke Invoke-AvmWorkflowGitRead -Exactly 1 -ParameterFilter {
+        Should -Invoke Invoke-AvmBicepWorkflowGit -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
             $Arguments[0] -eq 'fetch' -and $Arguments[-1] -ceq ('b' * 40) -and $Remote -and $AllowFailure
         }
     }
@@ -242,10 +583,10 @@ on:
         @{ EventName = 'pull_request'; Enabled = $false; Expected = 1 }
         @{ EventName = 'push'; Enabled = $true; Expected = 0 }
     ) {
-        Mock Invoke-AvmWorkflowGitRead {
+        Mock Invoke-AvmBicepWorkflowGit -ModuleName Avm.Authoring {
             [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
         } -ParameterFilter { $Arguments[0] -eq 'cat-file' }
-        Mock Invoke-AvmWorkflowGitRead {
+        Mock Invoke-AvmBicepWorkflowGit -ModuleName Avm.Authoring {
             [pscustomobject]@{ ExitCode = 0; StdOut = "$script:modulePath/metadata.json`n"; StdErr = '' }
         } -ParameterFilter { $Arguments[0] -eq 'diff' }
         $result = Initialize-AvmWorkflowMatrix -Root $script:root -EventName $EventName -TargetCommit ('a' * 40) `
@@ -255,13 +596,13 @@ on:
     }
 
     It 'fails unavailable pull request bases and returns an empty matrix for no relevant changes' {
-        Mock Invoke-AvmWorkflowGitRead {
+        Mock Invoke-AvmBicepWorkflowGit -ModuleName Avm.Authoring {
             [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'fixture unavailable' }
         } -ParameterFilter { $Arguments[0] -in @('cat-file', 'fetch') }
         { Initialize-AvmWorkflowMatrix -Root $script:root -EventName pull_request -TargetCommit ('a' * 40) `
                 -BaseCommit ('b' * 40) -PullRequestHeadCommit ('c' * 40) } |
             Should -Throw '*base commit is unavailable*'
-        Mock Invoke-AvmWorkflowGitRead {
+        Mock Invoke-AvmBicepWorkflowGit -ModuleName Avm.Authoring {
             [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
         } -ParameterFilter { $Arguments[0] -in @('cat-file', 'diff') }
         $result = Initialize-AvmWorkflowMatrix -Root $script:root -EventName push -TargetCommit ('a' * 40) -BaseCommit ('b' * 40)

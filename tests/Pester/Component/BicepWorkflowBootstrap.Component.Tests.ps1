@@ -17,6 +17,16 @@ Describe 'Component: Bicep isolated workflow bootstrap' -Tag Component {
         $script:fixture = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $script:support = Join-Path $script:fixture 'tools'
         $script:caller = Join-Path $script:fixture 'caller'
+        $manifest = Import-PowerShellDataFile -Path (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1')
+        $packageRoot = Join-Path $script:fixture 'published-modules'
+        $publishedVersion = [version]'99.0.0'
+        $publishedPackage = Join-Path $packageRoot 'Avm.Authoring' $publishedVersion
+        $null = New-Item -ItemType Directory -Path $publishedPackage -Force
+        Copy-Item -Path (Join-Path $script:repoRoot 'src' 'Avm.Authoring' '*') -Destination $publishedPackage -Recurse
+        $manifestPath = Join-Path $publishedPackage 'Avm.Authoring.psd1'
+        $manifestText = [IO.File]::ReadAllText($manifestPath)
+        $manifestText = [regex]::Replace($manifestText, "(?m)^(\s*ModuleVersion\s*=\s*)'[^']+'", "`${1}'$publishedVersion'")
+        [IO.File]::WriteAllText($manifestPath, $manifestText, [Text.UTF8Encoding]::new($false))
         foreach ($relative in @('.github/actions', 'scripts/bicep-workflows', 'repository-management/shared')) {
             $destination = Join-Path $script:support $relative
             $null = New-Item -ItemType Directory -Path (Split-Path $destination) -Force
@@ -30,7 +40,7 @@ Describe 'Component: Bicep isolated workflow bootstrap' -Tag Component {
         [IO.File]::WriteAllText((Join-Path $script:caller 'workflow.yml'), '')
         $script:outputPath = Join-Path $script:fixture 'outputs'
         $script:environment = @{
-            PSModulePath = Join-Path $PSHOME 'Modules'
+            PSModulePath = $packageRoot + [IO.Path]::PathSeparator + (Join-Path $PSHOME 'Modules')
             GITHUB_WORKSPACE = $script:caller
             GITHUB_OUTPUT = $script:outputPath
             MODULE_PATH = $script:modulePath
@@ -127,6 +137,93 @@ Describe 'Component: Bicep isolated workflow bootstrap' -Tag Component {
         }
         $result.ExitCode | Should -Not -Be 0
         Test-Path -LiteralPath $script:outputPath | Should -BeFalse
+    }
+
+    It 'executes the fork static bootstrap and packaged validation with empty configuration and no protected prerequisites' {
+        . (Join-Path $script:repoRoot 'scripts' 'bicep-workflows' 'Validation.ps1')
+        $workflow = ConvertFrom-Yaml (Get-Content -LiteralPath (
+                Join-Path $script:repoRoot '.github' 'workflows' 'bicep-module-static.yml') -Raw)
+        $action = ConvertFrom-Yaml (Get-Content -LiteralPath (
+                Join-Path $script:repoRoot '.github' 'actions' 'bicep-validation' 'action.yml') -Raw)
+        $saved = @{}
+        $values = @{
+            GITHUB_WORKSPACE = $script:caller
+            GITHUB_OUTPUT = $script:outputPath
+            GITHUB_ENV = Join-Path $script:fixture 'environment'
+            AVM_ACTION_PATH = Join-Path $script:support '.github' 'actions' 'bicep-validation'
+            OPERATION = 'Static'
+            MODULE_PATH = $script:modulePath
+            EXAMPLE = ''
+            BASELINE = ''
+            RUNNER_TEMP = Join-Path $script:fixture 'temp'
+        }
+        $staticJob = $workflow.jobs['job_module_static_validation']
+        $workflowEnvironment = if ($staticJob -is [Collections.IDictionary] -and $staticJob.Contains('env')) {
+            $staticJob['env']
+        }
+        else {
+            @{}
+        }
+        foreach ($name in $workflowEnvironment.Keys) {
+            $values[$name] = $workflowEnvironment[$name]
+        }
+        foreach ($name in $values.Keys) {
+            $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+            [Environment]::SetEnvironmentVariable($name, $values[$name])
+        }
+        try {
+            Mock Install-AvmWorkflowModule {}
+            Mock Import-AvmWorkflowPackage {}
+            Mock Install-AvmTool {}
+            Mock Get-Module { Microsoft.PowerShell.Core\Get-Module @PesterBoundParameters }
+            Mock Get-Module {
+                [pscustomobject]@{
+                    Version = [version]'0.30.0'
+                    PrivateData = @{ AvmCapabilities = @{ BicepPackagedCompliance = 1 } }
+                }
+            } -ParameterFilter { $Name -eq 'Avm.Authoring' }
+            Mock Invoke-AvmTestUnit {
+                $env:AVM_CI_VARIABLES | Should -BeExactly '{}'
+                $env:AVM_CI_SECRETS | Should -BeExactly '{}'
+                [pscustomobject]@{
+                    Status = 'pass'; RunsTotal = 3; RunsPassed = 3; RunsFailed = 0
+                    RunsSkipped = 0; RunsFiltered = 0; Issues = @()
+                }
+            }
+            Mock Invoke-AvmCheckPolicy { throw 'Policy must not run in the public-data-only static tier.' }
+            Mock Select-AvmTestSubscription { throw 'Static validation must not select a subscription.' }
+            Mock Get-AvmWorkflowAuthentication { throw 'Static validation must not resolve an identity.' }
+            Mock Invoke-AvmTestE2e { throw 'Static validation must not deploy.' }
+            foreach ($step in $action.runs.steps | Where-Object { $_.Contains('run') }) {
+                $tokens = $null
+                $errors = $null
+                $ast = [Management.Automation.Language.Parser]::ParseInput($step.run, [ref]$tokens, [ref]$errors)
+                $errors | Should -BeNullOrEmpty
+                $body = ($ast.EndBlock.Statements | Where-Object {
+                        $_.Extent.Text -notmatch '^\.\s+\(Join-Path'
+                    } | ForEach-Object { $_.Extent.Text }) -join "`n"
+                . ([scriptblock]::Create($body))
+            }
+            Should -Invoke Invoke-AvmTestUnit -Exactly 1 -ParameterFilter {
+                $Ecosystem -ceq 'bicep' -and $Recurse -and $IncludeCompliance -and $SkipModuleVersionCheck
+            }
+            Should -Invoke Install-AvmWorkflowModule -Exactly 1 -ParameterFilter { $Name -eq 'Avm.Authoring' }
+            Should -Invoke Install-AvmWorkflowModule -Exactly 0 -ParameterFilter { $Name -like 'Az*' }
+            Should -Invoke Invoke-AvmCheckPolicy -Exactly 0
+            Should -Invoke Select-AvmTestSubscription -Exactly 0
+            Should -Invoke Get-AvmWorkflowAuthentication -Exactly 0
+            Should -Invoke Invoke-AvmTestE2e -Exactly 0
+            $result = Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'avm-bicep-results' 'static.json') -Raw |
+                ConvertFrom-Json
+            $result.Status | Should -BeExactly 'pass'
+            $result.RunsTotal | Should -Be 3
+        }
+        finally {
+            foreach ($name in $saved.Keys) {
+                $value = $saved[$name]
+                [Environment]::SetEnvironmentVariable($name, $(if ($null -eq $value) { [NullString]::Value } else { $value }))
+            }
+        }
     }
 
     It 'imports the newest installed package instead of retaining an older import' {

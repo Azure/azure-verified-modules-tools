@@ -9,7 +9,17 @@ function Invoke-AvmWorkflowStaticValidation {
     )
 
     $path = Resolve-AvmWorkflowPath -Root $Root -RelativePath $ModulePath
-    $result = Invoke-AvmTestUnit -Path $path -Ecosystem bicep -Recurse -IncludeCompliance -SkipModuleVersionCheck
+    $variables = $env:AVM_CI_VARIABLES
+    $secrets = $env:AVM_CI_SECRETS
+    try {
+        $env:AVM_CI_VARIABLES = '{}'
+        $env:AVM_CI_SECRETS = '{}'
+        $result = Invoke-AvmTestUnit -Path $path -Ecosystem bicep -Recurse -IncludeCompliance -SkipModuleVersionCheck
+    }
+    finally {
+        $env:AVM_CI_VARIABLES = $variables
+        $env:AVM_CI_SECRETS = $secrets
+    }
     Write-AvmWorkflowResult -Name static -Result $result -Directory $ResultDirectory
 }
 

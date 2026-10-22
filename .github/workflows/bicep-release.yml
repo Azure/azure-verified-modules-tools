@@ -1,0 +1,78 @@
+name: 'Reusable: Bicep release'
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  initialize:
+    name: Select pending module releases
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: |
+      github.event_name == 'workflow_dispatch' || (
+        github.event_name == 'push' &&
+        github.repository == 'Azure/bicep-registry-modules' &&
+        github.ref == 'refs/heads/main'
+      )
+    outputs:
+      moduleMatrix: ${{ steps.initialize.outputs.moduleMatrix }}
+      hasModules: ${{ steps.initialize.outputs.hasModules }}
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Initialize release
+        id: initialize
+        shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_COMMIT: ${{ github.event.before }}
+          TARGET_COMMIT: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
+            Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+          }
+          Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
+          Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
+          Import-Module Avm.Authoring -ErrorAction Stop
+          $capabilities = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities
+          if ($capabilities.BicepWorkflowOrchestration -ne 1) {
+            throw 'The installed Avm.Authoring package does not provide BicepWorkflowOrchestration = 1.'
+          }
+          $parameters = @{
+            Root = $env:GITHUB_WORKSPACE
+            EventName = $env:EVENT_NAME
+            TargetCommit = $env:TARGET_COMMIT
+          }
+          if ($env:EVENT_NAME -ceq 'push') { $parameters.BaseCommit = $env:BASE_COMMIT }
+          $matrix = Initialize-AvmBicepReleaseMatrix @parameters
+          $value = ConvertTo-Json -InputObject @{ include = @($matrix.Include | ForEach-Object {
+                @{ modulePath = $_.ModulePath }
+              }) } -Depth 20 -Compress
+          "moduleMatrix=$value" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "hasModules=$((@($matrix.Include).Count -gt 0).ToString().ToLowerInvariant())" |
+            Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+  release:
+    name: Release [${{ matrix.modulePath }}]
+    needs: initialize
+    if: needs.initialize.outputs.hasModules == 'true'
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.initialize.outputs.moduleMatrix) }}
+    uses: ./.github/workflows/bicep-module-runtime-release.yml
+    with:
+      modulePath: ${{ matrix.modulePath }}
+      targetCommit: ${{ github.sha }}
+      pendingRelease: true
+      requireChangelog: true
+      requirePublishApproval: true

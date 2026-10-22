@@ -9,6 +9,9 @@ BeforeAll {
     foreach ($file in Get-ChildItem -LiteralPath (Join-Path $script:root '.github' 'workflows') -Filter 'bicep-module*.yml') {
         $script:workflows[$file.BaseName] = ConvertFrom-Yaml (Get-Content -LiteralPath $file.FullName -Raw)
     }
+    $script:entrypoints = @(Get-ChildItem -LiteralPath (Join-Path $script:root '.github' 'workflows') -Filter 'bicep-*.yml' |
+            Where-Object BaseName -In @('bicep-pr-check', 'bicep-release') |
+            ForEach-Object { ConvertFrom-Yaml (Get-Content -LiteralPath $_.FullName -Raw) })
     $script:actions = @{}
     foreach ($directory in Get-ChildItem -LiteralPath (Join-Path $script:root '.github' 'actions') -Directory -Filter 'bicep-*') {
         $script:actions[$directory.Name] = ConvertFrom-Yaml (Get-Content -LiteralPath (Join-Path $directory.FullName 'action.yml') -Raw)
@@ -16,9 +19,22 @@ BeforeAll {
 }
 
 Describe 'Bicep reusable workflow ownership and syntax' {
-    It 'accounts for all six reusable responsibilities without adding automatic triggers' {
-        $script:workflows.Count | Should -Be 6
-        foreach ($workflow in $script:workflows.Values) {
+    It 'exposes zero-input PR check and release entrypoints' {
+        $script:entrypoints.Count | Should -Be 2
+        foreach ($entrypoint in $script:entrypoints) {
+            @($entrypoint.on.Keys) | Should -Be @('workflow_call')
+            $entrypoint.on.workflow_call | Should -BeNullOrEmpty
+            $entrypoint.permissions.Count | Should -Be 0
+        }
+    }
+
+    It 'keeps legacy reusable workflows on their established tools contract' {
+        $legacyNames = @(
+            'bicep-module', 'bicep-module-deployment', 'bicep-module-preview',
+            'bicep-module-publish', 'bicep-module-publish-only', 'bicep-module-static'
+        )
+        @($script:workflows.Keys | Where-Object { $_ -in $legacyNames }) | Should -HaveCount 6
+        foreach ($workflow in $legacyNames | ForEach-Object { $script:workflows[$_] }) {
             @($workflow.on.Keys) | Should -Be @('workflow_call')
             $workflow.name | Should -Match '^Reusable: Bicep Module'
             $workflow.permissions.Count | Should -Be 0
@@ -28,8 +44,12 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         }
     }
 
-    It 'uses tools-owned support at the explicit immutable revision in every executable job' {
-        foreach ($workflow in $script:workflows.Values) {
+    It 'uses tools-owned support at the explicit immutable revision in every legacy executable job' {
+        $legacyNames = @(
+            'bicep-module', 'bicep-module-deployment', 'bicep-module-preview',
+            'bicep-module-publish', 'bicep-module-publish-only', 'bicep-module-static'
+        )
+        foreach ($workflow in $legacyNames | ForEach-Object { $script:workflows[$_] }) {
             foreach ($job in $workflow.jobs.Values) {
                 if (-not $job.Contains('steps')) { continue }
                 $usesSupport = @($job.steps | Where-Object { $_['uses'] -like './.avm-tools/*' })
@@ -54,6 +74,25 @@ Describe 'Bicep reusable workflow ownership and syntax' {
                 }
             }
         }
+    }
+
+    It 'uses only the published package runtime for new Bicep orchestration' {
+        $runtimeNames = @(
+            'bicep-module-runtime', 'bicep-module-runtime-deployment',
+            'bicep-module-runtime-release', 'bicep-module-runtime-static'
+        )
+        @($script:workflows.Keys | Where-Object { $_ -in $runtimeNames }) | Should -HaveCount 4
+        foreach ($workflow in $runtimeNames | ForEach-Object { $script:workflows[$_] }) {
+            $text = $workflow | ConvertTo-Json -Depth 100
+            $text | Should -Not -Match '\.avm-tools|\.avm-entrypoint|tools-ref|github\.workflow_sha'
+            $text | Should -Match 'Install-PSResource -Name Avm\.Authoring'
+            $text | Should -Match 'AvmCapabilities'
+        }
+        $release = $script:workflows['bicep-module-runtime-release'].jobs.release
+        $tagging = $release.steps | Where-Object { $_.name -eq 'Create module release tags' }
+        $tagging.run | Should -Match 'Set-AvmBicepReleaseTags'
+        $tagging.run | Should -Match 'RequireChangelog'
+        $tagging.run | Should -Match 'PendingRelease'
     }
 
     It 'keeps nested reusable calls relative and forwards the immutable tools contract' {
@@ -146,8 +185,11 @@ Describe 'Bicep reusable workflow ownership and syntax' {
 
     It 'parses every embedded PowerShell script without interpolated workflow expressions' {
         $steps = @(
-            foreach ($workflow in $script:workflows.Values) {
+            foreach ($workflow in (@($script:workflows.Values) + $script:entrypoints)) {
                 foreach ($job in $workflow.jobs.Values) {
+                    if ($job.Contains('uses') -and -not $job.uses.StartsWith('./')) {
+                        $job.uses | Should -Match '@[0-9a-f]{40}$'
+                    }
                     if ($job.Contains('steps')) { $job.steps }
                 }
             }
@@ -245,10 +287,13 @@ Describe 'Bicep required checks and deployment guards' {
     }
 
     It 'keeps fork static validation free of secrets, environments, login and publication' {
-        $workflow = $script:workflows['bicep-module-static']
-        @($workflow.jobs.Keys) | Should -Be @('job_module_static_validation')
-        $text = Get-Content -LiteralPath (Join-Path $script:root '.github' 'workflows' 'bicep-module-static.yml') -Raw
-        $text | Should -Not -Match 'secrets|id-token|azure/login|environment:|bicep-release-tags'
+        $workflow = $script:workflows['bicep-module-runtime-static']
+        @($workflow.jobs.Keys) | Should -Be @('static')
+        $text = Get-Content -LiteralPath (Join-Path $script:root '.github' 'workflows' 'bicep-module-runtime-static.yml') -Raw
+        $text | Should -Not -Match '\bsecrets\b|id-token|azure/login|environment:|bicep-release-tags'
+        $workflow.jobs.static.env.AVM_CI_VARIABLES | Should -BeExactly '{}'
+        $workflow.jobs.static.env.AVM_CI_SECRETS | Should -BeExactly '{}'
+        $workflow.jobs.static.steps[-1].run | Should -Match 'Invoke-AvmTestUnit'
     }
 
     It 'selects only the published module client mapping while preserving tenant and subscription precedence' {
@@ -516,6 +561,22 @@ Describe 'Bicep release-tag safety contracts' {
             $job.permissions.Contains('id-token') | Should -BeFalse
             $job.permissions.contents | Should -Be $(if ($name -eq 'bicep-module-preview') { 'read' } else { 'write' })
         }
+    }
+
+    It 'passes pending-release semantics through the tag-only publication path' {
+        $release = $script:entrypoints | Where-Object name -EQ 'Reusable: Bicep release'
+        $release.jobs.release.permissions.contents | Should -BeExactly 'write'
+        $release.jobs.release.with.pendingRelease | Should -BeTrue
+        $release.jobs.release.with.requireChangelog | Should -BeTrue
+        $release.jobs.release.with.requirePublishApproval | Should -BeTrue
+        $release.jobs.release.with.Contains('baseCommit') | Should -BeFalse
+        $runtime = $script:workflows['bicep-module-runtime-release']
+        $runtime.on.workflow_call.inputs.pendingRelease.default | Should -BeFalse
+        $runtime.on.workflow_call.inputs.requireChangelog.default | Should -BeFalse
+        $tagging = $runtime.jobs.release.steps | Where-Object { $_.name -eq 'Create module release tags' }
+        $tagging.env.PENDING_RELEASE | Should -BeExactly '${{ inputs.pendingRelease }}'
+        $tagging.env.REQUIRE_CHANGELOG | Should -BeExactly '${{ inputs.requireChangelog }}'
+        $tagging.run | Should -Match 'Set-AvmBicepReleaseTags'
     }
 
     It 'preserves preview-only push behavior and explicit release approval' {

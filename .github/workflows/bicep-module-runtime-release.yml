@@ -1,0 +1,84 @@
+name: 'Reusable: Bicep Module Runtime Release'
+
+on:
+  workflow_call:
+    inputs:
+      modulePath:
+        type: string
+        required: true
+      targetCommit:
+        type: string
+        required: true
+      pendingRelease:
+        type: boolean
+        required: false
+        default: false
+      requireChangelog:
+        type: boolean
+        required: false
+        default: false
+      requirePublishApproval:
+        type: boolean
+        required: false
+        default: false
+
+permissions: {}
+
+jobs:
+  approval:
+    name: Approve release tag creation
+    environment: publish-approval
+    runs-on: ubuntu-latest
+    permissions: {}
+    if: inputs.requirePublishApproval && github.ref == 'refs/heads/main' && github.repository == 'Azure/bicep-registry-modules'
+    steps:
+      - name: Record approval
+        shell: pwsh
+        run: Write-Output 'Release tag creation approved.'
+
+  release:
+    name: Create release tags
+    needs: approval
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: avm-publish-${{ inputs.modulePath }}
+      queue: max
+    if: |
+      !cancelled() &&
+      (!inputs.requirePublishApproval || needs.approval.result == 'success') &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'Azure/bicep-registry-modules'
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.targetCommit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Create module release tags
+        shell: pwsh
+        env:
+          MODULE_PATH: ${{ inputs.modulePath }}
+          TARGET_COMMIT: ${{ inputs.targetCommit }}
+          PENDING_RELEASE: ${{ inputs.pendingRelease }}
+          REQUIRE_CHANGELOG: ${{ inputs.requireChangelog }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
+            Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+          }
+          Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
+          Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
+          Import-Module Avm.Authoring -ErrorAction Stop
+          $capabilities = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities
+          if ($capabilities.BicepWorkflowOrchestration -ne 1) {
+            throw 'The installed Avm.Authoring package does not provide BicepWorkflowOrchestration = 1.'
+          }
+          $tags = @(Set-AvmBicepReleaseTags -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH `
+              -TargetCommit $env:TARGET_COMMIT -PendingRelease:([bool]::Parse($env:PENDING_RELEASE)) `
+              -RequireChangelog:([bool]::Parse($env:REQUIRE_CHANGELOG)) -Confirm:$false)
+          if ($tags.Count -eq 0) { Write-Output 'No publishable module changes were found.' }
+          foreach ($tag in $tags) { Write-Output "$($tag.Tag): created=$($tag.Created), reused=$($tag.Reused)" }

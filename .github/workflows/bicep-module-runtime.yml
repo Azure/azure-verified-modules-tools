@@ -1,0 +1,217 @@
+name: 'Reusable: Bicep Module Runtime'
+
+on:
+  workflow_call:
+    inputs:
+      workflowInput:
+        type: string
+        required: true
+      modulePath:
+        type: string
+        required: true
+      moduleTestFilePaths:
+        type: string
+        required: true
+      psRuleModuleTestFilePaths:
+        type: string
+        required: true
+      targetCommit:
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  static:
+    name: Static validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: fromJSON(inputs.workflowInput).staticValidation == 'true'
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.targetCommit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run public static validation
+        shell: pwsh
+        env:
+          MODULE_PATH: ${{ inputs.modulePath }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
+            Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+          }
+          Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
+          Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
+          Import-Module Avm.Authoring -ErrorAction Stop
+          $capabilities = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities
+          if ($capabilities.BicepWorkflowOrchestration -ne 1) {
+            throw 'The installed Avm.Authoring package does not provide BicepWorkflowOrchestration = 1.'
+          }
+          Invoke-AvmTestUnit -Path (Join-Path $env:GITHUB_WORKSPACE $env:MODULE_PATH) `
+            -Ecosystem bicep -Recurse -IncludeCompliance -SkipModuleVersionCheck
+
+  policy-required:
+    name: 'Required policy [${{ matrix.baseline.name }}] on [${{ matrix.testCase.Name }}]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: inputs.psRuleModuleTestFilePaths != '' && inputs.psRuleModuleTestFilePaths != '[]' && fromJSON(inputs.workflowInput).staticValidation == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        testCase: ${{ fromJSON(inputs.psRuleModuleTestFilePaths) }}
+        baseline:
+          - name: Reliability
+            value: Azure.Pillar.Reliability
+          - name: Custom Security
+            value: CB.AVM.WAF.Security
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.targetCommit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run required policy validation
+        shell: pwsh
+        env:
+          MODULE_PATH: ${{ inputs.modulePath }}
+          EXAMPLE: ${{ matrix.testCase.Path }}
+          BASELINE: ${{ matrix.baseline.value }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
+            Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+          }
+          Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
+          Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
+          Import-Module Avm.Authoring -ErrorAction Stop
+          $capabilities = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities
+          if ($capabilities.BicepWorkflowOrchestration -ne 1) {
+            throw 'The installed Avm.Authoring package does not provide BicepWorkflowOrchestration = 1.'
+          }
+          Invoke-AvmCheckPolicy -Path (Join-Path $env:GITHUB_WORKSPACE $env:MODULE_PATH) `
+            -Ecosystem bicep -Example @($env:EXAMPLE) -Baseline @($env:BASELINE) -SkipModuleVersionCheck
+
+  policy-advisory:
+    name: 'Advisory policy [${{ matrix.baseline.name }}] on [${{ matrix.testCase.Name }}]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: inputs.psRuleModuleTestFilePaths != '' && inputs.psRuleModuleTestFilePaths != '[]' && fromJSON(inputs.workflowInput).staticValidation == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        testCase: ${{ fromJSON(inputs.psRuleModuleTestFilePaths) }}
+        baseline:
+          - name: All pillars
+            value: Azure.Default
+          - name: Security
+            value: Azure.Pillar.Security
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.targetCommit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run advisory policy validation
+        shell: pwsh
+        env:
+          MODULE_PATH: ${{ inputs.modulePath }}
+          EXAMPLE: ${{ matrix.testCase.Path }}
+          BASELINE: ${{ matrix.baseline.value }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
+            Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+          }
+          Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
+          Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
+          Import-Module Avm.Authoring -ErrorAction Stop
+          $capabilities = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities
+          if ($capabilities.BicepWorkflowOrchestration -ne 1) {
+            throw 'The installed Avm.Authoring package does not provide BicepWorkflowOrchestration = 1.'
+          }
+          Invoke-AvmCheckPolicy -Path (Join-Path $env:GITHUB_WORKSPACE $env:MODULE_PATH) `
+            -Ecosystem bicep -Example @($env:EXAMPLE) -Baseline @($env:BASELINE) -SkipModuleVersionCheck
+
+  select-deployments:
+    name: Initialize subscription selection
+    environment: avm-validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: inputs.moduleTestFilePaths != '' && inputs.moduleTestFilePaths != '[]' && fromJSON(inputs.workflowInput).deploymentValidation == 'true'
+    outputs:
+      deploymentMatrix: ${{ steps.select.outputs.deploymentMatrix }}
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.targetCommit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select deployments
+        id: select
+        shell: pwsh
+        env:
+          MODULE_PATH: ${{ inputs.modulePath }}
+          TEST_FILES: ${{ inputs.moduleTestFilePaths }}
+          TEST_SUBSCRIPTION_IDS: ${{ vars.VALIDATE_SUBSCRIPTION_IDS || vars.TEST_SUBSCRIPTION_IDS || secrets.VALIDATE_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS }}
+          VALIDATE_SUBSCRIPTION_ID: ${{ vars.VALIDATE_SUBSCRIPTION_ID || secrets.VALIDATE_SUBSCRIPTION_ID }}
+          VALIDATE_MODULE_CLIENT_IDS: ${{ vars.VALIDATE_MODULE_CLIENT_IDS }}
+          VALIDATE_TENANT_ID: ${{ vars.VALIDATE_TENANT_ID || secrets.VALIDATE_TENANT_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
+            Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+          }
+          Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
+          Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
+          Import-Module Avm.Authoring -ErrorAction Stop
+          $capabilities = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities
+          if ($capabilities.BicepWorkflowE2eRuntime -ne 1) {
+            throw 'The installed Avm.Authoring package does not provide BicepWorkflowE2eRuntime = 1.'
+          }
+          $testFiles = @(ConvertFrom-Json -InputObject $env:TEST_FILES -AsHashtable -NoEnumerate)
+          $matrix = @(Get-AvmBicepE2eDeploymentMatrix -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH `
+              -TestFiles $testFiles -PoolJson $env:TEST_SUBSCRIPTION_IDS -FallbackSubscriptionId $env:VALIDATE_SUBSCRIPTION_ID `
+              -ModuleClientIds $env:VALIDATE_MODULE_CLIENT_IDS -TenantId $env:VALIDATE_TENANT_ID `
+              -RandomSeed ([int](([long]$env:GITHUB_RUN_ID + [long]$env:GITHUB_RUN_ATTEMPT) % [int]::MaxValue)) `
+              -DisplaySubscriptionNames:($env:TEST_SUBSCRIPTION_IDS -ne ''))
+          $value = ConvertTo-Json -InputObject $matrix -Depth 20 -Compress
+          "deploymentMatrix=$value" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+  deploy:
+    name: Deployment validation
+    needs:
+      - static
+      - policy-required
+      - select-deployments
+    if: |
+      !cancelled() &&
+      fromJSON(inputs.workflowInput).deploymentValidation == 'true' &&
+      inputs.moduleTestFilePaths != '' && inputs.moduleTestFilePaths != '[]' &&
+      needs.select-deployments.result == 'success' &&
+      needs.static.result != 'failure' &&
+      needs.policy-required.result != 'failure'
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        testCase: ${{ fromJSON(needs.select-deployments.outputs.deploymentMatrix) }}
+    concurrency:
+      group: ${{ matrix.testCase.ConcurrencyGroup }}
+      queue: max
+    uses: ./.github/workflows/bicep-module-runtime-deployment.yml
+    with:
+      modulePath: ${{ inputs.modulePath }}
+      workflowInput: ${{ inputs.workflowInput }}
+      testCase: ${{ toJSON(matrix.testCase) }}
+      targetCommit: ${{ inputs.targetCommit }}
+    secrets: inherit

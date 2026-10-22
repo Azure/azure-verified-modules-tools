@@ -2,6 +2,8 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.5.0' }
 
 BeforeAll {
+    $script:repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
+    Import-Module (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
     . (Join-Path $PSScriptRoot '..' '..' '..' 'scripts' 'bicep-workflows' 'Release.ps1')
     $script:savedEnvironment = @{}
     foreach ($name in @('GITHUB_REPOSITORY', 'GITHUB_REF', 'GITHUB_TOKEN')) {
@@ -13,6 +15,7 @@ BeforeAll {
 }
 
 AfterAll {
+    Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
     foreach ($name in $script:savedEnvironment.Keys) {
         $value = $script:savedEnvironment[$name]
         [Environment]::SetEnvironmentVariable($name, $(if ($null -eq $value) { [NullString]::Value } else { $value }))
@@ -36,7 +39,7 @@ Describe 'Component: Bicep workflow release-tag safeguards' -Tag Component {
         $script:remoteTags = ''
         $script:pushExitCode = 0
         $script:concurrentTarget = ''
-        Mock Invoke-AvmWorkflowGitRead {
+        Mock Invoke-AvmBicepWorkflowGit -ModuleName Avm.Authoring {
             $code = 0
             $output = switch ($Arguments[0]) {
                 'rev-parse' {
@@ -54,7 +57,7 @@ Describe 'Component: Bicep workflow release-tag safeguards' -Tag Component {
             }
             [pscustomobject]@{ ExitCode = $code; StdOut = [string]$output; StdErr = '' }
         }
-        Mock Invoke-AvmWorkflowProcess {
+        Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
             if ($ArgumentList[0] -notin @('tag', 'push')) { throw "Unexpected Git mutation: $($ArgumentList[0])" }
             if ($ArgumentList[0] -eq 'push') {
                 if ($script:concurrentTarget) {
@@ -71,14 +74,14 @@ Describe 'Component: Bicep workflow release-tag safeguards' -Tag Component {
         $result.Count | Should -Be 1
         $result[0].Tag | Should -BeExactly "$script:modulePath/1.2.0"
         $result[0].Created | Should -BeFalse
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
     }
 
     It 'does not publish metadata-only edits' {
         $script:diff = "$script:modulePath/metadata.json"
         @(Set-AvmWorkflowReleaseTags -Root $script:root -ModulePath $script:modulePath -TargetCommit $script:target -BaseCommit $script:base -Confirm:$false).Count |
             Should -Be 0
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
     }
 
     It 'peels annotated tags and reuses an exact already-published target' {
@@ -86,7 +89,7 @@ Describe 'Component: Bicep workflow release-tag safeguards' -Tag Component {
         $result = Set-AvmWorkflowReleaseTags -Root $script:root -ModulePath $script:modulePath -TargetCommit $script:target -BaseCommit $script:base -Confirm:$false
         $result.Tag | Should -BeExactly "$script:modulePath/1.2.4"
         $result.Reused | Should -BeTrue
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
     }
 
     It 'increments an existing patch and pushes only the selected tag ref' {
@@ -94,7 +97,7 @@ Describe 'Component: Bicep workflow release-tag safeguards' -Tag Component {
         $result = Set-AvmWorkflowReleaseTags -Root $script:root -ModulePath $script:modulePath -TargetCommit $script:target -BaseCommit $script:base -Confirm:$false
         $result.Tag | Should -BeExactly "$script:modulePath/1.2.5"
         $result.Created | Should -BeTrue
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 1 -ParameterFilter {
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
             $ArgumentList[0] -eq 'push' -and $ArgumentList[2] -ceq "refs/tags/$script:modulePath/1.2.5:refs/tags/$script:modulePath/1.2.5" -and
             $ArgumentList -notcontains '--force' -and $EnvVars.GIT_CONFIG_COUNT -eq '1'
         }
@@ -105,7 +108,7 @@ Describe 'Component: Bicep workflow release-tag safeguards' -Tag Component {
         $script:remoteTags = "$script:base`trefs/tags/$script:modulePath/1.2.0"
         { Set-AvmWorkflowReleaseTags -Root $script:root -ModulePath $script:modulePath -TargetCommit $script:target -BaseCommit $script:base -Confirm:$false } |
             Should -Throw '*different commit*'
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
     }
 
     It 'reconciles a failed push once without replaying mutations' {
@@ -113,8 +116,8 @@ Describe 'Component: Bicep workflow release-tag safeguards' -Tag Component {
         $script:concurrentTarget = $script:target
         $result = Set-AvmWorkflowReleaseTags -Root $script:root -ModulePath $script:modulePath -TargetCommit $script:target -BaseCommit $script:base -Confirm:$false
         $result.Created | Should -BeTrue
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'push' }
-        Should -Invoke Invoke-AvmWorkflowGitRead -Exactly 2 -ParameterFilter { $Arguments[0] -eq 'ls-remote' }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'push' }
+        Should -Invoke Invoke-AvmBicepWorkflowGit -ModuleName Avm.Authoring -Exactly 2 -ParameterFilter { $Arguments[0] -eq 'ls-remote' }
     }
 
     It 'retains a failed push when the remote does not confirm the same target' {
@@ -122,48 +125,48 @@ Describe 'Component: Bicep workflow release-tag safeguards' -Tag Component {
         $script:concurrentTarget = $script:base
         { Set-AvmWorkflowReleaseTags -Root $script:root -ModulePath $script:modulePath -TargetCommit $script:target -BaseCommit $script:base -Confirm:$false } |
             Should -Throw '*no mutation was retried*'
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'push' }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'push' }
     }
 
     It 'reconciles a timed-out push without replaying it' {
-        Mock Invoke-AvmWorkflowProcess {
+        Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
             $script:remoteTags = "$script:target`trefs/tags/$script:modulePath/1.2.0"
             throw [TimeoutException]::new('fixture push timeout')
         } -ParameterFilter { $ArgumentList[0] -eq 'push' }
         $result = Set-AvmWorkflowReleaseTags -Root $script:root -ModulePath $script:modulePath -TargetCommit $script:target -BaseCommit $script:base -Confirm:$false
         $result.Created | Should -BeTrue
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'push' }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'push' }
     }
 
     It 'does not promote a missing-base preview fallback into publication' {
         { Set-AvmWorkflowReleaseTags -Root $script:root -ModulePath $script:modulePath -TargetCommit $script:target -IncludeAllVersionedModules -Confirm:$false } |
             Should -Throw '*preview-only*'
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
     }
 
     It 'rejects modified module inputs and a conflicting local tag' {
-        Mock Invoke-AvmWorkflowGitRead {
+        Mock Invoke-AvmBicepWorkflowGit -ModuleName Avm.Authoring {
             [pscustomobject]@{ ExitCode = 0; StdOut = ' M main.json'; StdErr = '' }
         } -ParameterFilter { $Arguments[0] -eq 'status' }
         { Set-AvmWorkflowReleaseTags -Root $script:root -ModulePath $script:modulePath -TargetCommit $script:target -BaseCommit $script:base -Confirm:$false } |
             Should -Throw '*unchanged from the target*'
-        Mock Invoke-AvmWorkflowGitRead {
+        Mock Invoke-AvmBicepWorkflowGit -ModuleName Avm.Authoring {
             [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
         } -ParameterFilter { $Arguments[0] -eq 'status' }
-        Mock Invoke-AvmWorkflowGitRead {
+        Mock Invoke-AvmBicepWorkflowGit -ModuleName Avm.Authoring {
             [pscustomobject]@{ ExitCode = 0; StdOut = $script:base; StdErr = '' }
         } -ParameterFilter { $Arguments[0] -eq 'rev-parse' -and $Arguments[1] -eq '-q' }
         { Set-AvmWorkflowReleaseTags -Root $script:root -ModulePath $script:modulePath -TargetCommit $script:target -BaseCommit $script:base -Confirm:$false } |
             Should -Throw '*Local tag*different commit*'
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
     }
 
     It 'uses the target parent for ordinary per-module publication' {
-        Mock Invoke-AvmWorkflowGitRead {
+        Mock Invoke-AvmBicepWorkflowGit -ModuleName Avm.Authoring {
             [pscustomobject]@{ ExitCode = 0; StdOut = $script:base; StdErr = '' }
         } -ParameterFilter { $Arguments[0] -eq 'rev-parse' -and $Arguments[1] -eq '--verify' }
         $null = Set-AvmWorkflowReleaseTags -Root $script:root -ModulePath $script:modulePath -TargetCommit $script:target -WhatIf
-        Should -Invoke Invoke-AvmWorkflowGitRead -Exactly 1 -ParameterFilter {
+        Should -Invoke Invoke-AvmBicepWorkflowGit -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
             $Arguments[0] -eq 'diff' -and $Arguments -ccontains $script:base -and $Arguments -ccontains $script:target
         }
     }
@@ -178,13 +181,13 @@ Describe 'Component: Bicep workflow release-tag safeguards' -Tag Component {
         $script:remote = 'https://github.com/Azure/bicep-registry-modules'
         $script:head = $script:base
         { Set-AvmWorkflowReleaseTags @parameters } | Should -Throw '*exact target commit*'
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
     }
 
     It 'rejects option-shaped commit inputs before invoking Git' {
         { Set-AvmWorkflowReleaseTags -Root $script:root -ModulePath $script:modulePath -TargetCommit '--help' -WhatIf } |
             Should -Throw '*full SHA-1*'
-        Should -Invoke Invoke-AvmWorkflowGitRead -Exactly 0
+        Should -Invoke Invoke-AvmBicepWorkflowGit -ModuleName Avm.Authoring -Exactly 0
     }
 
     It 'orders changed versioned children before the parent' {
@@ -253,20 +256,21 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
         $script:releaseTags = @{}
         $script:allowReleaseWrites = $false
         $script:releaseWrites = [Collections.Generic.List[string]]::new()
-        Mock Invoke-AvmWorkflowProcess {
+        Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
             $records = foreach ($entry in $script:releaseTags.GetEnumerator()) {
                 "$($entry.Value)`trefs/tags/$($entry.Key)"
             }
             [pscustomobject]@{ ExitCode = 0; StdOut = $records -join "`n"; StdErr = '' }
         } -ParameterFilter { $ArgumentList[0] -eq 'ls-remote' }
-        Mock Invoke-AvmWorkflowProcess {
-            if ($script:allowReleaseWrites -and $FilePath -eq 'git' -and $ArgumentList[0] -in @('push', 'tag')) {
+        Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
+            if ($script:allowReleaseWrites -and [IO.Path]::GetFileNameWithoutExtension($FilePath) -ceq 'git' -and
+                $ArgumentList[0] -in @('push', 'tag')) {
                 $script:releaseWrites.Add($ArgumentList -join ' ')
                 return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
             throw 'Release discovery must not mutate Git or execute protected tools.'
         } -ParameterFilter {
-            $FilePath -ne 'git' -or $ArgumentList[0] -in @('push', 'tag', 'fetch')
+            $ArgumentList[0] -in @('push', 'tag', 'fetch')
         }
         $null = Invoke-AvmReleaseFixtureGit -Arguments @('init', '--quiet', '--initial-branch=main')
         $null = Invoke-AvmReleaseFixtureGit -Arguments @('config', 'core.autocrlf', 'false')
@@ -292,7 +296,7 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
         $tags = @(Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
                 -TargetCommit $script:releaseTarget -PendingRelease -WhatIf)
         $tags.Tag | Should -Be @("$script:modulePath/1.2.3")
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('push', 'tag') }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('push', 'tag') }
     }
 
     It 'does not release unchanged modules or docs, metadata, source and test-only edits (<ChangedFile>)' -ForEach @(
@@ -310,7 +314,7 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
         $matrix.include | Should -HaveCount 0
         @(Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
                 -TargetCommit $script:releaseTarget -PendingRelease -WhatIf) | Should -HaveCount 0
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('push', 'tag') }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('push', 'tag') }
     }
 
     It 'initially releases untagged versioned modules without a parent-commit fallback or force' {
@@ -392,19 +396,19 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
                 $script:releaseTags["$script:modulePath/1.2.9"] = $orphan
             }
             'shallow history' {
-                Mock Invoke-AvmWorkflowProcess {
+                Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
                     [pscustomobject]@{ ExitCode = 0; StdOut = 'true'; StdErr = '' }
                 } -ParameterFilter { $ArgumentList -contains '--is-shallow-repository' }
             }
             'remote failure' {
-                Mock Invoke-AvmWorkflowProcess { throw [InvalidOperationException]::new('Unavailable remote tags.') } -ParameterFilter {
+                Mock Invoke-AvmProcess -ModuleName Avm.Authoring { throw [InvalidOperationException]::new('Unavailable remote tags.') } -ParameterFilter {
                     $ArgumentList[0] -eq 'ls-remote'
                 }
             }
         }
         { Initialize-AvmWorkflowReleaseMatrix -Root $script:releaseRoot -EventName workflow_dispatch `
                 -TargetCommit $script:releaseTarget } | Should -Throw
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('push', 'tag') }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('push', 'tag') }
     }
 
     It 'rejects missing push history and unsupported or nonupstream contexts without publication' {
@@ -426,7 +430,7 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
         { Initialize-AvmWorkflowReleaseMatrix -Root $script:releaseRoot -EventName workflow_dispatch `
                 -TargetCommit $script:releaseTarget } | Should -Throw '*unchanged from the target*'
         $script:releaseTarget = New-AvmReleaseFixtureCommit -Message 'pending compiled change'
-        Mock Invoke-AvmWorkflowProcess {
+        Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
             [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'Missing version at tagged commit.' }
         } -ParameterFilter { $ArgumentList[0] -eq 'cat-file' -and $ArgumentList[-1] -like '*:*/version.json' }
         { Initialize-AvmWorkflowReleaseMatrix -Root $script:releaseRoot -EventName workflow_dispatch `
@@ -457,9 +461,9 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
         $tags.Created | Should -BeTrue
         $script:releaseWrites[0] | Should -BeExactly "tag $script:modulePath/1.2.3 $script:releaseTarget"
         $reads = if ($Mode -eq 'pending') { 2 } else { 1 }
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly $reads -ParameterFilter { $ArgumentList[0] -eq 'ls-remote' }
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'tag' }
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'push' }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly $reads -ParameterFilter { $ArgumentList[0] -eq 'ls-remote' }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'tag' }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'push' }
     }
 
     It 'fails explicitly without tag writes for invalid required release notes: <Failure>' -ForEach @(
@@ -510,7 +514,7 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
         { Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
                 -TargetCommit $script:releaseTarget -PendingRelease -RequireChangelog -Confirm:$false } |
             Should -Throw "*CHANGELOG.md for $script:modulePath release 1.2.3:*"
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('tag', 'push') }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('tag', 'push') }
     }
 
     It 'reports an unreadable changelog with its module and expected version' {
@@ -534,7 +538,7 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
         { Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
                 -TargetCommit $script:releaseTarget -PendingRelease -RequireChangelog -Confirm:$false } |
             Should -Throw "*CHANGELOG.md for $script:modulePath release 1.2.4:*expected-version*"
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('tag', 'push') }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('tag', 'push') }
     }
 
     It 'preflights every parent and child before any writes in <Mode> mode' -ForEach @(
@@ -553,7 +557,7 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
                 -TargetCommit $script:releaseTarget -RequireChangelog -Confirm:$false @parameters } |
             Should -Throw "*CHANGELOG.md for $script:modulePath release 1.2.3:*"
         $script:releaseWrites | Should -HaveCount 0
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('tag', 'push') }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('tag', 'push') }
     }
 
     It 'preserves initial release and child-first execution with valid notes for the whole plan' {
@@ -578,7 +582,7 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
         { Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
                 -TargetCommit $script:releaseTarget -BaseCommit $script:initialReleaseCommit -RequireChangelog -Confirm:$false } |
             Should -Throw "*CHANGELOG.md for $script:modulePath release 1.2.3:*"
-        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('tag', 'push') }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('tag', 'push') }
     }
 
     It 'retains same-target tag reuse with a valid required version section' {
@@ -612,13 +616,13 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
         $script:releaseTarget = New-AvmReleaseFixtureCommit -Message 'legacy release without changelog'
         $script:allowReleaseWrites = $true
         $env:GITHUB_TOKEN = 'fixture-not-a-real-token'
-        Mock Assert-AvmWorkflowReleaseChangelog { throw 'Default callers must not validate changelogs.' }
+        Mock Assert-AvmBicepWorkflowReleaseChangelog -ModuleName Avm.Authoring { throw 'Default callers must not validate changelogs.' }
         $parameters = @{}
         if ($ExplicitFalse) { $parameters.RequireChangelog = $false }
         $tags = @(Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
                 -TargetCommit $script:releaseTarget -PendingRelease -Confirm:$false @parameters)
         $tags.Tag | Should -Be @("$script:modulePath/1.2.3")
         $tags.Created | Should -BeTrue
-        Should -Invoke Assert-AvmWorkflowReleaseChangelog -Exactly 0
+        Should -Invoke Assert-AvmBicepWorkflowReleaseChangelog -ModuleName Avm.Authoring -Exactly 0
     }
 }

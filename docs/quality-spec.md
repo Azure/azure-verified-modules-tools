@@ -1709,32 +1709,69 @@ creating state; a failing command does not mean no resources exist.
 
 ### Shared Bicep workflows
 
-Tools owns the six reusable `bicep-module*.yml` workflows, their composite
-actions and `scripts/bicep-workflows` support. The registry retains module
-callers, source, authored tests and configuration, including
-its legacy child-publication approval configuration and validator.
+Tools owns the top-level reusable `bicep-pr-check.yml` and `bicep-release.yml`
+entrypoints, the established six reusable `bicep-module*.yml` legacy leaves, and
+the package-runtime Bicep module leaves. The registry retains thin event callers,
+ordinary module callers, source, authored tests and configuration, including its
+legacy child-publication approval configuration and validator.
 Shared native validation and execution belong to the released `Avm.Authoring`
 package, not registry utilities or copied compliance scripts.
-Reserved Azure Local cases retain the registry-local prepared-environment
-lifecycle until equivalent native coverage exists. Registry entry workflows
-partition generic selections with the existing reservation helper and retain
-the reserved module callers; do not duplicate the reservation inventory or
-send reserved cases to ordinary native execution. This routing exception does
-not permit a legacy shared-identity fallback.
+Reserved Azure Local cases retain registry-owned legacy execution until
+equivalent native coverage exists. The tools entrypoints
+partition generic selections with the caller's existing reservation helper.
+Non-General selections retain explicit, immutable reverse calls to the registry
+legacy preview and publish-only workflows. Relative reusable calls inside tools
+cannot select a registry workflow. This is a legacy compatibility exception, not
+migration of that implementation into tools or a new prepared-HCI, mapped-identity
+or full-environment-lock guarantee. Preserve its existing behavior; do not
+duplicate the reservation inventory, route reserved cases into ordinary native
+execution, or change the ordinary registry module workflows and publication
+approval policy as part of the thin-caller contract.
 
-Callers pin every tools `uses` reference and `tools-ref` to the same full
-immutable commit SHA. The tools checkout does not supply the runtime module:
-each native phase installs and imports the latest stable PSGallery
-`Avm.Authoring` package. Package qualification must exercise
-the workflow adapter with that runtime, including InPlace/Fresh retries and
-final-only cleanup; interface-parameter checks alone do not prove this behavior.
-Nested reusable calls remain relative to that tools revision. Executable
-jobs check out the complete caller at its intended target and separately
-check out tools actions, workflow support and shared repository-management
-helpers into `.avm-tools`; local actions must never resolve against
-caller-owned implementation. Remote initializers resolve their scripts from
-`github.action_path`. Ordinary callers retain `github.sha`; generic callers
-forward their checked `targetCommit` through every validation tier.
+Both entrypoints expose no `workflow_call` inputs. PR checks use the original
+caller's `github` event context. Automatic upstream PR checks admit `opened`,
+`reopened` and `synchronize` without a static-check label. A `labeled` event is
+admitted only when adding `PR: Run E2E Tests`; that label alone enables deployment
+for internal PRs. Other automatic repositories and event types are not admitted.
+Fork PRs always run only the public-data static tier, irrespective of labels:
+packaged compliance and authored unit tests, with empty `AVM_CI_VARIABLES` and
+`AVM_CI_SECRETS` maps, no inherited secrets, OIDC, identity or subscription
+selection. Report protected policy and deployment tiers as not run, never as
+successful static results. Manual check dispatch has only `modulePaths`, an
+explicit comma-separated selection; it runs static, policy and deployment
+validation with cleanup and normal location defaults, without PR-label lookup
+or publication. No operation, phase, cleanup or location toggles are exposed.
+
+The release entrypoint is separate from checks and needs no OIDC permission.
+It only discovers publishable changes and creates module release tags through
+the existing approval and ADO publication path; it never runs validation,
+deployment or identity/subscription selection. The registry release caller
+enables manual dispatch, with the intended main-push trigger commented out
+until a separately approved activation.
+The entrypoint always enables the internal pre-tag changelog guard. The shared
+tag planner must validate notes for every refreshed calculated child/parent
+target before creating or pushing any tag in that module's release plan.
+
+Callers pin the entrypoint `uses` reference once to a durable, merged tools
+commit SHA; an orphan premerge head or mutable branch is not the publication
+contract. New Bicep orchestration uses only relative reusable workflow calls
+from that entrypoint revision and the latest stable PSGallery `Avm.Authoring`
+package. It must not check out tools again, pin a second tools SHA, use
+`@main`, derive a source ref, or accept a caller-facing `tools-ref` override.
+The runtime package must declare exact integer
+`PrivateData.AvmCapabilities.BicepWorkflowOrchestration = 1` before selection
+or release work and `BicepWorkflowE2eRuntime = 1` before E2E selection or
+authentication; an unavailable published runtime fails explicitly rather than
+falling back to repository scripts. Package qualification must exercise this
+package-only path, including empty fork configuration, InPlace/Fresh retries,
+artifact state, and final-only cleanup; interface-parameter checks alone do
+not prove that behavior.
+Direct callers of established legacy leaves continue to pin their tools `uses`
+reference and `tools-ref` to the same full immutable SHA. Nested reusable calls
+remain relative to the entrypoint revision. Executable package-runtime jobs
+check out only the complete caller at its intended target. Ordinary callers
+retain `github.sha`; generic callers forward their checked `targetCommit`
+through every validation tier.
 
 For generic pull requests, `pullRequestHeadCommit` is the event's head SHA.
 The checked-out target must be the tested merge with exactly two parents:
@@ -1892,14 +1929,14 @@ invalid or failed history/tag reads are errors, not empty successful selections.
 Recheck independent child/parent baselines inside the existing module publication
 lock, create changed children before parents, and retain tag version, reuse,
 conflict and push-reconciliation semantics. Explicit before/after push discovery
-and existing leaf defaults remain unchanged. Shared support exposes pending
-discovery and tagging without adding workflow events, authentication,
-deployment, publication activation or a caller-facing mode/input surface.
-New orchestration must consume a durable, separately merged support commit;
-never pin support to an orphanable premerge head.
+and existing leaf defaults remain unchanged. The published runtime exposes pending discovery and tagging without adding
+workflow events, authentication, deployment, publication activation or a
+caller-facing mode/input surface. A tools workflow revision is not usable by
+the registry until its matching runtime capability has been published.
 
-`Set-AvmWorkflowReleaseTags -RequireChangelog` is an opt-in release precondition;
-omitting the switch or passing false preserves existing caller defaults.
+`Set-AvmBicepReleaseTags -RequireChangelog` is an opt-in release precondition;
+omitting the switch or passing false preserves existing caller defaults and
+the `Set-AvmWorkflowReleaseTags` compatibility adapter.
 Resolve current source baselines and calculate the complete child/parent tag
 proposal once, then validate every proposed version before creating or pushing
 any tag in that module's plan. Both pending and explicit-base releases use this
@@ -1929,8 +1966,9 @@ validation credentials without changing their subjects or resource names.
 Do not change the GitHub subject configuration. New workflow restrictions
 and flexible credentials are a separate follow-up; tools pin changes do not
 require credential changes under the current three-claim contract.
-Generic execution keeps its existing label/internal-fork controls without
-adding a base-main restriction. The same registry subject can authenticate
+Generic execution keeps its internal-fork controls and the PR entrypoint's
+E2E-only label admission without adding a base-main restriction. The same registry
+subject can authenticate
 multiple module identities: workflow selection is not a federated per-module
 isolation boundary. Never substitute the Tools validation credential for a
 registry caller. Keep the old shared Bicep identity unchanged.
@@ -1949,8 +1987,9 @@ edit module callers whose own files are main-push triggers, potentially
 starting fleet validation. Registry merging/cutover needs an approved rollout
 window. Do not retire registry platform-cleanup tests or native compatibility
 coverage solely because workflow source checks pass.
-Registry caller replacements must preserve the existing orchestration:
-experimental checks require both `PR: Run Checks` and `PR: Run E2E Tests`;
+Registry caller replacements use the tools-owned orchestration:
+static PR checks need no label, and internal E2E checks require only
+`PR: Run E2E Tests`;
 ignored jobs exit before checkout, bootstrap or sign-in. The seeded matrix
 retains the original subscription index and canonical GUID-based identity.
 Main, preview and publish callers share the deployment implementation and the

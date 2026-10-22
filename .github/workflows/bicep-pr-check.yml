@@ -1,0 +1,161 @@
+name: 'Reusable: Bicep PR check'
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  initialize:
+    name: Select modules and test routes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: |
+      !cancelled() &&
+      (github.event_name == 'workflow_dispatch' || (
+        github.repository == 'Azure/bicep-registry-modules' &&
+        github.event_name == 'pull_request' && (
+          contains(fromJSON('["opened","reopened","synchronize"]'), github.event.action) ||
+          (github.event.action == 'labeled' && github.event.label.name == 'PR: Run E2E Tests')
+        )
+      ))
+    outputs:
+      baseCommit: ${{ steps.initialize.outputs.baseCommit }}
+      targetCommit: ${{ steps.initialize.outputs.targetCommit }}
+      workflowInput: ${{ steps.initialize.outputs.workflowInput }}
+      moduleMatrix: ${{ steps.initialize.outputs.moduleMatrix }}
+      sharedModuleMatrix: ${{ steps.initialize.outputs.sharedModuleMatrix }}
+      localModuleMatrix: ${{ steps.initialize.outputs.localModuleMatrix }}
+      hasModules: ${{ steps.initialize.outputs.hasModules }}
+      hasSharedModules: ${{ steps.initialize.outputs.hasSharedModules }}
+      hasLocalModules: ${{ steps.initialize.outputs.hasLocalModules }}
+      forkStatic: ${{ steps.initialize.outputs.forkStatic }}
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Initialize checks
+        id: initialize
+        shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PULL_REQUEST_HEAD_COMMIT: ${{ github.event.pull_request.head.sha }}
+          TARGET_COMMIT: ${{ github.sha }}
+          MODULE_PATHS: ${{ github.event.inputs.modulePaths }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
+            Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+          }
+          Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
+          Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
+          Import-Module Avm.Authoring -ErrorAction Stop
+          $capabilities = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities
+          if ($capabilities.BicepWorkflowOrchestration -ne 1) {
+            throw 'The installed Avm.Authoring package does not provide BicepWorkflowOrchestration = 1.'
+          }
+
+          $fork = $env:EVENT_NAME -ceq 'pull_request' -and $env:HEAD_REPOSITORY -cne $env:REPOSITORY
+          $labels = @(ConvertFrom-Json -InputObject $env:PR_LABELS)
+          $deployment = $env:EVENT_NAME -ceq 'workflow_dispatch' -or (
+            -not $fork -and $labels -ccontains 'PR: Run E2E Tests'
+          )
+          $parameters = @{
+            Root = $env:GITHUB_WORKSPACE
+            EventName = $env:EVENT_NAME
+            TargetCommit = $env:TARGET_COMMIT
+            PullRequestHeadCommit = $env:PULL_REQUEST_HEAD_COMMIT
+            ModulePaths = $env:MODULE_PATHS
+            StaticValidation = $true
+            DeploymentValidation = $deployment
+            RemoveDeployment = $true
+          }
+          $outputs = Initialize-AvmBicepWorkflowMatrix @parameters
+          . (Join-Path $env:GITHUB_WORKSPACE 'utilities' 'pipelines' 'sharedScripts' 'Get-TestSubscriptionTag.ps1')
+
+          $shared = [Collections.Generic.List[object]]::new()
+          $local = [Collections.Generic.List[object]]::new()
+          foreach ($entry in $outputs.ModuleMatrix.Include) {
+            $record = [pscustomobject]@{
+              modulePath = [string]$entry.ModulePath
+              moduleTestFilePaths = ConvertTo-Json -InputObject @($entry.TestFiles) -Depth 20 -Compress
+              psRuleModuleTestFilePaths = ConvertTo-Json -InputObject @($entry.PolicyTestFiles) -Depth 20 -Compress
+            }
+            $tag = Get-TestSubscriptionTag -ModulePath $record.modulePath -RepoRootPath $env:GITHUB_WORKSPACE
+            if ($tag -ceq 'General') { $shared.Add($record) } else { $local.Add($record) }
+          }
+          $all = @($shared) + @($local)
+          $values = [ordered]@{
+            baseCommit = $outputs.BaseCommit
+            targetCommit = $outputs.TargetCommit
+            workflowInput = ConvertTo-Json -InputObject $outputs.WorkflowInput -Depth 20 -Compress
+            moduleMatrix = ConvertTo-Json -InputObject @{ include = $all } -Depth 20 -Compress
+            sharedModuleMatrix = ConvertTo-Json -InputObject @{ include = @($shared) } -Depth 20 -Compress
+            localModuleMatrix = ConvertTo-Json -InputObject @{ include = @($local) } -Depth 20 -Compress
+            hasModules = ($all.Count -gt 0).ToString().ToLowerInvariant()
+            hasSharedModules = ($shared.Count -gt 0).ToString().ToLowerInvariant()
+            hasLocalModules = ($local.Count -gt 0).ToString().ToLowerInvariant()
+            forkStatic = $fork.ToString().ToLowerInvariant()
+          }
+          foreach ($entry in $values.GetEnumerator()) {
+            "$($entry.Key)=$($entry.Value)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+
+  check:
+    name: Check [${{ matrix.modulePath }}]
+    needs: initialize
+    if: needs.initialize.outputs.forkStatic != 'true' && needs.initialize.outputs.hasSharedModules == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.initialize.outputs.sharedModuleMatrix) }}
+    uses: ./.github/workflows/bicep-module-runtime.yml
+    with:
+      workflowInput: ${{ needs.initialize.outputs.workflowInput }}
+      modulePath: ${{ matrix.modulePath }}
+      moduleTestFilePaths: ${{ matrix.moduleTestFilePaths }}
+      psRuleModuleTestFilePaths: ${{ matrix.psRuleModuleTestFilePaths }}
+      targetCommit: ${{ needs.initialize.outputs.targetCommit }}
+    secrets: inherit
+
+  check_legacy:
+    name: Check [${{ matrix.modulePath }}] (legacy)
+    needs: initialize
+    if: needs.initialize.outputs.forkStatic != 'true' && needs.initialize.outputs.hasLocalModules == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.initialize.outputs.localModuleMatrix) }}
+    uses: Azure/bicep-registry-modules/.github/workflows/avm.template.module.preview.yml@795bfc3da023e8bd2d0831856ec684ed4352880b
+    with:
+      workflowInput: ${{ needs.initialize.outputs.workflowInput }}
+      modulePath: ${{ matrix.modulePath }}
+      moduleTestFilePaths: ${{ matrix.moduleTestFilePaths }}
+      psRuleModuleTestFilePaths: ${{ matrix.psRuleModuleTestFilePaths }}
+      baseCommit: ${{ needs.initialize.outputs.baseCommit }}
+      targetCommit: ${{ needs.initialize.outputs.targetCommit }}
+    secrets: inherit
+
+  check_fork:
+    name: Static check [${{ matrix.modulePath }}] (fork)
+    needs: initialize
+    if: needs.initialize.outputs.forkStatic == 'true' && needs.initialize.outputs.hasModules == 'true'
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.initialize.outputs.moduleMatrix) }}
+    uses: ./.github/workflows/bicep-module-runtime-static.yml
+    with:
+      modulePath: ${{ matrix.modulePath }}
