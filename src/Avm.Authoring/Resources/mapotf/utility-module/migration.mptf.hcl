@@ -122,7 +122,7 @@ locals {
     for name, entries in local.provider_mapping_entries : name => entries
     if contains(keys(var.provider_source_facts), name) &&
     !contains(var.provider_source_facts[name], local.provider_addresses.modtm) &&
-    contains(keys(entries), "modtm")
+    try(entries.modtm == "modtm", false)
   }
   retained_provider_mappings = {
     for name, entries in local.modtm_provider_mappings : name => entries
