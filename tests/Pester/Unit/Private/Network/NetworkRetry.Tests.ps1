@@ -101,6 +101,30 @@ Describe 'Shared network retry' {
             }
         }
 
+        It 'does not invoke the permanent-failure hook for cancellation' {
+            InModuleScope 'Avm.Authoring' {
+                $state = @{ ActionCalls = 0; HookCalls = 0 }
+                $retryHook = {
+                    $state.HookCalls++
+                    $true
+                }
+
+                {
+                    Invoke-AvmRetry `
+                        -RetryActivity 'probe' `
+                        -RetryOnPermanentFailure $retryHook `
+                        -RetryAction {
+                            $state.ActionCalls++
+                            throw [System.OperationCanceledException]::new('cancelled')
+                        }
+                } | Should -Throw '*cancelled*'
+
+                $state.ActionCalls | Should -Be 1
+                $state.HookCalls | Should -Be 0
+                Should -Invoke Wait-AvmRetryDelay -Exactly 0
+            }
+        }
+
         It 'waits at least the server Retry-After delay' {
             InModuleScope 'Avm.Authoring' {
                 $state = @{ Calls = 0 }
@@ -170,6 +194,7 @@ Describe 'Shared network retry' {
     Context 'Get-AvmNetworkFailureKind' {
         It 'classifies <Name> as <Kind>' -TestCases @(
             @{ Name = 'an HTTP 401 response'; Kind = 'Permanent'; Factory = "[System.Net.Http.HttpRequestException]::new('Unauthorized', `$null, [System.Net.HttpStatusCode]::Unauthorized)" }
+            @{ Name = 'an HTTP 404 response'; Kind = 'Permanent'; Factory = "[System.Net.Http.HttpRequestException]::new('Not found', `$null, [System.Net.HttpStatusCode]::NotFound)" }
             @{ Name = 'an HTTP 429 response'; Kind = 'Transient'; Factory = "[System.Net.Http.HttpRequestException]::new('Too many', `$null, [System.Net.HttpStatusCode]::TooManyRequests)" }
             @{ Name = 'a TLS authentication failure'; Kind = 'Permanent'; Factory = "[System.Net.Http.HttpRequestException]::new('SSL failed', [System.Security.Authentication.AuthenticationException]::new('bad certificate'))" }
             @{ Name = 'a DNS failure'; Kind = 'Transient'; Factory = '[System.Net.Sockets.SocketException]::new(11001)' }

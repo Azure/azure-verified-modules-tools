@@ -50,6 +50,19 @@ if ($IncludeBicepPolicy) {
     }
 }
 
+$retryOnGalleryNotFound = {
+    param([System.Management.Automation.ErrorRecord] $ErrorRecord)
+
+    $errorText = @(
+        $ErrorRecord.Exception.Message
+        $ErrorRecord.ErrorDetails?.Message
+        $ErrorRecord.ToString()
+    ) -join "`n"
+    $isNotFoundResponse = $errorText -match '(?i)response status code does not indicate success:\s*404\s*\(not found\)|\bhttp\s*404\b'
+    $isGalleryRequest = $errorText -match '(?i)https://www\.powershellgallery\.com/api/v2/(?:FindPackagesById|package/)'
+    return $isNotFoundResponse -and $isGalleryRequest
+}
+
 foreach ($package in $packages) {
     # Ranges stay network-resolved so CI keeps receiving the newest allowed
     # release; an exact pin that is already installed needs no Gallery request.
@@ -61,10 +74,15 @@ foreach ($package in $packages) {
     }
 
     if ($PSCmdlet.ShouldProcess($package.Name, 'Install build prerequisite')) {
-        $null = Invoke-AvmRetry `
-            -RetryActivity "Installing $($package.Name)" `
-            -RetryMaxAttempts $MaxAttempts `
-            -RetryInitialDelaySeconds $InitialDelaySeconds `
-            -RetryAction { Install-PSResource @package -Scope CurrentUser -TrustRepository }
+        $retryParameters = @{
+            RetryActivity            = "Installing $($package.Name)"
+            RetryMaxAttempts         = $MaxAttempts
+            RetryInitialDelaySeconds = $InitialDelaySeconds
+            RetryAction              = { Install-PSResource @package -Scope CurrentUser -TrustRepository }
+        }
+        if ($isExactPin) {
+            $retryParameters.RetryOnPermanentFailure = $retryOnGalleryNotFound
+        }
+        $null = Invoke-AvmRetry @retryParameters
     }
 }
