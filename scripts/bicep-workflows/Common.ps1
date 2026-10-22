@@ -3,6 +3,24 @@
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
+function Invoke-AvmWorkflowPackagePrivate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [hashtable] $Parameters
+    )
+
+    $module = Get-Module -Name Avm.Authoring | Select-Object -First 1
+    if ($null -eq $module) {
+        Import-AvmWorkflowPackage
+        $module = Get-Module -Name Avm.Authoring | Select-Object -First 1
+    }
+    if ($null -eq $module) {
+        throw [InvalidOperationException]::new('The installed Avm.Authoring package could not be imported for a Bicep workflow compatibility adapter.')
+    }
+    return & $module { param($CommandName, $CommandParameters) & $CommandName @CommandParameters } $Name $Parameters
+}
+
 function Resolve-AvmWorkflowPath {
     [CmdletBinding()]
     param(

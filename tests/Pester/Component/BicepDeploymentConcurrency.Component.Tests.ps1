@@ -106,8 +106,8 @@ Describe 'Component: Bicep deployment concurrency policy' -Tag Component {
             FallbackSubscriptionId = $script:subscription; TenantId = $script:tenant
             ModuleClientIds = '{"avm/res/mock/widget":"10000000-0000-4000-8000-000000000006"}'
         }
-        Mock Get-AvmTool { [pscustomobject]@{ Status = 'installed'; Path = 'fixture-bicep' } }
-        Mock Invoke-AvmWorkflowProcess {
+        Mock -CommandName Get-AvmTool -ModuleName Avm.Authoring -MockWith { [pscustomobject]@{ Status = 'installed'; Path = 'fixture-bicep' } }
+        Mock -CommandName Invoke-AvmProcess -ModuleName Avm.Authoring -MockWith {
             [pscustomobject]@{ StdOut = '{"$schema":"https://schema.management.azure.com/schemas/2019-04-01/subscriptionDeploymentTemplate.json#","resources":[]}' }
         }
     }
@@ -162,7 +162,7 @@ Describe 'Component: Bicep deployment concurrency policy' -Tag Component {
         @{ Scope = 'managementGroup' }
         @{ Scope = 'subscription' }
     ) {
-        Mock Invoke-AvmWorkflowProcess {
+        Mock -CommandName Invoke-AvmProcess -ModuleName Avm.Authoring -MockWith {
             [pscustomobject]@{ StdOut = (@{
                         '$schema' = "https://schema.management.azure.com/schemas/2019-08-01/$($Scope)DeploymentTemplate.json#"
                         resources = @()
@@ -174,7 +174,7 @@ Describe 'Component: Bicep deployment concurrency policy' -Tag Component {
     }
 
     It 'inspects a lexical parent variable template without an ARM evaluator or an indirection lock' {
-        Mock Invoke-AvmWorkflowProcess {
+        Mock -CommandName Invoke-AvmProcess -ModuleName Avm.Authoring -MockWith {
             [pscustomobject]@{ StdOut = (@{
                         '$schema' = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#'
                         variables = @{ '$fxv#0' = @{ resources = @(@{ type = 'Microsoft.Storage/storageAccounts'; name = '#_namePrefix_#' }) } }
@@ -188,7 +188,7 @@ Describe 'Component: Bicep deployment concurrency policy' -Tag Component {
     }
 
     It 'does not unlock a declaration whose test-created groups have no fresh ownership proof' {
-        Mock Invoke-AvmWorkflowProcess {
+        Mock -CommandName Invoke-AvmProcess -ModuleName Avm.Authoring -MockWith {
             [pscustomobject]@{ StdOut = '{"$schema":"https://schema.management.azure.com/schemas/2019-04-01/subscriptionDeploymentTemplate.json#","resources":[{"type":"Microsoft.Resources/resourceGroups","name":"fixed"}]}' }
         }
         $matrix = (Get-AvmWorkflowDeploymentMatrix @script:options).deploymentMatrix | ConvertFrom-Json -AsHashtable
@@ -230,7 +230,7 @@ Describe 'Component: Bicep deployment concurrency policy' -Tag Component {
     }
 
     It 'retains a legacy module fallback without imposing it on verified cases' {
-        Mock Invoke-AvmWorkflowProcess {
+        Mock -CommandName Invoke-AvmProcess -ModuleName Avm.Authoring -MockWith {
             $resources = if ($ArgumentList[1] -like '*defaults*') { @(@{ type = 'Microsoft.Mock/settings'; name = 'fixed' }) } else { @() }
             [pscustomobject]@{ StdOut = (@{
                         '$schema' = 'https://schema.management.azure.com/schemas/2019-08-01/tenantDeploymentTemplate.json#'
@@ -271,7 +271,7 @@ Describe 'Component: Bicep deployment concurrency policy' -Tag Component {
         foreach ($test in $script:tests) {
             Remove-Item -LiteralPath (Join-Path $script:root $script:module (Split-Path $test.path -Parent) 'isolation.json')
         }
-        Mock Invoke-AvmWorkflowProcess {
+        Mock -CommandName Invoke-AvmProcess -ModuleName Avm.Authoring -MockWith {
             [pscustomobject]@{ StdOut = (@{
                         '$schema' = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#'
                         variables = @{ '$fxv#0' = @{ resources = @() } }

@@ -1,0 +1,44 @@
+name: 'Reusable: Bicep Module Runtime Static'
+
+on:
+  workflow_call:
+    inputs:
+      modulePath:
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  static:
+    name: Static validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      AVM_CI_VARIABLES: '{}'
+      AVM_CI_SECRETS: '{}'
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run public static validation
+        shell: pwsh
+        env:
+          MODULE_PATH: ${{ inputs.modulePath }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
+            Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+          }
+          Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
+          Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
+          Import-Module Avm.Authoring -ErrorAction Stop
+          $capabilities = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities
+          if ($capabilities.BicepWorkflowOrchestration -ne 1) {
+            throw 'The installed Avm.Authoring package does not provide BicepWorkflowOrchestration = 1.'
+          }
+          Invoke-AvmTestUnit -Path (Join-Path $env:GITHUB_WORKSPACE $env:MODULE_PATH) `
+            -Ecosystem bicep -Recurse -IncludeCompliance

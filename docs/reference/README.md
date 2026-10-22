@@ -8,11 +8,18 @@ This reference is generated from the comment-based help on the public PowerShell
 | --- | --- | --- |
 | [Export-AvmReadmeNote](Export-AvmReadmeNote.md) | `avm docs export-notes` | Extract authored Bicep README Notes into an adjacent, tracked sidecar. |
 | [Get-AvmAuthoringPlaceholder](Get-AvmAuthoringPlaceholder.md) |  | Returns a placeholder message confirming the Avm.Authoring module is installed. |
+| [Get-AvmBicepE2eDeploymentMatrix](Get-AvmBicepE2eDeploymentMatrix.md) |  | Build native Bicep E2E deployment selections without Azure access. |
+| [Get-AvmBicepE2eTestContext](Get-AvmBicepE2eTestContext.md) |  | Revalidate one selected Bicep E2E case and return its execution context. |
+| [Get-AvmBicepPendingReleasePlan](Get-AvmBicepPendingReleasePlan.md) |  | Discover versioned Bicep modules awaiting release tags. |
+| [Get-AvmBicepWorkflowModuleMatrix](Get-AvmBicepWorkflowModuleMatrix.md) |  | Build a deterministic Bicep module workflow matrix. |
+| [Get-AvmBicepWorkflowTestFiles](Get-AvmBicepWorkflowTestFiles.md) |  | Discover native Bicep test files and policy candidates for one module. |
 | [Get-AvmCatalogTelemetryPrefix](Get-AvmCatalogTelemetryPrefix.md) |  | Read current and historical telemetry prefixes from the public AVM catalog. |
 | [Get-AvmModuleContext](Get-AvmModuleContext.md) | `avm context` | Classify a directory as a Bicep or Terraform module/monorepo context. |
 | [Get-AvmModuleMetadata](Get-AvmModuleMetadata.md) | `avm metadata show` | Read and validate an existing module metadata.json file. |
 | [Get-AvmTool](Get-AvmTool.md) | `avm tool list`<br>`avm tool which` | List or query managed tools from the avm.pins manifest. |
 | [Get-AvmVersion](Get-AvmVersion.md) | `avm version` | Reports the running Avm.Authoring module version and host runtime. |
+| [Initialize-AvmBicepReleaseMatrix](Initialize-AvmBicepReleaseMatrix.md) |  | Build a guarded top-level Bicep release matrix. |
+| [Initialize-AvmBicepWorkflowMatrix](Initialize-AvmBicepWorkflowMatrix.md) |  | Discover a checked-out Bicep workflow matrix for a push, pull request, or manual run. |
 | [Initialize-AvmModule](Initialize-AvmModule.md) | `avm init` | Initialize a Bicep module locally, or create and set up a Terraform module repository. |
 | [Initialize-AvmModuleMetadata](Initialize-AvmModuleMetadata.md) | `avm metadata initialize` | Create metadata.json without overwriting an existing file. |
 | [Install-AvmTool](Install-AvmTool.md) | `avm tool install` | Install one, several, or all managed tools from avm.pins. |
@@ -35,5 +42,6 @@ This reference is generated from the comment-based help on the public PowerShell
 | [New-AvmTelemetryIdPrefix](New-AvmTelemetryIdPrefix.md) |  | Generate a seven-character hexadecimal telemetry identifier. |
 | [Register-AvmFeature](Register-AvmFeature.md) | `avm register-features` | Ensure features declared at a module root are registered in one Azure test subscription. |
 | [Select-AvmTestSubscription](Select-AvmTestSubscription.md) |  | Select a Bicep test subscription using the repository's exact reservation map. |
+| [Set-AvmBicepReleaseTags](Set-AvmBicepReleaseTags.md) |  | Create guarded Bicep module release tags from a checked-out target. |
 | [Test-AvmModuleMetadata](Test-AvmModuleMetadata.md) | `avm metadata validate` | Validate existing or supplied module metadata with packaged Pester tests. |
 | [Update-AvmAuthoring](Update-AvmAuthoring.md) | `avm update`<br>`avm upgrade` | Update Avm.Authoring to the latest PowerShell Gallery version. |

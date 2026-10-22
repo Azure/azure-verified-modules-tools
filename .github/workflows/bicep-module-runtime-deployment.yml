@@ -1,0 +1,146 @@
+name: 'Reusable: Bicep Module Runtime Deployment'
+
+on:
+  workflow_call:
+    inputs:
+      modulePath:
+        type: string
+        required: true
+      workflowInput:
+        type: string
+        required: true
+      testCase:
+        type: string
+        required: true
+      targetCommit:
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  deploy:
+    name: Deploy [${{ fromJSON(inputs.testCase).Name }}] on [${{ fromJSON(inputs.testCase).SubscriptionName }}]
+    environment: avm-validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: ${{ fromJSON(inputs.testCase).ConcurrencyGroup }}
+      queue: max
+    steps:
+      - name: Report skipped deployment
+        if: fromJSON(inputs.testCase).E2eIgnore
+        shell: pwsh
+        run: Write-Output 'Deployment skipped because .e2eignore is set.'
+      - name: Check out caller
+        if: ${{ !fromJSON(inputs.testCase).E2eIgnore }}
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.targetCommit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Initialize deployment context
+        id: context
+        if: ${{ !fromJSON(inputs.testCase).E2eIgnore }}
+        shell: pwsh
+        env:
+          MODULE_PATH: ${{ inputs.modulePath }}
+          TEST_CASE: ${{ inputs.testCase }}
+          TEST_SUBSCRIPTION_IDS: ${{ vars.VALIDATE_SUBSCRIPTION_IDS || vars.TEST_SUBSCRIPTION_IDS || secrets.VALIDATE_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS }}
+          VALIDATE_SUBSCRIPTION_ID: ${{ vars.VALIDATE_SUBSCRIPTION_ID || secrets.VALIDATE_SUBSCRIPTION_ID }}
+          VALIDATE_MODULE_CLIENT_IDS: ${{ vars.VALIDATE_MODULE_CLIENT_IDS }}
+          VALIDATE_TENANT_ID: ${{ vars.VALIDATE_TENANT_ID || secrets.VALIDATE_TENANT_ID }}
+          TOKEN_NAMEPREFIX: ${{ secrets.TOKEN_NAMEPREFIX }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
+            Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+          }
+          Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
+          Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
+          Import-Module Avm.Authoring -ErrorAction Stop
+          $capabilities = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities
+          if ($capabilities.BicepWorkflowE2eRuntime -ne 1) {
+            throw 'The installed Avm.Authoring package does not provide BicepWorkflowE2eRuntime = 1.'
+          }
+          $testCase = ConvertFrom-Json -InputObject $env:TEST_CASE -AsHashtable
+          $context = Get-AvmBicepE2eTestContext -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH `
+              -TestCase $testCase -PoolJson $env:TEST_SUBSCRIPTION_IDS -FallbackSubscriptionId $env:VALIDATE_SUBSCRIPTION_ID `
+              -ModuleClientIds $env:VALIDATE_MODULE_CLIENT_IDS -TenantId $env:VALIDATE_TENANT_ID -NamePrefix $env:TOKEN_NAMEPREFIX
+          foreach ($property in $context.PSObject.Properties) {
+            "$($property.Name)=$($property.Value)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+      - name: Sign in with OIDC
+        if: ${{ !fromJSON(inputs.testCase).E2eIgnore }}
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ steps.context.outputs.ClientId }}
+          tenant-id: ${{ steps.context.outputs.TenantId }}
+          subscription-id: ${{ steps.context.outputs.SubscriptionId }}
+          enable-AzPSSession: true
+      - name: Deploy native test case
+        id: deploy
+        if: ${{ !fromJSON(inputs.testCase).E2eIgnore }}
+        shell: pwsh
+        env:
+          MODULE_PATH: ${{ steps.context.outputs.ModulePath }}
+          EXAMPLE: ${{ steps.context.outputs.Example }}
+          SUBSCRIPTION_ID: ${{ steps.context.outputs.SubscriptionId }}
+          TENANT_ID: ${{ steps.context.outputs.TenantId }}
+          REQUIRE_ISOLATION: ${{ steps.context.outputs.RequireResourceIsolation }}
+          LOCATION: ${{ fromJSON(inputs.workflowInput).customLocation }}
+          AVM_CI_VARIABLES: ${{ toJSON(vars) }}
+          AVM_CI_SECRETS: ${{ toJSON(secrets) }}
+          STATE_PATH: ${{ runner.temp }}/avm-bicep-state/${{ steps.context.outputs.ArtifactKey }}.cleanup.json
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module Avm.Authoring -ErrorAction Stop
+          $null = New-Item -ItemType Directory -Path (Split-Path $env:STATE_PATH) -Force
+          Invoke-AvmTestE2e -Path (Join-Path $env:GITHUB_WORKSPACE $env:MODULE_PATH) -Ecosystem bicep `
+            -Example @($env:EXAMPLE) -Recurse -SubscriptionId $env:SUBSCRIPTION_ID -TenantId $env:TENANT_ID `
+            -Phase Deploy -CleanupStatePath $env:STATE_PATH -Location $env:LOCATION -UseCiInputs `
+            -RequireResourceIsolation:([bool]::Parse($env:REQUIRE_ISOLATION)) -SkipModuleVersionCheck -Confirm:$false
+      - name: Renew OIDC sign-in for completion
+        if: ${{ !cancelled() && (success() || failure()) && steps.deploy.outcome != 'skipped' }}
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ steps.context.outputs.ClientId }}
+          tenant-id: ${{ steps.context.outputs.TenantId }}
+          subscription-id: ${{ steps.context.outputs.SubscriptionId }}
+          enable-AzPSSession: true
+      - name: Assert and complete native test case
+        if: ${{ !cancelled() && (success() || failure()) && (steps.deploy.outcome == 'success' || steps.deploy.outcome == 'failure') && steps.renew_oidc.outcome == 'success' }}
+        shell: pwsh
+        env:
+          MODULE_PATH: ${{ steps.context.outputs.ModulePath }}
+          SUBSCRIPTION_ID: ${{ steps.context.outputs.SubscriptionId }}
+          TENANT_ID: ${{ steps.context.outputs.TenantId }}
+          STATE_PATH: ${{ runner.temp }}/avm-bicep-state/${{ steps.context.outputs.ArtifactKey }}.cleanup.json
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module Avm.Authoring -ErrorAction Stop
+          Invoke-AvmTestE2e -Path (Join-Path $env:GITHUB_WORKSPACE $env:MODULE_PATH) -Ecosystem bicep `
+            -SubscriptionId $env:SUBSCRIPTION_ID -TenantId $env:TENANT_ID -Phase Complete `
+            -CleanupStatePath $env:STATE_PATH -SkipModuleVersionCheck -Confirm:$false
+      - name: Recover unfinished native cleanup
+        if: ${{ !cancelled() && failure() && steps.deploy.outcome != 'skipped' && fromJSON(inputs.workflowInput).removeDeployment == 'true' && steps.renew_oidc.outcome == 'success' }}
+        shell: pwsh
+        env:
+          SUBSCRIPTION_ID: ${{ steps.context.outputs.SubscriptionId }}
+          TENANT_ID: ${{ steps.context.outputs.TenantId }}
+          STATE_PATH: ${{ runner.temp }}/avm-bicep-state/${{ steps.context.outputs.ArtifactKey }}.cleanup.json
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module Avm.Authoring -ErrorAction Stop
+          Invoke-AvmTestCleanup -StatePath $env:STATE_PATH -SubscriptionId $env:SUBSCRIPTION_ID `
+            -TenantId $env:TENANT_ID -SkipModuleVersionCheck -Confirm:$false
+      - name: Retain recovery state
+        if: always() && steps.context.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bicep-deployment-${{ steps.context.outputs.ArtifactKey }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/avm-bicep-state/*.json
+          if-no-files-found: warn
+          retention-days: 14

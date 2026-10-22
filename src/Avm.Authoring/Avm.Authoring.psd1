@@ -11,12 +11,19 @@
     FunctionsToExport    = @(
         'Export-AvmReadmeNote',
         'Get-AvmAuthoringPlaceholder',
+        'Get-AvmBicepE2eDeploymentMatrix',
+        'Get-AvmBicepE2eTestContext',
+        'Get-AvmBicepPendingReleasePlan',
+        'Get-AvmBicepWorkflowModuleMatrix',
+        'Get-AvmBicepWorkflowTestFiles',
         'Get-AvmCatalogTelemetryPrefix',
         'Get-AvmModuleContext',
         'Get-AvmTool',
         'Get-AvmVersion',
         'Initialize-AvmModule',
         'Initialize-AvmModuleMetadata',
+        'Initialize-AvmBicepReleaseMatrix',
+        'Initialize-AvmBicepWorkflowMatrix',
         'Install-AvmTool',
         'New-AvmTelemetryIdPrefix',
         'Invoke-Avm',
@@ -38,6 +45,7 @@
         'Get-AvmModuleMetadata',
         'Register-AvmFeature',
         'Select-AvmTestSubscription',
+        'Set-AvmBicepReleaseTags',
         'Test-AvmModuleMetadata',
         'Update-AvmAuthoring'
     )
@@ -50,6 +58,8 @@
             BicepPackagedCompliance         = 1
             BicepRequiredResourceProviders  = 1
             PowerShellModuleArchiveRecovery = 1
+            BicepWorkflowOrchestration      = 1
+            BicepWorkflowE2eRuntime         = 1
         }
         PSData          = @{
             Tags         = @('Azure', 'AVM', 'AzureVerifiedModules', 'Bicep', 'Terraform', 'Authoring', 'CLI', 'PSEdition_Core')
