@@ -97,7 +97,7 @@ Describe 'Module Resources packaging' {
         }
     }
 
-    It 'relies on default-enabled AVM rules and preserves only scope exemptions' {
+    It 'relies on default-enabled AVM rules except narrow telemetry exclusions' {
         $tflintDir = Join-Path $script:moduleRoot (Join-Path 'Resources' 'tflint')
         $root = Get-Content -LiteralPath (Join-Path $tflintDir 'avm.tflint.hcl') -Raw
         $module = Get-Content -LiteralPath (Join-Path $tflintDir 'avm.tflint_module.hcl') -Raw
@@ -126,7 +126,6 @@ Describe 'Module Resources packaging' {
                 'avm_terraform_literal_heredoc_disallowed',
                 'avm_terraform_provider_block_disallowed',
                 'avm_terraform_sensitive_variable_default_disallowed',
-                'avm_azapi_resource_tags_required',
                 'avm_azapi_replace_triggers_refs_valid',
                 'avm_terraform_configuration_file_required'
             )) {
@@ -136,6 +135,9 @@ Describe 'Module Resources packaging' {
 
         $root | Should -Not -Match 'rule\s+"avm_output_resource_id_required"'
         $module | Should -Match '(?s)rule\s+"avm_output_resource_id_required"\s*\{\s*enabled\s*=\s*false\s*\}'
+        foreach ($content in @($root, $module)) {
+            $content | Should -Match '(?s)rule\s+"avm_azapi_resource_tags_required"\s*\{[^}]*enabled\s*=\s*true[^}]*ignored_resources\s*=\s*\[\s*"azapi_resource\.telemetry"\s*\]'
+        }
         $root | Should -Match '(?s)rule\s+"avm_provider_modtm_version_constraint"\s*\{\s*enabled\s*=\s*false\s*\}'
         $module | Should -Match '(?s)rule\s+"avm_provider_modtm_version_constraint"\s*\{\s*enabled\s*=\s*false\s*\}'
         foreach ($exampleRule in @(

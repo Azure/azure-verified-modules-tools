@@ -130,6 +130,10 @@ section when cutting a release.
 
 ### Changed
 
+- Terraform lint configuration pins AVM ruleset 1.4.0 and
+  exempts only the generated `azapi_resource.telemetry` from the five applicable
+  tag and interface rules. Legacy generated tag-ignore comments are removed
+  during transformation and are now reported by the inline-ignore audit.
 - Native Bicep convention validation no longer requires the repository-root
   child publication allow-list or evaluates child membership. Versioned child
   modules still require an exact, regular `version.json`, valid version data,

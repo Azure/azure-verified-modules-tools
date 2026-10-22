@@ -26,7 +26,7 @@ Describe 'Invoke-AvmTerraformTransform' -Tag Component {
             Ecosystem = 'terraform'
             Source    = 'path-heuristic'
         }
-        Mock Set-AvmTelemetryTagLintDirective -ModuleName 'Avm.Authoring'
+        Mock Remove-AvmTelemetryTagLintDirective -ModuleName 'Avm.Authoring'
         Mock Get-AvmTerraformLocationInspection -ModuleName 'Avm.Authoring' { $null }
         Mock Get-AvmTerraformUnitTestSnapshot -ModuleName 'Avm.Authoring' { @() }
         Mock Get-AvmTerraformUtilityMigrationPlan -ModuleName 'Avm.Authoring' { @() }
@@ -218,7 +218,7 @@ Describe 'Invoke-AvmTerraformTransform' -Tag Component {
                 $ArgumentList[0] -eq 'clean-backup' -and
                 $ArgumentList -contains '--tf-dir'
             }
-            Should -Invoke Set-AvmTelemetryTagLintDirective -Exactly 1
+            Should -Invoke Remove-AvmTelemetryTagLintDirective -Exactly 1
         }
     }
 
@@ -2140,7 +2140,7 @@ terraform {
     }
 }
 
-Describe 'Set-AvmTelemetryTagLintDirective' -Tag Component {
+Describe 'Remove-AvmTelemetryTagLintDirective' -Tag Component {
     BeforeEach {
         $script:lintRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $null = New-Item -ItemType Directory -Path $script:lintRoot -Force
@@ -2150,43 +2150,39 @@ resource "azapi_resource" "other" {
   tags = var.tags
 }
 
+# tflint-ignore: avm_azapi_resource_tags_required
 resource "azapi_resource" "telemetry" {
   type = "Microsoft.Resources/deployments@2025-04-01"
-  # tflint-ignore: avm_azapi_resource_tags_required
-  tags = {
-    avm_apply_id = plantimestamp()
-  }
+  body = { properties = { mode = "Incremental" } }
 }
 '@
         $script:lintTarget = [pscustomobject]@{ Path = $script:lintRoot; Profiles = @('root') }
     }
 
-    It 'moves the legacy tag directive to the telemetry resource and preserves other resources' {
+    It 'removes the exact legacy telemetry directive and preserves other resources' {
         $before = Get-Content -LiteralPath $script:lintFile -Raw
         InModuleScope 'Avm.Authoring' -Parameters @{ Target = $script:lintTarget } {
             param($Target)
-            Set-AvmTelemetryTagLintDirective -Targets @($Target) -WhatIf
+            Remove-AvmTelemetryTagLintDirective -Targets @($Target) -WhatIf
         }
         Get-Content -LiteralPath $script:lintFile -Raw | Should -BeExactly $before
 
         InModuleScope 'Avm.Authoring' -Parameters @{ Target = $script:lintTarget } {
             param($Target)
-            Set-AvmTelemetryTagLintDirective -Targets @($Target)
+            Remove-AvmTelemetryTagLintDirective -Targets @($Target)
         }
         $after = Get-Content -LiteralPath $script:lintFile -Raw
-        $after | Should -Match '(?m)^# tflint-ignore: avm_azapi_resource_tags_required\r?\nresource "azapi_resource" "telemetry" \{'
-        $after | Should -Not -Match '(?m)^  # tflint-ignore: avm_azapi_resource_tags_required'
+        $after | Should -Not -Match 'tflint-ignore: avm_azapi_resource_tags_required'
         $after | Should -Match '(?s)resource "azapi_resource" "other" \{\s*tags\s*=\s*var\.tags'
-        @([regex]::Matches($after, 'tflint-ignore: avm_azapi_resource_tags_required')) | Should -HaveCount 1
 
         InModuleScope 'Avm.Authoring' -Parameters @{ Target = $script:lintTarget } {
             param($Target)
-            Set-AvmTelemetryTagLintDirective -Targets @($Target)
+            Remove-AvmTelemetryTagLintDirective -Targets @($Target)
         }
         Get-Content -LiteralPath $script:lintFile -Raw | Should -BeExactly $after
     }
 
-    It 'annotates a tagless telemetry deployment' {
+    It 'does not add a directive to a tagless telemetry deployment' {
         Set-Content -LiteralPath $script:lintFile -Encoding utf8NoBOM -Value @'
 resource "azapi_resource" "telemetry" {
   type = "Microsoft.Resources/deployments@2025-04-01"
@@ -2195,25 +2191,79 @@ resource "azapi_resource" "telemetry" {
 '@
         InModuleScope 'Avm.Authoring' -Parameters @{ Target = $script:lintTarget } {
             param($Target)
-            Set-AvmTelemetryTagLintDirective -Targets @($Target)
+            Remove-AvmTelemetryTagLintDirective -Targets @($Target)
         }
         $content = Get-Content -LiteralPath $script:lintFile -Raw
-        $content | Should -Match '(?m)^# tflint-ignore: avm_azapi_resource_tags_required\r?\nresource "azapi_resource" "telemetry" \{'
-        $content | Should -Not -Match '(?m)^\s*tags\s*='
+        $content | Should -Not -Match 'tflint-ignore: avm_azapi_resource_tags_required'
+        $content | Should -Match '(?m)^resource "azapi_resource" "telemetry" \{'
     }
 
-    It 'does not silently accept a missing telemetry resource' {
-        Set-Content -LiteralPath $script:lintFile -Encoding utf8NoBOM -Value 'resource "azapi_resource" "other" {}'
-        $caught = $null
-        try {
-            InModuleScope 'Avm.Authoring' -Parameters @{ Target = $script:lintTarget } {
-                param($Target)
-                Set-AvmTelemetryTagLintDirective -Targets @($Target)
-            }
+    It 'removes the exact legacy directive when the file uses mixed line endings' {
+        $directive = '# tflint-ignore: avm_azapi_resource_tags_required'
+        $mixed = $directive + "`n" + @'
+resource "azapi_resource" "telemetry" {
+  type = "Microsoft.Resources/deployments@2025-04-01"
+}
+'@
+        [System.IO.File]::WriteAllText(
+            $script:lintFile,
+            $mixed.Replace("`n", "`r`n").Replace($directive + "`r`n", $directive + "`n"),
+            [System.Text.UTF8Encoding]::new($false))
+
+        InModuleScope 'Avm.Authoring' -Parameters @{ Target = $script:lintTarget } {
+            param($Target)
+            Remove-AvmTelemetryTagLintDirective -Targets @($Target)
         }
-        catch { $caught = $_.Exception }
-        $caught.GetType().Name | Should -Be 'AvmConfigurationException'
-        $caught.Message | Should -Match 'Expected one azapi_resource.telemetry block'
+
+        Get-Content -LiteralPath $script:lintFile -Raw |
+            Should -Not -Match 'tflint-ignore: avm_azapi_resource_tags_required'
+    }
+
+    It 'removes the exact legacy directive from a direct local module' {
+        $child = Join-Path $script:lintRoot 'modules' 'network'
+        $null = New-Item -ItemType Directory -Path $child -Force
+        $childFile = Join-Path $child 'main.telemetry.tf'
+        Copy-Item -LiteralPath $script:lintFile -Destination $childFile
+
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            Target = [pscustomobject]@{ Path = $child; Scope = 'module'; Profiles = @('root', 'module', 'common') }
+        } {
+            param($Target)
+            Remove-AvmTelemetryTagLintDirective -Targets @($Target)
+        }
+
+        Get-Content -LiteralPath $childFile -Raw |
+            Should -Not -Match 'tflint-ignore: avm_azapi_resource_tags_required'
+    }
+
+    It 'does not remove a combined or authored telemetry directive' {
+        Set-Content -LiteralPath $script:lintFile -Encoding utf8NoBOM -Value @'
+# tflint-ignore: avm_azapi_resource_tags_required, avm_other_rule
+resource "azapi_resource" "telemetry" {
+  type = "Microsoft.Resources/deployments@2025-04-01"
+}
+'@
+        $before = Get-Content -LiteralPath $script:lintFile -Raw
+        InModuleScope 'Avm.Authoring' -Parameters @{ Target = $script:lintTarget } {
+            param($Target)
+            Remove-AvmTelemetryTagLintDirective -Targets @($Target)
+        }
+        Get-Content -LiteralPath $script:lintFile -Raw | Should -BeExactly $before
+    }
+
+    It 'does not remove a business-resource directive' {
+        Set-Content -LiteralPath $script:lintFile -Encoding utf8NoBOM -Value @'
+# tflint-ignore: avm_azapi_resource_tags_required
+resource "azapi_resource" "business" {
+  type = "Microsoft.Resources/deployments@2025-04-01"
+}
+'@
+        $before = Get-Content -LiteralPath $script:lintFile -Raw
+        InModuleScope 'Avm.Authoring' -Parameters @{ Target = $script:lintTarget } {
+            param($Target)
+            Remove-AvmTelemetryTagLintDirective -Targets @($Target)
+        }
+        Get-Content -LiteralPath $script:lintFile -Raw | Should -BeExactly $before
     }
 
     It 'does not require a telemetry resource in a prefix-free helper' {
@@ -2223,7 +2273,7 @@ resource "azapi_resource" "telemetry" {
             Target = [pscustomobject]@{ Path = $script:lintRoot; Profiles = @('module', 'common') }
         } {
             param($Target)
-            Set-AvmTelemetryTagLintDirective -Targets @($Target)
+            Remove-AvmTelemetryTagLintDirective -Targets @($Target)
         }
         Get-Content -LiteralPath $script:lintFile -Raw | Should -BeExactly $before
     }
