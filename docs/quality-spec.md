@@ -1314,8 +1314,13 @@ The one-off migration and canonical CSV replacement remain explicit operator
 actions.
 Metadata is owner-authored, not a managed-file
 overlay that can be replaced on every repository sync.
-Terraform repository discovery reads validated root metadata from each
-repository's default branch. Missing files warn during rollout and suppress
+Terraform repository discovery admits installed repositories by the shared
+case-insensitive module naming regex, without built-in or caller-supplied
+exclusion lists. Nonmatching repositories are logged and ignored without
+warnings, errors, issue artifacts, or metadata requests. Archive filtering and
+explicit repository-ID selection still apply to matching modules. Discovery
+reads validated root metadata from each selected repository's default branch.
+Missing files warn during rollout and suppress
 direct collaborator cleanup; invalid files or API failures exclude that
 repository. Archive state comes from GitHub, not an authored metadata field.
 New-repository creation (`avm init`) initializes metadata before the first
@@ -1892,6 +1897,24 @@ discovery and tagging without adding workflow events, authentication,
 deployment, publication activation or a caller-facing mode/input surface.
 New orchestration must consume a durable, separately merged support commit;
 never pin support to an orphanable premerge head.
+
+`Set-AvmWorkflowReleaseTags -RequireChangelog` is an opt-in release precondition;
+omitting the switch or passing false preserves existing caller defaults.
+Resolve current source baselines and calculate the complete child/parent tag
+proposal once, then validate every proposed version before creating or pushing
+any tag in that module's plan. Both pending and explicit-base releases use this
+guard. Reuse the installed `Avm.Authoring` Bicep version/changelog parser,
+not a second target-version calculation or a full compliance/test/deployment run.
+Each planned module needs a regular exact-case readable UTF-8 `CHANGELOG.md`,
+semantic release headings, exactly one section for its actual proposed version,
+and one nonempty Changes section followed by one nonempty Breaking Changes
+section. Missing, malformed, duplicate, unreadable or stale notes fail with the
+module path and expected version; a guard failure leaves the plan's tags
+untouched. Successful preflight executes those same proposals, retaining
+same-target reuse and conflicting-tag/remote-reconciliation safeguards.
+Changelog-only changes do not make a module publishable, and an empty release
+plan does not require notes. The guard adds no package dependency, workflow
+trigger, authentication, approval bypass or lock guarantee.
 
 Publishing an executable candidate is not a package release, federation apply
 or registry cutover. Moving deployment to tools changes `job_workflow_ref`

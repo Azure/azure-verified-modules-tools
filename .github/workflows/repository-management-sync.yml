@@ -9,10 +9,6 @@ on:
         description: 'Override the target repositories, use a comma separated list. Leave as All to run on all repositories.'
         default: 'All'
         type: string
-      repositories_to_skip:
-        description: 'Additional repositories to skip, as a comma separated list. Permanent exclusions always apply.'
-        default: ''
-        type: string
       plan_only:
         description: 'Whether to only plan the changes'
         default: true
@@ -66,7 +62,6 @@ jobs:
         id: matrix
         with:
           repositories: ${{ case(github.event_name == 'workflow_dispatch', inputs.repositories, 'All') }}
-          repositoriesToSkip: ${{ case(github.event_name == 'workflow_dispatch', inputs.repositories_to_skip, '') }}
           clientId: ${{ vars.AVM_APP_CLIENT_ID }}
           privateKey: ${{ secrets.AVM_APP_PRIVATE_KEY }}
 

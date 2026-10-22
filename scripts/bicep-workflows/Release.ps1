@@ -169,6 +169,61 @@ function Initialize-AvmWorkflowReleaseMatrix {
     return @{ include = @(foreach ($path in $modules) { @{ modulePath = $path } }) }
 }
 
+function Assert-AvmWorkflowReleaseChangelog {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Root,
+        [Parameter(Mandatory)] [string] $ModulePath,
+        [Parameter(Mandatory)] [string] $Version
+    )
+
+    $context = "CHANGELOG.md for $ModulePath release $Version"
+    $package = Get-Module Avm.Authoring | Select-Object -First 1
+    if ($null -eq $package) {
+        throw [InvalidOperationException]::new("$context requires the imported Avm.Authoring package.")
+    }
+    $path = Resolve-AvmWorkflowPath -Root $Root -RelativePath $ModulePath
+    try {
+        $data = & $package {
+            param($Path, $ModulePath)
+            Get-AvmBicepVersionInput -Scope @{ Path = $Path; ModuleRelativePath = $ModulePath }
+        } $path $ModulePath
+    }
+    catch [IO.IOException], [UnauthorizedAccessException], [Text.DecoderFallbackException],
+    [Management.Automation.CommandNotFoundException], [Management.Automation.ItemNotFoundException] {
+        throw [InvalidOperationException]::new("${context}: cannot read changelog data: $($_.Exception.Message)", $_.Exception)
+    }
+    if ($null -eq $data -or $data.VersionError) {
+        throw [ArgumentException]::new("${context}: cannot inspect valid version.json data.")
+    }
+    if ($data.ChangelogFiles.Count -ne 1 -or $data.ChangelogFiles[0].Name -cne 'CHANGELOG.md' -or
+        $data.ChangelogFiles[0].PSIsContainer -or
+        ($data.ChangelogFiles[0].Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw [ArgumentException]::new("${context}: a regular exact-case changelog file is required.")
+    }
+    if ($data.ChangelogError) {
+        throw [ArgumentException]::new("${context}: changelog is unreadable as UTF-8: $($data.ChangelogError)")
+    }
+    if (@($data.Headings | Where-Object { $null -eq $_.Version }).Count -gt 0) {
+        throw [ArgumentException]::new("${context}: release headings must use '## MAJOR.MINOR.PATCH'.")
+    }
+    $heading = "^## $([regex]::Escape($Version))\s*$"
+    $releases = @($data.Versions | Where-Object { $_.Text -cmatch $heading })
+    if ($releases.Count -ne 1) {
+        throw [ArgumentException]::new("${context}: exactly one expected-version section is required.")
+    }
+    $sections = $releases[0].Sections
+    foreach ($section in $sections) {
+        if ($section.Positions.Count -ne 1 -or
+            @($section.Content | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -eq 0) {
+            throw [ArgumentException]::new("${context}: exactly one nonempty '$($section.Name)' section is required.")
+        }
+    }
+    if ($sections[0].Positions[0] -ge $sections[1].Positions[0]) {
+        throw [ArgumentException]::new("${context}: Changes must precede Breaking Changes.")
+    }
+}
+
 function Set-AvmWorkflowReleaseTags {
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
     param(
@@ -178,7 +233,8 @@ function Set-AvmWorkflowReleaseTags {
         [string] $BaseCommit,
         [switch] $Force,
         [switch] $IncludeAllVersionedModules,
-        [switch] $PendingRelease
+        [switch] $PendingRelease,
+        [switch] $RequireChangelog
     )
 
     if ($TargetCommit -cnotmatch '^[0-9a-f]{40}$' -or
@@ -236,7 +292,7 @@ function Set-AvmWorkflowReleaseTags {
                 [pscustomobject]@{ ModulePath = $relative; BaseCommit = $BaseCommit }
             })
     }
-    $outputs = [Collections.Generic.List[object]]::new()
+    $proposals = [Collections.Generic.List[object]]::new()
     foreach ($candidate in $plan) {
         $relative = $candidate.ModulePath
         $candidateBase = $candidate.BaseCommit
@@ -268,7 +324,18 @@ function Set-AvmWorkflowReleaseTags {
         if ($remoteTags.ContainsKey($tag) -and $remoteTags[$tag] -cne $TargetCommit) {
             throw [InvalidOperationException]::new("Release tag $tag already points to a different commit.")
         }
-        $created = $false
+        $proposals.Add([pscustomobject]@{ Module = $relative; Tag = $tag; Commit = $TargetCommit; Reused = $reused; Created = $false })
+    }
+    if ($RequireChangelog) {
+        foreach ($proposal in $proposals) {
+            Assert-AvmWorkflowReleaseChangelog -Root $Root -ModulePath $proposal.Module `
+                -Version $proposal.Tag.Substring($proposal.Module.Length + 1)
+        }
+    }
+    foreach ($proposal in $proposals) {
+        $relative = $proposal.Module
+        $tag = $proposal.Tag
+        $reused = $proposal.Reused
         if (-not $reused -and $PSCmdlet.ShouldProcess("$tag at $TargetCommit", 'Create and push module release tag')) {
             if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) {
                 throw [InvalidOperationException]::new('The release-tag job requires its scoped GitHub token.')
@@ -302,9 +369,8 @@ function Set-AvmWorkflowReleaseTags {
                     throw [InvalidOperationException]::new("Publishing $tag failed; no mutation was retried.")
                 }
             }
-            $created = $true
+            $proposal.Created = $true
         }
-        $outputs.Add([pscustomobject]@{ Module = $relative; Tag = $tag; Commit = $TargetCommit; Reused = $reused; Created = $created })
     }
-    return $outputs.ToArray()
+    return $proposals.ToArray()
 }

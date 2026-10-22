@@ -168,9 +168,6 @@ Describe "Repository management migration layout" {
                 "(?m)^  schedule:\r?\n    - cron: '33 \*/4 \* \* 1-5'\s*$"
             )).Count | Should -Be 1
         $workflow | Should -Match (
-            "(?ms)^      repositories_to_skip:\r?\n.*?^        default:\s*''\s*$"
-        )
-        $workflow | Should -Match (
             '(?ms)^      plan_only:\r?\n.*?^        default:\s*true\s*$'
         )
     }
@@ -196,16 +193,10 @@ Describe "Repository management migration layout" {
         ) | Should -BeFalse
     }
 
-    It "limits the retired governance identifier to its inert exclusion and tests" {
+    It "limits the retired governance identifier to discovery tests" {
         $retiredIdentifier = 'avm-terraform-' + 'governance'
         $grepOutput = @(
             & git -C $script:repoRoot grep -in -e $retiredIdentifier 2>$null
-        )
-        $allowedProductionLine = (
-            '^repository-management/repository-sync/actions/avm-repos/scripts/' +
-            'Get-RepositoriesWhereAppInstalled\.ps1:\d+:\s*"' +
-            [regex]::Escape($retiredIdentifier) +
-            '",?\s*$'
         )
         $allowedTestLine = (
             '^tests/Pester/Unit/RepositoryManagement/' +
@@ -214,7 +205,6 @@ Describe "Repository management migration layout" {
         $unexpectedReferences = @(
             $grepOutput |
                 Where-Object {
-                    $_ -notmatch $allowedProductionLine -and
                     $_ -notmatch $allowedTestLine
                 }
         )
