@@ -843,6 +843,17 @@ ModTM removal, conditional AzAPI insertion and declared-requirement retirement.
 PowerShell supplies only fresh dependency-tree and provider-configuration facts,
 surfaces the profile's literal-map review before writing, and must not parse,
 rebuild or replace authored provider-map expressions.
+For scopes with child module calls, defer early ModTM requirement retirement
+until the utility cleanup has fresh dependency proof, rather than temporarily
+dropping and regenerating a still-required source/version contract.
+Before loading a dependency tree, reconcile known local callers against their
+children's current native declarations, including callers selected through test
+files. Repeat this reconciliation after retiring a child's requirement: Terraform
+loads test-selected examples during `get`, before dependency-ordered caller
+restoration can run. Remove only unsupported `modtm = modtm` entries; preserve
+alias and different-local-name selections. A temporarily retired declaration
+may be restored only with the existing fresh dependency proof, after which a
+retained mixed map must again forward any genuinely required ModTM configuration.
 An intermediate native missing-provider-configuration warning may be tracked
 while repairing proven source bindings. All other diagnostics remain fatal,
 and a strict dependency recheck must pass before mock migration.
@@ -1318,8 +1329,13 @@ The one-off migration and canonical CSV replacement remain explicit operator
 actions.
 Metadata is owner-authored, not a managed-file
 overlay that can be replaced on every repository sync.
-Terraform repository discovery reads validated root metadata from each
-repository's default branch. Missing files warn during rollout and suppress
+Terraform repository discovery admits installed repositories by the shared
+case-insensitive module naming regex, without built-in or caller-supplied
+exclusion lists. Nonmatching repositories are logged and ignored without
+warnings, errors, issue artifacts, or metadata requests. Archive filtering and
+explicit repository-ID selection still apply to matching modules. Discovery
+reads validated root metadata from each selected repository's default branch.
+Missing files warn during rollout and suppress
 direct collaborator cleanup; invalid files or API failures exclude that
 repository. Archive state comes from GitHub, not an authored metadata field.
 New-repository creation (`avm init`) initializes metadata before the first
@@ -1877,6 +1893,43 @@ path, never MCR publication. Retain upstream/main/manual guards, child-before-
 parent ordering, same-target tag reuse, conflicting-tag failures and
 reconciliation of uncertain pushes without mutation replay. Preview cannot
 create or push tags.
+
+Shared pending-release support compares each tracked compiled/versioned module,
+including versioned children, against its own latest semantic-version source
+tag across all version lines. A manual pending release includes publishable
+`main.json` or `version.json` changes older than the latest main commit, but
+not docs, metadata, authored source or test-only edits. A module without a
+release tag is an initial release of its tracked compiled/versioned files;
+do not substitute the target's parent, force unchanged modules or infer that
+an ADO handoff tag proves MCR publication completed.
+Validate complete history and each selected tag's commit ancestry; unavailable,
+invalid or failed history/tag reads are errors, not empty successful selections.
+Recheck independent child/parent baselines inside the existing module publication
+lock, create changed children before parents, and retain tag version, reuse,
+conflict and push-reconciliation semantics. Explicit before/after push discovery
+and existing leaf defaults remain unchanged. Shared support exposes pending
+discovery and tagging without adding workflow events, authentication,
+deployment, publication activation or a caller-facing mode/input surface.
+New orchestration must consume a durable, separately merged support commit;
+never pin support to an orphanable premerge head.
+
+`Set-AvmWorkflowReleaseTags -RequireChangelog` is an opt-in release precondition;
+omitting the switch or passing false preserves existing caller defaults.
+Resolve current source baselines and calculate the complete child/parent tag
+proposal once, then validate every proposed version before creating or pushing
+any tag in that module's plan. Both pending and explicit-base releases use this
+guard. Reuse the installed `Avm.Authoring` Bicep version/changelog parser,
+not a second target-version calculation or a full compliance/test/deployment run.
+Each planned module needs a regular exact-case readable UTF-8 `CHANGELOG.md`,
+semantic release headings, exactly one section for its actual proposed version,
+and one nonempty Changes section followed by one nonempty Breaking Changes
+section. Missing, malformed, duplicate, unreadable or stale notes fail with the
+module path and expected version; a guard failure leaves the plan's tags
+untouched. Successful preflight executes those same proposals, retaining
+same-target reuse and conflicting-tag/remote-reconciliation safeguards.
+Changelog-only changes do not make a module publishable, and an empty release
+plan does not require notes. The guard adds no package dependency, workflow
+trigger, authentication, approval bypass or lock guarantee.
 
 Publishing an executable candidate is not a package release, federation apply
 or registry cutover. Moving deployment to tools changes `job_workflow_ref`

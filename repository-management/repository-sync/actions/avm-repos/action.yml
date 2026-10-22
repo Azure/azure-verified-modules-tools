@@ -5,9 +5,6 @@ inputs:
   repositories:
     description: "Target repositories, comma separated list to select specific repositories: 'avm-res-keyvault-vault'."
     default: "All"
-  repositoriesToSkip:
-    description: "Additional repositories to skip, as a comma separated list."
-    default: ""
   outputDirectory:
     description: "Output directory for the repository data"
     default: "${{ github.workspace }}"
@@ -56,27 +53,23 @@ runs:
           Write-Information "Repository selection: $($repositories.Count) explicit repositories." -InformationAction Continue
         }
 
-        $repositoriesToSkip = @($env:REPOSITORIES_TO_SKIP -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
         $matrix = @(Invoke-RepositorySyncLogGroup -Name 'Repository discovery and matrix details' -Action {
           Write-Information "Included IDs: $(ConvertTo-Json -InputObject $repositories -Compress)" -InformationAction Continue
-          Write-Information "Additional exclusions: $(ConvertTo-Json -InputObject $repositoriesToSkip -Compress)" -InformationAction Continue
           $selected = @(& (Join-Path $env:AVM_REPOS_ACTION_PATH 'scripts' 'Get-RepositoriesWhereAppInstalled.ps1') `
             -repoFilter $repositories `
-            -outputDirectory $env:OUTPUT_DIRECTORY `
-            -additionalReposToSkip $repositoriesToSkip)
+            -outputDirectory $env:OUTPUT_DIRECTORY)
           Write-Information (ConvertTo-Json -InputObject $selected -Depth 10) -InformationAction Continue
           $selected
         })
         $matrixJson = ConvertTo-Json -InputObject $matrix -Depth 10 -Compress
         Write-Output "matrix=$matrixJson" >> $env:GITHUB_OUTPUT
-        Write-Information "Matrix ready: $($matrix.Count) repositories; maximum parallel jobs: $matrixParallel; additional exclusions: $($repositoriesToSkip.Count)." -InformationAction Continue
+        Write-Information "Matrix ready: $($matrix.Count) repositories; maximum parallel jobs: $matrixParallel." -InformationAction Continue
         $global:LASTEXITCODE = 0
       shell: pwsh
       env:
         GH_TOKEN: ${{ steps.app-token.outputs.token }}
         AVM_REPOS_ACTION_PATH: ${{ github.action_path }}
         REPOSITORIES: ${{ inputs.repositories }}
-        REPOSITORIES_TO_SKIP: ${{ inputs.repositoriesToSkip }}
         OUTPUT_DIRECTORY: ${{ inputs.outputDirectory }}
 
     - name: Upload repository log JSON

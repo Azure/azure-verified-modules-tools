@@ -282,6 +282,147 @@ module "library" {
         }
     }
 
+It 'converges mixed local provider maps before loading test-selected examples: <RetainModtm>' -ForEach @(
+        @{ RetainModtm = $false }
+        @{ RetainModtm = $true }
+    ) {
+        $root = $script:target
+        $library = Join-Path $root 'dependencies' 'library'
+        $example = Join-Path $root 'examples' 'management'
+        $tests = Join-Path $root 'tests'
+        $null = New-Item -ItemType Directory -Path $library, $example, $tests -Force
+        $requirements = @'
+terraform {
+  required_providers {
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.12"
+    }
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 4.0"
+    }
+    modtm = {
+      source  = "Azure/modtm"
+      version = "~> 0.3"
+    }
+  }
+}
+'@
+        Set-Content -LiteralPath (Join-Path $root 'terraform.tf') -Value $requirements -Encoding utf8NoBOM
+        $rootContent = @'
+module "library" {
+  source = "./dependencies/library"
+  __PROVIDERS__
+}
+data "azurerm_client_config" "this" {}
+'@
+        $mapping = if ($RetainModtm) { 'providers = { modtm = modtm }' } else { '' }
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM `
+            -Value $rootContent.Replace('__PROVIDERS__', $mapping)
+        $libraryContent = if ($RetainModtm) {
+            @'
+terraform {
+  required_providers {
+    modtm = {
+      source  = "Azure/modtm"
+      version = "~> 0.3"
+    }
+  }
+}
+data "modtm_module_source" "this" {
+  module_path = path.module
+}
+'@
+        }
+        else { 'locals { fixture = true }' }
+        Set-Content -LiteralPath (Join-Path $library 'main.tf') -Value $libraryContent -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $example 'terraform.tf') -Value $requirements -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $example 'main.tf') -Encoding utf8NoBOM -Value @'
+provider "azapi" {
+  alias = "management"
+}
+provider "azurerm" {
+  alias = "management"
+  features {}
+}
+module "example" {
+  source = "../.."
+  providers = {
+    azapi   = azapi.management # Keep the management selection.
+    azurerm = azurerm.management
+    modtm   = modtm
+  }
+  location = "eastus"
+}
+'@
+        $testPath = Join-Path $tests 'examples.tftest.hcl'
+        Set-Content -LiteralPath $testPath -Encoding utf8NoBOM -Value @'
+mock_provider "azapi" {}
+mock_provider "azurerm" {}
+mock_provider "modtm" {}
+run "management" {
+  command = plan
+  module {
+    source = "./examples/management"
+  }
+  providers = {
+    azapi   = azapi
+    azurerm = azurerm
+    modtm   = modtm
+  }
+}
+'@
+        $testBytes = [IO.File]::ReadAllBytes($testPath)
+        $libraryBytes = [IO.File]::ReadAllBytes((Join-Path $library 'main.tf'))
+        $first = $null
+        foreach ($pass in 1..3) {
+            InModuleScope Avm.Authoring -Parameters @{ Root = $root; Example = $example; RetainModtm = $RetainModtm } {
+                param($Root, $Example, $RetainModtm)
+                (Invoke-AvmTerraformTransform -Context ([pscustomobject]@{ Root = $Root; Ecosystem = 'terraform' })).Status |
+                    Should -BeExactly 'pass'
+                $tool = Resolve-AvmTool -Name mapotf
+                $inspection = Invoke-AvmProcess -FilePath $tool.Path -WorkingDirectory $Example -ArgumentList @(
+                    'debug', '--tf-dir', $Example,
+                    '--mptf-dir', (Resolve-AvmMapotfConfigDir -Root $Root -ProfileName provider-inheritance),
+                    '--eval', 'local.module_provider_entries')
+                $entries = ($inspection.StdOut | ConvertFrom-Json -AsHashtable).example
+                $entries.azapi | Should -BeExactly 'azapi.management'
+                $entries.azurerm | Should -BeExactly 'azurerm.management'
+                $entries.Contains('modtm') | Should -Be $RetainModtm
+                foreach ($path in @($Root, $Example)) {
+                    $requirements = Get-AvmTerraformUnitTestRequiredProvider -Path $path -Options ([pscustomobject]@{
+                            ToolPath = $tool.Path
+                            EnvVars = @{}
+                            ProfileDirs = @{ module = Resolve-AvmMapotfConfigDir -Root $Root -ProfileName module }
+                        })
+                    $requirements.azapi.source | Should -BeExactly 'Azure/azapi'
+                    $requirements.azapi.version | Should -BeExactly '~> 2.12'
+                    $requirements.azurerm.source | Should -BeExactly 'hashicorp/azurerm'
+                    $requirements.azurerm.version | Should -BeExactly '~> 4.0'
+                    $requirements.Contains('modtm') | Should -Be $RetainModtm
+                    if ($RetainModtm) {
+                        $requirements.modtm.source | Should -BeExactly 'Azure/modtm'
+                        $requirements.modtm.version | Should -BeExactly '~> 0.3'
+                    }
+                    $terraform = Resolve-AvmTool -Name terraform
+                    $environment = @{ TF_DATA_DIR = Join-Path $path '.provider-proof' }
+                    $null = Invoke-AvmProcess -FilePath $terraform.Path -WorkingDirectory $path -EnvVars $environment `
+                        -ArgumentList @('get', '-no-color')
+                    $tree = Invoke-AvmProcess -FilePath $terraform.Path -WorkingDirectory $path -EnvVars $environment `
+                        -ArgumentList @('providers', '-no-color')
+                    $null = ConvertFrom-AvmTerraformProviderTree -Text $tree.StdOut -Path $path
+                }
+            }
+            [IO.File]::ReadAllBytes($testPath) | Should -Be $testBytes
+            [IO.File]::ReadAllBytes((Join-Path $library 'main.tf')) | Should -Be $libraryBytes
+            [IO.File]::ReadAllText((Join-Path $example 'main.tf')) | Should -Match '# Keep the management selection.'
+            $content = (Get-TerraformContent -Root $root) + (Get-TerraformContent -Root $example)
+            if ($pass -eq 1) { $first = $content }
+            else { $content | Should -BeExactly $first }
+        }
+    }
+
 It 'preserves an original version contract that constrains a real dependency without adding forwarding' {
         $root = $script:target
         Remove-Item -LiteralPath (Join-Path $root 'metadata.json')
@@ -510,6 +651,74 @@ run "explicit" {
         }
         [IO.File]::ReadAllBytes($test) | Should -Be $testBytes
         [IO.File]::ReadAllText($main) | Should -Match 'provider "azapi" \{\s+alias = "owner"'
+    }
+
+It 'removes only unsupported same-default ModTM entries without rewriting non-default maps' {
+        $root = $script:target
+        $main = Join-Path $root 'main.tf'
+        Set-Content -LiteralPath $main -Encoding utf8NoBOM -Value @'
+provider "modtm" {
+  alias = "owner"
+}
+module "retired" {
+  source = "./dependency"
+  providers = {
+    azapi = azapi.management # Keep this selection.
+    modtm = modtm
+  }
+}
+module "selected" {
+  source = "./dependency"
+  providers = {
+    azapi = azapi.management
+    modtm = modtm.owner # Never erase an authored non-default binding.
+  }
+}
+module "renamed" {
+  source = "./dependency"
+  providers = { modtm = custom }
+}
+module "alias_key" {
+  source = "./dependency"
+  providers = { modtm.owner = modtm.owner }
+}
+module "required" {
+  source = "./dependency"
+  providers = {
+    azapi = azapi.management
+    modtm = modtm
+  }
+}
+'@
+        InModuleScope Avm.Authoring -Parameters @{ Root = $root; Profiles = $script:profilesRoot } {
+            param($Root, $Profiles)
+            $tool = Resolve-AvmTool -Name mapotf
+            $profile = Join-Path $Profiles 'utility-module'
+            $facts = 'provider_source_facts={retired=[],selected=[],renamed=[],alias_key=[],required=["registry.terraform.io/azure/modtm"]}'
+            $first = $null
+            foreach ($pass in 1..2) {
+                $null = Invoke-AvmProcess -FilePath $tool.Path -WorkingDirectory $Root -ArgumentList @(
+                    'transform', '--tf-dir', $Root, '--mptf-dir', $profile,
+                    '--mptf-var', $facts, '--mptf-var', 'apply_utility_migration=false')
+                $inspection = Invoke-AvmProcess -FilePath $tool.Path -WorkingDirectory $Root -ArgumentList @(
+                    'debug', '--tf-dir', $Root, '--mptf-dir', $profile,
+                    '--eval', '{ entries = local.provider_mapping_entries, calls = data.module.utility.result }')
+                $inspection = $inspection.StdOut | ConvertFrom-Json -AsHashtable
+                $entries = $inspection.entries
+                $entries.retired.Contains('modtm') | Should -BeFalse
+                $entries.retired.azapi | Should -BeExactly 'azapi.management'
+                $entries.selected.modtm | Should -BeExactly 'modtm.owner'
+                $entries.renamed.modtm | Should -BeExactly 'custom'
+                $inspection.calls.alias_key.providers | Should -Match 'modtm[.]owner\s*=\s*modtm[.]owner'
+                $entries.required.modtm | Should -BeExactly 'modtm'
+                $content = [IO.File]::ReadAllText((Join-Path $Root 'main.tf'))
+                if ($pass -eq 1) { $first = $content }
+                else { $content | Should -BeExactly $first }
+            }
+        }
+        [IO.File]::ReadAllText($main) | Should -Match '# Keep this selection.'
+        [IO.File]::ReadAllText($main) | Should -Match '# Never erase an authored non-default binding.'
+        [IO.File]::ReadAllText($main) | Should -Match 'provider "modtm" \{\s+alias = "owner"'
     }
 
 It 'restores ModTM only into retained explicit maps and never creates an implicit forwarding map' {
