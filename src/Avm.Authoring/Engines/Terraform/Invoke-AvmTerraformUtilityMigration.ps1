@@ -323,6 +323,41 @@ function Invoke-AvmTerraformUtilityMigration {
     }
 }
 
+function Sync-AvmTerraformLocalProviderMapping {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Plans,
+        [Parameter(Mandatory)] [object] $Options,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $DependencyPaths
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+    $requirements = @{}
+    foreach ($scope in $Plans) {
+        $providerSourceFacts = @{}
+        foreach ($name in $scope.Dependencies.Keys) {
+            $dependency = $scope.Dependencies[$name]
+            if ($dependency -cnotin $DependencyPaths) { continue }
+            if (-not $requirements.ContainsKey($dependency)) {
+                $requirements[$dependency] = Get-AvmTerraformUnitTestRequiredProvider -Path $dependency -Options $Options
+            }
+            if (-not $requirements[$dependency].Contains('modtm')) {
+                $providerSourceFacts[$name] = @()
+            }
+        }
+        if ($providerSourceFacts.Count -eq 0 -or
+            -not $PSCmdlet.ShouldProcess($scope.Target.Path, 'retire unsupported default ModTM mappings before dependency inspection')) {
+            continue
+        }
+        $facts = Assert-AvmTerraformUtilityProviderMappingReview -Path $scope.Target.Path -Options $Options `
+            -ProviderSourceFacts $providerSourceFacts -CallsRequiringAzapi @()
+        Invoke-AvmTerraformUtilityNativeMigration -Path $scope.Target.Path -Scope $scope.Target.Scope -Options $Options `
+            -ProviderSourceFacts $providerSourceFacts -ProviderConfigurationFacts @($facts.Configurations) `
+            -ProviderAliasFacts @($facts.Aliases) -ApplyUtilityMigration:$false
+    }
+}
+
 function Invoke-AvmTerraformUtilityProviderCleanup {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -344,6 +379,8 @@ function Invoke-AvmTerraformUtilityProviderCleanup {
     $appliedRequirements = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     $planningPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($scope in $Plans) { $originalRequirements[$scope.Target.Path] = $scope.Before.requirements }
+    Sync-AvmTerraformLocalProviderMapping -Plans $Plans -Options $Options `
+        -DependencyPaths @($Plans | ForEach-Object { $_.Target.Path })
     foreach ($scope in $Plans) {
         $path = $scope.Target.Path
         if (-not $PSCmdlet.ShouldProcess($path, 'retire utility-only provider references using fresh dependency evidence')) { continue }
@@ -377,6 +414,7 @@ function Invoke-AvmTerraformUtilityProviderCleanup {
         Invoke-AvmTerraformUtilityNativeMigration -Path $path -Scope $scope.Target.Scope -Options $Options `
             -ProviderSourceFacts $moduleSources[$path] -ProviderConfigurationFacts @($facts.Configurations) `
             -ProviderAliasFacts @($facts.Aliases) -ProviderFactsComplete -ApplyUtilityMigration:$false
+        Sync-AvmTerraformLocalProviderMapping -Plans $Plans -Options $Options -DependencyPaths @($path)
         $inspection = Get-AvmTerraformUtilityInspection -Path $path -Options $Options
         $requirements[$path] = $inspection.requirements
         $sources[$path] = @(Get-AvmTerraformUnitTestProviderSource -Path $path -ModuleTargets $ModuleTargets -Options $Options `

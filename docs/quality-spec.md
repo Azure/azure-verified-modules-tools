@@ -843,6 +843,17 @@ ModTM removal, conditional AzAPI insertion and declared-requirement retirement.
 PowerShell supplies only fresh dependency-tree and provider-configuration facts,
 surfaces the profile's literal-map review before writing, and must not parse,
 rebuild or replace authored provider-map expressions.
+For scopes with child module calls, defer early ModTM requirement retirement
+until the utility cleanup has fresh dependency proof, rather than temporarily
+dropping and regenerating a still-required source/version contract.
+Before loading a dependency tree, reconcile known local callers against their
+children's current native declarations, including callers selected through test
+files. Repeat this reconciliation after retiring a child's requirement: Terraform
+loads test-selected examples during `get`, before dependency-ordered caller
+restoration can run. Remove only unsupported `modtm = modtm` entries; preserve
+alias and different-local-name selections. A temporarily retired declaration
+may be restored only with the existing fresh dependency proof, after which a
+retained mixed map must again forward any genuinely required ModTM configuration.
 An intermediate native missing-provider-configuration warning may be tracked
 while repairing proven source bindings. All other diagnostics remain fatal,
 and a strict dependency recheck must pass before mock migration.
@@ -938,17 +949,21 @@ The deployment identity needs `Microsoft.Resources/deployments/read`,
 `Microsoft.Resources/deployments/delete` at the subscription scope; see
 <https://aka.ms/avm/telemetry>.
 
-The generated AzAPI resource sets `response_export_values = []`. Only this
-tagless telemetry deployment receives a scoped inline TFLint exemption
-from the generic AzAPI tagging rule; that rule remains enabled for every
-other AzAPI resource. The transform engine adds the directive after MaPoTF
-writes the resource because `asraw` blocks do not retain comments.
-The lint warning audit skips only that exact directive
-above a tagless generated telemetry deployment; other inline ignores still
-warn. The packaged root TFLint profile disables the retired
+The generated AzAPI resource sets `response_export_values = []`. Root and
+direct local-module TFLint profiles configure the `ignored_resources` selector
+`azapi_resource.telemetry` only for the generic AzAPI tagging rule and the
+generated deployment's TFFR6/7/8 interface rules
+(`resource_types`, `retry`, `timeouts`, and `ignore_body_changes`). All other
+resources remain subject to those rules, including business AzAPI resources in
+the same module; examples retain their existing rule disables. The transform
+removes only the prior exact generated tag pragma when it is adjacent to the
+canonical untagged telemetry deployment. The lint warning audit reports every
+inline ignore, including that legacy pragma, except for the existing narrow
+generated location and provider-contract exceptions. The packaged root TFLint
+profile disables the retired
 `modtm` provider requirement, as the module and example profiles already do.
 
-The packaged AVM TFLint ruleset is pinned to attested release v1.3.0.
+The packaged AVM TFLint ruleset is pinned to released v1.4.0.
 AzureRM remains optional, but declared version constraints must exclude 5.0.0
 and later in root, child and example scopes. The existing source and
 compatibility checks still apply; excluding individual 5.x versions does not

@@ -856,7 +856,7 @@ function Set-AvmProviderContractLintDirective {
     }
 }
 
-function Set-AvmTelemetryTagLintDirective {
+function Remove-AvmTelemetryTagLintDirective {
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)][object[]] $Targets)
 
@@ -867,40 +867,30 @@ function Set-AvmTelemetryTagLintDirective {
     $encoding = [System.Text.UTF8Encoding]::new($false)
     foreach ($target in $Targets | Where-Object { $_.Profiles -contains 'root' }) {
         $path = Join-Path $target.Path 'main.telemetry.tf'
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-            throw [AvmConfigurationException]::new("Instrumented Terraform module '$($target.Path)' has no main.telemetry.tf.")
-        }
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
 
         $original = [System.IO.File]::ReadAllText($path)
-        $content = $original
         $resources = [regex]::Matches(
-            $content,
+            $original,
             '(?ms)^resource[ \t]+"azapi_resource"[ \t]+"telemetry"[ \t]*\{(?<body>.*?)^\}')
-        if ($resources.Count -ne 1) {
-            throw [AvmConfigurationException]::new("Expected one azapi_resource.telemetry block in '$path'.")
-        }
+        if ($resources.Count -ne 1) { continue }
 
         $body = $resources[0].Groups['body']
-        $cleanBody = [regex]::Replace(
-            $body.Value,
-            '(?m)^[ \t]*# tflint-ignore: avm_azapi_resource_tags_required\r?\n',
-            '')
-        if ($cleanBody -cne $body.Value) {
-            $content = $content.Remove($body.Index, $body.Length).Insert($body.Index, $cleanBody)
-            $resources = [regex]::Matches(
-                $content,
-                '(?ms)^resource[ \t]+"azapi_resource"[ \t]+"telemetry"[ \t]*\{(?<body>.*?)^\}')
+        if (
+            $body.Value -cnotmatch '(?m)^  type\s*=\s*"Microsoft.Resources/deployments@2025-04-01"\s*$' -or
+            $body.Value -cmatch '(?m)^  tags\s*='
+        ) {
+            continue
         }
 
         $offset = $resources[0].Index
-        $priorLines = @($content.Substring(0, $offset) -split '\r?\n')
-        if ($priorLines.Count -lt 2 -or $priorLines[-2] -cne $directive) {
-            $lineEnding = if ($content.Contains("`r`n")) { "`r`n" } else { "`n" }
-            $content = $content.Insert($offset, $directive + $lineEnding)
-        }
+        $directiveMatch = [regex]::Match(
+            $original.Substring(0, $offset),
+            '(?m)^' + [regex]::Escape($directive) + '(?<lineEnding>\r?\n)\z')
+        if (-not $directiveMatch.Success) { continue }
 
-        if ($content -cne $original -and
-            $PSCmdlet.ShouldProcess($path, 'exempt generated telemetry deployment from the standard resource-tag rule')) {
+        $content = $original.Remove($directiveMatch.Index, $directiveMatch.Length)
+        if ($PSCmdlet.ShouldProcess($path, 'remove the legacy generated telemetry TFLint directive')) {
             [System.IO.File]::WriteAllText($path, $content, $encoding)
         }
     }
@@ -1378,7 +1368,7 @@ function Invoke-AvmTerraformTransform {
             Set-AvmProviderContractLintDirective -ProviderSources $retainedProviderSources -ProviderBindings $providerBindings `
                 -Options $transformOptions -OriginalRequirements $originalProviderRequirements -AllowPathFallback:$AllowPathFallback
         }
-        Set-AvmTelemetryTagLintDirective -Targets $moduleTargets
+        Remove-AvmTelemetryTagLintDirective -Targets $moduleTargets
         if ($newLocationTargets.Count -gt 0) {
             Set-AvmRequiredLocationLintDirective -Targets $newLocationTargets -Options $transformOptions
         }

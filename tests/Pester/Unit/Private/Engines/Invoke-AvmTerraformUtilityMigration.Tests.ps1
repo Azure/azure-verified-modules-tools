@@ -537,6 +537,68 @@ Describe 'Terraform utility migration planning' {
 }
 
 Describe 'Terraform utility provider mapping proof' {
+    It 'reconciles only selected local callers whose child no longer declares ModTM' {
+        InModuleScope Avm.Authoring -Parameters @{ Root = "$TestDrive" } {
+            param($Root)
+            $retired = Join-Path $Root 'modules' 'retired'
+            $retained = Join-Path $Root 'modules' 'retained'
+            $unselected = Join-Path $Root 'modules' 'unselected'
+            $targets = @(
+                [pscustomobject]@{
+                    Target = [pscustomobject]@{ Path = $Root; Scope = 'root' }
+                    Dependencies = @{ retired = $retired; retained = $retained; unselected = $unselected }
+                }
+                [pscustomobject]@{
+                    Target = [pscustomobject]@{ Path = Join-Path $Root 'examples' 'management'; Scope = 'example' }
+                    Dependencies = @{ shared = $retired }
+                }
+            )
+            Mock Get-AvmTerraformUnitTestRequiredProvider {
+                if ($Path -ceq $retained) { return @{ modtm = @{ source = 'Azure/modtm'; version = '~> 0.3' } } }
+                return @{}
+            }
+            Mock Assert-AvmTerraformUtilityProviderMappingReview {
+                $CallsRequiringAzapi | Should -HaveCount 0
+                $ProviderSourceFacts.Count | Should -Be 1
+                @($ProviderSourceFacts.Values)[0] | Should -HaveCount 0
+                @{ Configurations = @(); Aliases = @() }
+            }
+            Mock Invoke-AvmTerraformUtilityNativeMigration {}
+            Sync-AvmTerraformLocalProviderMapping -Plans $targets -Options ([pscustomobject]@{}) `
+                -DependencyPaths @($retired, $retained)
+            Should -Invoke Get-AvmTerraformUnitTestRequiredProvider -Exactly 1 -ParameterFilter { $Path -ceq $retired }
+            Should -Invoke Get-AvmTerraformUnitTestRequiredProvider -Exactly 1 -ParameterFilter { $Path -ceq $retained }
+            Should -Invoke Get-AvmTerraformUnitTestRequiredProvider -Exactly 0 -ParameterFilter { $Path -ceq $unselected }
+            Should -Invoke Invoke-AvmTerraformUtilityNativeMigration -Exactly 2 -ParameterFilter {
+                -not $ApplyUtilityMigration -and -not $ProviderFactsComplete -and
+                -not $ProviderSourceFacts.ContainsKey('retained') -and -not $ProviderSourceFacts.ContainsKey('unselected')
+            }
+        }
+    }
+
+    It 'repairs local caller contracts before every potentially retiring dependency inspection' {
+        InModuleScope Avm.Authoring {
+            $target = [pscustomobject]@{ Path = 'fixture'; Scope = 'root' }
+            $scope = [pscustomobject]@{ Target = $target; Before = @{ requirements = @{} }; Dependencies = @{} }
+            $options = [pscustomobject]@{ UtilityProviderSources = @{} }
+            $script:providerSequence = [System.Collections.Generic.List[string]]::new()
+            Mock Sync-AvmTerraformLocalProviderMapping { $script:providerSequence.Add('repair') }
+            Mock Get-AvmTerraformUtilityInspection { @{ requirements = @{} } }
+            Mock Assert-AvmTerraformUtilityProviderMappingReview { @{ Configurations = @(); Aliases = @() } }
+            Mock Get-AvmTerraformUtilityProviderConfigurationFact { @{ Configurations = @(); Aliases = @() } }
+            Mock Invoke-AvmTerraformUtilityNativeMigration {
+                $script:providerSequence.Add($(if ($ProviderFactsComplete) { 'retire' } else { 'map' }))
+            }
+            Mock Get-AvmTerraformUnitTestProviderSource {
+                $script:providerSequence.Add('inspect')
+                @()
+            }
+            Mock Invoke-AvmMapotfTransformTarget {}
+            Invoke-AvmTerraformUtilityProviderCleanup -Plans @($scope) -ModuleTargets @($target) -Options $options
+            @($script:providerSequence) | Should -Be @('repair', 'map', 'inspect', 'retire', 'repair', 'inspect')
+        }
+    }
+
     It 'rejects incomplete native response shapes before writing: <Json>' -ForEach @(
         @{ Json = 'not json' }
         @{ Json = 'null' }

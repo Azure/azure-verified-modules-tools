@@ -101,7 +101,6 @@ BeforeAll {
     ) -join "`n"
     Set-Content -LiteralPath (Join-Path $script:fixtureRoot 'main.tf') -Value $mainTf -Encoding utf8NoBOM
     $script:telemetryStubContent = @'
-# tflint-ignore: avm_azapi_resource_tags_required
 resource "azapi_resource" "telemetry" {
   type = "Microsoft.Resources/deployments@2025-04-01"
   body = {
