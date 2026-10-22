@@ -1314,8 +1314,13 @@ The one-off migration and canonical CSV replacement remain explicit operator
 actions.
 Metadata is owner-authored, not a managed-file
 overlay that can be replaced on every repository sync.
-Terraform repository discovery reads validated root metadata from each
-repository's default branch. Missing files warn during rollout and suppress
+Terraform repository discovery admits installed repositories by the shared
+case-insensitive module naming regex, without built-in or caller-supplied
+exclusion lists. Nonmatching repositories are logged and ignored without
+warnings, errors, issue artifacts, or metadata requests. Archive filtering and
+explicit repository-ID selection still apply to matching modules. Discovery
+reads validated root metadata from each selected repository's default branch.
+Missing files warn during rollout and suppress
 direct collaborator cleanup; invalid files or API failures exclude that
 repository. Archive state comes from GitHub, not an authored metadata field.
 New-repository creation (`avm init`) initializes metadata before the first

@@ -131,6 +131,12 @@ Project synchronization requires successful GitHub App token setup. If that
 prerequisite is unavailable, a visible skip notice points to the earlier setup
 failure instead of reporting an unrelated Projects-permission error.
 
+Discovery uses the case-insensitive Terraform AVM module naming regex for the
+`azure`, `azurerm`, and `azapi` providers, with no repository exclusion list.
+Nonmatching installed repositories are logged and ignored without warnings,
+errors, issue artifacts, or metadata requests. Archived modules remain skipped;
+explicit repository-ID selection and metadata validation still apply.
+
 ### Test identity naming
 
 Terraform uses `id-test-terraform-` followed by the complete lowercase repository
@@ -148,7 +154,7 @@ This is stricter than [Azure's 3-128-character identity limit](https://learn.mic
 the full federation names must also fit their
 [3-120-character limit](https://learn.microsoft.com/en-us/azure/templates/microsoft.managedidentity/userassignedidentities/federatedidentitycredentials).
 Discovery rejects normalized-name collisions across the complete installed
-repository inventory before selection, exclusions or archive filtering.
+repository inventory before selection or archive filtering.
 Workers whose names contain `windows` or `w5s` recheck that inventory before
 Terraform, including directly invoked workers. Inventory failures stop the
 run; selecting only one colliding repository does not bypass the check.
