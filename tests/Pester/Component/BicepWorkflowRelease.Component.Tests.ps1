@@ -224,6 +224,12 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
             $null = New-Item -ItemType Directory -Path (Split-Path -Path $file -Parent) -Force
             [IO.File]::WriteAllText($file, $Value)
         }
+
+        function Set-AvmReleaseFixtureChangelog {
+            param([string] $ModulePath, [string] $Version)
+            Set-AvmReleaseFixtureFile -Path "$ModulePath/CHANGELOG.md" -Value (
+                "# Changelog`n`n## $Version`n`n### Changes`n`n- Fixture changes.`n`n### Breaking Changes`n`n- None.`n")
+        }
     }
 
     AfterAll {
@@ -245,13 +251,21 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
         $env:GITHUB_REF = 'refs/heads/main'
         $env:GITHUB_TOKEN = ''
         $script:releaseTags = @{}
+        $script:allowReleaseWrites = $false
+        $script:releaseWrites = [Collections.Generic.List[string]]::new()
         Mock Invoke-AvmWorkflowProcess {
             $records = foreach ($entry in $script:releaseTags.GetEnumerator()) {
                 "$($entry.Value)`trefs/tags/$($entry.Key)"
             }
             [pscustomobject]@{ ExitCode = 0; StdOut = $records -join "`n"; StdErr = '' }
         } -ParameterFilter { $ArgumentList[0] -eq 'ls-remote' }
-        Mock Invoke-AvmWorkflowProcess { throw 'Release discovery must not mutate Git or execute protected tools.' } -ParameterFilter {
+        Mock Invoke-AvmWorkflowProcess {
+            if ($script:allowReleaseWrites -and $FilePath -eq 'git' -and $ArgumentList[0] -in @('push', 'tag')) {
+                $script:releaseWrites.Add($ArgumentList -join ' ')
+                return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            throw 'Release discovery must not mutate Git or execute protected tools.'
+        } -ParameterFilter {
             $FilePath -ne 'git' -or $ArgumentList[0] -in @('push', 'tag', 'fetch')
         }
         $null = Invoke-AvmReleaseFixtureGit -Arguments @('init', '--quiet', '--initial-branch=main')
@@ -425,5 +439,186 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
         { Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
                 -TargetCommit $script:releaseTarget -PendingRelease -BaseCommit $script:initialReleaseCommit -WhatIf } |
             Should -Throw '*cannot override*'
+    }
+
+    It 'tags the exact preflighted version with valid notes in <Mode> mode' -ForEach @(
+        @{ Mode = 'pending' }
+        @{ Mode = 'explicit' }
+    ) {
+        Set-AvmReleaseFixtureFile -Path "$script:modulePath/main.json" -Value '{"resources":[{}]}'
+        Set-AvmReleaseFixtureChangelog -ModulePath $script:modulePath -Version '1.2.3'
+        $script:releaseTarget = New-AvmReleaseFixtureCommit -Message 'compiled change and release notes'
+        $script:allowReleaseWrites = $true
+        $env:GITHUB_TOKEN = 'fixture-not-a-real-token'
+        $parameters = if ($Mode -eq 'pending') { @{ PendingRelease = $true } } else { @{ BaseCommit = $script:initialReleaseCommit } }
+        $tags = @(Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
+                -TargetCommit $script:releaseTarget -RequireChangelog -Confirm:$false @parameters)
+        $tags.Tag | Should -Be @("$script:modulePath/1.2.3")
+        $tags.Created | Should -BeTrue
+        $script:releaseWrites[0] | Should -BeExactly "tag $script:modulePath/1.2.3 $script:releaseTarget"
+        $reads = if ($Mode -eq 'pending') { 2 } else { 1 }
+        Should -Invoke Invoke-AvmWorkflowProcess -Exactly $reads -ParameterFilter { $ArgumentList[0] -eq 'ls-remote' }
+        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'tag' }
+        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'push' }
+    }
+
+    It 'fails explicitly without tag writes for invalid required release notes: <Failure>' -ForEach @(
+        @{ Failure = 'missing' }
+        @{ Failure = 'empty file' }
+        @{ Failure = 'malformed heading' }
+        @{ Failure = 'wrong version' }
+        @{ Failure = 'duplicate version' }
+        @{ Failure = 'missing Changes' }
+        @{ Failure = 'empty Changes' }
+        @{ Failure = 'missing Breaking Changes' }
+        @{ Failure = 'empty Breaking Changes' }
+        @{ Failure = 'duplicate Changes' }
+        @{ Failure = 'reversed sections' }
+        @{ Failure = 'invalid UTF-8' }
+        @{ Failure = 'directory' }
+    ) {
+        Set-AvmReleaseFixtureFile -Path "$script:modulePath/main.json" -Value '{"resources":[{}]}'
+        $file = Join-Path $script:releaseRoot $script:modulePath 'CHANGELOG.md'
+        if ($Failure -eq 'directory') {
+            $null = New-Item -ItemType Directory -Path $file
+        }
+        elseif ($Failure -ne 'missing') {
+            Set-AvmReleaseFixtureChangelog -ModulePath $script:modulePath -Version '1.2.3'
+            $text = [IO.File]::ReadAllText($file)
+            $text = switch ($Failure) {
+                'empty file' { '' }
+                'malformed heading' { $text.Replace('## 1.2.3', '## [1.2.3]') }
+                'wrong version' { $text.Replace('## 1.2.3', '## 1.2.2') }
+                'duplicate version' { "$text`n## 1.2.3`n`n### Changes`n`n- Duplicate.`n`n### Breaking Changes`n`n- None.`n" }
+                'missing Changes' { $text.Replace("### Changes`n`n- Fixture changes.`n`n", '') }
+                'empty Changes' { $text.Replace('- Fixture changes.', '') }
+                'missing Breaking Changes' { $text.Replace("### Breaking Changes`n`n- None.`n", '') }
+                'empty Breaking Changes' { $text.Replace('- None.', '') }
+                'duplicate Changes' { "$text`n### Changes`n`n- Duplicate.`n" }
+                'reversed sections' {
+                    $text.Replace('### Changes', '### Temporary').Replace('### Breaking Changes', '### Changes').
+                        Replace('### Temporary', '### Breaking Changes')
+                }
+                default { $text }
+            }
+            [IO.File]::WriteAllText($file, $text)
+            if ($Failure -eq 'invalid UTF-8') { [IO.File]::WriteAllBytes($file, [byte[]]@(255)) }
+        }
+        $script:releaseTarget = New-AvmReleaseFixtureCommit -Message "invalid release notes: $Failure"
+        $script:allowReleaseWrites = $true
+        $env:GITHUB_TOKEN = 'fixture-not-a-real-token'
+        { Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
+                -TargetCommit $script:releaseTarget -PendingRelease -RequireChangelog -Confirm:$false } |
+            Should -Throw "*CHANGELOG.md for $script:modulePath release 1.2.3:*"
+        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('tag', 'push') }
+    }
+
+    It 'reports an unreadable changelog with its module and expected version' {
+        Set-AvmReleaseFixtureChangelog -ModulePath $script:modulePath -Version '1.2.3'
+        $file = Join-Path $script:releaseRoot $script:modulePath 'CHANGELOG.md'
+        $lock = [IO.File]::Open($file, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+        try {
+            { Assert-AvmWorkflowReleaseChangelog -Root $script:releaseRoot -ModulePath $script:modulePath -Version '1.2.3' } |
+                Should -Throw "*CHANGELOG.md for $script:modulePath release 1.2.3:*unreadable*"
+        }
+        finally { $lock.Dispose() }
+    }
+
+    It 'requires the actual next version after source tags advance past previously authored notes' {
+        Set-AvmReleaseFixtureFile -Path "$script:modulePath/main.json" -Value '{"resources":[{}]}'
+        Set-AvmReleaseFixtureChangelog -ModulePath $script:modulePath -Version '1.2.3'
+        $script:releaseTarget = New-AvmReleaseFixtureCommit -Message 'notes for an earlier target'
+        (Initialize-AvmWorkflowReleaseMatrix -Root $script:releaseRoot -EventName workflow_dispatch `
+                -TargetCommit $script:releaseTarget).include | Should -HaveCount 1
+        $script:releaseTags["$script:modulePath/1.2.3"] = $script:initialReleaseCommit
+        { Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
+                -TargetCommit $script:releaseTarget -PendingRelease -RequireChangelog -Confirm:$false } |
+            Should -Throw "*CHANGELOG.md for $script:modulePath release 1.2.4:*expected-version*"
+        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('tag', 'push') }
+    }
+
+    It 'preflights every parent and child before any writes in <Mode> mode' -ForEach @(
+        @{ Mode = 'pending' }
+        @{ Mode = 'explicit' }
+    ) {
+        foreach ($path in @($script:modulePath, "$script:modulePath/child")) {
+            Set-AvmReleaseFixtureFile -Path "$path/main.json" -Value '{"resources":[{}]}'
+        }
+        Set-AvmReleaseFixtureChangelog -ModulePath "$script:modulePath/child" -Version '1.2.5'
+        $script:releaseTarget = New-AvmReleaseFixtureCommit -Message 'valid child but missing parent notes'
+        $script:allowReleaseWrites = $true
+        $env:GITHUB_TOKEN = 'fixture-not-a-real-token'
+        $parameters = if ($Mode -eq 'pending') { @{ PendingRelease = $true } } else { @{ BaseCommit = $script:initialReleaseCommit } }
+        { Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
+                -TargetCommit $script:releaseTarget -RequireChangelog -Confirm:$false @parameters } |
+            Should -Throw "*CHANGELOG.md for $script:modulePath release 1.2.3:*"
+        $script:releaseWrites | Should -HaveCount 0
+        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('tag', 'push') }
+    }
+
+    It 'preserves initial release and child-first execution with valid notes for the whole plan' {
+        $script:releaseTags = @{}
+        foreach ($path in @($script:modulePath, "$script:modulePath/child")) {
+            Set-AvmReleaseFixtureChangelog -ModulePath $path -Version '1.2.0'
+        }
+        $script:releaseTarget = New-AvmReleaseFixtureCommit -Message 'initial release notes'
+        $script:allowReleaseWrites = $true
+        $env:GITHUB_TOKEN = 'fixture-not-a-real-token'
+        $tags = @(Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
+                -TargetCommit $script:releaseTarget -PendingRelease -RequireChangelog -Confirm:$false)
+        $tags.Tag | Should -Be @("$script:modulePath/child/1.2.0", "$script:modulePath/1.2.0")
+        $script:releaseWrites[0] | Should -BeExactly "tag $script:modulePath/child/1.2.0 $script:releaseTarget"
+        $script:releaseWrites[2] | Should -BeExactly "tag $script:modulePath/1.2.0 $script:releaseTarget"
+    }
+
+    It 'rejects incorrect notes in opted-in explicit-base publication' {
+        Set-AvmReleaseFixtureFile -Path "$script:modulePath/main.json" -Value '{"resources":[{}]}'
+        Set-AvmReleaseFixtureChangelog -ModulePath $script:modulePath -Version '1.2.2'
+        $script:releaseTarget = New-AvmReleaseFixtureCommit -Message 'wrong explicit release notes'
+        { Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
+                -TargetCommit $script:releaseTarget -BaseCommit $script:initialReleaseCommit -RequireChangelog -Confirm:$false } |
+            Should -Throw "*CHANGELOG.md for $script:modulePath release 1.2.3:*"
+        Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('tag', 'push') }
+    }
+
+    It 'retains same-target tag reuse with a valid required version section' {
+        Set-AvmReleaseFixtureFile -Path "$script:modulePath/main.json" -Value '{"resources":[{}]}'
+        Set-AvmReleaseFixtureChangelog -ModulePath $script:modulePath -Version '1.2.4'
+        $script:releaseTarget = New-AvmReleaseFixtureCommit -Message 'already tagged target notes'
+        $script:releaseTags["$script:modulePath/1.2.4"] = $script:releaseTarget
+        $tags = @(Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
+                -TargetCommit $script:releaseTarget -BaseCommit $script:initialReleaseCommit -RequireChangelog -Confirm:$false)
+        $tags.Tag | Should -Be @("$script:modulePath/1.2.4")
+        $tags.Reused | Should -BeTrue
+        $tags.Created | Should -BeFalse
+        $script:releaseWrites | Should -HaveCount 0
+    }
+
+    It 'does not make changelog-only edits publishable or validate an empty release plan' {
+        @(Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
+                -TargetCommit $script:releaseTarget -PendingRelease -RequireChangelog -Confirm:$false) | Should -HaveCount 0
+        Set-AvmReleaseFixtureChangelog -ModulePath $script:modulePath -Version '1.2.3'
+        $script:releaseTarget = New-AvmReleaseFixtureCommit -Message 'changelog only'
+        @(Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
+                -TargetCommit $script:releaseTarget -PendingRelease -RequireChangelog -Confirm:$false) | Should -HaveCount 0
+        $script:releaseWrites | Should -HaveCount 0
+    }
+
+    It 'keeps changelog validation disabled when ExplicitFalse is <ExplicitFalse>' -ForEach @(
+        @{ ExplicitFalse = $false }
+        @{ ExplicitFalse = $true }
+    ) {
+        Set-AvmReleaseFixtureFile -Path "$script:modulePath/main.json" -Value '{"resources":[{}]}'
+        $script:releaseTarget = New-AvmReleaseFixtureCommit -Message 'legacy release without changelog'
+        $script:allowReleaseWrites = $true
+        $env:GITHUB_TOKEN = 'fixture-not-a-real-token'
+        Mock Assert-AvmWorkflowReleaseChangelog { throw 'Default callers must not validate changelogs.' }
+        $parameters = @{}
+        if ($ExplicitFalse) { $parameters.RequireChangelog = $false }
+        $tags = @(Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
+                -TargetCommit $script:releaseTarget -PendingRelease -Confirm:$false @parameters)
+        $tags.Tag | Should -Be @("$script:modulePath/1.2.3")
+        $tags.Created | Should -BeTrue
+        Should -Invoke Assert-AvmWorkflowReleaseChangelog -Exactly 0
     }
 }
