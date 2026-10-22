@@ -424,7 +424,6 @@ Describe 'Test-AvmPins' {
                 'avm_terraform_literal_heredoc_disallowed'
                 'avm_terraform_provider_block_disallowed'
                 'avm_terraform_sensitive_variable_default_disallowed'
-                'avm_azapi_resource_tags_required'
                 'avm_azapi_replace_triggers_refs_valid'
                 'avm_terraform_configuration_file_required'
             )
@@ -469,13 +468,35 @@ Describe 'Test-AvmPins' {
                         $text | Should -Not -Match ('rule\s+"' + [regex]::Escape($rule) + '"') -Because "$($config.Name) relies on the AVM default for '$rule'"
                     }
                 }
+
+                $telemetryIgnoredRules = @(
+                    'avm_azapi_resource_tags_required'
+                    'avm_interface_ignore_body_changes'
+                    'avm_interface_resource_types'
+                    'avm_interface_retry'
+                    'avm_interface_timeouts'
+                )
+                foreach ($configName in @('avm.tflint.hcl', 'avm.tflint_module.hcl')) {
+                    $text = [System.IO.File]::ReadAllText((Join-Path $configDir $configName))
+                    foreach ($rule in $telemetryIgnoredRules) {
+                        $rulePattern = 'rule\s+"' + [regex]::Escape($rule) +
+                            '"\s*\{[^}]*?ignored_resources\s*=\s*\[\s*"azapi_resource\.telemetry"\s*\]'
+                        $text | Should -Match $rulePattern -Because "$configName must exempt generated telemetry from '$rule'"
+                    }
+                    $text | Should -Match 'rule\s+"avm_azapi_resource_tags_required"\s*\{[^}]*?enabled\s*=\s*true' -Because "$configName must preserve the tag rule's default enabled behavior"
+                    @([regex]::Matches($text, 'ignored_resources\s*=')) | Should -HaveCount 5
+                }
+
+                $exampleText = [System.IO.File]::ReadAllText((Join-Path $configDir 'avm.tflint_example.hcl'))
+                $exampleText | Should -Not -Match 'ignored_resources\s*='
+                $exampleText | Should -Match 'rule\s+"avm_azapi_resource_tags_required"\s*\{[^}]*?enabled\s*=\s*false'
             }
         }
 
         It 'pins the released AVM ruleset version' {
             $pins = InModuleScope 'Avm.Authoring' { Read-AvmPins }
 
-            $pins.tflintPlugins.avm | Should -Be '1.3.1'
+            $pins.tflintPlugins.avm | Should -Be '1.4.0'
         }
 
         It 'keeps managed tool versions out of test stub source' {

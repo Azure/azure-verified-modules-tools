@@ -6,6 +6,7 @@ BeforeAll {
         $script:repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..')).Path
         $script:moduleManifest = Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
         $script:configPath = Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Resources' 'tflint' 'avm.tflint.hcl'
+        $script:moduleConfigPath = Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Resources' 'tflint' 'avm.tflint_module.hcl'
         $pinsPath = Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Resources' 'avm.pins.jsonc'
         $pins = Get-Content -LiteralPath $pinsPath -Raw | ConvertFrom-Json
         $script:tflintVersion = [string]($pins.tools | Where-Object name -eq 'tflint' | Select-Object -First 1).version
@@ -237,7 +238,12 @@ output "deprecated_lock" {
                 "TFLint inline ignore comment found for rule(s): terraform_unused_required_providers. (tests/wrapper/terraform.tf, line $line)"
             }
         )
-        @($run.DeprecatedWarnings).Count | Should -Be (3 + $providerWarnings.Count)
+        $businessInterfaceRules = @(
+            'avm_interface_ignore_body_changes'
+            'avm_interface_retry'
+            'avm_interface_timeouts'
+        )
+        @($run.DeprecatedWarnings).Count | Should -Be (3 + $providerWarnings.Count + (2 * $businessInterfaceRules.Count))
         @($run.DeprecatedWarnings | Where-Object {
                 $_ -match '\[avm_interface_lock_deprecated\].*v0\.19\.0 migration window'
             }).Count | Should -Be 1
@@ -247,11 +253,16 @@ output "deprecated_lock" {
         @($run.DeprecatedWarnings | Where-Object {
                 $_ -match 'TFLint inline ignore comment found for rule\(s\): terraform_unused_declarations\. \(manual-ignore\.tf, line 1\)'
             }).Count | Should -Be 1
+        foreach ($rule in $businessInterfaceRules) {
+            @($run.DeprecatedWarnings | Where-Object {
+                    $_ -match ('\[' + [regex]::Escape($rule) + '\].*\(main\.tf, line (22|42), column 1\)')
+                }).Count | Should -Be 2
+        }
         ($run.DeprecatedWarnings -join "`n") | Should -Not -Match 'main\.telemetry\.tf'
         ($run.DeprecatedSummary -join "`n") | Should -Not -Match 'avm_interface_lock_deprecated|v0\.19\.0 migration window'
 
         $run.CanonicalResult.Status | Should -Be 'pass'
-        @($run.CanonicalWarnings).Count | Should -Be (1 + $providerWarnings.Count)
+        @($run.CanonicalWarnings).Count | Should -Be (1 + $providerWarnings.Count + (2 * $businessInterfaceRules.Count))
         foreach ($warning in $providerWarnings) {
             @($run.DeprecatedWarnings | Where-Object { $_ -ceq $warning }) | Should -HaveCount 1
             @($run.CanonicalWarnings | Where-Object { $_ -ceq $warning }) | Should -HaveCount 1
@@ -259,8 +270,118 @@ output "deprecated_lock" {
         @($run.CanonicalWarnings | Where-Object {
                 $_ -ceq "TFLint override disables rule 'avm_output_resource_id_required'."
             }).Count | Should -Be 1
+        foreach ($rule in $businessInterfaceRules) {
+            @($run.CanonicalWarnings | Where-Object {
+                    $_ -match ('\[' + [regex]::Escape($rule) + '\].*\(main\.tf, line (22|42), column 1\)')
+                }).Count | Should -Be 2
+        }
         ($run.CanonicalWarnings -join "`n") | Should -Not -Match 'main\.telemetry\.tf'
         @($run.CanonicalResult.Issues | Where-Object Code -like 'avm_interface_*_deprecated') |
             Should -BeNullOrEmpty
+    }
+
+    It 'exempts canonical telemetry while retaining mixed business AzAPI findings' -Skip:((Test-Path Env:\AVM_OFFLINE) -and ($env:AVM_OFFLINE -eq '1')) {
+        $rules = @(
+            'avm_azapi_resource_tags_required'
+            'avm_interface_ignore_body_changes'
+            'avm_interface_resource_types'
+            'avm_interface_retry'
+            'avm_interface_timeouts'
+        )
+        $telemetry = @'
+resource "azapi_resource" "telemetry" {
+  type                   = "Microsoft.Resources/deployments@2025-04-01"
+  response_export_values = []
+}
+'@
+        $business = @'
+resource "azapi_resource" "business" {
+  type                   = "Microsoft.Resources/resourceGroups@2024-03-01"
+  response_export_values = []
+}
+'@
+        $terraform = @'
+terraform {
+  required_version = ">= 1.9.0"
+}
+'@
+
+        $profiles = @(
+            @{ Name = 'root'; Config = $script:configPath }
+            @{ Name = 'module'; Config = $script:moduleConfigPath }
+        )
+        foreach ($profile in $profiles) {
+            $root = Join-Path $TestDrive ("telemetry-only-" + $profile.Name)
+            $null = New-Item -ItemType Directory -Path $root -Force
+            Set-Content -LiteralPath (Join-Path $root 'terraform.tf') -Value $terraform -Encoding utf8NoBOM
+            Set-Content -LiteralPath (Join-Path $root 'main.telemetry.tf') -Value $telemetry -Encoding utf8NoBOM
+            Set-Content -LiteralPath (Join-Path $root 'variables.tf') -Value '' -Encoding utf8NoBOM
+
+            $run = InModuleScope 'Avm.Authoring' -Parameters @{
+                Config = $profile.Config
+                Root   = $root
+                Rules  = $rules
+            } {
+                param($Config, $Root, $Rules)
+                $tool = Resolve-AvmTool -Name 'tflint'
+                $init = Invoke-AvmProcess -FilePath $tool.Path `
+                    -ArgumentList @('--init', '--no-color', '--config', $Config) `
+                    -WorkingDirectory $Root -IgnoreExitCode
+                $lint = @{}
+                foreach ($rule in $Rules) {
+                    $lint[$rule] = Invoke-AvmProcess -FilePath $tool.Path `
+                        -ArgumentList @('--config', $Config, '--format=json', "--only=$rule") `
+                        -WorkingDirectory $Root -IgnoreExitCode
+                }
+                [pscustomobject]@{ Init = $init; Lint = $lint }
+            }
+
+            $run.Init.ExitCode | Should -Be 0 -Because $run.Init.StdErr
+            foreach ($rule in $rules) {
+                $run.Lint[$rule].ExitCode | Should -Be 0 -Because "$($profile.Name) telemetry should be ignored by ${rule}: $($run.Lint[$rule].StdErr)"
+                @((ConvertFrom-Json -InputObject $run.Lint[$rule].StdOut).issues |
+                        Where-Object { $_.rule.name -eq $rule }) |
+                    Should -BeNullOrEmpty -Because "$($profile.Name) telemetry must not require $rule"
+            }
+        }
+
+        $mixedRoot = Join-Path $TestDrive 'telemetry-and-business'
+        $null = New-Item -ItemType Directory -Path $mixedRoot -Force
+        Set-Content -LiteralPath (Join-Path $mixedRoot 'terraform.tf') -Value $terraform -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $mixedRoot 'main.tf') -Value $business -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $mixedRoot 'main.telemetry.tf') -Value $telemetry -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $mixedRoot 'variables.tf') -Value '' -Encoding utf8NoBOM
+
+        $mixedRun = InModuleScope 'Avm.Authoring' -Parameters @{
+            Config = $script:configPath
+            Root   = $mixedRoot
+            Rules  = $rules
+        } {
+            param($Config, $Root, $Rules)
+            $tool = Resolve-AvmTool -Name 'tflint'
+            $init = Invoke-AvmProcess -FilePath $tool.Path `
+                -ArgumentList @('--init', '--no-color', '--config', $Config) `
+                -WorkingDirectory $Root -IgnoreExitCode
+            $lint = @{}
+            foreach ($rule in $Rules) {
+                $lint[$rule] = Invoke-AvmProcess -FilePath $tool.Path `
+                    -ArgumentList @('--config', $Config, '--format=json', "--only=$rule") `
+                    -WorkingDirectory $Root -IgnoreExitCode
+            }
+            [pscustomobject]@{ Init = $init; Lint = $lint }
+        }
+
+        $mixedRun.Init.ExitCode | Should -Be 0 -Because $mixedRun.Init.StdErr
+        foreach ($rule in $rules) {
+            $issues = @((ConvertFrom-Json -InputObject $mixedRun.Lint[$rule].StdOut).issues |
+                    Where-Object { $_.rule.name -eq $rule })
+            $issues | Should -Not -BeNullOrEmpty -Because "business AzAPI must remain subject to $rule"
+            if ($rule -like 'avm_interface_*') {
+                $issues[0].range.filename | Should -Be 'variables.tf'
+            }
+            else {
+                $issues[0].range.filename | Should -Be 'main.tf'
+            }
+        }
     }
 }

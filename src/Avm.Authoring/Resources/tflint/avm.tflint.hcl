@@ -6,7 +6,7 @@ plugin "terraform" {
 
 plugin "avm" {
   enabled   = true
-  version   = "1.3.1"
+  version   = "1.4.0"
   source    = "github.com/Azure/tflint-ruleset-avm"
   signature = "attestation"
 }
@@ -84,6 +84,11 @@ rule "avm_provider_modtm_version_constraint" {
   enabled = false
 }
 
+rule "avm_azapi_resource_tags_required" {
+  enabled           = true
+  ignored_resources = ["azapi_resource.telemetry"]
+}
+
 rule "avm_azapi_data_response_export_values_required" {
   enabled  = true
   severity = "notice"
@@ -95,23 +100,27 @@ rule "avm_azapi_response_export_values_required" {
 }
 
 rule "avm_interface_ignore_body_changes" {
-  enabled  = true
-  severity = "notice"
+  enabled           = true
+  severity          = "notice"
+  ignored_resources = ["azapi_resource.telemetry"]
 }
 
 rule "avm_interface_resource_types" {
-  enabled  = true
-  severity = "notice"
+  enabled           = true
+  severity          = "notice"
+  ignored_resources = ["azapi_resource.telemetry"]
 }
 
 rule "avm_interface_retry" {
-  enabled  = true
-  severity = "notice"
+  enabled           = true
+  severity          = "notice"
+  ignored_resources = ["azapi_resource.telemetry"]
 }
 
 rule "avm_interface_timeouts" {
-  enabled  = true
-  severity = "notice"
+  enabled           = true
+  severity          = "notice"
+  ignored_resources = ["azapi_resource.telemetry"]
 }
 
 rule "avm_output_entire_resource_disallowed" {

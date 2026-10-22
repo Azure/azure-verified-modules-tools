@@ -949,17 +949,21 @@ The deployment identity needs `Microsoft.Resources/deployments/read`,
 `Microsoft.Resources/deployments/delete` at the subscription scope; see
 <https://aka.ms/avm/telemetry>.
 
-The generated AzAPI resource sets `response_export_values = []`. Only this
-tagless telemetry deployment receives a scoped inline TFLint exemption
-from the generic AzAPI tagging rule; that rule remains enabled for every
-other AzAPI resource. The transform engine adds the directive after MaPoTF
-writes the resource because `asraw` blocks do not retain comments.
-The lint warning audit skips only that exact directive
-above a tagless generated telemetry deployment; other inline ignores still
-warn. The packaged root TFLint profile disables the retired
+The generated AzAPI resource sets `response_export_values = []`. Root and
+direct local-module TFLint profiles configure the `ignored_resources` selector
+`azapi_resource.telemetry` only for the generic AzAPI tagging rule and the
+generated deployment's TFFR6/7/8 interface rules
+(`resource_types`, `retry`, `timeouts`, and `ignore_body_changes`). All other
+resources remain subject to those rules, including business AzAPI resources in
+the same module; examples retain their existing rule disables. The transform
+removes only the prior exact generated tag pragma when it is adjacent to the
+canonical untagged telemetry deployment. The lint warning audit reports every
+inline ignore, including that legacy pragma, except for the existing narrow
+generated location and provider-contract exceptions. The packaged root TFLint
+profile disables the retired
 `modtm` provider requirement, as the module and example profiles already do.
 
-The packaged AVM TFLint ruleset is pinned to attested release v1.3.0.
+The packaged AVM TFLint ruleset is pinned to released v1.4.0.
 AzureRM remains optional, but declared version constraints must exclude 5.0.0
 and later in root, child and example scopes. The existing source and
 compatibility checks still apply; excluding individual 5.x versions does not

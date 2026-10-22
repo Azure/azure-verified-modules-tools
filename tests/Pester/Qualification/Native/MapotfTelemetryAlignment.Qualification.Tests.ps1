@@ -700,7 +700,7 @@ It 'emits the reviewed telemetry bytes for independent fresh migrations and repe
             Invoke-TelemetryProfiles -Root $root
             InModuleScope Avm.Authoring -Parameters @{ Root = $root } {
                 param($Root)
-                Set-AvmTelemetryTagLintDirective -Targets @([pscustomobject]@{ Path = $Root; Profiles = @('root') })
+                Remove-AvmTelemetryTagLintDirective -Targets @([pscustomobject]@{ Path = $Root; Profiles = @('root') })
             }
             $null = Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $root -ArgumentList @('fmt', '-no-color')
             [IO.File]::ReadAllBytes((Join-Path $root 'main.telemetry.tf')) |
