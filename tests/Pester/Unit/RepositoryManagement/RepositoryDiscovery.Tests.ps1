@@ -76,7 +76,7 @@ AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
-Describe "Repository discovery built-in exclusions" {
+Describe "Repository discovery regex filtering" {
     BeforeEach {
         $script:discoveryState = @{
             Installation = $null
@@ -139,14 +139,13 @@ Describe "Repository discovery built-in exclusions" {
 
         BeforeEach {
             $script:matrixEnvironment = @{}
-            foreach ($key in @('AVM_REPOS_ACTION_PATH', 'OUTPUT_DIRECTORY', 'GITHUB_OUTPUT', 'REPOSITORIES', 'REPOSITORIES_TO_SKIP', 'GITHUB_ACTIONS')) {
+            foreach ($key in @('AVM_REPOS_ACTION_PATH', 'OUTPUT_DIRECTORY', 'GITHUB_OUTPUT', 'REPOSITORIES', 'GITHUB_ACTIONS')) {
                 $script:matrixEnvironment[$key] = [Environment]::GetEnvironmentVariable($key)
             }
             $env:AVM_REPOS_ACTION_PATH = $script:actionDirectory
             $env:OUTPUT_DIRECTORY = $TestDrive
             $env:GITHUB_OUTPUT = Join-Path $TestDrive "$([guid]::NewGuid().ToString('N')).output"
             $env:GITHUB_ACTIONS = 'true'
-            $env:REPOSITORIES_TO_SKIP = ''
             $script:discoveryState.Installation = @{
                 repositories = @(
                     (New-TestRepository -Name 'terraform-azurerm-avm-res-normal')
@@ -185,12 +184,25 @@ Describe "Repository discovery built-in exclusions" {
             $global:LASTEXITCODE | Should -Be 0
         }
 
-        It 'retains trimmed exclusions and an empty matrix without inventing repositories' {
-            $env:REPOSITORIES = 'avm-res-custom'
-            $env:REPOSITORIES_TO_SKIP = ' terraform-azurerm-avm-res-custom, terraform-azurerm-avm-res-custom, '
-            $records = @(& $script:matrixCode 6>&1)
+        It 'publishes an empty matrix without warnings or errors when no installed repositories match' {
+            $env:REPOSITORIES = 'All'
+            $script:discoveryState.Installation = @{
+                repositories = @(
+                    (New-TestRepository -Name 'azure-verified-modules-tools')
+                    (New-TestRepository -Name 'unexpected-repository')
+                )
+                total_count = 2
+            }
+            $records = @(& $script:matrixCode *>&1)
             Get-Content -LiteralPath $env:GITHUB_OUTPUT | Should -Contain 'matrix=[]'
-            ($records.MessageData | Out-String) | Should -Match 'Matrix ready: 0 repositories;.*additional exclusions: 1'
+            ($records.MessageData | Out-String) | Should -Match 'Matrix ready: 0 repositories;'
+            @($records | Where-Object {
+                    $_ -is [System.Management.Automation.WarningRecord] -or
+                    $_ -is [System.Management.Automation.ErrorRecord]
+                }) | Should -HaveCount 0
+            $script:discoveryState.Requests | Should -Be @('/installation/repositories?per_page=100&page=1')
+            Test-Path (Join-Path $TestDrive 'issues.log.json') | Should -BeFalse
+            $global:LASTEXITCODE | Should -Be 0
         }
 
         It 'rejects mixed All and empty explicit lists before discovery: <Selection>' -ForEach @(
@@ -211,57 +223,20 @@ Describe "Repository discovery built-in exclusions" {
         }
     }
 
-    It "applies built-in exclusions when no additional parameter is supplied" {
-        $repositories = @(
-            Invoke-RepositoryDiscovery -InstalledRepositories @(
-                (New-TestRepository -Name "terraform-azurerm-avm-template")
-                (New-TestRepository -Name "avm-terraform-governance")
-                (New-TestRepository -Name "terraform-azurerm-avm-res-normal")
-            )
-        )
-
-        $repositories.repoName | Should -Be @("terraform-azurerm-avm-res-normal")
-    }
-
-    It "applies built-in exclusions when the additional parameter is explicitly empty" {
-        $repositories = @(
-            Invoke-RepositoryDiscovery -InstalledRepositories @(
-                (New-TestRepository -Name "terraform-azurerm-avm-template")
-                (New-TestRepository -Name "avm-terraform-governance")
-                (New-TestRepository -Name "terraform-azurerm-avm-res-normal")
-            ) -Parameters @{
-                additionalReposToSkip = @()
-            }
-        )
-
-        $repositories.repoName | Should -Be @("terraform-azurerm-avm-res-normal")
-    }
-
-    It "adds caller-supplied exclusions to the built-in exclusions" {
-        $repositories = @(
-            Invoke-RepositoryDiscovery -InstalledRepositories @(
-                (New-TestRepository -Name "terraform-azurerm-avm-template")
-                (New-TestRepository -Name "avm-terraform-governance")
-                (New-TestRepository -Name "terraform-azurerm-avm-res-custom")
-                (New-TestRepository -Name "terraform-azurerm-avm-res-normal")
-            ) -Parameters @{
-                additionalReposToSkip = @("terraform-azurerm-avm-res-custom")
-            }
-        )
-
-        $repositories.repoName | Should -Be @("terraform-azurerm-avm-res-normal")
-    }
-
-    It "matches built-in exclusions case-insensitively" {
-        $repositories = @(
-            Invoke-RepositoryDiscovery -InstalledRepositories @(
-                (New-TestRepository -Name "TERRAFORM-AZURERM-AVM-TEMPLATE")
-                (New-TestRepository -Name "AVM-TERRAFORM-GOVERNANCE")
-                (New-TestRepository -Name "terraform-azurerm-avm-res-normal")
-            )
-        )
-
-        $repositories.repoName | Should -Be @("terraform-azurerm-avm-res-normal")
+    It 'admits matching module names for <Name>' -ForEach @(
+        @{ Name = 'terraform-azure-avm-res-custom' }
+        @{ Name = 'terraform-azurerm-avm-res-custom' }
+        @{ Name = 'terraform-azapi-avm-res-custom' }
+        @{ Name = 'TERRAFORM-AZURERM-AVM-RES-CUSTOM' }
+    ) {
+        $script:discoveryState.Metadata["Azure/$Name"] = New-DiscoveryMetadata | ConvertTo-Json -Depth 10
+        $repositories = @(Invoke-RepositoryDiscovery -InstalledRepositories @(
+                (New-TestRepository -Name $Name)
+            ))
+        $repositories | Should -HaveCount 1
+        $repositories[0].repoName | Should -BeExactly $Name
+        $repositories[0].repoSubType | Should -BeExactly 'resource'
+        Test-Path (Join-Path $TestDrive 'issues.log.json') | Should -BeFalse
     }
 
     It "includes a normal repository" {
@@ -281,10 +256,9 @@ Describe "Repository discovery built-in exclusions" {
         Should -Invoke ConvertFrom-Csv -Times 0 -Exactly
     }
 
-    It 'rejects reserved-name collisions before selection or exclusions: <Case>' -ForEach @(
+    It 'rejects reserved-name collisions before selection or archive filtering: <Case>' -ForEach @(
         @{ Case = 'full fleet'; Parameters = @{}; Archived = $false }
         @{ Case = 'selected windows repository'; Parameters = @{ repoFilter = @('avm-ptn-azuremonitorwindowsagent') }; Archived = $false }
-        @{ Case = 'explicitly skipped peer'; Parameters = @{ additionalReposToSkip = @('terraform-azurerm-avm-ptn-azuremonitorw5sagent') }; Archived = $false }
         @{ Case = 'archived peer'; Parameters = @{}; Archived = $true }
     ) {
         $windows = New-TestRepository -Name 'terraform-azurerm-avm-ptn-azuremonitorwindowsagent'
@@ -304,41 +278,50 @@ Describe "Repository discovery built-in exclusions" {
         $repositories | Should -HaveCount 2
     }
 
-    It "skips tooling repositories before validation without warning or issue artifacts" -ForEach @(
-        @{ ToolingName = "policy-library-avm" }
-        @{ ToolingName = "mapotf" }
-        @{ ToolingName = "azure-verified-modules-tools" }
-        @{ ToolingName = "POLICY-LIBRARY-AVM" }
-        @{ ToolingName = "MAPOTF" }
-        @{ ToolingName = "AZURE-VERIFIED-MODULES-TOOLS" }
+    It 'logs and ignores nonmatching repository <Name> without warnings, errors, or metadata requests' -ForEach @(
+        @{ Name = 'terraform-azurerm-avm-template' }
+        @{ Name = 'avm-terraform-governance' }
+        @{ Name = 'bicep-registry-modules' }
+        @{ Name = 'terraform-azure-modules' }
+        @{ Name = 'ALZ-PowerShell-Module' }
+        @{ Name = 'Azure-Verified-Modules' }
+        @{ Name = 'Azure-Verified-Modules-Grept' }
+        @{ Name = 'avmtester' }
+        @{ Name = 'tflint-ruleset-avm' }
+        @{ Name = 'policy-library-avm' }
+        @{ Name = 'mapotf' }
+        @{ Name = 'azure-verified-modules-tools' }
+        @{ Name = 'avm-gh-app' }
+        @{ Name = 'avm-container-images-cicd-agents-and-runners' }
+        @{ Name = 'Azure-Verified-Modules-Workflows' }
+        @{ Name = 'TERRAFORM-AZURERM-AVM-TEMPLATE' }
+        @{ Name = 'POLICY-LIBRARY-AVM' }
+        @{ Name = 'unexpected-repository' }
+        @{ Name = 'terraform-aws-avm-res-normal' }
+        @{ Name = 'terraform-azurerm-avm-unknown-normal' }
+        @{ Name = 'terraform-azurerm-avm-res-' }
     ) {
-        $result = @(
+        $records = @(
             Invoke-RepositoryDiscovery -InstalledRepositories @(
-                (New-TestRepository -Name $ToolingName)
+                (New-TestRepository -Name $Name)
                 (New-TestRepository -Name "terraform-azurerm-avm-res-normal")
-            ) 3>&1
+            ) *>&1
         )
-        $warningRecords = @($result | Where-Object { $_ -is [System.Management.Automation.WarningRecord] })
-        $repositories = @($result | Where-Object { $_ -isnot [System.Management.Automation.WarningRecord] })
+        $repositories = @($records | Where-Object { $_ -is [hashtable] })
 
         $repositories.repoName | Should -Be @("terraform-azurerm-avm-res-normal")
-        $warningRecords | Should -BeNullOrEmpty
+        @($records | Where-Object {
+                $_ -is [System.Management.Automation.WarningRecord] -or
+                $_ -is [System.Management.Automation.ErrorRecord]
+            }) | Should -HaveCount 0
+        @($records | Where-Object { $_ -is [System.Management.Automation.InformationRecord] } |
+            ForEach-Object { $_.MessageData.ToString() }) |
+            Should -Contain "Skipping $Name as it does not match the Terraform AVM module naming convention..."
+        $script:discoveryState.Requests | Should -Be @(
+            '/installation/repositories?per_page=100&page=1'
+            'repos/Azure/terraform-azurerm-avm-res-normal/contents/metadata.json?ref=main'
+        )
         Test-Path (Join-Path $TestDrive "issues.log.json") | Should -BeFalse
-    }
-
-    It "still reports an unexpected non-module repository" {
-        $repositories = @(
-            Invoke-RepositoryDiscovery -InstalledRepositories @(
-                (New-TestRepository -Name "unexpected-repository")
-                (New-TestRepository -Name "terraform-azurerm-avm-res-normal")
-            )
-        )
-        $repositories.repoName | Should -Be @("terraform-azurerm-avm-res-normal")
-        $issues = @(Get-Content -Raw (Join-Path $TestDrive "issues.log.json") | ConvertFrom-Json)
-        $issues.Count | Should -Be 1
-        $issues[0].repoId | Should -Be "unexpected-repository"
-        $issues[0].severity | Should -Be "error"
-        $issues[0].message | Should -BeLike "*does not match the required naming convention*"
     }
 
     It 'skips archived repositories using GitHub state without requesting metadata' {

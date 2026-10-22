@@ -4,24 +4,6 @@
 param(
   [array]$repoFilter = @(),
   [array]$validProviders = @("azure", "azurerm", "azapi"),
-  [array]$reposToSkip = @(
-    "terraform-azurerm-avm-template",
-    "avm-terraform-governance",
-    "bicep-registry-modules",
-    "terraform-azure-modules",
-    "ALZ-PowerShell-Module",
-    "Azure-Verified-Modules",
-    "Azure-Verified-Modules-Grept",
-    "avmtester",
-    "tflint-ruleset-avm",
-    "policy-library-avm",
-    "mapotf",
-    "azure-verified-modules-tools",
-    "avm-gh-app",
-    "avm-container-images-cicd-agents-and-runners",
-    "Azure-Verified-Modules-Workflows"
-  ),
-  [array]$additionalReposToSkip = @(),
   [string]$outputDirectory = "."
 )
 
@@ -45,35 +27,18 @@ $installedRepositories = @(Get-RepositoryInstalledRepositories)
 
 $issues = [System.Collections.Generic.List[object]]::new()
 
-$finalReposToSkip = $reposToSkip + $additionalReposToSkip
-$providerPattern = ($validProviders | ForEach-Object { [regex]::Escape($_) }) -join '|'
-
-Write-Host "Skipping repositories: $(ConvertTo-Json $finalReposToSkip)"
-
 foreach ($installedRepository in $installedRepositories | Sort-Object -Property name)
 {
-  if ($finalReposToSkip -contains $installedRepository.name)
+  $identity = Get-RepositoryTerraformModuleIdentity -Name $installedRepository.name -ValidProviders $validProviders
+  if ($null -eq $identity)
   {
-    Write-Host "Skipping $($installedRepository.name) as it is in the skip list..."
+    Write-Host "Skipping $($installedRepository.name) as it does not match the Terraform AVM module naming convention..."
     continue
   }
 
   if ($installedRepository.archived)
   {
     Write-Host "Skipping $($installedRepository.name) as it is archived in GitHub..."
-    continue
-  }
-
-  $identity = Get-RepositoryTerraformModuleIdentity -Name $installedRepository.name -ValidProviders $validProviders
-  if ($null -eq $identity)
-  {
-    $issue = @{
-      repoId   = $installedRepository.name
-      message  = "Skipping $($installedRepository.name) as it does not match the required naming convention: terraform-($providerPattern)-avm-(res|ptn|utl)-..."
-      severity = "error"
-    }
-    Write-Warning $issue.message
-    $issues.Add($issue)
     continue
   }
 

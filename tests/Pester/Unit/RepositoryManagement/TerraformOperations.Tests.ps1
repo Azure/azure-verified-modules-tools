@@ -138,7 +138,7 @@ Describe 'State identity wiring' {
         $planOnly.Value | Should -Match '(?m)^        type: boolean\r?$'
         @([regex]::Matches($dispatch.Value, '(?m)^      ([a-z][a-z0-9_]+):\r?$') |
             ForEach-Object { $_.Groups[1].Value }) | Should -Be @(
-            'repositories', 'repositories_to_skip', 'plan_only', 'use_workflow_authoring_source', 'force_file_update',
+            'repositories', 'plan_only', 'use_workflow_authoring_source', 'force_file_update',
             'sync_project_items', 'include_closed_project_items', 'project_lookback_days'
         )
     }
