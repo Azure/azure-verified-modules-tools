@@ -843,6 +843,17 @@ ModTM removal, conditional AzAPI insertion and declared-requirement retirement.
 PowerShell supplies only fresh dependency-tree and provider-configuration facts,
 surfaces the profile's literal-map review before writing, and must not parse,
 rebuild or replace authored provider-map expressions.
+For scopes with child module calls, defer early ModTM requirement retirement
+until the utility cleanup has fresh dependency proof, rather than temporarily
+dropping and regenerating a still-required source/version contract.
+Before loading a dependency tree, reconcile known local callers against their
+children's current native declarations, including callers selected through test
+files. Repeat this reconciliation after retiring a child's requirement: Terraform
+loads test-selected examples during `get`, before dependency-ordered caller
+restoration can run. Remove only unsupported `modtm = modtm` entries; preserve
+alias and different-local-name selections. A temporarily retired declaration
+may be restored only with the existing fresh dependency proof, after which a
+retained mixed map must again forward any genuinely required ModTM configuration.
 An intermediate native missing-provider-configuration warning may be tracked
 while repairing proven source bindings. All other diagnostics remain fatal,
 and a strict dependency recheck must pass before mock migration.
