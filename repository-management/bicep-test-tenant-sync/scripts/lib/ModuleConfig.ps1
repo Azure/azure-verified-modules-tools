@@ -66,8 +66,11 @@ function Resolve-AvmBicepModuleSettings {
     $groups = @($Configuration['moduleGroups'])
     foreach ($entry in $groups) {
         $group = ConvertTo-AvmSettingDictionary -Value $entry
-        if (@($group.Keys | Where-Object { $_ -cnotin @('name', 'order', 'modules', 'entraGroups', 'testTenant') }).Count -gt 0) {
+        if (@($group.Keys | Where-Object { $_ -cnotin @('name', 'order', 'modules', 'entraGroups', 'testTenant', 'existingIdentity') }).Count -gt 0) {
             throw [System.ArgumentException]::new('Bicep module groups contain unsupported settings.')
+        }
+        if ($group.Contains('existingIdentity')) {
+            $null = ConvertTo-AvmExistingIdentitySetting -Value $group['existingIdentity']
         }
         foreach ($selector in @($group['modules'])) {
             if ($selector -ceq '*') { continue }
@@ -89,6 +92,66 @@ function Resolve-AvmBicepModuleSettings {
     return $result
 }
 
+function Resolve-AvmBicepModuleExistingIdentities {
+    [CmdletBinding()]
+    [OutputType([System.Collections.IDictionary])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $ModulePaths,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Configuration
+    )
+
+    $groups = @($Configuration['moduleGroups'])
+    $result = [ordered]@{}
+    foreach ($path in @($ModulePaths | Sort-Object -CaseSensitive)) {
+        $identity = Resolve-AvmGroupExistingIdentity -Groups $groups -SelectorProperty 'modules' -Item $path
+        if ($null -ne $identity) { $result[$path] = $identity }
+    }
+    return $result
+}
+
+function Resolve-AvmBicepSubscriptionVendingBillingScopes {
+    [CmdletBinding()]
+    [OutputType([System.Collections.IDictionary])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Configuration,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Values
+    )
+
+    $selector = 'avm/ptn/lz/sub-vending'
+    $null = Resolve-AvmBicepModuleSettings -ModulePaths @($selector) -Configuration $Configuration
+    $identities = Resolve-AvmBicepModuleExistingIdentities -ModulePaths @($selector) -Configuration $Configuration
+    $result = [ordered]@{}
+    if ($identities.Contains($selector)) {
+        $identity = Resolve-AvmSubscriptionVendingIdentity -ExistingIdentity $identities[$selector] -Values $Values
+        $result[$selector] = $identity['billing_scope']
+    }
+    return $result
+}
+
+function ConvertTo-AvmBicepModuleBillingScopeJson {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [System.Collections.IDictionary] $BillingScopes
+    )
+
+    $selector = 'avm/ptn/lz/sub-vending'
+    if ($BillingScopes.Count -gt 1 -or
+        ($BillingScopes.Count -eq 1 -and -not $BillingScopes.Contains($selector))) {
+        throw [System.ArgumentException]::new('Only the canonical subscription-vending root may receive a Bicep Registry billing scope.')
+    }
+    $result = [ordered]@{}
+    if ($BillingScopes.Contains($selector)) {
+        $scope = $BillingScopes[$selector]
+        if ($scope -isnot [string] -or
+            $scope -cnotmatch '^/providers/Microsoft\.Billing/billingAccounts/[A-Za-z0-9:_-]+/billingProfiles/[A-Za-z0-9_-]+/invoiceSections/[A-Za-z0-9_-]+$') {
+            throw [System.ArgumentException]::new('The Bicep Registry billing scope must be an invoice-section resource ID.')
+        }
+        $result[$selector] = $scope
+    }
+    return ConvertTo-Json -InputObject $result -Compress -Depth 3
+}
+
 function ConvertTo-AvmBicepIdentityMapping {
     [CmdletBinding()]
     [OutputType([System.Collections.IDictionary])]
@@ -96,6 +159,7 @@ function ConvertTo-AvmBicepIdentityMapping {
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Identities,
         [Parameter(Mandatory)] [string[]] $ModulePaths,
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Settings,
+        [AllowEmptyCollection()] [System.Collections.IDictionary] $ExistingIdentities = @{},
         [switch] $Legacy
     )
 
@@ -109,6 +173,9 @@ function ConvertTo-AvmBicepIdentityMapping {
         $identity = $Identities[$path]
         $name = Get-AvmTestIdentityName -ModulePath $path -Legacy:$Legacy
         $expectedId = "/subscriptions/$($settings.TEST_BAMI_ADMIN_SUBSCRIPTION_ID)/resourceGroups/$($settings.TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME)/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$name"
+        if (-not $Legacy -and $ExistingIdentities.Contains($path)) {
+            $expectedId = $ExistingIdentities[$path]['resource_id']
+        }
         if ($identity -isnot [System.Collections.IDictionary] -or $identity.Count -ne 3 -or
             $identity['tenant_id'] -ine $settings.TEST_BAMI_TENANT_ID -or
             $identity['identity_resource_id'] -ine $expectedId) {

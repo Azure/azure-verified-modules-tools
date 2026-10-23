@@ -10,6 +10,13 @@ BeforeAll {
     . (Join-Path $script:root 'tests' 'fixtures' 'BicepIdentities.ps1')
     $script:originalEnvironment = @{}
     $script:values = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)
+    $script:values.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID =
+        '/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-avm-managed-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-subscription-vending'
+    $script:values.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID = '10000000-0000-4000-8000-000000000006'
+    $script:values.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID = '10000000-0000-4000-8000-000000000007'
+    $script:values.TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID = 'avm-subscription-vending'
+    $script:values.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE =
+        '/providers/Microsoft.Billing/billingAccounts/account:segment/billingProfiles/profile/invoiceSections/section'
     $script:backendValues = @{
         ARM_BACKEND_TENANT_ID = '20000000-0000-4000-8000-000000000001'
         ARM_BACKEND_SUBSCRIPTION_ID = '20000000-0000-4000-8000-000000000002'
@@ -113,10 +120,18 @@ Describe 'Bicep module identity entry points with real files and mocked services
             New-Item -ItemType File -Path $path
         }.GetNewClosure())
         Mock Invoke-AvmProcess -ModuleName Avm.Authoring -MockWith ({
-            param($FilePath, $ArgumentList, $EnvVars, $WorkingDirectory, $StreamOutput, $OnStdOutLine, $OnStdErrLine)
+            param($FilePath, $ArgumentList, $EnvVars, $WorkingDirectory, $StreamOutput, $OnStdOutLine, $OnStdErrLine, $StandardInputPath)
             $command = [IO.Path]::GetFileNameWithoutExtension($FilePath)
             $state.Calls.Add(@{ Command = $command; Arguments = $ArgumentList; Environment = $EnvVars; Directory = $WorkingDirectory })
             if ($command -ceq 'gh') {
+                if ($ArgumentList[0] -ceq 'secret') {
+                    $ArgumentList | Should -Be @(
+                        'secret', 'set', 'VALIDATE_MODULE_BILLING_SCOPES',
+                        '--repo', 'Azure/bicep-registry-modules', '--env', 'avm'
+                    )
+                    Test-Path -LiteralPath $StandardInputPath | Should -BeTrue
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+                }
                 $ArgumentList[0] | Should -BeExactly 'api'
                 $ArgumentList[4] | Should -BeIn @('GET', 'POST', 'PATCH')
                 if ($ArgumentList[-1] -ceq 'repos/Azure/azure-verified-modules-tools') {
@@ -345,7 +360,7 @@ Describe 'Bicep module identity entry points with real files and mocked services
         }
         ConvertTo-Json -InputObject $remaining -Depth 5 -Compress | Should -BeExactly $script:beforeVariables
         (& $script:publisherPath -ModuleClientIdPath $script:mappingPath -IdentityMigrationPath $script:migrationPath -Apply |
-            ConvertFrom-Json -AsHashtable).Status | Should -BeExactly 'NoChange'
+            ConvertFrom-Json -AsHashtable).Status | Should -BeExactly 'Published'
         $script:state.Writes | Should -HaveCount 1
     }
 

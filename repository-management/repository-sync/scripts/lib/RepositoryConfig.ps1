@@ -148,5 +148,6 @@ function Resolve-RepositorySettings {
         WorkloadIdentityFederationSubjectClaimOverrides = $workloadIdentityFederationSubjectClaimOverrides
         TestTenant                                      = Resolve-AvmGroupTestTenant -Groups $repositoryConfig.repositoryGroups -SelectorProperty 'repositories' -Item $repoId
         EntraGroups                                     = Resolve-AvmRepositoryEntraGroups -Groups $repositoryConfig.repositoryGroups -RepositoryId $repoId
+        ExistingIdentity                                = Resolve-AvmGroupExistingIdentity -Groups $repositoryConfig.repositoryGroups -SelectorProperty 'repositories' -Item $repoId
     }
 }

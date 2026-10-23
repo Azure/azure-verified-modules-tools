@@ -138,6 +138,140 @@ function Get-AvmBamiOwnerAssignmentName {
     return '{0}-{1}-{2}-{3}-{4}' -f $hex.Substring(0, 8), $hex.Substring(8, 4), $hex.Substring(12, 4), $hex.Substring(16, 4), $hex.Substring(20, 12)
 }
 
+function Assert-AvmExternalBamiIdentityPlan {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Plan,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Settings,
+        [Parameter(Mandatory)] [string] $Repository,
+        [Parameter(Mandatory)] [string] $RepositoryId,
+        [Parameter(Mandatory)] [string] $RepositoryOwnerId,
+        [Parameter(Mandatory)] [string] $RepositorySyncRepositoryId,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $EntraGroupNames,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Identity,
+        [string] $JobWorkflowRef,
+        [string] $ModuleAddress = 'module.azure',
+        [string] $WorkflowRef,
+        [switch] $BicepRegistryFederation,
+        [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test', 'examples-test-execution')
+    )
+
+    if (($Plan.Contains('errored') -and $Plan['errored'] -ne $false) -or
+        ($Plan.Contains('complete') -and $Plan['complete'] -ne $true) -or
+        $Plan['resource_changes'] -isnot [System.Collections.IList] -or
+        $Plan['planned_values'] -isnot [System.Collections.IDictionary] -or
+        $Plan['planned_values']['root_module'] -isnot [System.Collections.IDictionary]) {
+        throw [System.InvalidOperationException]::new('External identity plans must be complete and non-errored.')
+    }
+    foreach ($field in @('name', 'resource_id', 'client_id', 'principal_id', 'manage_entra_groups')) {
+        if (-not $Identity.Contains($field)) {
+            throw [System.ArgumentException]::new('External identity validation requires complete bootstrap evidence.')
+        }
+    }
+    if ($Identity['name'] -cne 'id-avm-subscription-vending' -or
+        $Identity['resource_id'] -ine "/subscriptions/$($Settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'])/resourceGroups/rg-avm-managed-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-subscription-vending" -or
+        $Identity['manage_entra_groups'] -isnot [bool]) {
+        throw [System.InvalidOperationException]::new('External identity plans may use only the pinned bootstrap subscription-vending identity.')
+    }
+    foreach ($field in @('client_id', 'principal_id')) {
+        $id = [guid]::Empty
+        if ($Identity[$field] -isnot [string] -or -not [guid]::TryParseExact($Identity[$field], 'D', [ref]$id) -or
+            $id -eq [guid]::Empty -or $id.ToString() -in @($Settings['TEST_BAMI_CONTROLLER_CLIENT_ID'], $Settings['TEST_BAMI_BICEP_CLIENT_ID'])) {
+            throw [System.InvalidOperationException]::new('External identity evidence must not bind a controller or Bicep execution identity.')
+        }
+    }
+
+    $moduleMatch = [regex]::Match($ModuleAddress, '^module\.bicep\["([^"]+)"\]$')
+    $federationName = "$($Identity['name'])-$(if ($moduleMatch.Success) { 'bicep-sub-vending' } else { 'terraform-sub-vending' })"
+    $resources = @(Get-AvmTerraformPlannedResource -Module $Plan['planned_values']['root_module'])
+    $managed = @($resources | Where-Object { $_['mode'] -ceq 'managed' })
+    $allowed = @("$ModuleAddress.azapi_resource.validation_federated_credential")
+    foreach ($environment in $Environments) {
+        $allowed += "$ModuleAddress.azapi_resource.identity_federated_credentials[`"$environment`"]"
+    }
+    if ($BicepRegistryFederation) {
+        $allowed += "$ModuleAddress.azapi_resource.bicep_registry_federated_credential[0]"
+    }
+    if ($Identity['manage_entra_groups']) {
+        foreach ($group in $EntraGroupNames) {
+            $allowed += "$ModuleAddress.azuread_group_member.test_permissions[$(ConvertTo-Json -InputObject $group -Compress)]"
+        }
+    }
+    $addresses = @($managed | ForEach-Object { $_['address'] } | Select-Object -Unique)
+    if ($managed.Count -ne $allowed.Count -or $addresses.Count -ne $allowed.Count -or
+        @($addresses | Where-Object { $_ -cnotin $allowed }).Count -gt 0) {
+        throw [System.InvalidOperationException]::new('External identity plans may manage only their exact federation and selected individual membership edges.')
+    }
+    $changes = @{}
+    foreach ($change in $Plan['resource_changes']) {
+        if ($change -isnot [System.Collections.IDictionary] -or $change['address'] -isnot [string] -or
+            $change['change'] -isnot [System.Collections.IDictionary] -or $changes.Contains($change['address'])) {
+            throw [System.InvalidOperationException]::new('External identity plans require complete unambiguous changes.')
+        }
+        $changes[$change['address']] = $change
+    }
+    foreach ($resource in $managed) {
+        $change = $changes[$resource['address']]
+        $type = $resource['address'] -match '\.azuread_group_member\.' ? 'azuread_group_member' : 'azapi_resource'
+        $provider = $type -ceq 'azuread_group_member' ? 'registry.terraform.io/hashicorp/azuread' : 'registry.terraform.io/azure/azapi'
+        if ($null -eq $change -or $resource['type'] -cne $type -or $change['mode'] -cne 'managed' -or
+            $change['type'] -cne $type -or $change['provider_name'] -cne $provider -or
+            (@($change['change']['actions']) -join ',') -cnotin @('no-op', 'create', 'update', 'delete,create', 'create,delete')) {
+            throw [System.InvalidOperationException]::new('External identity plans contain an invalid provider or action.')
+        }
+    }
+
+    $data = @(Get-AvmTerraformPlanDataResource -Plan $Plan)
+    $identityEvidence = @($data | Where-Object { $_['address'] -ceq "$ModuleAddress.data.azapi_resource.existing_identity[0]" })
+    if ($identityEvidence.Count -ne 1 -or $identityEvidence[0]['values'] -isnot [System.Collections.IDictionary] -or
+        $identityEvidence[0]['values']['id'] -ine $Identity['resource_id'] -or
+        $identityEvidence[0]['values']['output'] -isnot [System.Collections.IDictionary] -or
+        $identityEvidence[0]['values']['output']['properties'] -isnot [System.Collections.IDictionary]) {
+        throw [System.InvalidOperationException]::new('External identity plans require exact bootstrap UAMI read evidence.')
+    }
+    $properties = $identityEvidence[0]['values']['output']['properties']
+    if ($properties['tenantId'] -ine $Settings['TEST_BAMI_TENANT_ID'] -or
+        $properties['clientId'] -ine $Identity['client_id'] -or $properties['principalId'] -ine $Identity['principal_id']) {
+        throw [System.InvalidOperationException]::new('External identity read evidence does not match the pinned bootstrap tuple.')
+    }
+
+    foreach ($environment in $Environments) {
+        $address = "$ModuleAddress.azapi_resource.identity_federated_credentials[`"$environment`"]"
+        $expectedName = $WorkflowRef ? "$federationName-module-$environment" : "$federationName-$environment"
+        $subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:${environment}:job_workflow_ref:$JobWorkflowRef"
+        if ($WorkflowRef) { $subject += ":workflow_ref:$WorkflowRef" }
+        Assert-AvmExternalFederatedCredential -Resource @($managed | Where-Object { $_['address'] -ceq $address })[0] `
+            -Name $expectedName -ParentId $Identity['resource_id'] -Subject $subject
+    }
+    Assert-AvmExternalFederatedCredential -Resource @($managed | Where-Object { $_['address'] -ceq "$ModuleAddress.azapi_resource.validation_federated_credential" })[0] `
+        -Name "$federationName-avm-validation" -ParentId $Identity['resource_id'] `
+        -Subject "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
+    if ($BicepRegistryFederation) {
+        Assert-AvmExternalFederatedCredential -Resource @($managed | Where-Object { $_['address'] -ceq "$ModuleAddress.azapi_resource.bicep_registry_federated_credential[0]" })[0] `
+            -Name "$federationName-registry-avm-validation" -ParentId $Identity['resource_id'] `
+            -Subject "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:avm-validation"
+    }
+}
+
+function Assert-AvmExternalFederatedCredential {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Resource,
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [string] $ParentId,
+        [Parameter(Mandatory)] [string] $Subject
+    )
+
+    $properties = $Resource['values']['body']['properties']
+    if ($Resource['type'] -cne 'azapi_resource' -or $Resource['values']['type'] -cne 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview' -or
+        $Resource['values']['name'] -cne $Name -or $Name.Length -gt 120 -or $Resource['values']['parent_id'] -ine $ParentId -or
+        $properties['issuer'] -cne 'https://token.actions.githubusercontent.com' -or
+        @($properties['audiences']).Count -ne 1 -or @($properties['audiences'])[0] -cne 'api://AzureADTokenExchange' -or
+        $properties['subject'] -cne $Subject) {
+        throw [System.InvalidOperationException]::new('External identity federation must retain an exact disjoint child name and OIDC subject.')
+    }
+}
+
 function Assert-AvmBamiIdentityPlan {
     [CmdletBinding()]
     param(
@@ -154,6 +288,7 @@ function Assert-AvmBamiIdentityPlan {
         [string] $IdentityName,
         [string] $WorkflowRef,
         [switch] $BicepRegistryFederation,
+        [AllowNull()] [System.Collections.IDictionary] $ExistingIdentity,
         [ValidatePattern('^[a-z][a-z0-9-]*$')]
         [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test', 'examples-test-execution'),
         [switch] $PassThru
@@ -161,6 +296,14 @@ function Assert-AvmBamiIdentityPlan {
 
     $Settings = Get-AvmBamiSettings -Values $Settings
     $EntraGroupNames = ConvertTo-AvmEntraGroupNames -Names $EntraGroupNames
+    if ($null -ne $ExistingIdentity) {
+        Assert-AvmExternalBamiIdentityPlan -Plan $Plan -Settings $Settings -Repository $Repository `
+            -RepositoryId $RepositoryId -RepositoryOwnerId $RepositoryOwnerId `
+            -RepositorySyncRepositoryId $RepositorySyncRepositoryId -JobWorkflowRef $JobWorkflowRef `
+            -EntraGroupNames $EntraGroupNames -ModuleAddress $ModuleAddress -Identity $ExistingIdentity `
+            -WorkflowRef $WorkflowRef -BicepRegistryFederation:$BicepRegistryFederation -Environments $Environments
+        return
+    }
     $moduleMatch = [regex]::Match($ModuleAddress, '^module\.bicep\["([^"]+)"\]$')
     if ($BicepRegistryFederation -and (-not $moduleMatch.Success -or $Repository -cne 'Azure/bicep-registry-modules' -or
         $Environments.Count -ne 1 -or $Environments[0] -cne 'avm-validation')) {
@@ -179,7 +322,7 @@ function Assert-AvmBamiIdentityPlan {
         throw [System.InvalidOperationException]::new('Candidate Terraform plan must include complete resource changes.')
     }
     $resources = @(Get-AvmTerraformPlannedResource -Module $Plan['planned_values']['root_module'])
-    $identityAddress = "$ModuleAddress.azapi_resource.identity"
+    $identityAddress = "$ModuleAddress.azapi_resource.identity[0]"
     $validationCredentialAddress = "$ModuleAddress.azapi_resource.validation_federated_credential"
     $registryCredentialAddress = "$ModuleAddress.azapi_resource.bicep_registry_federated_credential[0]"
     $membershipNames = @{}
@@ -511,19 +654,26 @@ function ConvertTo-AvmBamiConsumerSettings {
     param(
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Identity,
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Settings,
-        [Parameter(Mandatory)] [object] $Repository
+        [Parameter(Mandatory)] [object] $Repository,
+        [AllowNull()] [System.Collections.IDictionary] $ExistingIdentity
     )
 
     $Settings = Get-AvmBamiSettings -Values $Settings
     $clientId = [guid]::Empty
-    $name = Get-AvmTestIdentityName -Repository $Repository.full_name
-    $expectedIdentity = "/subscriptions/$($Settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'])/resourceGroups/$($Settings['TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME'])/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$name"
+    $expectedIdentity = if ($null -eq $ExistingIdentity) {
+        $name = Get-AvmTestIdentityName -Repository $Repository.full_name
+        "/subscriptions/$($Settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'])/resourceGroups/$($Settings['TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME'])/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$name"
+    }
+    else {
+        $ExistingIdentity['resource_id']
+    }
     if ($Identity['client_id'] -isnot [string] -or -not [guid]::TryParseExact($Identity['client_id'], 'D', [ref] $clientId) -or
         $clientId -eq [guid]::Empty -or $clientId.ToString() -in @($Settings['TEST_BAMI_CONTROLLER_CLIENT_ID'], $Settings['TEST_BAMI_BICEP_CLIENT_ID']) -or
+        ($null -ne $ExistingIdentity -and $clientId.ToString() -ine $ExistingIdentity['client_id']) -or
         $Identity['tenant_id'] -ine $Settings['TEST_BAMI_TENANT_ID'] -or
         $Identity['identity_resource_id'] -ine $expectedIdentity -or
         $Identity['repository_id'] -cne [string]$Repository.id -or $Identity['repository_owner_id'] -cne [string]$Repository.owner.id) {
-        throw [System.InvalidOperationException]::new('Candidate output is not a complete dedicated test identity for the expected tenant and repository; controller/Bicep identities cannot be used.')
+        throw [System.InvalidOperationException]::new('Candidate output is not a complete expected test identity for the tenant and repository; controller/Bicep identities cannot be used.')
     }
     return @{
         tenant_id = $Settings['TEST_BAMI_TENANT_ID']
@@ -660,6 +810,7 @@ function Assert-AvmRepositorySyncPlan {
         [AllowNull()] [object] $Repository,
         [string] $RepositorySyncRepositoryId,
         [string[]] $EntraGroupNames = @(),
+        [AllowNull()] [System.Collections.IDictionary] $ExistingIdentity,
         [string] $JobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main',
         [string[]] $ResourceTypesThatCannotBeDestroyed = @('github_repository')
     )
@@ -745,5 +896,5 @@ function Assert-AvmRepositorySyncPlan {
     Assert-AvmBamiIdentityPlan -Plan $identityPlan -Settings $Settings -Repository $Repository.full_name `
         -RepositoryId ([string]$Repository.id) -RepositoryOwnerId ([string]$Repository.owner.id) `
         -RepositorySyncRepositoryId $RepositorySyncRepositoryId -JobWorkflowRef $JobWorkflowRef `
-        -EntraGroupNames $EntraGroupNames -ModuleAddress 'module.bami[0]'
+        -EntraGroupNames $EntraGroupNames -ExistingIdentity $ExistingIdentity -ModuleAddress 'module.bami[0]'
 }
