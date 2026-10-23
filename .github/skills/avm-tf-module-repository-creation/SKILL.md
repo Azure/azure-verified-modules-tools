@@ -44,7 +44,7 @@ gh auth status --hostname github.com
   Import-Module Avm.Authoring
   ```
 
-  Run `avm update` instead when an older release is already installed.
+  Run `avm upgrade` instead when an older release is already installed.
 - The user needs AVM core team approval to create the repository, a GitHub account linked in the [Open Source Portal](https://repos.opensource.microsoft.com/link), and membership of the `Azure` organization. They also need to be able to fork `microsoft/github-operations`, because the app installation pull request is opened from their fork.
 
 ## 2. Collect the inputs

@@ -31,6 +31,10 @@ Describe 'Cmdlet documentation generation' -Tag 'Component' {
         $preCommitPage = Get-Content -LiteralPath (Join-Path $outputPath 'Invoke-AvmPreCommit.md') -Raw
         $preCommitPage | Should -Match '`avm pre-commit`'
 
+        $upgradePage = Get-Content -LiteralPath (Join-Path $outputPath 'Update-AvmAuthoring.md') -Raw
+        $upgradePage | Should -Match '`avm upgrade`'
+        $upgradePage | Should -Not -Match 'avm update'
+
         $prCheckPage = Get-Content -LiteralPath (Join-Path $outputPath 'Invoke-AvmPrCheck.md') -Raw
         $prCheckPage | Should -Match '### -ExcludeSteps'
         $prCheckPage | Should -Match '\| Type \| `String\[\]` \|'
@@ -50,6 +54,7 @@ Describe 'Cmdlet documentation generation' -Tag 'Component' {
         $index = Get-Content -LiteralPath (Join-Path $outputPath 'README.md') -Raw
         $index | Should -Match '\| Cmdlet \| CLI command\(s\) \| Purpose \|'
         $index | Should -Match '\| \[Invoke-AvmPreCommit\]\(Invoke-AvmPreCommit\.md\) \| `avm pre-commit` \|'
+        $index | Should -Not -Match 'avm update|avm test intn'
     }
 
     It 'reports <Problem> pages without rewriting the destination' -ForEach @(
