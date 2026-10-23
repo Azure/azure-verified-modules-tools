@@ -200,6 +200,9 @@ jobs:
       needs.select-deployments.result == 'success' &&
       needs.static.result != 'failure' &&
       needs.policy-required.result != 'failure'
+    permissions:
+      contents: read
+      id-token: write # Enables the nested deployment workflow's Azure OIDC login.
     strategy:
       fail-fast: false
       max-parallel: 4
