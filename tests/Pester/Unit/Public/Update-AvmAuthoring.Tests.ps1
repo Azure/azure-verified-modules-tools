@@ -38,27 +38,15 @@ Describe 'Update-AvmAuthoring' {
         }
     }
 
-    It 'retains avm update as a backwards-compatible alias' {
+    It 'rejects avm update without invoking the self-update command' {
         InModuleScope 'Avm.Authoring' {
-            Mock Test-AvmModuleVersion {
-                throw [AvmModuleVersionException]::new(
-                    [version]'1.0.0',
-                    [version]'2.0.0',
-                    'stale')
-            }
-            Mock Update-AvmAuthoring {
-                [pscustomobject]@{
-                    Name   = 'Avm.Authoring'
-                    Status = 'current'
-                    Marker = 'routed'
-                }
-            }
+            Mock Test-AvmModuleVersion
+            Mock Update-AvmAuthoring
 
-            $result = Invoke-Avm update --passthru
+            { Invoke-Avm update } | Should -Throw "*Unknown verb: 'update'*"
 
-            $result.Marker | Should -Be 'routed'
-            Should -Invoke Update-AvmAuthoring -Times 1 -Exactly
-            Should -Invoke Test-AvmModuleVersion -Times 0 -Exactly
+            Should -Invoke Update-AvmAuthoring -Times 0 -Exactly
+            Should -Invoke Test-AvmModuleVersion -Times 1 -Exactly
         }
     }
 

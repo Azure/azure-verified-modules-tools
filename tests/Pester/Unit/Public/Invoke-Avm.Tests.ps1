@@ -126,7 +126,7 @@ function script:Test-AvmModuleVersion {
             'Latest version: 0.17.1'
             ''
             'Update and reload the module:'
-            '  Update-PSResource -Name Avm.Authoring -Scope CurrentUser'
+            '  avm upgrade'
             '  Import-Module Avm.Authoring -Force'
         ) -join "`n")
 }
@@ -174,6 +174,37 @@ $invoke
 
 AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
+}
+
+Describe 'Invoke-Avm help listing' {
+    It 'lists common commands first for <Case>' -ForEach @(
+        @{ Case = 'bare avm'; Tokens = @() }
+        @{ Case = 'avm help'; Tokens = @('help') }
+        @{ Case = 'avm --help'; Tokens = @('--help') }
+        @{ Case = 'avm -h'; Tokens = @('-h') }
+    ) {
+        InModuleScope 'Avm.Authoring' -Parameters @{ Tokens = $Tokens } {
+            param($Tokens)
+            Mock Test-AvmModuleVersion
+            Mock Test-AvmDisableSentinel { $null }
+            $script:helpCommands = [System.Collections.Generic.List[string]]::new()
+            Mock Write-AvmLog {
+                if ($Message -match '^  (.+?)\s{2,}') {
+                    $script:helpCommands.Add($Matches[1])
+                }
+            }
+
+            Invoke-Avm @Tokens
+
+            $script:helpCommands[0..5] -join '|' |
+                Should -BeExactly 'pre-commit|pr-check|test unit|test integration|test e2e|init'
+            $script:helpCommands | Should -Contain 'upgrade'
+            $script:helpCommands | Should -Not -Contain 'update'
+            $script:helpCommands | Should -Not -Contain 'test intn'
+            @($script:helpCommands | Select-Object -Unique).Count |
+                Should -Be $script:helpCommands.Count
+        }
+    }
 }
 
 Describe 'Invoke-Avm array dispatch' {
@@ -234,7 +265,7 @@ Describe 'Invoke-Avm dispatch failure semantics (F02)' {
 
         $result.ExitCode | Should -Not -Be 0
         $result.Output | Should -Match "Avm\.Authoring 0\.16\.0 is outdated\. Version 0\.17\.1 is required to run 'avm spec-verb'\."
-        $result.Output | Should -Match "Update-PSResource -Name Avm\.Authoring -Scope CurrentUser"
+        $result.Output | Should -Match 'avm upgrade'
         $result.Output | Should -Not -Match 'NotInstalled:'
         $result.Output | Should -Not -Match 'avm spec-verb: pass'
         $result.Output | Should -Not -Match '\.ps1:\d+'

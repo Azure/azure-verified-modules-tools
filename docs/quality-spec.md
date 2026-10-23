@@ -3025,8 +3025,8 @@ including workflow and repository-management tests.
 - Normal commands compare the running module against the latest PowerShell
   Gallery release and stop with upgrade guidance when outdated. `avm version`
   and `Get-AvmVersion` instead return the running version with an update warning.
-  `avm upgrade` bypasses the guard so it can install the newer version;
-  `avm update` remains a backwards-compatible alias.
+  `avm upgrade` is the sole CLI self-update command and bypasses the guard so it
+  can install the newer version.
   `-SkipModuleVersionCheck` is an explicit opt-out for automation and source
   checkouts. Composed commands forward it to module context resolution and
   nested steps; Gallery lookup failures warn and allow the command to continue.

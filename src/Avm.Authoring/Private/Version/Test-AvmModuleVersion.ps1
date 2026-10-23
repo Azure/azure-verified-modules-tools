@@ -71,7 +71,7 @@ function Test-AvmModuleVersion {
             return
         }
 
-        $upgradeScript = 'Update-PSResource -Name Avm.Authoring -Scope CurrentUser'
+        $upgradeScript = 'avm upgrade'
         $reloadScript = 'Import-Module Avm.Authoring -Force'
         $message = @(
             "Installed version: $($currentModule.Version)"

@@ -42,19 +42,41 @@ Describe 'Invoke-AvmTestIntegration' {
         }
     }
 
-    It 'forwards the retry budget and existing CLI options (<Token>)' -ForEach @(
-        @{ Token = '--max-retry'; Budget = 0 }
-        @{ Token = '-MaxRetry'; Budget = 1 }
-        @{ Token = '--max-retry'; Budget = 10 }
+    It 'supports intn with pass-through <Position> the verb' -ForEach @(
+        @{ Position = 'before'; Tokens = @('--passthru', 'test', 'intn') }
+        @{ Position = 'after'; Tokens = @('test', 'intn', '--passthru') }
     ) {
-        InModuleScope 'Avm.Authoring' -Parameters @{ Flag = $Token; Budget = $Budget } {
-            param($Flag, $Budget)
+        InModuleScope 'Avm.Authoring' -Parameters @{ Tokens = $Tokens } {
+            param($Tokens)
+            Mock Test-AvmModuleVersion
+            Mock Test-AvmDisableSentinel { $null }
+            Mock Invoke-AvmTestIntegration {
+                [pscustomobject]@{ Status = 'pass'; Marker = 'integration' }
+            }
+
+            $result = avm @Tokens
+
+            $result.Marker | Should -Be 'integration'
+            Should -Invoke Invoke-AvmTestIntegration -Exactly 1
+        }
+    }
+
+    It 'forwards the retry budget and existing CLI options via test <Command> (<Token>)' -ForEach @(
+        @{ Command = 'integration'; Token = '--max-retry'; Budget = 0 }
+        @{ Command = 'integration'; Token = '-MaxRetry'; Budget = 1 }
+        @{ Command = 'integration'; Token = '--max-retry'; Budget = 10 }
+        @{ Command = 'intn'; Token = '--max-retry'; Budget = 0 }
+        @{ Command = 'intn'; Token = '-MaxRetry'; Budget = 1 }
+        @{ Command = 'intn'; Token = '--max-retry'; Budget = 10 }
+    ) {
+        InModuleScope 'Avm.Authoring' -Parameters @{ Command = $Command; Flag = $Token; Budget = $Budget } {
+            param($Command, $Flag, $Budget)
             Mock Test-AvmDisableSentinel { $null }
             Mock Get-AvmModuleContextInternal { [pscustomobject]@{ Root = 'mock-root'; Ecosystem = 'terraform' } }
             Mock Invoke-AvmTerraformTestSuite {
                 [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; FilesProcessed = 1; Issues = @() }
             }
-            $null = avm test integration $Flag $Budget --no-init --allow-path-fallback --ecosystem terraform
+            $null = avm test $Command $Flag $Budget --no-init --allow-path-fallback --ecosystem terraform
             Should -Invoke Invoke-AvmTerraformTestSuite -Exactly 1 -ParameterFilter {
                 $Tier -eq 'integration' -and $MaxRetry -eq $Budget -and $NoInit -and $AllowPathFallback
             }
@@ -67,8 +89,12 @@ Describe 'Invoke-AvmTestIntegration' {
         { Invoke-AvmTestIntegration -MaxRetry $Budget } | Should -Throw
     }
 
-    It 'keeps the CLI failure terminating after retry exhaustion' {
-        InModuleScope 'Avm.Authoring' {
+    It 'keeps the CLI failure terminating after retry exhaustion via test <Command>' -ForEach @(
+        @{ Command = 'integration' }
+        @{ Command = 'intn' }
+    ) {
+        InModuleScope 'Avm.Authoring' -Parameters @{ Command = $Command } {
+            param($Command)
             Mock Test-AvmDisableSentinel { $null }
             Mock Get-AvmModuleContextInternal { [pscustomobject]@{ Root = 'mock-root'; Ecosystem = 'terraform' } }
             Mock Invoke-AvmTerraformTestSuite {
@@ -77,7 +103,7 @@ Describe 'Invoke-AvmTestIntegration' {
                     Issues = @([pscustomobject]@{ File = 'main.tf'; Line = 12; Column = 3; Severity = 'error'; Code = ''; Message = 'SkuNotAvailable' })
                 }
             }
-            { avm test integration --max-retry 2 } | Should -Throw -ExceptionType ([AvmCommandException]) -ExpectedMessage '*SkuNotAvailable*'
+            { avm test $Command --max-retry 2 } | Should -Throw -ExceptionType ([AvmCommandException]) -ExpectedMessage '*SkuNotAvailable*'
         }
     }
 
