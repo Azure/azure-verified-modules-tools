@@ -20,14 +20,39 @@ function Get-AvmVerbRegistry {
 
     [pscustomobject[]]@(
         [pscustomobject]@{
+            Path    = [string[]]@('pre-commit')
+            Cmdlet  = 'Invoke-AvmPreCommit'
+            Summary = 'Validate metadata, then run the fast pre-commit gauntlet (terraform: sync, check convention, transform, format, docs; bicep: format, lint, validate, transform, docs).'
+        }
+        [pscustomobject]@{
+            Path    = [string[]]@('pr-check')
+            Cmdlet  = 'Invoke-AvmPrCheck'
+            Summary = 'Run the full PR gauntlet (metadata, sync, format, transform, lint, check policy, check convention, test, docs).'
+        }
+        [pscustomobject]@{
+            Path    = [string[]]@('test', 'unit')
+            Cmdlet  = 'Invoke-AvmTestUnit'
+            Summary = 'Run Bicep Pester or Terraform unit tests (tests/unit).'
+        }
+        [pscustomobject]@{
+            Path    = [string[]]@('test', 'integration')
+            Cmdlet  = 'Invoke-AvmTestIntegration'
+            Summary = 'Run Bicep ARM validate/what-if or Terraform integration tests.'
+        }
+        [pscustomobject]@{
+            Path    = [string[]]@('test', 'e2e')
+            Cmdlet  = 'Invoke-AvmTestE2e'
+            Summary = 'Deploy isolated Bicep examples or run Terraform e2e tests.'
+        }
+        [pscustomobject]@{
+            Path    = [string[]]@('init')
+            Cmdlet  = 'Initialize-AvmModule'
+            Summary = 'Initialize a local Bicep module, or create and set up a Terraform module repository (resumable).'
+        }
+        [pscustomobject]@{
             Path    = [string[]]@('version')
             Cmdlet  = 'Get-AvmVersion'
             Summary = 'Print module, runtime and OS version info.'
-        }
-        [pscustomobject]@{
-            Path    = [string[]]@('update')
-            Cmdlet  = 'Update-AvmAuthoring'
-            Summary = 'Update Avm.Authoring to the latest PowerShell Gallery version.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('upgrade')
@@ -60,11 +85,6 @@ function Get-AvmVerbRegistry {
             Summary = 'Classify the current directory as a Bicep or Terraform module.'
         }
         [pscustomobject]@{
-            Path    = [string[]]@('init')
-            Cmdlet  = 'Initialize-AvmModule'
-            Summary = 'Initialize a local Bicep module, or create and set up a Terraform module repository (resumable).'
-        }
-        [pscustomobject]@{
             Path    = [string[]]@('metadata', 'validate')
             Cmdlet  = 'Test-AvmModuleMetadata'
             Summary = 'Validate root or child module metadata against the shared schema.'
@@ -93,21 +113,6 @@ function Get-AvmVerbRegistry {
             Path    = [string[]]@('test')
             Cmdlet  = 'Invoke-AvmTest'
             Summary = 'Build Bicep sources or validate Terraform examples and warn about module coverage.'
-        }
-        [pscustomobject]@{
-            Path    = [string[]]@('test', 'unit')
-            Cmdlet  = 'Invoke-AvmTestUnit'
-            Summary = 'Run Bicep Pester or Terraform unit tests (tests/unit).'
-        }
-        [pscustomobject]@{
-            Path    = [string[]]@('test', 'integration')
-            Cmdlet  = 'Invoke-AvmTestIntegration'
-            Summary = 'Run Bicep ARM validate/what-if or Terraform integration tests.'
-        }
-        [pscustomobject]@{
-            Path    = [string[]]@('test', 'e2e')
-            Cmdlet  = 'Invoke-AvmTestE2e'
-            Summary = 'Deploy isolated Bicep examples or run Terraform e2e tests.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('test', 'cleanup')
@@ -148,16 +153,6 @@ function Get-AvmVerbRegistry {
             Path    = [string[]]@('check', 'convention')
             Cmdlet  = 'Invoke-AvmCheckConvention'
             Summary = 'Run the built-in AVM convention rules against the current module.'
-        }
-        [pscustomobject]@{
-            Path    = [string[]]@('pre-commit')
-            Cmdlet  = 'Invoke-AvmPreCommit'
-            Summary = 'Validate metadata, then run the fast pre-commit gauntlet (terraform: sync, check convention, transform, format, docs; bicep: format, lint, validate, transform, docs).'
-        }
-        [pscustomobject]@{
-            Path    = [string[]]@('pr-check')
-            Cmdlet  = 'Invoke-AvmPrCheck'
-            Summary = 'Run the full PR gauntlet (metadata, sync, format, transform, lint, check policy, check convention, test, docs).'
         }
     )
 }

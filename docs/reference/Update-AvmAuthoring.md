@@ -13,12 +13,10 @@ running module is outdated, safely invokes Update-PSResource for the
 CurrentUser scope. This command bypasses stale-version enforcement so
 an outdated module can update itself.
 
-Routed by the dispatcher: 'avm upgrade' (with 'avm update' retained as
-a backwards-compatible alias).
+Routed by the dispatcher: 'avm upgrade'.
 
 ## CLI commands
 
-- `avm update`
 - `avm upgrade`
 
 ## Syntax

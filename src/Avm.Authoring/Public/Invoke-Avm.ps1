@@ -66,7 +66,7 @@ function Invoke-Avm {
             $PSDefaultParameterValues['*:Verbose'] = $true
         }
 
-        $isUpdateCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -cin @('update', 'upgrade')
+        $isUpgradeCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -ceq 'upgrade'
         $isVersionCommand = $rawArguments.Count -gt 0 -and [string]$rawArguments[0] -ceq 'version'
         $isE2eListCommand = $false
         if ($rawArguments.Count -ge 3) {
@@ -76,7 +76,7 @@ function Invoke-Avm {
                         Where-Object { [string]$_ -match '^--?list(?:=true)?$' }).Count -gt 0
             }
         }
-        if (-not $isUpdateCommand -and -not $isE2eListCommand) {
+        if (-not $isUpgradeCommand -and -not $isE2eListCommand) {
             Test-AvmModuleVersion `
                 -SkipModuleVersionCheck:$SkipModuleVersionCheck `
                 -RefreshLatestVersion `
@@ -113,6 +113,11 @@ function Invoke-Avm {
                 , $arg
             }
         )
+        if ($arguments.Count -ge 2 -and
+            [string]$arguments[0] -ceq 'test' -and
+            [string]$arguments[1] -ceq 'intn') {
+            $arguments[1] = 'integration'
+        }
         $registry = @(Get-AvmVerbRegistry)
 
         # F09: bare 'avm', 'avm --help', 'avm -h' and 'avm help' all print the same

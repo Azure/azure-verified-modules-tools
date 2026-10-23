@@ -44,4 +44,4 @@ This reference is generated from the comment-based help on the public PowerShell
 | [Select-AvmTestSubscription](Select-AvmTestSubscription.md) |  | Select a Bicep test subscription using the repository's exact reservation map. |
 | [Set-AvmBicepReleaseTags](Set-AvmBicepReleaseTags.md) |  | Create guarded Bicep module release tags from a checked-out target. |
 | [Test-AvmModuleMetadata](Test-AvmModuleMetadata.md) | `avm metadata validate` | Validate existing or supplied module metadata with packaged Pester tests. |
-| [Update-AvmAuthoring](Update-AvmAuthoring.md) | `avm update`<br>`avm upgrade` | Update Avm.Authoring to the latest PowerShell Gallery version. |
+| [Update-AvmAuthoring](Update-AvmAuthoring.md) | `avm upgrade` | Update Avm.Authoring to the latest PowerShell Gallery version. |

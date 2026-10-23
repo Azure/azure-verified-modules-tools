@@ -93,7 +93,7 @@ Describe 'Test-AvmModuleVersion' {
             $caught.LatestVersion | Should -Be ([version]'99.0.0')
             $caught.Message | Should -Match 'Installed version:'
             $caught.Message | Should -Match 'Latest version: 99\.0\.0'
-            $caught.Message | Should -Match 'Update-PSResource -Name Avm\.Authoring -Scope CurrentUser'
+            $caught.Message | Should -Match 'avm upgrade'
             $caught.Message | Should -Match 'Import-Module Avm\.Authoring -Force'
         }
     }
