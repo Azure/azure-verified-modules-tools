@@ -95,6 +95,20 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $tagging.run | Should -Match 'PendingRelease'
     }
 
+    It 'forwards least-privilege permissions through the package runtime deployment call' {
+        $prCheck = $script:entrypoints | Where-Object name -EQ 'Reusable: Bicep PR check'
+        $prCheck.jobs.check.permissions.contents | Should -BeExactly 'read'
+        $prCheck.jobs.check.permissions.'id-token' | Should -BeExactly 'write'
+
+        $runtime = $script:workflows['bicep-module-runtime']
+        $runtime.permissions.Count | Should -Be 0
+        $deployment = $runtime.jobs.deploy
+        $deployment.uses | Should -BeExactly './.github/workflows/bicep-module-runtime-deployment.yml'
+        @($deployment.permissions.Keys | Sort-Object) | Should -Be @('contents', 'id-token')
+        $deployment.permissions.contents | Should -BeExactly 'read'
+        $deployment.permissions.'id-token' | Should -BeExactly 'write'
+    }
+
     It 'keeps nested reusable calls relative and forwards the immutable tools contract' {
         foreach ($name in @('bicep-module', 'bicep-module-preview', 'bicep-module-publish')) {
             $job = $script:workflows[$name].jobs.job_module_deploy_validation
