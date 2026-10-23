@@ -31,6 +31,10 @@ function Invoke-AvmProcess {
         are inherited; entries in this hashtable take precedence. A $null
         value removes the variable for the child.
 
+    .PARAMETER StandardInputPath
+        Optional UTF-8 text file to copy to the child process's standard
+        input. The path is not passed to the child as an argument.
+
     .PARAMETER TimeoutSec
         Maximum runtime in seconds. 0 (default) means no timeout.
 
@@ -88,6 +92,7 @@ function Invoke-AvmProcess {
         [string[]] $ArgumentList = @(),
         [string] $WorkingDirectory,
         [hashtable] $EnvVars,
+        [string] $StandardInputPath,
         [int] $TimeoutSec = 0,
         [switch] $IgnoreExitCode,
         [switch] $StreamOutput,
@@ -103,6 +108,10 @@ function Invoke-AvmProcess {
 
     if (-not $WorkingDirectory) {
         $WorkingDirectory = (Get-Location).ProviderPath
+    }
+    if ($PSBoundParameters.ContainsKey('StandardInputPath') -and
+        -not (Test-Path -LiteralPath $StandardInputPath -PathType Leaf)) {
+        throw [System.IO.FileNotFoundException]::new("Standard input file '$StandardInputPath' does not exist.", $StandardInputPath)
     }
 
     $displayLabel = if (-not [string]::IsNullOrWhiteSpace($Label)) {
@@ -150,7 +159,7 @@ function Invoke-AvmProcess {
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
-    $psi.RedirectStandardInput = $false
+    $psi.RedirectStandardInput = $PSBoundParameters.ContainsKey('StandardInputPath')
     $psi.CreateNoWindow = $true
     $psi.WorkingDirectory = $WorkingDirectory
 
@@ -201,6 +210,11 @@ function Invoke-AvmProcess {
         try {
             $null = $process.Start()
             $started = $true
+            if ($PSBoundParameters.ContainsKey('StandardInputPath')) {
+                $standardInputContent = [System.IO.File]::ReadAllText($StandardInputPath, [System.Text.UTF8Encoding]::new($false))
+                $process.StandardInput.Write($standardInputContent)
+                $process.StandardInput.Close()
+            }
         }
         catch [System.ComponentModel.Win32Exception] {
             throw [AvmProcessException]::new(

@@ -364,8 +364,8 @@ Describe 'Repository sync unified driver' -Tag Component {
     It 'rejects unverified candidate outputs before authoring: <Case>' -ForEach @(
         @{ Case = 'missing identity'; Mutate = { param($o) $o.Remove('test_identity') }; Message = '*complete dedicated*' }
         @{ Case = 'missing settings'; Mutate = { param($o) $o.Remove('test_settings') }; Message = '*complete dedicated*' }
-        @{ Case = 'wrong repository'; Mutate = { param($o) $o.test_identity.value.repository_id = '9876' }; Message = '*expected tenant and repository*' }
-        @{ Case = 'controller identity'; Mutate = { param($o) $o.test_identity.value.client_id = '10000000-0000-4000-8000-000000000002' }; Message = '*dedicated test identity*' }
+        @{ Case = 'wrong repository'; Mutate = { param($o) $o.test_identity.value.repository_id = '9876' }; Message = '*expected test identity*' }
+        @{ Case = 'controller identity'; Mutate = { param($o) $o.test_identity.value.client_id = '10000000-0000-4000-8000-000000000002' }; Message = '*expected test identity*' }
         @{ Case = 'different exported client'; Mutate = { param($o) $o.test_settings.value.client_id = '10000000-0000-4000-8000-000000000099' }; Message = '*do not match*' }
         @{ Case = 'different subscriptions'; Mutate = { param($o) $o.test_settings.value.test_subscription_ids[0].id = '10000000-0000-4000-8000-000000000003' }; Message = '*do not match*' }
     ) {

@@ -23,6 +23,7 @@ module "bami" {
   repository_sync_repository_id = var.repository_sync_repository_id
   is_protected_repo             = var.is_protected_repo
   entra_group_names             = var.entra_group_names
+  existing_identity             = var.existing_identity
   expected_identity_context = {
     tenant_id            = var.bami_test_settings.tenant_id
     subscription_id      = var.bami_test_settings.admin_subscription_id
@@ -56,6 +57,8 @@ module "github" {
   copilot_agent_firewall_allow_list                          = var.github_copilot_agent_firewall_allow_list
   copilot_agent_firewall_allow_list_variable_name            = var.github_copilot_agent_firewall_allow_list_variable_name
   topics                                                     = var.topics
+  subscription_vending_management_group_id                   = var.subscription_vending_management_group_id
+  subscription_vending_billing_scope                         = var.subscription_vending_billing_scope
 }
 
 import {

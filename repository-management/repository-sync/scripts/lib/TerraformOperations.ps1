@@ -279,6 +279,7 @@ function Invoke-TerraformPlanAndApply {
         [AllowNull()] [object] $repository,
         [string] $repositorySyncRepositoryId,
         [string[]] $entraGroupNames = @(),
+        [AllowNull()] [System.Collections.IDictionary] $existingIdentity,
         [string] $jobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main'
     )
 
@@ -306,6 +307,7 @@ function Invoke-TerraformPlanAndApply {
         -Arguments @('show', '-json', $planPath) -Json
     Assert-AvmRepositorySyncPlan -Plan $plan -Settings $bamiSettings -Repository $repository `
         -RepositorySyncRepositoryId $repositorySyncRepositoryId -EntraGroupNames $entraGroupNames `
+        -ExistingIdentity $existingIdentity `
         -JobWorkflowRef $jobWorkflowRef -ResourceTypesThatCannotBeDestroyed $resourceTypesThatCannotBeDestroyed
     if (-not $planOnly -and $PSCmdlet.ShouldProcess($orgAndRepoName, 'Apply the verified saved repository plan')) {
         Invoke-RepositorySyncTerraform -Root $terraformModulePath -Environment $environment -LockRecovery $lockRecovery -Arguments @(

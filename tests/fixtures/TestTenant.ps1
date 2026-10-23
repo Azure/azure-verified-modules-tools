@@ -128,7 +128,7 @@ AND
     if (-not $KnownClient) { $identity.Remove('client_id') }
     $resources = @(
         @{
-            address = 'module.azure.azapi_resource.identity'
+            address = 'module.azure.azapi_resource.identity[0]'
             mode = 'managed'
             type = 'azapi_resource'
             values = @{
@@ -210,7 +210,7 @@ AND
             })
             $unknown = if ($KnownClient) { @{} } elseif ($_.type -ceq 'azuread_group_member') {
                 @{ member_object_id = $true }
-            } elseif ($_.address -ceq 'module.azure.azapi_resource.identity') {
+            } elseif ($_.address -ceq 'module.azure.azapi_resource.identity[0]') {
                 @{ id = $true; output = $true }
             } else {
                 @{ parent_id = $true }
@@ -359,6 +359,9 @@ function New-AvmTestRetiredIdentityChanges {
     $plan = ($plan | ConvertTo-Json -Depth 100).Replace('10000000-', '20000000-').Replace('rg-bami-test', 'rg-retired-test') |
         ConvertFrom-Json -AsHashtable -Depth 100
     foreach ($change in $plan.resource_changes) {
+        if ($change.address -ceq 'module.azure[0].azapi_resource.identity[0]') {
+            $change.address = 'module.azure[0].azapi_resource.identity'
+        }
         $change.change.actions = @('forget')
         $change.change.after = $null
         $change.change.after_unknown = @{}

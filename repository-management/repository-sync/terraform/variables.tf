@@ -76,6 +76,50 @@ variable "entra_group_names" {
   default     = []
 }
 
+variable "existing_identity" {
+  type = object({
+    name                = string
+    resource_id         = string
+    client_id           = string
+    principal_id        = string
+    federation_name_key = string
+    manage_entra_groups = bool
+  })
+  description = "Optional bootstrap-owned test identity. Its resource, client, and principal evidence is supplied by BAMI rather than created by repository sync."
+  default     = null
+  nullable    = true
+}
+
+variable "subscription_vending_management_group_id" {
+  type        = string
+  description = "Optional subscription-vending management group injected only into the selected repository."
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = var.subscription_vending_management_group_id == null ? true : (
+      can(regex("^[a-zA-Z0-9_().-]{1,90}$", var.subscription_vending_management_group_id)) &&
+      !endswith(var.subscription_vending_management_group_id, ".") &&
+      var.subscription_vending_management_group_id != var.bami_test_settings.management_group_id
+    )
+    error_message = "The subscription-vending management group must be a distinct valid management-group name."
+  }
+}
+
+variable "subscription_vending_billing_scope" {
+  type        = string
+  description = "Optional invoice-section billing scope injected only into the selected subscription-vending repository."
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = var.subscription_vending_billing_scope == null ? true : can(
+      regex("^/providers/Microsoft\\.Billing/billingAccounts/[A-Za-z0-9:_-]+/billingProfiles/[A-Za-z0-9_-]+/invoiceSections/[A-Za-z0-9_-]+$", var.subscription_vending_billing_scope)
+    )
+    error_message = "The subscription-vending billing scope must be an invoice-section resource ID."
+  }
+}
+
 variable "github_repository_owner" {
   type        = string
   description = "Owner of the GitHub repositories."

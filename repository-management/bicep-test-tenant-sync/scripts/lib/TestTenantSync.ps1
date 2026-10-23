@@ -152,6 +152,7 @@ function Invoke-AvmBicepTestTenantSync {
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Values,
         [System.Collections.IDictionary] $ModuleClientIds,
         [System.Collections.IDictionary] $IdentityMigration,
+        [System.Collections.IDictionary] $BillingScopes,
         [Parameter(ParameterSetName = 'Plan')] [switch] $PlanOnly = $true,
         [Parameter(Mandatory, ParameterSetName = 'Apply')] [switch] $Apply
     )
@@ -180,6 +181,10 @@ function Invoke-AvmBicepTestTenantSync {
             throw [System.ArgumentException]::new('Identity rename evidence requires its complete proposed module client-ID mapping.')
         }
         $null = ConvertFrom-AvmBicepIdentityMigration -Migration $IdentityMigration -ClientIds $ModuleClientIds -Settings $bundle
+    }
+    $billingScopeSecret = $null
+    if ($PSBoundParameters.ContainsKey('BillingScopes')) {
+        $billingScopeSecret = ConvertTo-AvmBicepModuleBillingScopeJson -BillingScopes $BillingScopes
     }
     $snapshot = Get-AvmBicepTestTenantSnapshot
     $retargetedNames = @(
@@ -216,15 +221,21 @@ function Invoke-AvmBicepTestTenantSync {
         }
     )
     $publishing = $PSCmdlet.ParameterSetName -ceq 'Apply' -and $Apply.IsPresent
+    $secretAction = if ($null -ne $billingScopeSecret) { 'Set' } else { 'None' }
     $result = [ordered]@{
         Target = 'Azure/bicep-registry-modules'
         Status = if ($changes.Count -eq 0) { 'NoChange' } else { 'Planned' }
         PlanOnly = -not $publishing
-        HasChanges = $changes.Count -gt 0
+        HasChanges = $changes.Count -gt 0 -or $secretAction -cne 'None'
         ChangedNames = $changes
+        BillingScopeSecretAction = $secretAction
+    }
+    if ($secretAction -cne 'None' -and $result.Status -ceq 'NoChange') {
+        $result.Status = 'Planned'
     }
     if (-not $publishing) { return [pscustomobject]$result }
-    if ($changes.Count -gt 0 -and -not $PSCmdlet.ShouldProcess($result.Target, 'Publish nonsecret Bicep variables with guarded subscription tags and verified module naming transitions')) {
+    if (($changes.Count -gt 0 -or $secretAction -cne 'None') -and
+        -not $PSCmdlet.ShouldProcess($result.Target, 'Publish nonsecret Bicep variables and the guarded billing-scope environment secret')) {
         $result.Status = 'Preview'
         $result.PlanOnly = $true
         return [pscustomobject]$result
@@ -242,6 +253,9 @@ function Invoke-AvmBicepTestTenantSync {
                 throw [System.InvalidOperationException]::new("Complete execution-value readback does not match $name.")
             }
         }
+        if ($secretAction -ceq 'Set') {
+            Set-AvmBicepRegistryBillingScopeSecret -Value $billingScopeSecret -Confirm:$false
+        }
         $final = Get-AvmBicepTestTenantSnapshot
         Assert-AvmBicepTestTenantSnapshot -Expected $snapshot -Actual $final -Stage 'final publication readback'
     }
@@ -251,7 +265,7 @@ function Invoke-AvmBicepTestTenantSync {
             $_.Exception
         )
     }
-    if ($changes.Count -gt 0) {
+    if ($changes.Count -gt 0 -or $secretAction -cne 'None') {
         $result.Status = 'Published'
     }
     return [pscustomobject]$result

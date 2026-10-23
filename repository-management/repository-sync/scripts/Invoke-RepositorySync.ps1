@@ -97,6 +97,7 @@ $testTenant = if ($repositoryCreationModeEnabled) {
 else {
     Resolve-RepositoryTestTenantSettings -TestTenant $selectedTestTenant -BamiValues $bamiSettings
 }
+$existingIdentity = Resolve-AvmSubscriptionVendingIdentity -ExistingIdentity $settings.ExistingIdentity -Values $bamiSettings
 $repoSplit = $repoUrl.Split("/")
 $orgName = $repoSplit[3]
 $repoName = $repoSplit[4]
@@ -152,6 +153,18 @@ if ($null -ne $testTenant.Settings) {
     $terraformVariables["bami_test_settings"] = ConvertTo-AvmRepositoryTerraformSettings -Settings $testTenant.Settings
     $terraformVariables["entra_group_names"] = @($settings.EntraGroups)
 }
+if ($null -ne $existingIdentity) {
+    $terraformVariables["existing_identity"] = @{
+        name = $existingIdentity['name']
+        resource_id = $existingIdentity['resource_id']
+        client_id = $existingIdentity['client_id']
+        principal_id = $existingIdentity['principal_id']
+        federation_name_key = 'terraform-sub-vending'
+        manage_entra_groups = $existingIdentity['manage_entra_groups']
+    }
+    $terraformVariables["subscription_vending_management_group_id"] = $existingIdentity['management_group_id']
+    $terraformVariables["subscription_vending_billing_scope"] = $existingIdentity['billing_scope']
+}
 if ($null -ne $repositorySyncContext) {
     $terraformVariables["repository_sync_repository_id"] = $repositorySyncContext.RepositoryId
 }
@@ -188,6 +201,7 @@ $issueLog = @(Invoke-RepositorySyncLogGroup -Name 'Terraform repository configur
         environment = $environment
         bamiSettings = $testTenant.Settings
         entraGroupNames = @($settings.EntraGroups)
+        existingIdentity = $existingIdentity
         issueLog = $issues
     }
     if ($null -ne $repositorySyncContext) {
@@ -241,7 +255,7 @@ if (-not $repositoryCreationModeEnabled -and $candidateOutputDirectory) {
         throw [System.InvalidOperationException]::new('Candidate preparation requires complete dedicated test identity and settings outputs.')
     }
     $verifiedSettings = ConvertTo-AvmBamiConsumerSettings -Identity $outputs['test_identity']['value'] `
-        -Settings $testTenant.Settings -Repository $repositorySyncContext.Repository
+        -Settings $testTenant.Settings -Repository $repositorySyncContext.Repository -ExistingIdentity $existingIdentity
     $expected = ConvertTo-RepositorySyncTestSettings -Settings $verifiedSettings | ConvertTo-Json -Depth 6 -Compress
     $actual = ConvertTo-RepositorySyncTestSettings -Settings $outputs['test_settings']['value'] | ConvertTo-Json -Depth 6 -Compress
     if ($actual -cne $expected) {

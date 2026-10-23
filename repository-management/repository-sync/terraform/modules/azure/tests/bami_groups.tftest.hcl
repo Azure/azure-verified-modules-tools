@@ -25,6 +25,7 @@ override_data {
     display_name     = "repository-readers"
     security_enabled = true
     types            = []
+    members          = ["10000000-0000-4000-8000-000000000007"]
   }
 }
 
@@ -35,6 +36,32 @@ override_data {
     display_name     = "repository-owners"
     security_enabled = true
     types            = []
+    members          = ["10000000-0000-4000-8000-000000000007"]
+  }
+}
+
+override_data {
+  target = data.azuread_group.test_permissions["avm-test-management-group-iam-admins"]
+  values = {
+    object_id        = "10000000-0000-4000-8000-000000000010"
+    display_name     = "avm-test-management-group-iam-admins"
+    security_enabled = true
+    types            = []
+    members          = ["10000000-0000-4000-8000-000000000007"]
+  }
+}
+
+override_data {
+  target = data.azapi_resource.existing_identity[0]
+  values = {
+    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-avm-managed-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-subscription-vending"
+    output = {
+      properties = {
+        principalId = "10000000-0000-4000-8000-000000000007"
+        clientId    = "10000000-0000-4000-8000-000000000006"
+        tenantId    = "10000000-0000-4000-8000-000000000001"
+      }
+    }
   }
 }
 
@@ -49,7 +76,7 @@ override_data {
 }
 
 override_resource {
-  target          = azapi_resource.identity
+  target          = azapi_resource.identity[0]
   override_during = plan
   values = {
     id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-terraform-azurerm-avm-ptn-example-repo"
@@ -96,7 +123,7 @@ run "configured_names_create_only_individual_group_edges" {
       toset(keys(azuread_group_member.test_permissions)) == var.entra_group_names &&
       alltrue([for name, membership in azuread_group_member.test_permissions :
         membership.group_object_id == data.azuread_group.test_permissions[name].object_id &&
-        membership.member_object_id == azapi_resource.identity.output.properties.principalId
+        membership.member_object_id == azapi_resource.identity[0].output.properties.principalId
       ])
     )
     error_message = "Configured names must create only this repository's resolved membership edges, never a direct BAMI Owner assignment."
@@ -111,6 +138,36 @@ run "configured_names_create_only_individual_group_edges" {
     )
     error_message = "Observed evidence must contain only provider identifiers and allow-listed group metadata."
   }
+}
+
+run "external_identity_requires_existing_iam_admin_membership" {
+  command = plan
+
+  variables {
+    github_repository_name = "terraform-azurerm-avm-ptn-alz-sub-vending"
+    entra_group_names      = ["repository-readers", "repository-owners", "avm-test-management-group-iam-admins"]
+    existing_identity = {
+      name                = "id-avm-subscription-vending"
+      resource_id         = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-avm-managed-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-subscription-vending"
+      client_id           = "10000000-0000-4000-8000-000000000006"
+      principal_id        = "10000000-0000-4000-8000-000000000007"
+      federation_name_key = "terraform-sub-vending"
+      manage_entra_groups = false
+    }
+  }
+
+  override_data {
+    target = data.azuread_group.test_permissions["avm-test-management-group-iam-admins"]
+    values = {
+      object_id        = "10000000-0000-4000-8000-000000000010"
+      display_name     = "avm-test-management-group-iam-admins"
+      security_enabled = true
+      types            = []
+      members          = []
+    }
+  }
+
+  expect_failures = [data.azuread_group.test_permissions["avm-test-management-group-iam-admins"]]
 }
 
 run "registry_environment_federation_rejects_terraform_repositories" {
@@ -216,7 +273,7 @@ run "controller_cannot_receive_repository_group_edges" {
   command = plan
 
   override_resource {
-    target          = azapi_resource.identity
+    target          = azapi_resource.identity[0]
     override_during = plan
     values = {
       id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-terraform-azurerm-avm-ptn-example-repo"
@@ -241,7 +298,7 @@ run "shared_bicep_client_is_rejected_even_without_group_edges" {
   }
 
   override_resource {
-    target          = azapi_resource.identity
+    target          = azapi_resource.identity[0]
     override_during = plan
     values = {
       id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-terraform-azurerm-avm-ptn-example-repo"
@@ -269,7 +326,7 @@ run "seed_legacy_terraform_identity" {
   }
 
   override_resource {
-    target          = azapi_resource.identity
+    target          = azapi_resource.identity[0]
     override_during = plan
     values = {
       id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent"
@@ -318,7 +375,7 @@ run "rename_legacy_terraform_identity" {
   }
 
   override_resource {
-    target          = azapi_resource.identity
+    target          = azapi_resource.identity[0]
     override_during = plan
     values = {
       id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent"
@@ -335,7 +392,7 @@ run "rename_legacy_terraform_identity" {
   # Mock providers do not execute AzAPI's replacement planning.
   plan_options {
     replace = [
-      azapi_resource.identity,
+      azapi_resource.identity[0],
       azapi_resource.identity_federated_credentials["pr-check"],
       azapi_resource.identity_federated_credentials["integration-test"],
       azapi_resource.identity_federated_credentials["examples-test"],
@@ -347,7 +404,7 @@ run "rename_legacy_terraform_identity" {
 
   assert {
     condition = (
-      azapi_resource.identity.name == "id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent" &&
+      azapi_resource.identity[0].name == "id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent" &&
       output.client_id == "10000000-0000-4000-8000-000000000006" &&
       alltrue([for edge in azuread_group_member.test_permissions :
         edge.member_object_id == "10000000-0000-4000-8000-000000000007"
@@ -366,7 +423,7 @@ run "recreate_windows_identity_after_its_legacy_resources_were_deleted" {
   }
 
   override_resource {
-    target          = azapi_resource.identity
+    target          = azapi_resource.identity[0]
     override_during = plan
     values = {
       id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent"
@@ -382,10 +439,10 @@ run "recreate_windows_identity_after_its_legacy_resources_were_deleted" {
 
   assert {
     condition = (
-      azapi_resource.identity.name == "id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent" &&
+      azapi_resource.identity[0].name == "id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent" &&
       alltrue([for environment, credential in azapi_resource.identity_federated_credentials :
         credential.name == "id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent-${environment}" &&
-        credential.parent_id == azapi_resource.identity.id
+        credential.parent_id == azapi_resource.identity[0].id
       ])
     )
     error_message = "A fresh plan after legacy deletion must recreate only the corrected identity and its bound credentials."
@@ -406,7 +463,7 @@ run "seed_legacy_bicep_identity" {
   }
 
   override_resource {
-    target          = azapi_resource.identity
+    target          = azapi_resource.identity[0]
     override_during = plan
     values = {
       id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-bicep-avm-res-fabric-capacity-32f81a9a"
@@ -449,7 +506,7 @@ run "rename_legacy_bicep_identity" {
 
   plan_options {
     replace = [
-      azapi_resource.identity,
+      azapi_resource.identity[0],
       azapi_resource.identity_federated_credentials["avm-validation"],
       azapi_resource.validation_federated_credential,
       azuread_group_member.test_permissions["repository-readers"],
@@ -458,7 +515,7 @@ run "rename_legacy_bicep_identity" {
   }
 
   override_resource {
-    target          = azapi_resource.identity
+    target          = azapi_resource.identity[0]
     override_during = plan
     values = {
       id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-fabric-capacity"
@@ -474,7 +531,7 @@ run "rename_legacy_bicep_identity" {
 
   assert {
     condition = (
-      azapi_resource.identity.name == "id-test-bicep-avm-res-fabric-capacity" &&
+      azapi_resource.identity[0].name == "id-test-bicep-avm-res-fabric-capacity" &&
       output.client_id == "10000000-0000-4000-8000-000000000006" &&
       azapi_resource.identity_federated_credentials["avm-validation"].name ==
       "id-test-bicep-avm-res-fabric-capacity-module-avm-validation" &&

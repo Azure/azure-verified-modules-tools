@@ -45,6 +45,7 @@ override_data {
     display_name     = "avm-test-entra-readers"
     security_enabled = true
     types            = []
+    members          = ["10000000-0000-4000-8000-000000000007"]
   }
 }
 
@@ -55,6 +56,29 @@ override_data {
     display_name     = "avm-test-management-group-owners"
     security_enabled = true
     types            = []
+    members          = ["10000000-0000-4000-8000-000000000007"]
+  }
+}
+
+override_data {
+  target = module.bami[0].data.azuread_group.test_permissions["avm-test-management-group-iam-admins"]
+  values = {
+    object_id        = "10000000-0000-4000-8000-000000000010"
+    display_name     = "avm-test-management-group-iam-admins"
+    security_enabled = true
+    types            = []
+    members          = ["10000000-0000-4000-8000-000000000007"]
+  }
+}
+
+override_data {
+  target = module.bami[0].data.azuread_group.test_permissions["avm-test-subscription-vending-owners"]
+  values = {
+    object_id        = "10000000-0000-4000-8000-000000000012"
+    display_name     = "avm-test-subscription-vending-owners"
+    security_enabled = true
+    types            = []
+    members          = ["10000000-0000-4000-8000-000000000007"]
   }
 }
 
@@ -206,6 +230,63 @@ run "unified_plan_binds_the_expected_tenant" {
     )
     error_message = "One root must bind GitHub federation and consumer settings to its own repository identity."
   }
+}
+
+run "subscription_vending_reuses_bootstrap_identity_and_publishes_billing_scope" {
+  command = plan
+
+  variables {
+    entra_group_names                        = ["avm-test-entra-readers", "avm-test-management-group-owners", "avm-test-subscription-vending-owners", "avm-test-management-group-iam-admins"]
+    github_repository_name                   = "terraform-azurerm-avm-ptn-alz-sub-vending"
+    module_id                                = "avm-ptn-alz-sub-vending"
+    subscription_vending_management_group_id = "avm-subscription-vending"
+    subscription_vending_billing_scope       = "/providers/Microsoft.Billing/billingAccounts/account:segment/billingProfiles/profile/invoiceSections/section"
+    existing_identity = {
+      name                = "id-avm-subscription-vending"
+      resource_id         = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-avm-managed-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-subscription-vending"
+      client_id           = "10000000-0000-4000-8000-000000000006"
+      principal_id        = "10000000-0000-4000-8000-000000000007"
+      federation_name_key = "terraform-sub-vending"
+      manage_entra_groups = false
+    }
+  }
+
+  override_data {
+    target = module.bami[0].data.azapi_resource.existing_identity[0]
+    values = {
+      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-avm-managed-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-subscription-vending"
+      output = {
+        properties = {
+          principalId = "10000000-0000-4000-8000-000000000007"
+          clientId    = "10000000-0000-4000-8000-000000000006"
+          tenantId    = "10000000-0000-4000-8000-000000000001"
+        }
+      }
+    }
+  }
+
+  assert {
+    condition = (
+      output.test_identity.identity_resource_id == var.existing_identity.resource_id &&
+      output.test_identity.client_id == var.existing_identity.client_id &&
+      output.test_group_contract.expected_identity.externally_managed &&
+      !output.test_group_contract.expected_identity.manages_entra_groups &&
+      module.github.subscription_vending_contract.billing_scope_secret_name == "TF_VAR_subscription_billing_scope" &&
+      module.github.subscription_vending_contract.management_group_secret_name == "TF_VAR_subscription_management_group_id" &&
+      module.github.subscription_vending_contract.management_group_variable_name == "TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID"
+    )
+    error_message = "Subscription vending must reuse the bootstrap identity, leave group edges to Bicep, and publish only its billing scope and management group."
+  }
+}
+
+run "subscription_vending_rejects_non_invoice_billing_scope" {
+  command = plan
+
+  variables {
+    subscription_vending_billing_scope = "/providers/Microsoft.Billing/billingAccounts/account"
+  }
+
+  expect_failures = [var.subscription_vending_billing_scope]
 }
 
 run "controller_and_shared_bicep_must_differ" {

@@ -19,7 +19,7 @@ override_data {
 }
 
 override_resource {
-  target          = azapi_resource.identity
+  target          = azapi_resource.identity[0]
   override_during = plan
   values = {
     id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-terraform-azurerm-avm-ptn-example-repo"
@@ -63,8 +63,8 @@ run "execution_federation_preserves_existing_environment_trust" {
         azapi_resource.identity_federated_credentials[environment].body.properties.issuer == "https://token.actions.githubusercontent.com" &&
         tolist(azapi_resource.identity_federated_credentials[environment].body.properties.audiences) == tolist(["api://AzureADTokenExchange"]) &&
         azapi_resource.identity_federated_credentials[environment].name == "${local.owner_repo_name}-${environment}" &&
-        azapi_resource.identity_federated_credentials[environment].parent_id == azapi_resource.identity.id &&
-        toset(azapi_resource.identity_federated_credentials[environment].locks) == toset([azapi_resource.identity.id])
+        azapi_resource.identity_federated_credentials[environment].parent_id == azapi_resource.identity[0].id &&
+        toset(azapi_resource.identity_federated_credentials[environment].locks) == toset([azapi_resource.identity[0].id])
       ])
     )
     error_message = "The new execution credential and all three existing credentials must bind only the same repository, reusable workflow, audience, issuer and dedicated identity."
@@ -90,9 +90,9 @@ run "validation_trust_stays_on_the_same_test_identity" {
   assert {
     condition = (
       azapi_resource.validation_federated_credential.name == "${local.owner_repo_name}-avm-validation" &&
-      azapi_resource.validation_federated_credential.parent_id == azapi_resource.identity.id &&
+      azapi_resource.validation_federated_credential.parent_id == azapi_resource.identity[0].id &&
       length(azapi_resource.validation_federated_credential.locks) == 1 &&
-      azapi_resource.validation_federated_credential.locks[0] == azapi_resource.identity.id
+      azapi_resource.validation_federated_credential.locks[0] == azapi_resource.identity[0].id
     )
     error_message = "Validation federation must remain on the existing module test identity."
   }
@@ -151,7 +151,7 @@ run "identity_names_preserve_the_stem_except_the_reserved_windows_substring" {
 
   assert {
     condition = (
-      azapi_resource.identity.name == "id-test-terraform-azapi-avm-res-compute-w5s-terraform" &&
+      azapi_resource.identity[0].name == "id-test-terraform-azapi-avm-res-compute-w5s-terraform" &&
       alltrue([for environment, credential in azapi_resource.identity_federated_credentials :
         credential.name == "id-test-terraform-azapi-avm-res-compute-w5s-terraform-${environment}"
       ]) &&
@@ -170,7 +170,7 @@ run "explicit_bicep_identity_names_do_not_use_the_terraform_substitution" {
   }
 
   assert {
-    condition     = azapi_resource.identity.name == "id-test-bicep-avm-res-compute-windows-agent"
+    condition     = azapi_resource.identity[0].name == "id-test-bicep-avm-res-compute-windows-agent"
     error_message = "Explicit Bicep identity names must not change."
   }
 }
@@ -183,7 +183,7 @@ run "azure_provider_remains_part_of_the_readable_identity" {
   }
 
   assert {
-    condition     = azapi_resource.identity.name == "id-test-terraform-azure-avm-ptn-example-repo"
+    condition     = azapi_resource.identity[0].name == "id-test-terraform-azure-avm-ptn-example-repo"
     error_message = "The azure provider component must not be confused with the omitted GitHub owner."
   }
 }
@@ -198,7 +198,7 @@ run "full_identity_and_credential_names_accept_their_exact_bounds" {
 
   assert {
     condition = (
-      length(azapi_resource.identity.name) == 90 &&
+      length(azapi_resource.identity[0].name) == 90 &&
       alltrue([for credential in azapi_resource.identity_federated_credentials : length(credential.name) == 120])
     )
     error_message = "Complete identity and federation names must retain every character at their respective bounds."
@@ -223,7 +223,7 @@ run "reserved_word_normalization_precedes_the_identity_length_check" {
   }
 
   assert {
-    condition     = azapi_resource.identity.name == "id-test-terraform-azurerm-avm-res-w5s${join("", [for index in range(53) : "a"])}"
+    condition     = azapi_resource.identity[0].name == "id-test-terraform-azurerm-avm-res-w5s${join("", [for index in range(53) : "a"])}"
     error_message = "The normalized 90-character name must be accepted without truncating any other characters."
   }
 }

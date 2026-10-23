@@ -40,6 +40,49 @@ Describe 'Bicep module identity configuration' {
         $selected[$paths[3]] | Should -Not -Contain 'avm-test-subscription-persistent-readers'
     }
 
+    It 'selects the bootstrap subscription-vending identity only for its exact root' {
+        $identities = Resolve-AvmBicepModuleExistingIdentities -ModulePaths @(
+            'avm/ptn/lz/sub-vending', 'avm/res/storage/storage-account'
+        ) -Configuration $script:configuration
+        @($identities.Keys) | Should -Be @('avm/ptn/lz/sub-vending')
+        $identities['avm/ptn/lz/sub-vending'].name | Should -BeExactly 'id-avm-subscription-vending'
+        $identities['avm/ptn/lz/sub-vending'].resourceGroupName | Should -BeExactly 'rg-avm-managed-identities'
+        $identities['avm/ptn/lz/sub-vending'].manageEntraGroups | Should -BeTrue
+    }
+
+    It 'binds the billing scope only to the configured vending root with complete bootstrap evidence' {
+        $settings = New-AvmTestBamiSettings
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID =
+            '/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-avm-managed-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-subscription-vending'
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID = '10000000-0000-4000-8000-000000000006'
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID = '10000000-0000-4000-8000-000000000007'
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID = 'avm-subscription-vending'
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE =
+            '/providers/Microsoft.Billing/billingAccounts/account:segment/billingProfiles/profile/invoiceSections/section'
+
+        $scopes = Resolve-AvmBicepSubscriptionVendingBillingScopes -Configuration $script:configuration -Values $settings
+        $scopes.Keys | Should -Be @('avm/ptn/lz/sub-vending')
+        $scopes['avm/ptn/lz/sub-vending'] | Should -BeExactly $settings.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE
+        ConvertTo-AvmBicepModuleBillingScopeJson -BillingScopes $scopes |
+            Should -BeExactly ('{"avm/ptn/lz/sub-vending":"' + $settings.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE + '"}')
+
+        $settings.Remove('TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE')
+        { Resolve-AvmBicepSubscriptionVendingBillingScopes -Configuration $script:configuration -Values $settings } |
+            Should -Throw '*invoice-section*'
+    }
+
+    It 'publishes an empty billing scope map only when the vending selector is absent' {
+        $configuration = ConvertFrom-AvmTestTenantJson -Json (
+            Get-Content -LiteralPath (Join-Path $script:root 'repository-management' 'bicep-config' 'config.json') -Raw
+        )
+        $configuration['moduleGroups'] = @($configuration['moduleGroups'] | Where-Object { $_['name'] -cne 'subscription-vending-identity' })
+        $scopes = Resolve-AvmBicepSubscriptionVendingBillingScopes -Configuration $configuration -Values (New-AvmTestBamiSettings)
+        $scopes.Count | Should -Be 0
+        ConvertTo-AvmBicepModuleBillingScopeJson -BillingScopes $scopes | Should -BeExactly '{}'
+        { ConvertTo-AvmBicepModuleBillingScopeJson -BillingScopes @{ 'avm/res/storage/storage-account' = 'scope' } } |
+            Should -Throw '*canonical subscription-vending root*'
+    }
+
     It 'accumulates ordered names without replacing defaults and validates unmatched declarations' {
         $path = 'avm/res/fabric/capacity'
         $config = @{ moduleGroups = @(

@@ -317,6 +317,7 @@ function Invoke-RepositorySyncProcess {
         [string] $WorkingDirectory,
         [hashtable] $EnvVars = @{},
         [ValidateRange(1, 3600)] [int] $TimeoutSec = 300,
+        [string] $StandardInputPath,
         [scriptblock] $OnOutputLine
     )
 
@@ -331,8 +332,11 @@ function Invoke-RepositorySyncProcess {
     $environment.GH_DEBUG = $null
     $environment.GH_PROMPT_DISABLED = '1'
     return & $module {
-        param($Executable, $Arguments, $Directory, $Environment, $Timeout, $OutputHandler)
+        param($Executable, $Arguments, $Directory, $Environment, $Timeout, $InputPath, $OutputHandler)
         $options = @{}
+        if (-not [string]::IsNullOrWhiteSpace($InputPath)) {
+            $options.StandardInputPath = $InputPath
+        }
         if ($null -ne $OutputHandler) {
             $options.StreamOutput = $true
             $options.OnStdOutLine = $OutputHandler
@@ -340,7 +344,7 @@ function Invoke-RepositorySyncProcess {
         }
         Invoke-AvmProcess -FilePath $Executable -ArgumentList $Arguments -WorkingDirectory $Directory `
             -TimeoutSec $Timeout -IgnoreExitCode -EnvVars $Environment @options
-    } $executable $Arguments $WorkingDirectory $environment $TimeoutSec $OnOutputLine
+    } $executable $Arguments $WorkingDirectory $environment $TimeoutSec $StandardInputPath $OnOutputLine
 }
 
 function Invoke-RepositoryGitHub {

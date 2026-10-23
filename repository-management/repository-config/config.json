@@ -161,6 +161,21 @@
       ]
     },
     {
+      "name": "subscription-vending-identity",
+      "repositories": [
+        "avm-ptn-alz-sub-vending"
+      ],
+      "entraGroups": [
+        "avm-test-subscription-vending-owners",
+        "avm-test-management-group-iam-admins"
+      ],
+      "existingIdentity": {
+        "name": "id-avm-subscription-vending",
+        "resourceGroupName": "rg-avm-managed-identities",
+        "manageEntraGroups": false
+      }
+    },
+    {
       "name": "azure-migrate",
       "repositories": [
         "avm-ptn-azure-local-migrate"
