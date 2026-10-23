@@ -41,7 +41,7 @@ Describe 'Cmdlet documentation generation' -Tag 'Component' {
         $prCheckPage | Should -Match 'Excluding validate also omits the Terraform initialize step'
         $prCheckPage | Should -Match '## Notes'
         $prCheckText = $prCheckPage -replace '\s+', ' '
-        $prCheckText | Should -Match 'no configured secrets are required'
+        $prCheckText | Should -Match 'no GitHub environment, subscription selection, Azure OIDC permission, secret map, or configured secret'
         $prCheckText | Should -Match 'one shared unit-test job for fork and same-repository pull requests'
         $prCheckText | Should -Match 'pr-check environment for OIDC without required reviewers'
         $prCheckText | Should -Match 'Integration and end-to-end tests remain non-fork and approval-gated'

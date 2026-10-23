@@ -170,6 +170,39 @@ $invoke
         }
     }
 
+    function script:Invoke-AvmChildPrCheck {
+        param(
+            [Parameter(Mandatory)]
+            [string] $Body,
+
+            [string] $Invocation = 'avm pr-check | Out-Null'
+        )
+
+        $manifest = $script:manifestPath
+        $scriptText = @"
+`$ErrorActionPreference = 'Stop'
+`$PSStyle.OutputRendering = 'PlainText'
+Import-Module '$manifest' -Force
+`$module = Get-Module Avm.Authoring
+& `$module {
+    function script:Get-AvmVerbRegistry {
+        [pscustomobject]@{ Path = [string[]]@('pr-check'); Cmdlet = 'Invoke-AvmPrCheck'; Summary = 'test PR check' }
+    }
+    function script:Invoke-AvmPrCheck { $Body }
+}
+$Invocation
+"@
+        $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('avm-pr-check-' + [guid]::NewGuid().ToString('N') + '.ps1')
+        Set-Content -LiteralPath $tmp -Value $scriptText -Encoding utf8
+        try {
+            $startInfo = New-AvmChildProcessStartInfo -ArgumentList @('-NoProfile', '-File', $tmp)
+            Invoke-AvmChildProcess -StartInfo $startInfo
+        }
+        finally {
+            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        }
+    }
+
 }
 
 AfterAll {
@@ -255,6 +288,39 @@ Describe 'Invoke-Avm dispatch failure semantics (F02)' {
         } finally {
             Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
         }
+    }
+
+    It 'makes a failed PR check nonzero while preserving its structured result for machine callers' {
+        $body = @'
+[pscustomobject]@{
+    Status = 'fail'
+    Steps = @(
+        [pscustomobject]@{ Step = 'check policy'; Status = 'fail'; Error = 'Required policy failed.' }
+        [pscustomobject]@{ Step = 'docs'; Status = 'pass'; Error = $null }
+    )
+}
+'@
+        $human = Invoke-AvmChildPrCheck -Body $body
+        $machine = Invoke-AvmChildPrCheck -Body $body -Invocation @'
+try {
+    avm pr-check --passthru | Out-Null
+    'NO-THROW'
+}
+catch {
+    $_.Exception.Result | ConvertTo-Json -Depth 10 -Compress
+}
+'@
+
+        $human.ExitCode | Should -Not -Be 0
+        $human.Output | Should -Match 'avm pr-check: fail'
+        $machine.ExitCode | Should -Be 0
+        $machine.Output | Should -Not -Match 'NO-THROW'
+        $result = @($machine.Output -split "`n" | Where-Object { $_.TrimStart().StartsWith('{') } |
+                Select-Object -Last 1) | ConvertFrom-Json
+        $result.Status | Should -BeExactly 'fail'
+        $result.Steps[0].Step | Should -BeExactly 'check policy'
+        $result.Steps[0].Status | Should -BeExactly 'fail'
+        $result.Steps[1].Status | Should -BeExactly 'pass'
     }
 }
 

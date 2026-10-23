@@ -73,6 +73,29 @@ Describe 'Bicep PSRule token replacement' {
         }
     }
 
+    It 'uses the portable public name prefix when no override is supplied' {
+        $before = $env:TOKEN_NAMEPREFIX
+        $localBefore = $env:localToken_namePrefix
+        try {
+            Remove-Item Env:TOKEN_NAMEPREFIX -ErrorAction SilentlyContinue
+            Remove-Item Env:localToken_namePrefix -ErrorAction SilentlyContinue
+            $token = InModuleScope 'Avm.Authoring' {
+                (Get-AvmBicepPolicyToken)['namePrefix']
+            }
+            $token | Should -BeExactly 'gci'
+        }
+        finally {
+            if ($null -eq $before) {
+                Remove-Item Env:TOKEN_NAMEPREFIX -ErrorAction SilentlyContinue
+            }
+            else { $env:TOKEN_NAMEPREFIX = $before }
+            if ($null -eq $localBefore) {
+                Remove-Item Env:localToken_namePrefix -ErrorAction SilentlyContinue
+            }
+            else { $env:localToken_namePrefix = $localBefore }
+        }
+    }
+
 
     Context 'subscription token source' {
         BeforeEach {

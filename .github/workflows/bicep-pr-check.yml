@@ -109,26 +109,42 @@ jobs:
           }
 
   check:
-    name: Check [${{ matrix.modulePath }}]
+    name: '${{ matrix.modulePath }}: PR check'
     needs: initialize
-    if: needs.initialize.outputs.forkStatic != 'true' && needs.initialize.outputs.hasSharedModules == 'true'
+    if: needs.initialize.outputs.hasModules == 'true'
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.initialize.outputs.moduleMatrix) }}
+    uses: ./.github/workflows/bicep-module-runtime.yml
+    with:
+      modulePath: ${{ matrix.modulePath }}
+      targetCommit: ${{ needs.initialize.outputs.targetCommit }}
+
+  e2e:
+    name: '${{ matrix.modulePath }}: E2E tests'
+    needs: initialize
+    if: |
+      needs.initialize.outputs.forkStatic != 'true' &&
+      needs.initialize.outputs.hasSharedModules == 'true' &&
+      fromJSON(needs.initialize.outputs.workflowInput).deploymentValidation == 'true'
     permissions:
       contents: read
       id-token: write
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.initialize.outputs.sharedModuleMatrix) }}
-    uses: ./.github/workflows/bicep-module-runtime.yml
+    uses: ./.github/workflows/bicep-module-runtime-e2e.yml
     with:
       workflowInput: ${{ needs.initialize.outputs.workflowInput }}
       modulePath: ${{ matrix.modulePath }}
       moduleTestFilePaths: ${{ matrix.moduleTestFilePaths }}
-      psRuleModuleTestFilePaths: ${{ matrix.psRuleModuleTestFilePaths }}
       targetCommit: ${{ needs.initialize.outputs.targetCommit }}
     secrets: inherit
 
   check_legacy:
-    name: Check [${{ matrix.modulePath }}] (legacy)
+    name: '${{ matrix.modulePath }}: E2E tests (legacy)'
     needs: initialize
     if: needs.initialize.outputs.forkStatic != 'true' && needs.initialize.outputs.hasLocalModules == 'true'
     permissions:
@@ -146,16 +162,3 @@ jobs:
       baseCommit: ${{ needs.initialize.outputs.baseCommit }}
       targetCommit: ${{ needs.initialize.outputs.targetCommit }}
     secrets: inherit
-
-  check_fork:
-    name: Static check [${{ matrix.modulePath }}] (fork)
-    needs: initialize
-    if: needs.initialize.outputs.forkStatic == 'true' && needs.initialize.outputs.hasModules == 'true'
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.initialize.outputs.moduleMatrix) }}
-    uses: ./.github/workflows/bicep-module-runtime-static.yml
-    with:
-      modulePath: ${{ matrix.modulePath }}

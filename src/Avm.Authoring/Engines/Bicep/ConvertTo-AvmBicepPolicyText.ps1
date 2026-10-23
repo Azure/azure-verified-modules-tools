@@ -24,7 +24,7 @@ function ConvertTo-AvmBicepPolicyText {
                 'subscriptionId' { 'VALIDATE_SUBSCRIPTION_ID' }
                 'tenantId' { 'VALIDATE_TENANT_ID' }
                 'managementGroupId' { 'VALIDATE_MANAGEMENT_GROUP_ID or ARM_MGMTGROUP_ID' }
-                'namePrefix' { 'localToken_namePrefix or TOKEN_NAMEPREFIX' }
+                'namePrefix' { 'the default public namePrefix configuration' }
                 default { "localToken_$name" }
             }
             throw [AvmConfigurationException]::new(

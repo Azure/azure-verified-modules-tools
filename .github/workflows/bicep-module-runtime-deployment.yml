@@ -90,7 +90,9 @@ jobs:
           SUBSCRIPTION_ID: ${{ steps.context.outputs.SubscriptionId }}
           TENANT_ID: ${{ steps.context.outputs.TenantId }}
           REQUIRE_ISOLATION: ${{ steps.context.outputs.RequireResourceIsolation }}
-          LOCATION: ${{ fromJSON(inputs.workflowInput).customLocation }}
+          METADATA_LOCATION: WestEurope
+          RESOURCE_GROUP_PREFIX: avm
+          RESOURCE_LOCATION: ${{ fromJSON(inputs.workflowInput).customLocation }}
           AVM_CI_VARIABLES: ${{ toJSON(vars) }}
           AVM_CI_SECRETS: ${{ toJSON(secrets) }}
           STATE_PATH: ${{ runner.temp }}/avm-bicep-state/${{ steps.context.outputs.ArtifactKey }}.cleanup.json
@@ -98,11 +100,20 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Import-Module Avm.Authoring -ErrorAction Stop
           $null = New-Item -ItemType Directory -Path (Split-Path $env:STATE_PATH) -Force
-          Invoke-AvmTestE2e -Path (Join-Path $env:GITHUB_WORKSPACE $env:MODULE_PATH) -Ecosystem bicep `
-            -Example @($env:EXAMPLE) -Recurse -SubscriptionId $env:SUBSCRIPTION_ID -TenantId $env:TENANT_ID `
-            -Phase Deploy -CleanupStatePath $env:STATE_PATH -Location $env:LOCATION -UseCiInputs `
-            -RequireResourceIsolation:([bool]::Parse($env:REQUIRE_ISOLATION)) -SkipModuleVersionCheck -Confirm:$false
+          Set-Location (Join-Path $env:GITHUB_WORKSPACE $env:MODULE_PATH)
+          $arguments = @(
+            'test', 'e2e', '--ecosystem', 'bicep', '--example', $env:EXAMPLE, '--recurse',
+            '--subscription-id', $env:SUBSCRIPTION_ID, '--tenant-id', $env:TENANT_ID, '--phase', 'Deploy',
+            '--cleanup-state-path', $env:STATE_PATH, '--location', $env:METADATA_LOCATION,
+            '--resource-group-prefix', $env:RESOURCE_GROUP_PREFIX, '--use-ci-inputs',
+            "--require-resource-isolation=$($env:REQUIRE_ISOLATION)", '--confirm=false'
+          )
+          if (-not [string]::IsNullOrWhiteSpace($env:RESOURCE_LOCATION)) {
+            $arguments += '--resource-location', $env:RESOURCE_LOCATION
+          }
+          avm @arguments
       - name: Renew OIDC sign-in for completion
+        id: renew_oidc
         if: ${{ !cancelled() && (success() || failure()) && steps.deploy.outcome != 'skipped' }}
         uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
         with:
@@ -121,9 +132,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module Avm.Authoring -ErrorAction Stop
-          Invoke-AvmTestE2e -Path (Join-Path $env:GITHUB_WORKSPACE $env:MODULE_PATH) -Ecosystem bicep `
-            -SubscriptionId $env:SUBSCRIPTION_ID -TenantId $env:TENANT_ID -Phase Complete `
-            -CleanupStatePath $env:STATE_PATH -SkipModuleVersionCheck -Confirm:$false
+          Set-Location (Join-Path $env:GITHUB_WORKSPACE $env:MODULE_PATH)
+          avm test e2e --ecosystem bicep --subscription-id $env:SUBSCRIPTION_ID `
+            --tenant-id $env:TENANT_ID --phase Complete --cleanup-state-path $env:STATE_PATH --confirm=false
       - name: Recover unfinished native cleanup
         if: ${{ !cancelled() && failure() && steps.deploy.outcome != 'skipped' && fromJSON(inputs.workflowInput).removeDeployment == 'true' && steps.renew_oidc.outcome == 'success' }}
         shell: pwsh
@@ -134,8 +145,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module Avm.Authoring -ErrorAction Stop
-          Invoke-AvmTestCleanup -StatePath $env:STATE_PATH -SubscriptionId $env:SUBSCRIPTION_ID `
-            -TenantId $env:TENANT_ID -SkipModuleVersionCheck -Confirm:$false
+          avm test cleanup --state-path $env:STATE_PATH --subscription-id $env:SUBSCRIPTION_ID `
+            --tenant-id $env:TENANT_ID --confirm=false
       - name: Retain recovery state
         if: always() && steps.context.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
