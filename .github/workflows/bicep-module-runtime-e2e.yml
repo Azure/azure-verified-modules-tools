@@ -1,0 +1,93 @@
+name: 'Reusable: Bicep Module Runtime E2E'
+
+on:
+  workflow_call:
+    inputs:
+      workflowInput:
+        type: string
+        required: true
+      modulePath:
+        type: string
+        required: true
+      moduleTestFilePaths:
+        type: string
+        required: true
+      targetCommit:
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  select-deployments:
+    name: '${{ inputs.modulePath }}: Select E2E test subscriptions'
+    environment: avm-validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      deploymentMatrix: ${{ steps.select.outputs.deploymentMatrix }}
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.targetCommit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select deployments
+        id: select
+        shell: pwsh
+        env:
+          MODULE_PATH: ${{ inputs.modulePath }}
+          TEST_FILES: ${{ inputs.moduleTestFilePaths }}
+          TEST_SUBSCRIPTION_IDS: ${{ vars.VALIDATE_SUBSCRIPTION_IDS || vars.TEST_SUBSCRIPTION_IDS || secrets.VALIDATE_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS }}
+          VALIDATE_SUBSCRIPTION_ID: ${{ vars.VALIDATE_SUBSCRIPTION_ID || secrets.VALIDATE_SUBSCRIPTION_ID }}
+          VALIDATE_MODULE_CLIENT_IDS: ${{ vars.VALIDATE_MODULE_CLIENT_IDS }}
+          VALIDATE_TENANT_ID: ${{ vars.VALIDATE_TENANT_ID || secrets.VALIDATE_TENANT_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
+            Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+          }
+          Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
+          Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
+          Import-Module Avm.Authoring -ErrorAction Stop
+          $capabilities = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities
+          if ($capabilities.BicepWorkflowE2eRuntime -ne 1) {
+            throw 'The installed Avm.Authoring package does not provide BicepWorkflowE2eRuntime = 1.'
+          }
+          $testFiles = @(ConvertFrom-Json -InputObject $env:TEST_FILES -AsHashtable)
+          $matrix = @(Get-AvmBicepE2eDeploymentMatrix -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH `
+              -TestFiles $testFiles -PoolJson $env:TEST_SUBSCRIPTION_IDS -FallbackSubscriptionId $env:VALIDATE_SUBSCRIPTION_ID `
+              -ModuleClientIds $env:VALIDATE_MODULE_CLIENT_IDS -TenantId $env:VALIDATE_TENANT_ID `
+              -RandomSeed ([int](([long]$env:GITHUB_RUN_ID + [long]$env:GITHUB_RUN_ATTEMPT) % [int]::MaxValue)) `
+              -DisplaySubscriptionNames:($env:TEST_SUBSCRIPTION_IDS -ne ''))
+          $value = ConvertTo-Json -InputObject $matrix -Depth 20 -Compress
+          "deploymentMatrix=$value" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+  deploy:
+    name: '${{ inputs.modulePath }}: E2E deployment validation'
+    needs: select-deployments
+    if: |
+      !cancelled() &&
+      fromJSON(inputs.workflowInput).deploymentValidation == 'true' &&
+      inputs.moduleTestFilePaths != '' && inputs.moduleTestFilePaths != '[]' &&
+      needs.select-deployments.result == 'success'
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        testCase: ${{ fromJSON(needs.select-deployments.outputs.deploymentMatrix) }}
+    concurrency:
+      group: ${{ matrix.testCase.ConcurrencyGroup }}
+      queue: max
+    uses: ./.github/workflows/bicep-module-runtime-deployment.yml
+    with:
+      modulePath: ${{ inputs.modulePath }}
+      workflowInput: ${{ inputs.workflowInput }}
+      testCase: ${{ toJSON(matrix.testCase) }}
+      targetCommit: ${{ inputs.targetCommit }}
+    secrets: inherit

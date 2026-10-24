@@ -22,8 +22,10 @@ function Invoke-AvmCheckPolicy {
         General, including untagged entries. Pool variables precede secrets.
         VALIDATE_SUBSCRIPTION_ID is a fallback only for General without a pool.
         Set VALIDATE_TENANT_ID,
-        VALIDATE_MANAGEMENT_GROUP_ID (or ARM_MGMTGROUP_ID), TOKEN_NAMEPREFIX,
-        and localToken_* variables for tokens used by the selected tests.
+        VALIDATE_MANAGEMENT_GROUP_ID (or ARM_MGMTGROUP_ID), and localToken_*
+        variables for tokens used by the selected tests. namePrefix defaults to
+        the portable public value 'gci'; localToken_namePrefix or
+        TOKEN_NAMEPREFIX can override it.
         Missing inputs or uninspectable results fail rather than skip.
 
         Terraform checks Azure authentication after pre.ps1 and .env loading,

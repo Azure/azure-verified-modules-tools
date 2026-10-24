@@ -45,11 +45,19 @@ Describe 'Component: Bicep PR entrypoint admission and routing' -Tag Component {
             $label = $script:eventLabel
             $eventName = $env:EVENT_NAME
             $repository = $env:REPOSITORY
+            $workflowInput = if ($Outputs.ContainsKey('workflowInput')) {
+                $Outputs['workflowInput'] | ConvertFrom-Json
+            }
+            else {
+                [pscustomobject]@{}
+            }
             $eventActions = @()
             if ($Condition -match "contains\(fromJSON\('([^']+)'\), github.event.action\)") {
                 $eventActions = @(ConvertFrom-Json -InputObject $Matches[1])
                 $Condition = $Condition.Replace($Matches[0], '($eventActions -ccontains $action)')
             }
+            $Condition = $Condition.Replace(
+                'fromJSON(needs.initialize.outputs.workflowInput)', '$workflowInput')
             $expression = $Condition.Replace('!cancelled()', '$true').
                 Replace('github.event_name', '$eventName').Replace('github.repository', '$repository').
                 Replace('github.event.action', '$action').Replace('github.event.label.name', '$label').
@@ -60,13 +68,13 @@ Describe 'Component: Bicep PR entrypoint admission and routing' -Tag Component {
             return & ([scriptblock]::Create($expression))
         }
         function Invoke-AvmPrEntrypointFixture {
-            if (-not (Test-AvmEntrypointCondition -Condition $script:prEntrypoint.jobs.initialize.if)) {
+            if (-not (Test-AvmEntrypointCondition -Condition $script:prEntrypoint.jobs.initialize['if'])) {
                 return @{ routes = @() }
             }
             . ([scriptblock]::Create($script:prEntrypoint.jobs.initialize.steps[-1].run))
             $outputs = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
-            $outputs.routes = @(foreach ($name in @('check', 'check_legacy', 'check_fork')) {
-                    if (Test-AvmEntrypointCondition -Condition $script:prEntrypoint.jobs[$name].if -Outputs $outputs) {
+            $outputs.routes = @(foreach ($name in @('check', 'e2e', 'check_legacy')) {
+                    if (Test-AvmEntrypointCondition -Condition $script:prEntrypoint.jobs[$name]['if'] -Outputs $outputs) {
                         $name
                     }
                 })
@@ -193,7 +201,7 @@ function Get-TestSubscriptionTag {
         }
     }
 
-    It 'runs automatic static checks without either label on <Action>' -ForEach @(
+    It 'runs automatic PR checks without either label on <Action>' -ForEach @(
         @{ Action = 'opened' }
         @{ Action = 'reopened' }
         @{ Action = 'synchronize' }
@@ -207,12 +215,12 @@ function Get-TestSubscriptionTag {
         $controls.removeDeployment | Should -BeExactly 'true'
     }
 
-    It 'admits E2E with only its own label and forwards it to both implementations' {
+    It 'admits shared E2E with only its own label while retaining the legacy route' {
         $script:eventAction = 'labeled'
         $script:eventLabel = 'PR: Run E2E Tests'
         $env:PR_LABELS = '["PR: Run E2E Tests"]'
         $output = Invoke-AvmPrEntrypointFixture
-        $output.routes | Should -Be @('check', 'check_legacy')
+        $output.routes | Should -Be @('check', 'e2e', 'check_legacy')
         ($output.workflowInput | ConvertFrom-Json).deploymentValidation | Should -BeExactly 'true'
         ($output.sharedModuleMatrix | ConvertFrom-Json).include.modulePath | Should -Be 'avm/res/mock/widget'
         ($output.localModuleMatrix | ConvertFrom-Json).include.modulePath | Should -Be 'avm/res/mock/reserved'
@@ -230,14 +238,14 @@ function Get-TestSubscriptionTag {
         Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
     }
 
-    It 'routes forks only to public static checks with <Labels>' -ForEach @(
+    It 'routes forks only to the public secret-free PR check with <Labels>' -ForEach @(
         @{ Labels = '[]' }
         @{ Labels = '["PR: Run E2E Tests"]' }
     ) {
         $env:HEAD_REPOSITORY = 'fork/bicep-registry-modules'
         $env:PR_LABELS = $Labels
         $output = Invoke-AvmPrEntrypointFixture
-        $output.routes | Should -Be @('check_fork')
+        $output.routes | Should -Be @('check')
         ($output.workflowInput | ConvertFrom-Json).deploymentValidation | Should -BeExactly 'false'
     }
 
@@ -248,7 +256,7 @@ function Get-TestSubscriptionTag {
         $env:PULL_REQUEST_HEAD_COMMIT = ''
         $env:MODULE_PATHS = 'avm/res/mock/reserved, avm/res/mock/widget'
         $output = Invoke-AvmPrEntrypointFixture
-        $output.routes | Should -Be @('check', 'check_legacy')
+        $output.routes | Should -Be @('check', 'e2e', 'check_legacy')
         $controls = $output.workflowInput | ConvertFrom-Json
         $controls.staticValidation | Should -BeExactly 'true'
         $controls.deploymentValidation | Should -BeExactly 'true'

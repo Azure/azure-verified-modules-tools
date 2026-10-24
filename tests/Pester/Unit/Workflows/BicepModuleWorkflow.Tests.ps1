@@ -79,9 +79,10 @@ Describe 'Bicep reusable workflow ownership and syntax' {
     It 'uses only the published package runtime for new Bicep orchestration' {
         $runtimeNames = @(
             'bicep-module-runtime', 'bicep-module-runtime-deployment',
-            'bicep-module-runtime-release', 'bicep-module-runtime-static'
+            'bicep-module-runtime-e2e', 'bicep-module-runtime-release',
+            'bicep-module-runtime-static'
         )
-        @($script:workflows.Keys | Where-Object { $_ -in $runtimeNames }) | Should -HaveCount 4
+        @($script:workflows.Keys | Where-Object { $_ -in $runtimeNames }) | Should -HaveCount 5
         foreach ($workflow in $runtimeNames | ForEach-Object { $script:workflows[$_] }) {
             $text = $workflow | ConvertTo-Json -Depth 100
             $text | Should -Not -Match '\.avm-tools|\.avm-entrypoint|tools-ref|github\.workflow_sha'
@@ -95,18 +96,30 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $tagging.run | Should -Match 'PendingRelease'
     }
 
-    It 'forwards least-privilege permissions through the package runtime deployment call' {
+    It 'keeps authoring checks secret-free and limits deployment credentials to E2E' {
         $prCheck = $script:entrypoints | Where-Object name -EQ 'Reusable: Bicep PR check'
         $prCheck.jobs.check.permissions.contents | Should -BeExactly 'read'
-        $prCheck.jobs.check.permissions.'id-token' | Should -BeExactly 'write'
+        $prCheck.jobs.check.permissions.Contains('id-token') | Should -BeFalse
+        $prCheck.jobs.check.Contains('secrets') | Should -BeFalse
 
         $runtime = $script:workflows['bicep-module-runtime']
         $runtime.permissions.Count | Should -Be 0
-        $deployment = $runtime.jobs.deploy
+        @($runtime.jobs.Keys | Sort-Object) | Should -Be @('pr-check', 'unit-test')
+        foreach ($job in $runtime.jobs.Values) {
+            $job.permissions.contents | Should -BeExactly 'read'
+            $job.permissions.Contains('id-token') | Should -BeFalse
+            ($job | ConvertTo-Json -Depth 20) | Should -Not -Match '\bsecrets\b|AVM_CI_|azure/login|environment:'
+        }
+        $runtime.jobs.'pr-check'.steps[-1].run | Should -Match '(?m)^\s*avm pr-check\s*$'
+        $runtime.jobs.'unit-test'.steps[-1].run | Should -Match 'avm test unit --recurse --include-compliance'
+
+        $e2e = $script:workflows['bicep-module-runtime-e2e']
+        $deployment = $e2e.jobs.deploy
         $deployment.uses | Should -BeExactly './.github/workflows/bicep-module-runtime-deployment.yml'
         @($deployment.permissions.Keys | Sort-Object) | Should -Be @('contents', 'id-token')
         $deployment.permissions.contents | Should -BeExactly 'read'
         $deployment.permissions.'id-token' | Should -BeExactly 'write'
+        $e2e.jobs.'select-deployments'.steps[-1].run | Should -Not -Match 'ConvertFrom-Json.*NoEnumerate'
     }
 
     It 'keeps nested reusable calls relative and forwards the immutable tools contract' {
@@ -117,6 +130,31 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             $job.with.Contains('avm-authoring-version') | Should -BeFalse
             $job.secrets | Should -BeExactly 'inherit'
         }
+    }
+
+    It 'runs packaged deployment phases through the CLI with renewable completion and recovery guards' {
+        $steps = $script:workflows['bicep-module-runtime-deployment'].jobs.deploy.steps
+        $deploy = $steps | Where-Object { $_['id'] -eq 'deploy' }
+        $renew = $steps | Where-Object { $_['id'] -eq 'renew_oidc' }
+        $complete = $steps | Where-Object { $_['name'] -eq 'Assert and complete native test case' }
+        $recover = $steps | Where-Object { $_['name'] -eq 'Recover unfinished native cleanup' }
+
+        $renew | Should -Not -BeNullOrEmpty
+        $deploy.env.METADATA_LOCATION | Should -BeExactly 'WestEurope'
+        $deploy.env.RESOURCE_GROUP_PREFIX | Should -BeExactly 'avm'
+        $deploy.env.RESOURCE_LOCATION | Should -BeExactly '${{ fromJSON(inputs.workflowInput).customLocation }}'
+        $deploy.run | Should -Match "'test', 'e2e'"
+        $deploy.run | Should -Match ([regex]::Escape("'--location', `$env:METADATA_LOCATION"))
+        $deploy.run | Should -Match ([regex]::Escape("'--resource-group-prefix', `$env:RESOURCE_GROUP_PREFIX"))
+        $deploy.run | Should -Match ([regex]::Escape("'--resource-location', `$env:RESOURCE_LOCATION"))
+        $deploy.run | Should -Not -Match 'Invoke-AvmTestE2e'
+        $complete.run | Should -Match 'avm test e2e'
+        $complete.run | Should -Not -Match 'Invoke-AvmTestE2e'
+        $recover.run | Should -Match 'avm test cleanup'
+        $recover.run | Should -Not -Match 'Invoke-AvmTestCleanup'
+        $complete.if | Should -Match 'steps\.renew_oidc\.outcome == ''success'''
+        $recover.if | Should -Match 'steps\.renew_oidc\.outcome == ''success'''
+        $recover.if | Should -Match "removeDeployment == 'true'"
     }
 
     It 'keeps generic validation and nested deployment on the same explicit target commit' {
