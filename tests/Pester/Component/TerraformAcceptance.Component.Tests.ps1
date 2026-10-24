@@ -27,6 +27,7 @@ Describe 'Terraform acceptance byte inventory' -Tag Component {
                             Result = [pscustomobject]@{ Evaluated = 1; Issues = @() }
                         }
                     }
+
                 )
             }
             Mock Assert-TerraformAcceptanceCredentials {}
@@ -68,6 +69,67 @@ Describe 'Terraform acceptance byte inventory' -Tag Component {
 
             { Invoke-TerraformAcceptancePrCheck -Context ([pscustomobject]@{ Root = $TestDrive }) } |
                 Should -Throw
+        }
+    }
+
+    Describe 'Terraform acceptance cleanup' -Tag Component {
+        BeforeAll {
+            . (Join-Path $PSScriptRoot '..' 'Helpers' 'TerraformAcceptance.ps1')
+        }
+
+        BeforeEach {
+            $script:work = Join-Path $TestDrive ('acceptance-work-' + [guid]::NewGuid().ToString('N'))
+            $null = New-Item -ItemType Directory -Path $script:work
+            $script:context = [pscustomobject]@{
+                Work = $script:work
+                Environment = @{}
+            }
+            Mock Start-Sleep {}
+        }
+
+        It 'retries a transient provider file lock and completes cleanup' {
+            $script:attempts = 0
+            Mock Remove-Item {
+                $script:attempts++
+                if ($script:attempts -eq 1) {
+                    throw [IO.IOException]::new(
+                        'The process cannot access the file because it is being used by another process.')
+                }
+            } -ParameterFilter { $LiteralPath -ceq $script:work -and $Recurse -and $Force -and $ErrorAction -eq 'Stop' }
+
+            Remove-TerraformAcceptanceContext -Context $script:context
+
+            $script:attempts | Should -Be 2
+            Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Milliseconds -eq 100 }
+        }
+
+        It 'rethrows the final transient provider file lock after bounded retries' {
+            $script:attempts = 0
+            Mock Remove-Item {
+                $script:attempts++
+                throw [IO.IOException]::new(
+                    'The process cannot access the file because it is being used by another process.')
+            } -ParameterFilter { $LiteralPath -ceq $script:work -and $Recurse -and $Force -and $ErrorAction -eq 'Stop' }
+
+            { Remove-TerraformAcceptanceContext -Context $script:context } |
+                Should -Throw -ExceptionType ([IO.IOException]) -ExpectedMessage '*being used by another process*'
+
+            $script:attempts | Should -Be 5
+            Should -Invoke Start-Sleep -Exactly 4
+        }
+
+        It 'rethrows non-retryable cleanup failures immediately' {
+            $script:attempts = 0
+            Mock Remove-Item {
+                $script:attempts++
+                throw [UnauthorizedAccessException]::new('Cleanup access denied.')
+            } -ParameterFilter { $LiteralPath -ceq $script:work -and $Recurse -and $Force -and $ErrorAction -eq 'Stop' }
+
+            { Remove-TerraformAcceptanceContext -Context $script:context } |
+                Should -Throw -ExceptionType ([UnauthorizedAccessException]) -ExpectedMessage '*Cleanup access denied.*'
+
+            $script:attempts | Should -Be 1
+            Should -Invoke Start-Sleep -Exactly 0
         }
     }
 
