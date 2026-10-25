@@ -129,4 +129,34 @@ Describe 'Public: Bicep workflow package APIs' -Tag Unit {
             $env:AVM_CI_SECRETS = $savedSecrets
         }
     }
+
+    It 'keeps every decoded E2E test record as an individual matrix input' {
+        $subscription = '11111111-2222-4333-8444-555555555555'
+        $tenant = '11111111-2222-4333-8444-666666666666'
+        $mapping = '{"avm/res/mock/widget":"10000000-0000-4000-8000-000000000006"}'
+        Mock Get-AvmModuleContext -ModuleName Avm.Authoring { [pscustomobject]@{ Ecosystem = 'bicep' } }
+        Mock Get-AvmTool -ModuleName Avm.Authoring { [pscustomobject]@{ Status = 'installed'; Path = 'fixture-bicep' } }
+        Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
+            [pscustomobject]@{ ExitCode = 0; StdOut = '{"resources":[]}' ; StdErr = '' }
+        }
+        $records = @(
+            ConvertFrom-Json -InputObject @'
+[
+  {"path":"tests/e2e/defaults/main.test.bicep","name":"defaults","e2eIgnore":false},
+  {"path":"tests/e2e/waf-aligned/main.test.bicep","name":"waf-aligned","e2eIgnore":true}
+]
+'@ -AsHashtable
+        )
+
+        $matrix = @(Get-AvmBicepE2eDeploymentMatrix -Root $script:root -ModulePath $script:modulePath `
+                -TestFiles $records -FallbackSubscriptionId $subscription -ModuleClientIds $mapping `
+                -TenantId $tenant -SkipModuleVersionCheck)
+
+        $matrix | Should -HaveCount 2
+        $matrix.E2eIgnore | Should -Be @($false, $true)
+        $matrix.Path | Should -Be @(
+            'tests/e2e/defaults/main.test.bicep',
+            'tests/e2e/waf-aligned/main.test.bicep'
+        )
+    }
 }

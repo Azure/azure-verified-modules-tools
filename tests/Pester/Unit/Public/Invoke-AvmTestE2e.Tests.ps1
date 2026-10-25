@@ -93,6 +93,54 @@ Describe 'Invoke-AvmTestE2e' {
         }
     }
 
+    It 'parses portable Bicep deployment, completion, and cleanup CLI arguments' {
+        $statePath = Join-Path $TestDrive 'cleanup.json'
+        InModuleScope 'Avm.Authoring' -Parameters @{ StatePath = $statePath } {
+            param($StatePath)
+            Mock Test-AvmModuleVersion {}
+            Mock Test-AvmDisableSentinel { $null }
+            Mock Invoke-AvmTestE2e {
+                [pscustomobject]@{ Status = 'pass'; Engine = 'bicep'; RunsPassed = 1; Issues = @() }
+            }
+            Mock Invoke-AvmTestCleanup {
+                [pscustomobject]@{ Status = 'pass'; Engine = 'bicep'; Issues = @() }
+            }
+
+            Invoke-Avm -SkipModuleVersionCheck test e2e --ecosystem bicep --example defaults --recurse `
+                --subscription-id 00000000-0000-0000-0000-000000000001 `
+                --tenant-id 00000000-0000-0000-0000-000000000002 --phase Deploy `
+                --cleanup-state-path $StatePath --location WestEurope --resource-group-prefix avm `
+                --resource-location eastus --use-ci-inputs --require-resource-isolation=true --confirm=false | Out-Null
+            Invoke-Avm -SkipModuleVersionCheck test e2e --ecosystem bicep `
+                --subscription-id 00000000-0000-0000-0000-000000000001 `
+                --tenant-id 00000000-0000-0000-0000-000000000002 --phase Complete `
+                --cleanup-state-path $StatePath --confirm=false | Out-Null
+            Invoke-Avm -SkipModuleVersionCheck test cleanup --state-path $StatePath `
+                --subscription-id 00000000-0000-0000-0000-000000000001 `
+                --tenant-id 00000000-0000-0000-0000-000000000002 --confirm=false | Out-Null
+
+            Should -Invoke Invoke-AvmTestE2e -Exactly 1 -ParameterFilter {
+                $Ecosystem -eq 'bicep' -and $Example -ceq 'defaults' -and $Recurse.IsPresent -and
+                $SubscriptionId -eq '00000000-0000-0000-0000-000000000001' -and
+                $TenantId -eq '00000000-0000-0000-0000-000000000002' -and $Phase -eq 'Deploy' -and
+                $CleanupStatePath -eq $StatePath -and $Location -eq 'WestEurope' -and
+                $ResourceGroupPrefix -eq 'avm' -and $ResourceLocation -eq 'eastus' -and
+                $UseCiInputs.IsPresent -and $RequireResourceIsolation.IsPresent -and -not $Confirm
+            }
+            Should -Invoke Invoke-AvmTestE2e -Exactly 1 -ParameterFilter {
+                $Phase -eq 'Complete' -and $CleanupStatePath -eq $StatePath -and
+                -not $PSBoundParameters.ContainsKey('Location') -and
+                -not $PSBoundParameters.ContainsKey('ResourceGroupPrefix') -and
+                -not $PSBoundParameters.ContainsKey('ResourceLocation') -and -not $Confirm
+            }
+            Should -Invoke Invoke-AvmTestCleanup -Exactly 1 -ParameterFilter {
+                $StatePath -eq $StatePath -and
+                $SubscriptionId -eq '00000000-0000-0000-0000-000000000001' -and
+                $TenantId -eq '00000000-0000-0000-0000-000000000002' -and -not $Confirm
+            }
+        }
+    }
+
     It 'rejects ecosystem-specific options before invoking the wrong engine' {
         InModuleScope 'Avm.Authoring' {
             Mock Get-AvmModuleContextInternal {

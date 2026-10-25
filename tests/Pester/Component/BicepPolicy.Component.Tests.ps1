@@ -367,15 +367,14 @@ Describe 'Bicep PSRule policy checks' -Tag 'Component' {
         $result.Issues.Severity | Should -Be @('warning', 'warning')
     }
 
-    It 'fails closed when a required token is missing without writing the token value' {
+    It 'uses the public name prefix when no override is configured' {
         Remove-Item Env:TOKEN_NAMEPREFIX -ErrorAction SilentlyContinue
         $result = Invoke-AvmCheckPolicy -Path $script:modulePath -SkipModuleVersionCheck
-        $result.Status | Should -Be 'fail'
-        $result.BaselinesExecuted | Should -Be 0
-        $result.Issues.Code | Should -Contain 'avm.bicep.psrule-source'
-        $result.Issues.Message | Should -Match 'TOKEN_NAMEPREFIX'
+        $result.Status | Should -Be 'pass'
+        $result.BaselinesExecuted | Should -Be 8
+        $result.Issues | Should -BeNullOrEmpty
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmBicepPolicyBaseline -Exactly 0
+            Should -Invoke Invoke-AvmBicepPolicyBaseline -Exactly 8
         }
     }
 

@@ -127,13 +127,33 @@ function New-TerraformAcceptanceContext {
     }
 }
 
+function Test-TerraformAcceptanceTransientFileLock {
+    param([Parameter(Mandatory)] [System.Management.Automation.ErrorRecord] $ErrorRecord)
+
+    $exception = $ErrorRecord.Exception
+    if ($exception -isnot [IO.IOException]) { return $false }
+
+    $win32Code = $exception.HResult -band 0xFFFF
+    return (($win32Code -in @(32, 33)) -or
+        $exception.Message -match '(?i)(sharing violation|lock violation|cannot access the file .*being used by another process)')
+}
+
 function Remove-TerraformAcceptanceContext {
     param([Parameter(Mandatory)] [object] $Context)
     foreach ($key in $Context.Environment.Keys) {
         $value = $Context.Environment[$key]
         [Environment]::SetEnvironmentVariable($key, $(if ($null -eq $value) { [NullString]::Value } else { $value }), 'Process')
     }
-    Remove-Item -LiteralPath $Context.Work -Recurse -Force -ErrorAction Stop
+    for ($attempt = 1; ; $attempt++) {
+        try {
+            Remove-Item -LiteralPath $Context.Work -Recurse -Force -ErrorAction Stop
+            return
+        }
+        catch {
+            if (-not (Test-TerraformAcceptanceTransientFileLock -ErrorRecord $_) -or $attempt -ge 5) { throw }
+            Start-Sleep -Milliseconds ([int](100 * [math]::Pow(2, $attempt - 1)))
+        }
+    }
 }
 
 function Assert-TerraformAcceptanceSteps {
