@@ -122,6 +122,21 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $e2e.jobs.'select-deployments'.steps[-1].run | Should -Not -Match 'ConvertFrom-Json.*NoEnumerate'
     }
 
+    It 'acquires each runtime case lock only in the executable lifecycle job, never its waiting caller' {
+        $caller = $script:workflows['bicep-module-runtime-e2e'].jobs.deploy
+        $caller.Contains('concurrency') | Should -BeFalse
+        $caller.uses | Should -BeExactly './.github/workflows/bicep-module-runtime-deployment.yml'
+        $caller.with.testCase | Should -BeExactly '${{ toJSON(matrix.testCase) }}'
+        $leaf = $script:workflows['bicep-module-runtime-deployment'].jobs.deploy
+        $leaf.Contains('uses') | Should -BeFalse
+        $leaf.concurrency.group | Should -BeExactly '${{ fromJSON(inputs.testCase).ConcurrencyGroup }}'
+        $leaf.concurrency.queue | Should -BeExactly 'max'
+        $leaf.environment | Should -BeExactly 'avm-validation'
+        foreach ($phase in @('Deploy native test case', 'Assert and complete native test case', 'Recover unfinished native cleanup')) {
+            @($leaf.steps | Where-Object { $_['name'] -ceq $phase }).Count | Should -Be 1
+        }
+    }
+
     It 'keeps nested reusable calls relative and forwards the immutable tools contract' {
         foreach ($name in @('bicep-module', 'bicep-module-preview', 'bicep-module-publish')) {
             $job = $script:workflows[$name].jobs.job_module_deploy_validation

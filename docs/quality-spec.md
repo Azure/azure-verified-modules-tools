@@ -1292,7 +1292,17 @@ For Bicep formatting, `avm pr-check` compares `bicep format --stdout` with
 the original source bytes and never rewrites the working copy. `avm pre-commit`
 still formats in place.
 The Bicep transform compares the exact bytes from `bicep build --stdout`
-with each module's main.json. Pre-commit writes missing or stale output only
+with each module's main.json, except only the string value tokens at the exact
+root paths `metadata._generator.version` and `metadata._generator.templateHash`.
+Validate both documents as strict JSON objects with unique decoded property
+names before comparison. A present generator must contain both nonempty string
+values. Locate those tokens from parsed structure without reserializing JSON;
+preserve every other byte, including property spelling/order, whitespace,
+newlines, BOM, unknown generator fields and similarly named fields elsewhere.
+Malformed artifacts and invalid UTF-8 fail explicitly, without overwriting them.
+Transform, packaged convention and compliance checks share this comparator;
+provenance-only differences preserve the checked-in bytes and timestamp.
+Pre-commit writes missing or stale output only
 after all selected modules build successfully, with rollback on write failure;
 `avm pr-check` reports each missing or stale artifact with an `avm pre-commit`
 remedy and never changes repository files. Compilation requires a nonempty,
@@ -1911,7 +1921,10 @@ release containing the other required runtime and policy interfaces.
 
 Keep `avm-validation` for selection/execution and `publish-approval` for tag
 approval. One per-case lifecycle lock covers deployment, assertions, post hooks,
-cleanup and cleanup-only recovery. Queue rather than cancel. The deployment
+cleanup and cleanup-only recovery. Only the executable runtime deployment job
+acquires the matrix case's concurrency group; its reusable-call E2E parent must
+not acquire that same group while waiting for the child. Retain the existing
+group identity and `queue: max`. Queue rather than cancel. The deployment
 job alone receives full CI variables/secrets, including its pre-login isolation
 input check. Retain generic `gci` and separate custom resource location from fixed
 `WestEurope` metadata location. Renewal precedes Complete after either a
