@@ -106,6 +106,120 @@ Describe 'Terraform ModTM restoration module enumeration' {
             Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -ceq 'transform' }
         }
     }
+
+    It 'leaves an unchanged dependency that only reaches ModTM through descendants to implicit inheritance (explicit map: <ExplicitMap>)' -TestCases @(
+        @{ ExplicitMap = $false }
+        @{ ExplicitMap = $true }
+    ) {
+        param($ExplicitMap)
+        InModuleScope Avm.Authoring -Parameters @{
+            Root = (Join-Path $TestDrive 'module')
+            ExplicitMap = $ExplicitMap
+        } {
+            param($Root, $ExplicitMap)
+            $external = Join-Path $Root '.published' 'config'
+            $retained = Join-Path $Root '.published' 'interfaces'
+            $modtm = 'registry.terraform.io/azure/modtm'
+            $sources = @{
+                config = [Collections.Generic.HashSet[string]]::new(
+                    [string[]]@($modtm, 'registry.terraform.io/hashicorp/azurerm'), [StringComparer]::Ordinal)
+                interfaces = [Collections.Generic.HashSet[string]]::new([string[]]@($modtm), [StringComparer]::Ordinal)
+            }
+            $manifest = ConvertTo-Json -Depth 5 -Compress -InputObject @{
+                Modules = @(
+                    @{ Key = ''; Dir = '.' }
+                    @{ Key = 'config'; Source = 'github.com/Azure/example//config'; Dir = $external }
+                    @{ Key = 'interfaces'; Source = 'Azure/avm-utl-interfaces/azure'; Version = '0.5.0'; Dir = $retained }
+                )
+            }
+            $configCall = @{ source = 'github.com/Azure/example//config'; mptf = @{} }
+            if ($ExplicitMap) { $configCall.providers = @{ modtm = 'modtm' } }
+            $calls = @{
+                config = $configCall
+                interfaces = @{ source = 'Azure/avm-utl-interfaces/azure'; version = '0.5.0'; mptf = @{} }
+            }
+            Mock ConvertFrom-AvmTerraformModuleManifest {}
+            Mock Get-ChildItem { @() }
+            Mock Get-AvmTerraformUnitTestRequiredProvider {
+                if ($Path -ceq $retained) { @{ modtm = @{ source = 'Azure/modtm'; version = '~> 0.3' } } }
+                else { @{ azurerm = @{ source = 'hashicorp/azurerm' } } }
+            }
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{ StdOut = $EnvVars['UNIT_CALLS_JSON']; ExitCode = 0; StdErr = '' }
+            }
+            $parameters = @{
+                Path = $Root
+                ModuleTargets = @([pscustomobject]@{ Path = $Root })
+                Options = [pscustomobject]@{
+                    ToolPath = 'mapotf'
+                    ProfileDirs = @{ 'provider-restore' = 'provider-restore' }
+                    EnvVars = @{ UNIT_CALLS_JSON = $calls | ConvertTo-Json -Depth 5 -Compress }
+                }
+                RequiredProviders = @{ $Root = @{} }
+                ProviderSources = @{ $Root = @($modtm) }
+                ModuleProviderSources = @{ $Root = $sources }
+                ModuleManifests = @{ $Root = $manifest }
+                OriginalRequirements = @{ $Root = @{} }
+                Plans = @{}
+                PlanningPaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+                BindDependencies = $true
+            }
+
+            if ($ExplicitMap) {
+                { Get-AvmTerraformUnitTestModtmRequirementPlan @parameters } |
+                    Should -Throw '*unchanged dependency ''config'' does not declare a ModTM source*'
+            }
+            else {
+                $plan = Get-AvmTerraformUnitTestModtmRequirementPlan @parameters
+                $plan.Arguments | Should -Contain ('unit_test_modtm_dependencies=' + (ConvertTo-Json -Compress -InputObject @('interfaces')))
+                $parameters.RequiredProviders[$Root].modtm.version | Should -BeExactly '~> 0.3'
+            }
+        }
+    }
+
+    It 'returns no plan when the only ModTM user is an unchanged dependency reached through descendants' {
+        InModuleScope Avm.Authoring -Parameters @{ Root = (Join-Path $TestDrive 'module') } {
+            param($Root)
+            $external = Join-Path $Root '.published' 'config'
+            $modtm = 'registry.terraform.io/azure/modtm'
+            $sources = @{
+                config = [Collections.Generic.HashSet[string]]::new([string[]]@($modtm), [StringComparer]::Ordinal)
+            }
+            $manifest = ConvertTo-Json -Depth 5 -Compress -InputObject @{
+                Modules = @(
+                    @{ Key = ''; Dir = '.' }
+                    @{ Key = 'config'; Source = 'github.com/Azure/example//config'; Dir = $external }
+                )
+            }
+            $calls = @{ config = @{ source = 'github.com/Azure/example//config'; mptf = @{} } }
+            Mock ConvertFrom-AvmTerraformModuleManifest {}
+            Mock Get-ChildItem { @() }
+            Mock Get-AvmTerraformUnitTestRequiredProvider { @{ azurerm = @{ source = 'hashicorp/azurerm' } } }
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{ StdOut = $EnvVars['UNIT_CALLS_JSON']; ExitCode = 0; StdErr = '' }
+            }
+            $parameters = @{
+                Path = $Root
+                ModuleTargets = @([pscustomobject]@{ Path = $Root })
+                Options = [pscustomobject]@{
+                    ToolPath = 'mapotf'
+                    ProfileDirs = @{ 'provider-restore' = 'provider-restore' }
+                    EnvVars = @{ UNIT_CALLS_JSON = $calls | ConvertTo-Json -Depth 5 -Compress }
+                }
+                RequiredProviders = @{ $Root = @{} }
+                ProviderSources = @{ $Root = @($modtm) }
+                ModuleProviderSources = @{ $Root = $sources }
+                ModuleManifests = @{ $Root = $manifest }
+                OriginalRequirements = @{ $Root = @{} }
+                Plans = @{}
+                PlanningPaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+                BindDependencies = $true
+            }
+
+            Get-AvmTerraformUnitTestModtmRequirementPlan @parameters | Should -BeNullOrEmpty
+            $parameters.Plans.Count | Should -Be 0
+        }
+    }
 }
 
 Describe 'Terraform unit-test migration' {
