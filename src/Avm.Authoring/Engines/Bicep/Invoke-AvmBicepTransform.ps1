@@ -6,7 +6,8 @@ function Invoke-AvmBicepTransform {
     .DESCRIPTION
         Discovers root and child modules, including modules/ children, builds
         each main.bicep through the pinned Bicep CLI, and writes main.json
-        only when its bytes differ.
+        only when its bytes differ outside the root generator version and
+        templateHash string values. All other bytes remain significant.
         Proposed modules without main.bicep do not need a compiled artifact.
         All builds finish before any files are written. -CheckDrift instead
         reports missing or stale main.json files without changing them.

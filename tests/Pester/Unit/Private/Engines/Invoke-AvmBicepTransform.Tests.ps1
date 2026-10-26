@@ -58,6 +58,40 @@ Describe 'Invoke-AvmBicepTransform' {
         [System.IO.File]::GetLastWriteTimeUtc($output) | Should -Be $timestamp
     }
 
+    It 'preserves artifact bytes and timestamp for provenance-only differences in writing and check modes' {
+        $output = Join-Path $script:moduleDir 'main.json'
+        $compiled = $script:compiled.Replace('"resources"', '"metadata":{"_generator":{"name":"bicep","version":"0.48.1.52935","templateHash":"new"}},"resources"')
+        $current = $compiled.Replace('0.48.1.52935', '0.47.16.16243').Replace('"new"', '"18275710714278981656"')
+        [System.IO.File]::WriteAllText($output, $current, [Text.UTF8Encoding]::new($false))
+        $timestamp = [datetime]::UtcNow.AddDays(-2)
+        [System.IO.File]::SetLastWriteTimeUtc($output, $timestamp)
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; Json = $compiled } {
+            param($C, $Json)
+            $script:armJson = $Json
+            foreach ($check in @($true, $false)) {
+                $result = Invoke-AvmBicepTransform -Context $C -CheckDrift:$check -Confirm:$false
+                $result.Status | Should -Be 'pass'
+                $result.Changed.Count | Should -Be 0
+                $result.Issues.Count | Should -Be 0
+            }
+        }
+        [System.IO.File]::ReadAllBytes($output) | Should -Be ([Text.Encoding]::UTF8.GetBytes($current))
+        [System.IO.File]::GetLastWriteTimeUtc($output) | Should -Be $timestamp
+    }
+
+    It 'fails clearly without overwriting a malformed checked-in artifact in either mode' {
+        $output = Join-Path $script:moduleDir 'main.json'
+        [System.IO.File]::WriteAllText($output, '{invalid', [Text.UTF8Encoding]::new($false))
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context } {
+            param($C)
+            foreach ($check in @($true, $false)) {
+                { Invoke-AvmBicepTransform -Context $C -CheckDrift:$check -Confirm:$false } |
+                    Should -Throw '*Checked-in main.json contains invalid JSON*'
+            }
+        }
+        [System.IO.File]::ReadAllText($output) | Should -BeExactly '{invalid'
+    }
+
     It 'compiles nested modules children in a monorepo but excludes proposed modules and tests' {
         $mono = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $root = Join-Path -Path $mono -ChildPath 'avm' -AdditionalChildPath 'res', 'mock', 'widgets'

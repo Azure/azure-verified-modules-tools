@@ -81,9 +81,6 @@ jobs:
       max-parallel: 4
       matrix:
         testCase: ${{ fromJSON(needs.select-deployments.outputs.deploymentMatrix) }}
-    concurrency:
-      group: ${{ matrix.testCase.ConcurrencyGroup }}
-      queue: max
     uses: ./.github/workflows/bicep-module-runtime-deployment.yml
     with:
       modulePath: ${{ inputs.modulePath }}
