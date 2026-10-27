@@ -1472,6 +1472,11 @@ Azure CLI and PowerShell must confirm the same subscription, tenant, cloud
 and account before CLI cleanup. Do not log in, export tokens or install
 modules implicitly. The native dependency floors follow the Az 15.5.0
 bundle, plus Az.Subscription 0.12.0, which is distributed separately.
+`Get-AvmBicepAzureDependency` exposes that same dependency inventory without
+installing or importing modules. Workflow setup installs missing individual
+dependencies at those floors from the official PSGallery in CurrentUser scope,
+reuses compatible modules and honors offline mode. Deployment tests run in a
+fresh session; the read-only preflight still checks every dependency and command.
 Check the actual command provenance and parameter names or aliases.
 Make the selected Az.Accounts version visible in the current PowerShell
 process's global scope before importing other Az modules: nested clients
@@ -1794,6 +1799,10 @@ falling back to repository scripts. Package qualification must exercise this
 package-only path, including empty fork configuration, InPlace/Fresh retries,
 artifact state, and final-only cleanup; interface-parameter checks alone do
 not prove that behavior.
+Both native and retained deployment bootstraps require exact integer
+`BicepAzureDependencyInventory = 1` and provision the package's declared
+dependencies before OIDC sign-in. Deployment and cleanup run in fresh sessions
+and retain their independent fail-closed dependency preflight.
 Direct callers of established legacy leaves continue to pin their tools `uses`
 reference and `tools-ref` to the same full immutable SHA. Nested reusable calls
 remain relative to the entrypoint revision. Executable package-runtime jobs
