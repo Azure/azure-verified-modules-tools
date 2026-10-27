@@ -51,11 +51,23 @@ jobs:
           MODULE_PATHS: ${{ github.event.inputs.modulePaths }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
-            Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+          $maxAttempts = 3
+          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            try {
+              if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
+                Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+              }
+              Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
+              Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
+              break
+            }
+            catch {
+              if ($attempt -eq $maxAttempts) { throw }
+              $delaySeconds = 5 * [math]::Pow(2, $attempt - 1)
+              Write-Warning "Avm.Authoring installation failed on attempt $attempt of ${maxAttempts}: $($_.Exception.Message). Retrying in $delaySeconds seconds."
+              Start-Sleep -Seconds $delaySeconds
+            }
           }
-          Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
-          Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
           Import-Module Avm.Authoring -ErrorAction Stop
           $capabilities = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities
           if ($capabilities.BicepWorkflowOrchestration -ne 1) {
