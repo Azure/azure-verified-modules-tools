@@ -364,7 +364,14 @@ authentication. Preflight failures retain ordinary post-hook cleanup behavior.
 ### Terraform policy recovery staging
 
 Terraform policy checks stage examples under `Get-AvmFolder -Kind Cache` in
-`policy-stage/avm-policy-<unique-id>`. Immediately before its pre hook, each
+`policy-stage/avm-policy-<unique-id>`. Provider-schema output may omit schemas
+only when its format is supported and every installed configuration is
+conservatively proven provider-free; unknown constructs or provider
+requirements fail closed. A `removed` block is provider-free only with an
+explicit `destroy = false` lifecycle and no other removal actions. Declared
+and configured providers must have their corresponding schemas. Normal
+Terraform validation, planning and Conftest evaluation still apply.
+Immediately before its pre hook, each
 example marks cleanup required and confirms it only after its post hook returns
 successfully. Examples that never start hooks do not require fixture cleanup.
 The parent checks every example after workers finish; failed, interrupted, or

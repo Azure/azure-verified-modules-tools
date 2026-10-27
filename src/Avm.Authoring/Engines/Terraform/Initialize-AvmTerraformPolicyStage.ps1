@@ -114,12 +114,42 @@ function Read-AvmTerraformPolicyConfiguration {
     $providers = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
     $hasModules = $false
     $hasBackend = $false
+    $mayRequireProviders = $false
     foreach ($document in $documents) {
+        foreach ($key in $document.Keys) {
+            if ($key -cnotin @('terraform', 'module', 'variable', 'locals', 'output', 'moved', 'removed')) {
+                $mayRequireProviders = $true
+            }
+        }
+        if ($document.Contains('removed')) {
+            foreach ($removed in @($document.removed)) {
+                if ($removed -isnot [System.Collections.IDictionary] -or -not $removed.Contains('from') -or
+                    $removed.from -isnot [string] -or [string]::IsNullOrWhiteSpace($removed.from) -or
+                    -not $removed.Contains('lifecycle') -or
+                    @($removed.Keys | Where-Object { $_ -cnotin @('from', 'lifecycle') }).Count -gt 0) {
+                    $mayRequireProviders = $true
+                    continue
+                }
+                $lifecycle = @($removed.lifecycle)
+                if ($lifecycle.Count -ne 1 -or $lifecycle[0] -isnot [System.Collections.IDictionary] -or
+                    $lifecycle[0].Count -ne 1 -or -not $lifecycle[0].Contains('destroy') -or
+                    $lifecycle[0].destroy -isnot [bool] -or $lifecycle[0].destroy) {
+                    $mayRequireProviders = $true
+                }
+            }
+        }
         if ($document.Contains('module')) {
             if ($document.module -isnot [System.Collections.IDictionary]) {
                 throw [AvmConfigurationException]::new("Cannot inspect module declarations in '$Path'. Correct the configuration before policy checks.")
             }
             if ($document.module.Count -gt 0) { $hasModules = $true }
+            foreach ($module in $document.module.Values) {
+                foreach ($call in @($module)) {
+                    if ($call -isnot [System.Collections.IDictionary] -or $call.Contains('providers')) {
+                        $mayRequireProviders = $true
+                    }
+                }
+            }
         }
         if ($document.Contains('terraform')) {
             foreach ($terraform in @($document.terraform)) {
@@ -127,6 +157,9 @@ function Read-AvmTerraformPolicyConfiguration {
                     throw [AvmConfigurationException]::new("Cannot inspect a Terraform block in '$Path' for provider safeguards.")
                 }
                 if ($terraform.Contains('backend') -or $terraform.Contains('cloud')) { $hasBackend = $true }
+                foreach ($key in $terraform.Keys) {
+                    if ($key -cnotin @('required_version', 'required_providers')) { $mayRequireProviders = $true }
+                }
                 if (-not $terraform.Contains('required_providers')) { continue }
                 foreach ($requirements in @($terraform.required_providers)) {
                     if ($requirements -isnot [System.Collections.IDictionary]) {
@@ -147,6 +180,7 @@ function Read-AvmTerraformPolicyConfiguration {
                             throw [AvmConfigurationException]::new("Provider '$name' in '$Path' has conflicting source declarations. Consolidate them before policy checks.")
                         }
                         $sources[$name] = $source
+                        $mayRequireProviders = $true
                     }
                 }
             }
@@ -175,12 +209,13 @@ function Read-AvmTerraformPolicyConfiguration {
         }
     }
     return [pscustomobject]@{
-        Path       = $Path
-        Files      = $files
-        Sources    = $sources
-        Providers  = @($providers.Values)
-        HasModules = $hasModules
-        HasBackend = $hasBackend
+        Path                = $Path
+        Files               = $files
+        Sources             = $sources
+        Providers           = @($providers.Values)
+        HasModules          = $hasModules
+        HasBackend          = $hasBackend
+        MayRequireProviders = $mayRequireProviders
     }
 }
 
@@ -188,7 +223,9 @@ function Get-AvmTerraformPolicyProviderSetting {
     [CmdletBinding()]
     [OutputType([hashtable])]
     param(
-        [Parameter(Mandatory)] [string] $Payload
+        [Parameter(Mandatory)] [string] $Payload,
+        [switch] $ProviderFree,
+        [string[]] $RequiredSources = @()
     )
 
     try {
@@ -197,9 +234,24 @@ function Get-AvmTerraformPolicyProviderSetting {
     catch [System.ArgumentException] {
         throw [AvmConfigurationException]::new('Terraform returned invalid provider schemas. Policy planning is blocked; reinitialize the configured providers.')
     }
-    if ($schema -isnot [System.Collections.IDictionary] -or -not $schema.Contains('provider_schemas') -or
-        $schema.provider_schemas -isnot [System.Collections.IDictionary]) {
+    if ($schema -isnot [System.Collections.IDictionary]) {
         throw [AvmConfigurationException]::new('Terraform did not return provider_schemas. Policy planning is blocked.')
+    }
+    if (-not $schema.Contains('provider_schemas') -or
+        ($schema.provider_schemas -is [System.Collections.IDictionary] -and $schema.provider_schemas.Count -eq 0)) {
+        if ($ProviderFree -and $RequiredSources.Count -eq 0 -and $schema.Contains('format_version') -and
+            $schema.format_version -is [string] -and $schema.format_version -cmatch '^1\.[0-9]+$') {
+            return @{}
+        }
+        throw [AvmConfigurationException]::new('Terraform did not return provider_schemas. Policy planning is blocked.')
+    }
+    if ($schema.provider_schemas -isnot [System.Collections.IDictionary]) {
+        throw [AvmConfigurationException]::new('Terraform did not return provider_schemas. Policy planning is blocked.')
+    }
+    foreach ($source in $RequiredSources) {
+        if (-not $schema.provider_schemas.Contains($source)) {
+            throw [AvmConfigurationException]::new("Terraform did not return the required provider schema for '$source'. Policy planning is blocked.")
+        }
     }
     $settings = @{}
     foreach ($address in $schema.provider_schemas.Keys) {
@@ -334,7 +386,21 @@ function Initialize-AvmTerraformPolicyStage {
     }
     $schema = Invoke-AvmProcess -FilePath $TerraformPath -ArgumentList @('providers', 'schema', '-json') `
         -WorkingDirectory $WorkingDirectory -EnvVars $EnvVars -Label 'terraform provider schemas (policy safeguards)'
-    $settings = Get-AvmTerraformPolicyProviderSetting -Payload $schema.StdOut
+    $requiredSources = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($configuration in $configurations) {
+        foreach ($source in $configuration.Sources.Values) { $null = $requiredSources.Add($source) }
+        foreach ($provider in $configuration.Providers) {
+            $source = if ($configuration.Sources.ContainsKey($provider.Name)) {
+                $configuration.Sources[$provider.Name]
+            }
+            else {
+                "registry.terraform.io/hashicorp/$($provider.Name)".ToLowerInvariant()
+            }
+            $null = $requiredSources.Add($source)
+        }
+    }
+    $providerFree = @($configurations | Where-Object { $_.MayRequireProviders }).Count -eq 0
+    $settings = Get-AvmTerraformPolicyProviderSetting -Payload $schema.StdOut -ProviderFree:$providerFree -RequiredSources @($requiredSources)
     $azureRm = 'registry.terraform.io/hashicorp/azurerm'
     # Implicit and inherited configurations use skip=true/legacy; explicit modern blocks use skip=false/none.
     if ($settings.ContainsKey($azureRm) -and -not $settings[$azureRm].ContainsKey('skip_provider_registration')) {

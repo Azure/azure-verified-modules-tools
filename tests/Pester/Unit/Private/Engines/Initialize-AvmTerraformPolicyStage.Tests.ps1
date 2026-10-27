@@ -75,6 +75,39 @@ Describe 'Terraform policy provider schema safeguards' {
             { Get-AvmTerraformPolicyProviderSetting -Payload $Payload } | Should -Throw '*resource_providers_to_register*'
         }
     }
+
+    It 'accepts <Case> schemas only with verified provider-free configurations and a supported format' -ForEach @(
+        @{ Case = 'omitted'; Payload = '{"format_version":"1.0"}' }
+        @{ Case = 'empty'; Payload = '{"format_version":"1.0","provider_schemas":{}}' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Payload = $Payload } {
+            param($Payload)
+            (Get-AvmTerraformPolicyProviderSetting -Payload $Payload -ProviderFree).Count | Should -Be 0
+            { Get-AvmTerraformPolicyProviderSetting -Payload $Payload } | Should -Throw '*provider_schemas*'
+            { Get-AvmTerraformPolicyProviderSetting -Payload $Payload -ProviderFree -RequiredSources @('registry.terraform.io/hashicorp/azurerm') } |
+                Should -Throw '*provider_schemas*'
+        }
+    }
+
+    It 'rejects malformed or unsupported provider-free schema output: <Payload>' -ForEach @(
+        @{ Payload = '{}' }, @{ Payload = '{"format_version":1}' }, @{ Payload = '{"format_version":"2.0"}' }
+        @{ Payload = '{"format_version":"1.0","provider_schemas":null}' }
+        @{ Payload = '{"format_version":"1.0","provider_schemas":[]}' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Payload = $Payload } {
+            param($Payload)
+            { Get-AvmTerraformPolicyProviderSetting -Payload $Payload -ProviderFree } | Should -Throw -ExceptionType ([AvmConfigurationException])
+        }
+    }
+
+    It 'rejects a missing required schema even when other schemas are present' {
+        $payload = New-PolicyProviderSchema | ConvertTo-Json -Depth 20
+        InModuleScope Avm.Authoring -Parameters @{ Payload = $payload } {
+            param($Payload)
+            { Get-AvmTerraformPolicyProviderSetting -Payload $Payload -RequiredSources @('registry.terraform.io/hashicorp/random') } |
+                Should -Throw '*required provider schema*'
+        }
+    }
 }
 
 Describe 'Terraform policy isolated environment' {
@@ -266,6 +299,72 @@ Describe 'Terraform policy initialization ordering and module coverage' {
         $script:payload = New-PolicyProviderSchema | ConvertTo-Json -Depth 20
     }
 
+    It 'rejects omitted schemas for provider-dependent or unrecognized configurations: <Case>' -ForEach @(
+        @{ Case = 'required provider'; Text = '{"terraform":{"required_providers":{"azurerm":{"source":"hashicorp/azurerm"}}}}' }
+        @{ Case = 'explicit provider'; Text = '{"provider":{"azurerm":{}}}' }
+        @{ Case = 'implicit resource'; Text = '{"resource":{"azurerm_resource_group":{"example":{}}}}' }
+        @{ Case = 'data source'; Text = '{"data":{"azurerm_client_config":{"current":{}}}}' }
+        @{ Case = 'ephemeral resource'; Text = '{"ephemeral":{"random_password":{"example":{}}}}' }
+        @{ Case = 'module provider mapping'; Text = '{"module":{"child":{"source":"./child","providers":{"azurerm":"${azurerm}"}}}}' }
+        @{ Case = 'provider metadata'; Text = '{"terraform":{"provider_meta":{"azurerm":{}}}}' }
+        @{ Case = 'removal with implicit destroy'; Text = '{"removed":[{"from":"${random_uuid.example}"}]}' }
+        @{ Case = 'removal with destroy enabled'; Text = '{"removed":[{"from":"${random_uuid.example}","lifecycle":{"destroy":true}}]}' }
+        @{ Case = 'removal with invalid destroy'; Text = '{"removed":[{"from":"${random_uuid.example}","lifecycle":{"destroy":"false"}}]}' }
+        @{ Case = 'removal with provisioner'; Text = '{"removed":[{"from":"${random_uuid.example}","lifecycle":{"destroy":false},"provisioner":{}}]}' }
+        @{ Case = 'unrecognized block'; Text = '{"unknown":{}}' }
+    ) {
+        Set-Content -LiteralPath (Join-Path $script:stage 'main.tf.json') -Value $Text -Encoding utf8NoBOM
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:stage } {
+            param($Root)
+            Mock Invoke-AvmTerraformInit {
+                $modules = Join-Path $EnvVars.TF_DATA_DIR 'modules'
+                $null = New-Item -ItemType Directory -Path $modules -Force
+                Set-Content -LiteralPath (Join-Path $modules 'modules.json') -Value '{"Modules":[{"Key":"","Dir":"."}]}' -Encoding utf8NoBOM
+            }
+
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = '{"format_version":"1.0"}' } }
+            { Initialize-AvmTerraformPolicyStage -WorkingDirectory $Root -StageRoot $Root -TerraformPath 'terraform' -ConftestPath 'unused' `
+                    -EnvVars (Get-AvmTerraformPolicyEnvironment -StageRoot $Root) } | Should -Throw '*provider_schemas*'
+            Should -Invoke Invoke-AvmProcess -Times 0 -ParameterFilter { $ArgumentList[0] -eq 'validate' }
+        }
+    }
+
+    It 'accepts provider-free removals with explicit no-destroy lifecycle' {
+        Set-Content -LiteralPath (Join-Path $script:stage 'main.tf.json') `
+            -Value '{"removed":[{"from":"${random_uuid.example}","lifecycle":{"destroy":false}}]}' -Encoding utf8NoBOM
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:stage } {
+            param($Root)
+            Mock Invoke-AvmTerraformInit {}
+            Mock Invoke-AvmProcess {
+                if ($ArgumentList[0] -eq 'providers') { return [pscustomobject]@{ ExitCode = 0; StdOut = '{"format_version":"1.0"}' } }
+                [pscustomobject]@{ ExitCode = 0; StdOut = '{"valid":true}' }
+            }
+            Initialize-AvmTerraformPolicyStage -WorkingDirectory $Root -StageRoot $Root -TerraformPath 'terraform' -ConftestPath 'unused' `
+                -EnvVars (Get-AvmTerraformPolicyEnvironment -StageRoot $Root)
+            Should -Invoke Invoke-AvmProcess -Times 1 -ParameterFilter { $ArgumentList[0] -eq 'validate' }
+        }
+    }
+
+    It 'rejects omitted schemas when an installed child requires a provider' {
+        $child = Join-Path $script:stage 'child'
+        $null = New-Item -ItemType Directory -Path $child
+        Set-Content -LiteralPath (Join-Path $script:stage 'main.tf.json') -Value '{"module":{"child":{"source":"./child"}}}' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $child 'main.tf.json') -Value '{"resource":{"azurerm_resource_group":{"example":{}}}}' -Encoding utf8NoBOM
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:stage; Child = $child } {
+            param($Root, $Child)
+            Mock Invoke-AvmTerraformInit {
+                $modules = Join-Path $EnvVars.TF_DATA_DIR 'modules'
+                $null = New-Item -ItemType Directory -Path $modules -Force
+                @{ Modules = @(@{ Key = ''; Dir = '.' }, @{ Key = 'child'; Dir = $Child }) } |
+                    ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $modules 'modules.json') -Encoding utf8NoBOM
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = '{"format_version":"1.0"}' } }
+            { Initialize-AvmTerraformPolicyStage -WorkingDirectory $Root -StageRoot $Root -TerraformPath 'terraform' -ConftestPath 'unused' `
+                    -EnvVars (Get-AvmTerraformPolicyEnvironment -StageRoot $Root) } | Should -Throw '*provider_schemas*'
+            Should -Invoke Invoke-AvmProcess -Times 0 -ParameterFilter { $ArgumentList[0] -eq 'validate' }
+        }
+    }
+
     It 'rejects <Kind> execution before init or provider schema acquisition' -ForEach @(
         @{ Kind = 'backend'; Text = '{"terraform":{"backend":{"local":{}}}}' }
         @{ Kind = 'cloud'; Text = '{"terraform":{"cloud":{}}}' }
@@ -385,7 +484,7 @@ Describe 'Terraform policy initialization ordering and module coverage' {
             param($Root, $Payload, $Exit)
             Mock Invoke-AvmTerraformInit {}
             Mock Invoke-AvmProcess {
-                if ($ArgumentList[0] -eq 'providers') { return [pscustomobject]@{ ExitCode = 0; StdOut = '{"provider_schemas":{}}' } }
+                if ($ArgumentList[0] -eq 'providers') { return [pscustomobject]@{ ExitCode = 0; StdOut = '{"format_version":"1.0","provider_schemas":{}}' } }
                 [pscustomobject]@{ ExitCode = $Exit; StdOut = $Payload }
             }
             { Initialize-AvmTerraformPolicyStage -WorkingDirectory $Root -StageRoot $Root -TerraformPath 'terraform' -ConftestPath 'unused' `
