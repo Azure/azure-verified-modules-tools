@@ -16,6 +16,130 @@ BeforeAll {
     foreach ($directory in Get-ChildItem -LiteralPath (Join-Path $script:root '.github' 'actions') -Directory -Filter 'bicep-*') {
         $script:actions[$directory.Name] = ConvertFrom-Yaml (Get-Content -LiteralPath (Join-Path $directory.FullName 'action.yml') -Raw)
     }
+    $runtimeContext = $script:workflows['bicep-module-runtime-deployment'].jobs.deploy.steps |
+        Where-Object { $_['id'] -ceq 'context' }
+    $tokens = $null
+    $errors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseInput($runtimeContext.run, [ref]$tokens, [ref]$errors)
+    if ($errors.Count -gt 0) { throw 'The runtime deployment context script is invalid.' }
+    $statements = @($ast.EndBlock.Statements)
+    $start = @($statements | Where-Object { $_.Extent.Text -match '^\$capabilities\s*=' })[0].Extent.StartOffset
+    $end = @($statements | Where-Object { $_.Extent.Text -match '^\$testCase\s*=' })[0].Extent.StartOffset
+    $script:dependencyBootstrap = [scriptblock]::Create($runtimeContext.run.Substring($start, $end - $start))
+    function Get-AvmBicepAzureDependency {
+        [CmdletBinding()]
+        param([switch] $SkipModuleVersionCheck)
+        throw 'Dependency inventory must be mocked.'
+    }
+    function Get-PSResourceRepository {
+        [CmdletBinding()]
+        param([string] $Name)
+        throw 'Gallery lookup must be mocked.'
+    }
+    function Install-PSResource {
+        [CmdletBinding()]
+        param([string] $Name, [string] $Version, [string] $Repository, [string] $Scope, [switch] $TrustRepository, [switch] $Quiet)
+        throw 'Dependency provisioning must be mocked.'
+    }
+}
+
+Describe 'Bicep runtime dependency bootstrap behavior' {
+    BeforeEach {
+        $script:savedOffline = [Environment]::GetEnvironmentVariable('AVM_OFFLINE')
+        [Environment]::SetEnvironmentVariable('AVM_OFFLINE', [NullString]::Value)
+        $script:runtimeCapability = 1
+        $script:dependencyCapability = 1
+        Mock Get-Module {
+            [pscustomobject]@{ PrivateData = @{ AvmCapabilities = @{
+                        BicepWorkflowE2eRuntime = $script:runtimeCapability
+                        BicepAzureDependencyInventory = $script:dependencyCapability
+                    } } }
+        } -ParameterFilter { $Name -eq 'Avm.Authoring' }
+        $global:AvmRuntimeDependencyFixture = @{}
+        Mock Get-AvmBicepAzureDependency {
+            [pscustomobject]@{ Name = 'Az.Accounts'; MinimumVersion = [version]'5.3.4' }
+            [pscustomobject]@{ Name = 'Az.Subscription'; MinimumVersion = [version]'0.12.0' }
+        }
+        Mock Get-Module {
+            $key = [string]$Name
+            if ($global:AvmRuntimeDependencyFixture.ContainsKey($key)) {
+                [pscustomobject]@{ Version = $global:AvmRuntimeDependencyFixture[$key] }
+            }
+        } -ParameterFilter { $ListAvailable }
+        Mock Get-PSResourceRepository { [pscustomobject]@{ Uri = 'https://www.powershellgallery.com/api/v2' } }
+        Mock Install-PSResource { $global:AvmRuntimeDependencyFixture[$Name] = [version]$Version }
+        Mock Start-Sleep {}
+        Mock Write-Warning {}
+    }
+
+    AfterEach {
+        $offline = if ($null -eq $script:savedOffline) { [NullString]::Value } else { $script:savedOffline }
+        [Environment]::SetEnvironmentVariable('AVM_OFFLINE', $offline)
+        Remove-Variable AvmRuntimeDependencyFixture -Scope Global -ErrorAction SilentlyContinue
+    }
+
+    It 'reuses compatible dependencies and provisions missing Subscription after qualification' {
+        $global:AvmRuntimeDependencyFixture['Az.Accounts'] = [version]'6.0.0'
+        & $script:dependencyBootstrap
+        Should -Invoke Install-PSResource -Exactly 1 -ParameterFilter {
+            $Name -ceq 'Az.Subscription' -and $Version -ceq '0.12.0' -and $Scope -ceq 'CurrentUser' -and $Repository -ceq 'PSGallery'
+        }
+    }
+
+    It 'rejects <Label> bootstrap capability without provisioning' -ForEach @(
+        @{ Label = 'missing'; Value = $null }
+        @{ Label = 'string'; Value = '1' }
+        @{ Label = 'boolean'; Value = $true }
+        @{ Label = 'unsupported'; Value = 2 }
+    ) {
+        $script:dependencyCapability = $Value
+        { & $script:dependencyBootstrap } | Should -Throw '*BicepAzureDependencyInventory*'
+        Should -Invoke Install-PSResource -Exactly 0
+    }
+
+    It 'stops before provisioning when runtime capability is not an integer' {
+        $script:runtimeCapability = '1'
+        { & $script:dependencyBootstrap } | Should -Throw '*BicepWorkflowE2eRuntime*'
+        Should -Invoke Install-PSResource -Exactly 0
+    }
+
+    It 'reconciles an installed dependency after a transient failure without repeating installation' {
+        $global:AvmRuntimeDependencyFixture['Az.Accounts'] = [version]'5.3.4'
+        Mock Install-PSResource {
+            $global:AvmRuntimeDependencyFixture[$Name] = [version]$Version
+            throw [Net.Http.HttpRequestException]::new('HTTP 504')
+        }
+        & $script:dependencyBootstrap
+        Should -Invoke Install-PSResource -Exactly 1
+        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 5 }
+    }
+
+    It 'rejects a nonofficial gallery before installing' {
+        Mock Get-PSResourceRepository { [pscustomobject]@{ Uri = 'https://example.invalid' } }
+        { & $script:dependencyBootstrap } | Should -Throw '*official HTTPS*'
+        Should -Invoke Install-PSResource -Exactly 0
+    }
+
+    It 'fails if the installer does not provide the required module' {
+        Mock Install-PSResource {}
+        { & $script:dependencyBootstrap } | Should -Throw '*did not provide Az.Accounts*'
+    }
+
+    It 'does not contact the gallery offline and fails when a dependency is missing' {
+        $env:AVM_OFFLINE = '1'
+        $global:AvmRuntimeDependencyFixture['Az.Accounts'] = [version]'5.3.4'
+        { & $script:dependencyBootstrap } | Should -Throw '*AVM_OFFLINE=1*Az.Subscription*'
+        Should -Invoke Get-PSResourceRepository -Exactly 0
+        Should -Invoke Install-PSResource -Exactly 0
+    }
+
+    It 'bounds transient installation failures to three attempts' {
+        Mock Install-PSResource { throw [Net.Http.HttpRequestException]::new('HTTP 503') }
+        { & $script:dependencyBootstrap } | Should -Throw '*503*'
+        Should -Invoke Install-PSResource -Exactly 3
+        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 5 }
+        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 10 }
+    }
 }
 
 Describe 'Bicep reusable workflow ownership and syntax' {

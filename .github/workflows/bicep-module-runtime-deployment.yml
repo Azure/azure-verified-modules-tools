@@ -74,8 +74,37 @@ jobs:
           }
           Import-Module Avm.Authoring -ErrorAction Stop
           $capabilities = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities
-          if ($capabilities.BicepWorkflowE2eRuntime -ne 1) {
+          if ($capabilities.BicepWorkflowE2eRuntime -isnot [int] -or $capabilities.BicepWorkflowE2eRuntime -ne 1) {
             throw 'The installed Avm.Authoring package does not provide BicepWorkflowE2eRuntime = 1.'
+          }
+          if ($capabilities.BicepAzureDependencyInventory -isnot [int] -or $capabilities.BicepAzureDependencyInventory -ne 1) {
+            throw 'The installed Avm.Authoring package does not provide BicepAzureDependencyInventory = 1.'
+          }
+          foreach ($dependency in Get-AvmBicepAzureDependency -SkipModuleVersionCheck) {
+            $available = @(Get-Module -ListAvailable -Name $dependency.Name | Where-Object { $_.Version -ge $dependency.MinimumVersion })
+            if ($available.Count -gt 0) { continue }
+            if ($env:AVM_OFFLINE -eq '1') { throw "AVM_OFFLINE=1 prevents installing $($dependency.Name)." }
+            $repository = Get-PSResourceRepository -Name PSGallery -ErrorAction Stop
+            if ([string]$repository.Uri -cne 'https://www.powershellgallery.com/api/v2') {
+              throw 'PSGallery must use the official HTTPS repository.'
+            }
+            for ($dependencyAttempt = 1; $dependencyAttempt -le 3; $dependencyAttempt++) {
+              try {
+                $available = @(Get-Module -ListAvailable -Name $dependency.Name | Where-Object { $_.Version -ge $dependency.MinimumVersion })
+                if ($available.Count -eq 0) {
+                  Install-PSResource -Name $dependency.Name -Version $dependency.MinimumVersion.ToString() `
+                    -Repository PSGallery -Scope CurrentUser -TrustRepository -Quiet -ErrorAction Stop
+                }
+                $available = @(Get-Module -ListAvailable -Name $dependency.Name | Where-Object { $_.Version -ge $dependency.MinimumVersion })
+                if ($available.Count -eq 0) { throw "Installation did not provide $($dependency.Name) $($dependency.MinimumVersion) or newer." }
+                break
+              }
+              catch {
+                if ($dependencyAttempt -eq 3 -or $_.Exception.ToString() -notmatch '(?i)(timed? out|connection (reset|refused)|temporary failure|temporarily unavailable|\b429\b|\b50[234]\b|no route to host|name or service not known)') { throw }
+                Write-Warning "Installing $($dependency.Name) failed transiently (attempt $dependencyAttempt of 3); checking installed state before retry."
+                Start-Sleep -Seconds (5 * [math]::Pow(2, $dependencyAttempt - 1))
+              }
+            }
           }
           $testCase = ConvertFrom-Json -InputObject $env:TEST_CASE -AsHashtable
           $context = Get-AvmBicepE2eTestContext -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH `

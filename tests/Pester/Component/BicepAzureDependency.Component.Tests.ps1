@@ -6,11 +6,84 @@ BeforeAll {
     & (Join-Path $PSScriptRoot '..' 'Import-AvmTestModule.ps1') `
         -SourceManifest (Join-Path $moduleRoot 'Avm.Authoring.psd1')
     $script:manifest = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Avm.Authoring.psd1'
+    Import-Module -FullyQualifiedName @{ ModuleName = 'powershell-yaml'; RequiredVersion = '0.4.12' }
+    $workflow = ConvertFrom-Yaml (Get-Content -Raw (Join-Path $PSScriptRoot '..' '..' '..' '.github' 'workflows' 'bicep-module-runtime-deployment.yml'))
+    $context = $workflow.jobs.deploy.steps | Where-Object { $_['id'] -ceq 'context' }
+    $tokens = $null
+    $errors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseInput($context.run, [ref]$tokens, [ref]$errors)
+    if ($errors.Count -gt 0) { throw 'The runtime deployment context script is invalid.' }
+    $script:provisioning = @($ast.EndBlock.Statements | Where-Object {
+            $_.Extent.Text -match '^foreach\s*\(\$dependency\s+in\s+Get-AvmBicepAzureDependency\b'
+        })[0].Extent.Text
 }
 
 AfterAll { Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue }
 
 Describe 'Component: Bicep cleanup dependency scope' -Tag Component {
+    It 'provisions missing dependencies and verifies the guard in a fresh session' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $modules = Join-Path $root 'modules'
+        $null = New-Item -ItemType Directory -Path $modules -Force
+        $driver = Join-Path $root 'bootstrap.ps1'
+        $provisioning = Join-Path $root 'provision.ps1'
+        [IO.File]::WriteAllText($provisioning, $script:provisioning, [Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText($driver, @'
+param($Manifest, $Modules, $Mode, $Provisioning)
+$ErrorActionPreference = 'Stop'
+$env:PSModulePath = $Modules + [IO.Path]::PathSeparator + (Join-Path $PSHOME 'Modules')
+$env:AVM_OFFLINE = '0'
+$module = Import-Module $Manifest -PassThru
+& $module {
+    function script:Get-AvmBicepAzureRequirement {
+        [pscustomobject]@{ Name = 'Az.Accounts'; MinimumVersion = '5.3.4'; Commands = @{ 'Get-AzContext' = @() } }
+        [pscustomobject]@{ Name = 'Az.Subscription'; MinimumVersion = '0.12.0'; Commands = @{ 'Disable-AzSubscription' = @('SubscriptionId') } }
+    }
+}
+if ($Mode -eq 'install') {
+        function Get-PSResourceRepository { param($Name) [pscustomobject]@{ Uri = 'https://www.powershellgallery.com/api/v2' } }
+        function Install-PSResource {
+            [CmdletBinding()]
+            param($Name, $Version, $Repository, $Scope, [switch]$TrustRepository, [switch]$Quiet)
+            if ($Repository -cne 'PSGallery' -or $Scope -cne 'CurrentUser') { throw 'Incorrect installation scope.' }
+            $command = if ($Name -ceq 'Az.Accounts') { 'Get-AzContext' } else { 'Disable-AzSubscription' }
+            $directory = Join-Path $Modules $Name $Version
+            $null = New-Item -ItemType Directory -Path $directory -Force
+            New-ModuleManifest -Path (Join-Path $directory "$Name.psd1") -RootModule "$Name.psm1" `
+                -ModuleVersion $Version -FunctionsToExport $command -CmdletsToExport @() -AliasesToExport @()
+            $body = if ($Name -ceq 'Az.Accounts') {
+                'function Get-AzContext { [CmdletBinding()] param() }'
+            } else {
+                'function Disable-AzSubscription { [CmdletBinding()] param([string] $SubscriptionId) }'
+            }
+            [IO.File]::WriteAllText((Join-Path $directory "$Name.psm1"), $body, [Text.UTF8Encoding]::new($false))
+        }
+        . $Provisioning
+        if (Get-Module Az.Accounts, Az.Subscription) { throw 'Bootstrap imported an Azure module.' }
+}
+else {
+    & $module { Assert-AvmBicepAzureDependency }
+    'verified'
+}
+'@, [Text.UTF8Encoding]::new($false))
+        InModuleScope Avm.Authoring -Parameters @{
+            Driver = $driver; Manifest = $script:manifest; Modules = $modules; Root = $root; Provisioning = $provisioning
+        } {
+            param($Driver, $Manifest, $Modules, $Root, $Provisioning)
+            $arguments = @('-NoProfile', '-NonInteractive', '-File', $Driver, '-Manifest', $Manifest, '-Modules', $Modules, '-Provisioning', $Provisioning)
+            $missing = Invoke-AvmProcess -FilePath ([Environment]::ProcessPath) -ArgumentList ($arguments + @('-Mode', 'verify')) `
+                -WorkingDirectory $Root -IgnoreExitCode
+            $missing.ExitCode | Should -Not -Be 0
+            $missing.StdErr | Should -Match 'Az.Subscription'
+            $installed = Invoke-AvmProcess -FilePath ([Environment]::ProcessPath) -ArgumentList ($arguments + @('-Mode', 'install')) `
+                -WorkingDirectory $Root
+            $installed.ExitCode | Should -Be 0
+            $verified = Invoke-AvmProcess -FilePath ([Environment]::ProcessPath) -ArgumentList ($arguments + @('-Mode', 'verify')) `
+                -WorkingDirectory $Root
+            $verified.StdOut | Should -Match 'verified'
+        }
+    }
+
     It 'keeps nested clients on the selected Accounts version with caller preload: <Preload>' -ForEach @(
         @{ Preload = $false }
         @{ Preload = $true }
