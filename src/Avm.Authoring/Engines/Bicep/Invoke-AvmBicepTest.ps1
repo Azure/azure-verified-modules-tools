@@ -11,7 +11,7 @@ function Invoke-AvmBicepTest {
         node_modules). Compilation failures are surfaced as Issue records;
         any failure flips Status to 'fail'.
 
-        bicep build emits diagnostics to stderr in the same defaultV2 format
+        bicep build emits diagnostics to stderr in the same default format
         as bicep lint:
           <path>(<line>,<col>) : <severity> <code>: <message>
 

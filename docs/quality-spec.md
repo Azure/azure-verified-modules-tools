@@ -1783,6 +1783,9 @@ contract. New Bicep orchestration uses only relative reusable workflow calls
 from that entrypoint revision and the latest stable PSGallery `Avm.Authoring`
 package. It must not check out tools again, pin a second tools SHA, use
 `@main`, derive a source ref, or accept a caller-facing `tools-ref` override.
+Package bootstrap retries installation up to three times with five- and
+ten-second delays, then rethrows the final failure. Import and capability
+checks remain outside the retry.
 The runtime package must declare exact integer
 `PrivateData.AvmCapabilities.BicepWorkflowOrchestration = 1` before selection
 or release work and `BicepWorkflowE2eRuntime = 1` before E2E selection or

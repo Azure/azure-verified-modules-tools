@@ -13,7 +13,8 @@ Describe 'Integration group selection' {
         $bicep = @(Get-AvmIntegrationTestFile -Path $path -Group Bicep)
         $terraform = @(Get-AvmIntegrationTestFile -Path $path -Group Terraform)
         $all.Count | Should -BeGreaterThan 0
-        $bicep.Count | Should -Be 8
+        $bicep.Count | Should -Be 9
+        $bicep | Should -Contain (Join-Path $path 'BicepLintPackaged.Integration.Tests.ps1')
         $bicep | Should -Contain (Join-Path $path 'BicepTestSubscriptionSelection.Integration.Tests.ps1')
         $bicep | Should -Contain (Join-Path $path 'BicepMetadataPackaged.Integration.Tests.ps1')
         $bicep | Should -Contain (Join-Path $path 'BicepModuleMetadata.Integration.Tests.ps1')
