@@ -282,9 +282,11 @@ module "library" {
         }
     }
 
-It 'converges mixed local provider maps before loading test-selected examples: <RetainModtm>' -ForEach @(
-        @{ RetainModtm = $false }
-        @{ RetainModtm = $true }
+It 'converges local provider maps before loading test-selected examples: <RetainModtm>, <DefaultMapping>, <RetainRandom>' -ForEach @(
+        @{ RetainModtm = $false; DefaultMapping = $false; RetainRandom = $false }
+        @{ RetainModtm = $true; DefaultMapping = $false; RetainRandom = $false }
+        @{ RetainModtm = $false; DefaultMapping = $true; RetainRandom = $false }
+        @{ RetainModtm = $false; DefaultMapping = $false; RetainRandom = $true }
     ) {
         $root = $script:target
         $library = Join-Path $root 'dependencies' 'library'
@@ -306,6 +308,10 @@ terraform {
       source  = "Azure/modtm"
       version = "~> 0.3"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6, < 4.0"
+    }
   }
 }
 '@
@@ -316,6 +322,9 @@ module "library" {
   __PROVIDERS__
 }
 data "azurerm_client_config" "this" {}
+resource "random_uuid" "telemetry" {
+  count = var.enable_telemetry ? 1 : 0
+}
 '@
         $mapping = if ($RetainModtm) { 'providers = { modtm = modtm }' } else { '' }
         Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM `
@@ -335,10 +344,23 @@ data "modtm_module_source" "this" {
 }
 '@
         }
+        elseif ($RetainRandom) {
+            @'
+terraform {
+  required_providers {
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.0, < 4.0"
+    }
+  }
+}
+resource "random_uuid" "business" {}
+'@
+        }
         else { 'locals { fixture = true }' }
         Set-Content -LiteralPath (Join-Path $library 'main.tf') -Value $libraryContent -Encoding utf8NoBOM
         Set-Content -LiteralPath (Join-Path $example 'terraform.tf') -Value $requirements -Encoding utf8NoBOM
-        Set-Content -LiteralPath (Join-Path $example 'main.tf') -Encoding utf8NoBOM -Value @'
+        $exampleContent = @'
 provider "azapi" {
   alias = "management"
 }
@@ -352,15 +374,21 @@ module "example" {
     azapi   = azapi.management # Keep the management selection.
     azurerm = azurerm.management
     modtm   = modtm
+    random  = random
   }
   location = "eastus"
 }
 '@
+        if ($DefaultMapping) {
+            $exampleContent = $exampleContent.Replace('azapi.management', 'azapi').Replace('azurerm.management', 'azurerm')
+        }
+        Set-Content -LiteralPath (Join-Path $example 'main.tf') -Encoding utf8NoBOM -Value $exampleContent
         $testPath = Join-Path $tests 'examples.tftest.hcl'
         Set-Content -LiteralPath $testPath -Encoding utf8NoBOM -Value @'
 mock_provider "azapi" {}
 mock_provider "azurerm" {}
 mock_provider "modtm" {}
+mock_provider "random" {}
 run "management" {
   command = plan
   module {
@@ -370,6 +398,7 @@ run "management" {
     azapi   = azapi
     azurerm = azurerm
     modtm   = modtm
+    random  = random
   }
 }
 '@
@@ -377,8 +406,11 @@ run "management" {
         $libraryBytes = [IO.File]::ReadAllBytes((Join-Path $library 'main.tf'))
         $first = $null
         foreach ($pass in 1..3) {
-            InModuleScope Avm.Authoring -Parameters @{ Root = $root; Example = $example; RetainModtm = $RetainModtm } {
-                param($Root, $Example, $RetainModtm)
+            InModuleScope Avm.Authoring -Parameters @{
+                Root = $root; Example = $example; RetainModtm = $RetainModtm
+                DefaultMapping = $DefaultMapping; RetainRandom = $RetainRandom
+            } {
+                param($Root, $Example, $RetainModtm, $DefaultMapping, $RetainRandom)
                 (Invoke-AvmTerraformTransform -Context ([pscustomobject]@{ Root = $Root; Ecosystem = 'terraform' })).Status |
                     Should -BeExactly 'pass'
                 $tool = Resolve-AvmTool -Name mapotf
@@ -386,10 +418,18 @@ run "management" {
                     'debug', '--tf-dir', $Example,
                     '--mptf-dir', (Resolve-AvmMapotfConfigDir -Root $Root -ProfileName provider-inheritance),
                     '--eval', 'local.module_provider_entries')
-                $entries = ($inspection.StdOut | ConvertFrom-Json -AsHashtable).example
-                $entries.azapi | Should -BeExactly 'azapi.management'
-                $entries.azurerm | Should -BeExactly 'azurerm.management'
-                $entries.Contains('modtm') | Should -Be $RetainModtm
+                $calls = $inspection.StdOut | ConvertFrom-Json -AsHashtable
+                if ($DefaultMapping) {
+                    $calls.Contains('example') | Should -BeFalse
+                }
+                else {
+                    $entries = $calls.example
+                    $entries.azapi | Should -BeExactly 'azapi.management'
+                    $entries.azurerm | Should -BeExactly 'azurerm.management'
+                    $entries.Contains('modtm') | Should -Be $RetainModtm
+                    $entries.Contains('random') | Should -Be $RetainRandom
+                    if ($RetainRandom) { $entries.random | Should -BeExactly 'random' }
+                }
                 foreach ($path in @($Root, $Example)) {
                     $requirements = Get-AvmTerraformUnitTestRequiredProvider -Path $path -Options ([pscustomobject]@{
                             ToolPath = $tool.Path
@@ -401,6 +441,11 @@ run "management" {
                     $requirements.azurerm.source | Should -BeExactly 'hashicorp/azurerm'
                     $requirements.azurerm.version | Should -BeExactly '~> 4.0'
                     $requirements.Contains('modtm') | Should -Be $RetainModtm
+                    $requirements.Contains('random') | Should -Be $RetainRandom
+                    if ($RetainRandom) {
+                        $requirements.random.source | Should -BeExactly 'hashicorp/random'
+                        $requirements.random.version | Should -BeExactly '>= 3.6, < 4.0'
+                    }
                     if ($RetainModtm) {
                         $requirements.modtm.source | Should -BeExactly 'Azure/modtm'
                         $requirements.modtm.version | Should -BeExactly '~> 0.3'
@@ -416,7 +461,9 @@ run "management" {
             }
             [IO.File]::ReadAllBytes($testPath) | Should -Be $testBytes
             [IO.File]::ReadAllBytes((Join-Path $library 'main.tf')) | Should -Be $libraryBytes
-            [IO.File]::ReadAllText((Join-Path $example 'main.tf')) | Should -Match '# Keep the management selection.'
+            if (-not $DefaultMapping) {
+                [IO.File]::ReadAllText((Join-Path $example 'main.tf')) | Should -Match '# Keep the management selection.'
+            }
             $content = (Get-TerraformContent -Root $root) + (Get-TerraformContent -Root $example)
             if ($pass -eq 1) { $first = $content }
             else { $content | Should -BeExactly $first }
@@ -653,7 +700,7 @@ run "explicit" {
         [IO.File]::ReadAllText($main) | Should -Match 'provider "azapi" \{\s+alias = "owner"'
     }
 
-It 'removes only unsupported same-default ModTM entries without rewriting non-default maps' {
+It 'removes only unsupported same-default ModTM and Random entries without rewriting non-default maps' {
         $root = $script:target
         $main = Join-Path $root 'main.tf'
         Set-Content -LiteralPath $main -Encoding utf8NoBOM -Value @'
@@ -665,28 +712,43 @@ module "retired" {
   providers = {
     azapi = azapi.management # Keep this selection.
     modtm = modtm
+    random = random
   }
+}
+module "random_only" {
+  source = "./dependency"
+  providers = { random = random }
+}
+module "undeclared" {
+  source = "./dependency"
+  providers = { random = random }
+}
+module "other_source" {
+  source = "./dependency"
+  providers = { random = random }
 }
 module "selected" {
   source = "./dependency"
   providers = {
     azapi = azapi.management
     modtm = modtm.owner # Never erase an authored non-default binding.
+    random = random.owner
   }
 }
 module "renamed" {
   source = "./dependency"
-  providers = { modtm = custom }
+  providers = { modtm = custom, random = custom }
 }
 module "alias_key" {
   source = "./dependency"
-  providers = { modtm.owner = modtm.owner }
+  providers = { modtm.owner = modtm.owner, random.owner = random.owner }
 }
 module "required" {
   source = "./dependency"
   providers = {
     azapi = azapi.management
     modtm = modtm
+    random = random
   }
 }
 '@
@@ -695,22 +757,39 @@ module "required" {
             $tool = Resolve-AvmTool -Name mapotf
             $profile = Join-Path $Profiles 'utility-module'
             $facts = 'provider_source_facts={retired=[],selected=[],renamed=[],alias_key=[],required=["registry.terraform.io/azure/modtm"]}'
+            $requirements = 'local_provider_requirements={' +
+            'retired={declared=[],original_sources={random="hashicorp/random"}},' +
+            'random_only={declared=[],original_sources={random="registry.terraform.io/hashicorp/random"}},' +
+            'selected={declared=[],original_sources={random="hashicorp/random"}},' +
+            'renamed={declared=[],original_sources={random="hashicorp/random"}},' +
+            'alias_key={declared=[],original_sources={random="hashicorp/random"}},' +
+            'required={declared=["modtm","random"],original_sources={random="hashicorp/random"}},' +
+            'undeclared={declared=[],original_sources={}},' +
+            'other_source={declared=[],original_sources={random="example/random"}}}'
             $first = $null
             foreach ($pass in 1..2) {
                 $null = Invoke-AvmProcess -FilePath $tool.Path -WorkingDirectory $Root -ArgumentList @(
                     'transform', '--tf-dir', $Root, '--mptf-dir', $profile,
-                    '--mptf-var', $facts, '--mptf-var', 'apply_utility_migration=false')
+                    '--mptf-var', $facts, '--mptf-var', $requirements, '--mptf-var', 'apply_utility_migration=false')
                 $inspection = Invoke-AvmProcess -FilePath $tool.Path -WorkingDirectory $Root -ArgumentList @(
                     'debug', '--tf-dir', $Root, '--mptf-dir', $profile,
                     '--eval', '{ entries = local.provider_mapping_entries, calls = data.module.utility.result }')
                 $inspection = $inspection.StdOut | ConvertFrom-Json -AsHashtable
                 $entries = $inspection.entries
                 $entries.retired.Contains('modtm') | Should -BeFalse
+                $entries.retired.Contains('random') | Should -BeFalse
+                $inspection.calls.random_only.Contains('providers') | Should -BeFalse
                 $entries.retired.azapi | Should -BeExactly 'azapi.management'
                 $entries.selected.modtm | Should -BeExactly 'modtm.owner'
+                $entries.selected.random | Should -BeExactly 'random.owner'
                 $entries.renamed.modtm | Should -BeExactly 'custom'
+                $entries.renamed.random | Should -BeExactly 'custom'
                 $inspection.calls.alias_key.providers | Should -Match 'modtm[.]owner\s*=\s*modtm[.]owner'
+                $inspection.calls.alias_key.providers | Should -Match 'random[.]owner\s*=\s*random[.]owner'
                 $entries.required.modtm | Should -BeExactly 'modtm'
+                $entries.required.random | Should -BeExactly 'random'
+                $entries.undeclared.random | Should -BeExactly 'random'
+                $entries.other_source.random | Should -BeExactly 'random'
                 $content = [IO.File]::ReadAllText((Join-Path $Root 'main.tf'))
                 if ($pass -eq 1) { $first = $content }
                 else { $content | Should -BeExactly $first }

@@ -843,17 +843,23 @@ ModTM removal, conditional AzAPI insertion and declared-requirement retirement.
 PowerShell supplies only fresh dependency-tree and provider-configuration facts,
 surfaces the profile's literal-map review before writing, and must not parse,
 rebuild or replace authored provider-map expressions.
-For scopes with child module calls, defer early ModTM requirement retirement
+For scopes with child module calls, defer early ModTM and Random requirement retirement
 until the utility cleanup has fresh dependency proof, rather than temporarily
 dropping and regenerating a still-required source/version contract.
 Before loading a dependency tree, reconcile known local callers against their
 children's current native declarations, including callers selected through test
 files. Repeat this reconciliation after retiring a child's requirement: Terraform
 loads test-selected examples during `get`, before dependency-ordered caller
-restoration can run. Remove only unsupported `modtm = modtm` entries; preserve
-alias and different-local-name selections. A temporarily retired declaration
+restoration can run. Remove only unsupported `modtm = modtm` and
+`random = random` entries; preserve alias and different-local-name selections.
+Random cleanup additionally requires the child's original native declaration
+to identify HashiCorp Random and its current declaration to be absent.
+Missing original declarations and other provider sources remain review failures,
+not inferred obsolete bindings. A temporarily retired declaration
 may be restored only with the existing fresh dependency proof, after which a
 retained mixed map must again forward any genuinely required ModTM configuration.
+Genuine transitive Random use retains its authored source/version contract and
+explicit caller binding until the separate default-map inheritance pass.
 An intermediate native missing-provider-configuration warning may be tracked
 while repairing proven source bindings. All other diagnostics remain fatal,
 and a strict dependency recheck must pass before mock migration.
