@@ -8,6 +8,7 @@ This reference is generated from the comment-based help on the public PowerShell
 | --- | --- | --- |
 | [Export-AvmReadmeNote](Export-AvmReadmeNote.md) | `avm docs export-notes` | Extract authored Bicep README Notes into an adjacent, tracked sidecar. |
 | [Get-AvmAuthoringPlaceholder](Get-AvmAuthoringPlaceholder.md) |  | Returns a placeholder message confirming the Avm.Authoring module is installed. |
+| [Get-AvmBicepAzureDependency](Get-AvmBicepAzureDependency.md) |  | List Azure PowerShell dependencies required for Bicep deployment tests. |
 | [Get-AvmBicepE2eDeploymentMatrix](Get-AvmBicepE2eDeploymentMatrix.md) |  | Build native Bicep E2E deployment selections without Azure access. |
 | [Get-AvmBicepE2eTestContext](Get-AvmBicepE2eTestContext.md) |  | Revalidate one selected Bicep E2E case and return its execution context. |
 | [Get-AvmBicepPendingReleasePlan](Get-AvmBicepPendingReleasePlan.md) |  | Discover versioned Bicep modules awaiting release tags. |
