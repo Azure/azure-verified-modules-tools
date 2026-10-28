@@ -657,7 +657,7 @@ function Get-AvmTerraformProviderContractBinding {
             throw [AvmConfigurationException]::new("Cannot inspect incoming provider contracts in '$($target.Path)': invalid native calls.")
         }
         if ($null -ne $Requirements) { $Requirements[$target.Path] = $inspection.requirements }
-        foreach ($call in $inspection.calls.Values) {
+        foreach ($call in $inspection.calls.get_Values()) {
             if ($call -isnot [System.Collections.IDictionary] -or $call['source'] -isnot [string] -or
                 $call['providers'] -isnot [System.Collections.IList] -or
                 @($call.providers | Where-Object { $_ -isnot [string] -or [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
@@ -672,7 +672,7 @@ function Get-AvmTerraformProviderContractBinding {
     }
     foreach ($snapshot in $Snapshots) {
         $inspection = Get-AvmTerraformUnitTestInspection -Scope $snapshot.Scope -ModuleTargets $Targets -Options $Options
-        foreach ($path in @($snapshot.Scope.Owner.Path) + @($inspection.test.run_modules.Values | ForEach-Object { $_.dir })) {
+        foreach ($path in @($snapshot.Scope.Owner.Path) + @($inspection.test.run_modules.get_Values() | ForEach-Object { $_.dir })) {
             if (-not $bindings.ContainsKey($path)) { continue }
             foreach ($provider in $inspection.test.mock_providers.Keys) {
                 $null = $bindings[$path].Add(($provider -split '\.', 2)[0])
