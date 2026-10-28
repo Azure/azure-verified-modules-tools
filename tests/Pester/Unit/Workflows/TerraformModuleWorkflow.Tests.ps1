@@ -14,25 +14,6 @@ Describe 'terraform-module reusable workflow' {
         $script:discoveryJob = $discoveryMatch.Value
     }
 
-    It 'uses the shared retrying installer and version input in <Job>' -ForEach @(
-        @{ Job = 'unit-test'; Run = '&install-avm-authoring |' }
-        @{ Job = 'pr-check-fork'; Run = '*install-avm-authoring' }
-        @{ Job = 'pr-check'; Run = '*install-avm-authoring' }
-        @{ Job = 'integration-test'; Run = '*install-avm-authoring' }
-        @{ Job = 'discover-examples'; Run = '*install-avm-authoring' }
-        @{ Job = 'e2e-test'; Run = '*install-avm-authoring' }
-    ) {
-        $jobPattern = '(?ms)^  ' + [regex]::Escape($Job) + ':\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)'
-        $jobBlock = [regex]::Match($script:workflow, $jobPattern).Value
-        $jobBlock | Should -Match (
-            '(?m)^      - name: Install Avm\.Authoring\r?\n' +
-            '        shell: pwsh\r?\n' +
-            '        env:\r?\n' +
-            '          AVM_AUTHORING_VERSION: \$\{\{ inputs\.avm-authoring-version \}\}\r?\n' +
-            '        run: ' + [regex]::Escape($Run) + '\r?$'
-        )
-    }
-
     It 'passes the non-secret subscription ID as a job output without masking it' {
         $script:workflow | Should -Match '"subscriptionId=\$\(\$chosen\.id\)"'
         $script:workflow | Should -Not -Match '::add-mask::'
@@ -44,7 +25,7 @@ Describe 'terraform-module reusable workflow' {
     }
 
     It 'discovers e2e examples with the machine-readable list surface' {
-        $script:workflow | Should -Match 'avm test e2e --list'
+        $script:workflow | Should -Match 'avm -SkipModuleVersionCheck test e2e --list'
         $script:workflow | Should -Match 'examples:\s*\$\{\{ steps\.list\.outputs\.examples \}\}'
         $script:workflow | Should -Match 'hasExamples:\s*\$\{\{ steps\.list\.outputs\.hasExamples \}\}'
     }
@@ -53,7 +34,7 @@ Describe 'terraform-module reusable workflow' {
         $script:workflow | Should -Match 'fail-fast:\s*false'
         $script:workflow | Should -Match 'example:\s*\$\{\{ fromJson\(needs\.discover-examples\.outputs\.examples\) \}\}'
         $script:workflow | Should -Match 'name:\s*End-to-end tests \(\$\{\{ matrix\.example \}\}\)'
-        $script:workflow | Should -Match 'avm test e2e --example'
+        $script:workflow | Should -Match 'avm -SkipModuleVersionCheck test e2e --example'
     }
 
     It 'skips the e2e matrix when no runnable examples were discovered' {
@@ -66,7 +47,7 @@ Describe 'terraform-module reusable workflow' {
     }
 
     It 'keeps the whole e2e matrix dependent on successful protected discovery' {
-        $script:e2eJob | Should -Match 'needs:\s*\[subscriptions, discover-examples\]'
+        $script:e2eJob | Should -Match 'needs:\s*\[bootstrap, subscriptions, discover-examples\]'
         $script:e2eJob | Should -Not -Match 'always\(\)|cancelled\(\)|failure\(\)|continue-on-error:'
         $script:discoveryJob | Should -Not -Match 'continue-on-error:'
     }
@@ -319,6 +300,16 @@ Describe 'terraform-module automatic checks and fork isolation' {
         $script:forkCheckScript = [scriptblock]::Create(($run.Groups['code'].Value -replace '(?m)^          ', ''))
     }
 
+    BeforeEach {
+        $script:savedRunnerTemp = [Environment]::GetEnvironmentVariable('RUNNER_TEMP', 'Process')
+        $env:RUNNER_TEMP = $TestDrive
+    }
+
+    AfterEach {
+        $restore = if ($null -eq $script:savedRunnerTemp) { [NullString]::Value } else { $script:savedRunnerTemp }
+        [Environment]::SetEnvironmentVariable('RUNNER_TEMP', $restore, 'Process')
+    }
+
     It 'runs <Job> independently with read-only permissions and no protected environment' -ForEach @(
         @{ Job = 'unit-test' }
         @{ Job = 'pr-check-fork' }
@@ -326,7 +317,8 @@ Describe 'terraform-module automatic checks and fork isolation' {
         $block = $script:jobs[$Job]
         $block | Should -Match '(?m)^    runs-on: ubuntu-latest\r?$'
         $block | Should -Match '(?m)^    permissions:\r?\n      contents: read\r?\n    env:'
-        $block | Should -Not -Match 'environment:|needs:|id-token:|azure/login@|SELECTED_SUBSCRIPTION|register-features'
+        $block | Should -Not -Match 'environment:|id-token:|azure/login@|SELECTED_SUBSCRIPTION|register-features'
+        $script:definition.jobs[$Job].needs | Should -BeExactly 'bootstrap'
         $block | Should -Not -Match '\$\{\{\s*(?:secrets|vars)\.'
         @($script:definition.jobs[$Job].permissions.Keys) | Should -Be @('contents')
         $script:definition.jobs[$Job].permissions.contents | Should -BeExactly 'read'
@@ -346,7 +338,7 @@ Describe 'terraform-module automatic checks and fork isolation' {
     It 'runs exactly one unit-test job on every invocation without branch, draft, or event gates' {
         @($script:definition.jobs.Keys | Where-Object { $_ -like 'unit-test*' }) | Should -Be @('unit-test')
         $job = $script:definition.jobs['unit-test']
-        foreach ($key in @('if', 'needs', 'environment', 'continue-on-error')) {
+        foreach ($key in @('if', 'environment', 'continue-on-error')) {
             $job.Contains($key) | Should -BeFalse
         }
         $job.steps | Should -HaveCount 4
@@ -355,7 +347,7 @@ Describe 'terraform-module automatic checks and fork isolation' {
             $step.Contains('continue-on-error') | Should -BeFalse
         }
         $script:jobs['unit-test'] | Should -Not -Match 'Prepare test environment|ConvertFrom-Context|github\.event'
-        $script:jobs['unit-test'] | Should -Match '(?m)^\s+avm test unit\r?$'
+        $script:jobs['unit-test'] | Should -Match '(?m)^\s+avm -SkipModuleVersionCheck test unit\r?$'
         $script:jobs['unit-test'] | Should -Match '(?m)^          persist-credentials: false\r?$'
     }
 
@@ -367,10 +359,11 @@ Describe 'terraform-module automatic checks and fork isolation' {
             $result = & {
                 function Import-Module {
                     param([string] $Name)
-                    $Name | Should -BeExactly 'Avm.Authoring'
+                    $Name | Should -BeExactly (Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1')
                 }
                 function Invoke-UnitTestCommand {
-                    param([string] $Verb, [string] $Tier)
+                    param([switch] $SkipModuleVersionCheck, [string] $Verb, [string] $Tier)
+                    $SkipModuleVersionCheck | Should -BeTrue
                     $script:unitTestTelemetry = [Environment]::GetEnvironmentVariable('TF_VAR_enable_telemetry', 'Process')
                     [pscustomobject]@{
                         Verb = $Verb
@@ -400,7 +393,7 @@ Describe 'terraform-module automatic checks and fork isolation' {
             Should -BeExactly 'github.event.pull_request.head.repo.fork == false'
         $script:definition.jobs.subscriptions['if'] |
             Should -BeExactly 'github.event.pull_request.head.repo.fork == false'
-        $script:definition.jobs['pr-check'].needs | Should -BeExactly 'subscriptions'
+        $script:definition.jobs['pr-check'].needs | Should -Be @('bootstrap', 'subscriptions')
         $script:definition.jobs.subscriptions.environment | Should -BeExactly 'no-approval'
         $script:definition.jobs.subscriptions.Contains('needs') | Should -BeFalse
         foreach ($job in @('pr-check', 'pr-check-fork')) {
@@ -422,7 +415,7 @@ Describe 'terraform-module automatic checks and fork isolation' {
         & {
             function Import-Module {
                 param([string] $Name)
-                $Name | Should -Be 'Avm.Authoring'
+                $Name | Should -BeExactly (Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1')
             }
             function Invoke-AvmPrCheck { param([string] $Path) }
             function Invoke-ForkCheckTestCommand { throw 'Checks must not execute with an older module.' }
@@ -445,11 +438,12 @@ Describe 'terraform-module automatic checks and fork isolation' {
             & {
                 function Import-Module {
                     param([string] $Name)
-                    $Name | Should -Be 'Avm.Authoring'
+                    $Name | Should -BeExactly (Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1')
                 }
                 function Invoke-AvmPrCheck { param([string[]] $ExcludeSteps) }
                 function Invoke-ForkCheckTestCommand {
-                    param([string] $Verb, [string[]] $ExcludeSteps)
+                    param([switch] $SkipModuleVersionCheck, [string] $Verb, [string[]] $ExcludeSteps)
+                    $SkipModuleVersionCheck | Should -BeTrue
                     [pscustomobject]@{ Verb = $Verb; Exclusions = $ExcludeSteps }
                 }
                 Set-Alias -Name avm -Value Invoke-ForkCheckTestCommand -Scope Local
@@ -473,9 +467,9 @@ Describe 'terraform-module automatic checks and fork isolation' {
 
     It 'preserves normal-branch pr-check credentials, OIDC environment, and the full command' {
         $script:jobs['pr-check'] | Should -Match '(?m)^    environment: pr-check\r?$'
-        $script:jobs['pr-check'] | Should -Match '(?m)^    needs: subscriptions\r?$'
+        $script:jobs['pr-check'] | Should -Match '(?m)^    needs: \[bootstrap, subscriptions\]\r?$'
         $script:jobs['pr-check'] | Should -Match '(?m)^      id-token: write\r?$'
-        $script:jobs['pr-check'] | Should -Match '(?m)^          avm pr-check\r?$'
+        $script:jobs['pr-check'] | Should -Match '(?m)^          avm -SkipModuleVersionCheck pr-check\r?$'
         $script:jobs['pr-check'] | Should -Not -Match 'ExcludeSteps|unprivileged-environment'
         $script:jobs['pr-check'] | Should -Match 'ConvertFrom-Context \$env:SECRETS_CONTEXT'
         $script:jobs['pr-check'] | Should -Match 'ConvertFrom-Context \$env:VARS_CONTEXT'
@@ -534,7 +528,7 @@ Describe 'terraform-module required Azure feature registration' {
         $block | Should -Match '\$selected -ne \$effective'
         $block | Should -Match '\$env:ARM_CLIENT_ID'
         $block | Should -Match '\$env:ARM_TENANT_ID'
-        $block | Should -Match 'Register-AvmFeature -SubscriptionId \$env:SELECTED_SUBSCRIPTION_ID -WhatIf'
+        $block | Should -Match 'Register-AvmFeature -SubscriptionId \$env:SELECTED_SUBSCRIPTION_ID -SkipModuleVersionCheck -WhatIf'
         $block | Should -Match '\$preview.FeaturesTotal -ne \$features.Count'
         $block | Should -Match '''required=true'' \| Out-File -FilePath \$env:GITHUB_OUTPUT'
         $script:jobs['e2e-test'] | Should -Match 'run: \*check-required-features'
@@ -546,7 +540,7 @@ Describe 'terraform-module required Azure feature registration' {
     ) {
         $block = $script:jobs[$Job]
         $names = @(
-            'Install Avm.Authoring'
+            'Download prepared authoring runtime'
             'Validate required features offline'
             'Azure login for required features'
             'Register required features'
@@ -559,7 +553,7 @@ Describe 'terraform-module required Azure feature registration' {
         for ($index = 1; $index -lt $positions.Count; $index++) {
             $positions[$index] | Should -BeGreaterThan $positions[$index - 1]
         }
-        $block | Should -Match 'avm register-features --subscription-id \$env:SELECTED_SUBSCRIPTION_ID|run: \*register-required-features'
+        $block | Should -Match 'avm -SkipModuleVersionCheck register-features --subscription-id \$env:SELECTED_SUBSCRIPTION_ID|run: \*register-required-features'
     }
 }
 

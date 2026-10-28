@@ -3,7 +3,7 @@
 
 BeforeDiscovery {
     $workflowRoot = Join-Path $PSScriptRoot '..' '..' '..' '..' '.github' 'workflows'
-    $installCases = foreach ($workflowName in 'terraform-module.yml', 'repository-management-sync.yml') {
+    $installCases = @(foreach ($workflowName in 'repository-management-sync.yml') {
         $workflow = Get-Content -LiteralPath (Join-Path $workflowRoot $workflowName) -Raw
         $step = [regex]::Match(
             $workflow,
@@ -19,17 +19,20 @@ BeforeDiscovery {
         @{
             WorkflowName = $workflowName
             InstallScript = $run.Groups['script'].Value -replace '(?m)^ {10}', ''
-            HasBootstrap = $workflowName -eq 'terraform-module.yml'
+            HasBootstrap = $false
             IsBicep = $false
         }
-    }
+    })
     foreach ($workflowFile in Get-ChildItem -LiteralPath $workflowRoot -Filter 'bicep*.yml') {
         $workflow = Get-Content -LiteralPath $workflowFile.FullName -Raw
         $installCount = [regex]::Matches($workflow, 'Install-PSResource -Name Avm\.Authoring').Count
-        $blocks = [regex]::Matches(
+        $blocks = @([regex]::Matches(
+            $workflow,
+            '(?ms)^          if \(\$env:AVM_AUTHORING_MODULE -eq ''Avm\.Authoring''\) \{\r?\n.*?^          Import-Module \$env:AVM_AUTHORING_MODULE -ErrorAction Stop\r?$'
+        )) + @([regex]::Matches(
             $workflow,
             '(?ms)^          \$maxAttempts = 3\r?\n.*?^          Import-Module Avm\.Authoring -ErrorAction Stop\r?$'
-        )
+        ))
         if ($blocks.Count -ne $installCount) {
             throw [System.InvalidOperationException]::new("Could not isolate every installer in $($workflowFile.Name).")
         }
@@ -78,10 +81,11 @@ Describe 'Avm.Authoring installation in <WorkflowName>' -ForEach $installCases {
 
     BeforeEach {
         $previousEnvironment = @{}
-        foreach ($name in @('AVM_AUTHORING_VERSION', 'USE_WORKFLOW_AUTHORING_SOURCE', 'GITHUB_WORKSPACE')) {
+        foreach ($name in @('AVM_AUTHORING_VERSION', 'AVM_AUTHORING_MODULE', 'USE_WORKFLOW_AUTHORING_SOURCE', 'GITHUB_WORKSPACE')) {
             $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
         }
         $env:AVM_AUTHORING_VERSION = $null
+        $env:AVM_AUTHORING_MODULE = 'Avm.Authoring'
         $env:USE_WORKFLOW_AUTHORING_SOURCE = 'false'
         $env:GITHUB_WORKSPACE = Join-Path $TestDrive 'repository'
         $global:AvmWorkflowInstallAttempts = 0

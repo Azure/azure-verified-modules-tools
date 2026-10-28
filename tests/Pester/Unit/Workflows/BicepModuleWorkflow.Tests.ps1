@@ -26,6 +26,10 @@ BeforeAll {
     $start = @($statements | Where-Object { $_.Extent.Text -match '^\$capabilities\s*=' })[0].Extent.StartOffset
     $end = @($statements | Where-Object { $_.Extent.Text -match '^\$testCase\s*=' })[0].Extent.StartOffset
     $script:dependencyBootstrap = [scriptblock]::Create($runtimeContext.run.Substring($start, $end - $start))
+    $resourceBootstrap = @($statements | Where-Object {
+            $_.Extent.Text -match '^if \(-not \(Get-Module -ListAvailable -Name Microsoft\.PowerShell\.PSResourceGet\)\)'
+        })[0]
+    $script:resourceBootstrap = [scriptblock]::Create($resourceBootstrap.Extent.Text)
     function Get-AvmBicepAzureDependency {
         [CmdletBinding()]
         param([switch] $SkipModuleVersionCheck)
@@ -40,6 +44,46 @@ BeforeAll {
         [CmdletBinding()]
         param([string] $Name, [string] $Version, [string] $Repository, [string] $Scope, [switch] $TrustRepository, [switch] $Quiet)
         throw 'Dependency provisioning must be mocked.'
+    }
+    function Install-Module {
+        [CmdletBinding()]
+        param([string] $Name, [string] $Scope, [switch] $Force, [switch] $AllowClobber)
+        throw 'Package manager provisioning must be mocked.'
+    }
+}
+
+Describe 'Bicep prepared runtime package manager bootstrap' {
+    BeforeEach {
+        Mock Get-Module { [pscustomobject]@{ Name = 'Microsoft.PowerShell.PSResourceGet' } }
+        Mock Install-Module {}
+        Mock Start-Sleep {}
+        Mock Write-Warning {}
+    }
+
+    It 'reuses an available package manager' {
+        & $script:resourceBootstrap
+        Should -Invoke Install-Module -Exactly 0
+    }
+
+    It 'retries provisioning when the prepared runtime has no package manager' {
+        Mock Get-Module {}
+        $script:attempts = 0
+        Mock Install-Module {
+            $script:attempts++
+            if ($script:attempts -eq 1) { throw 'HTTP 503' }
+        }
+        & $script:resourceBootstrap
+        Should -Invoke Install-Module -Exactly 2 -ParameterFilter {
+            $Name -eq 'Microsoft.PowerShell.PSResourceGet' -and $Scope -eq 'CurrentUser' -and $ErrorAction -eq 'Stop'
+        }
+        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 5 }
+    }
+
+    It 'fails closed when the package manager cannot be provisioned' {
+        Mock Get-Module {}
+        Mock Install-Module { throw 'HTTP 503' }
+        { & $script:resourceBootstrap } | Should -Throw '*503*'
+        Should -Invoke Install-Module -Exactly 3
     }
 }
 
@@ -143,11 +187,12 @@ Describe 'Bicep runtime dependency bootstrap behavior' {
 }
 
 Describe 'Bicep reusable workflow ownership and syntax' {
-    It 'exposes zero-input PR check and release entrypoints' {
+    It 'exposes the same source selection on both entrypoints' {
         $script:entrypoints.Count | Should -Be 2
         foreach ($entrypoint in $script:entrypoints) {
             @($entrypoint.on.Keys) | Should -Be @('workflow_call')
-            $entrypoint.on.workflow_call | Should -BeNullOrEmpty
+            @($entrypoint.on.workflow_call.inputs.Keys | Sort-Object) | Should -Be @('authoringRef', 'authoringSource')
+            $entrypoint.on.workflow_call.inputs.authoringSource.default | Should -BeExactly 'gallery'
             $entrypoint.permissions.Count | Should -Be 0
         }
     }
@@ -200,7 +245,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         }
     }
 
-    It 'uses only the published package runtime for new Bicep orchestration' {
+    It 'retains direct-call Gallery fallback and runtime capabilities' {
         $runtimeNames = @(
             'bicep-module-runtime', 'bicep-module-runtime-deployment',
             'bicep-module-runtime-e2e', 'bicep-module-runtime-release',
@@ -234,8 +279,8 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             $job.permissions.Contains('id-token') | Should -BeFalse
             ($job | ConvertTo-Json -Depth 20) | Should -Not -Match '\bsecrets\b|AVM_CI_|azure/login|environment:'
         }
-        $runtime.jobs.'pr-check'.steps[-1].run | Should -Match '(?m)^\s*avm pr-check\s*$'
-        $runtime.jobs.'unit-test'.steps[-1].run | Should -Match 'avm test unit --recurse --include-compliance'
+        $runtime.jobs.'pr-check'.steps[-1].run | Should -Match '(?m)^\s*avm -SkipModuleVersionCheck pr-check\s*$'
+        $runtime.jobs.'unit-test'.steps[-1].run | Should -Match 'avm -SkipModuleVersionCheck test unit --recurse --include-compliance'
 
         $e2e = $script:workflows['bicep-module-runtime-e2e']
         $deployment = $e2e.jobs.deploy
@@ -287,9 +332,9 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $deploy.run | Should -Match ([regex]::Escape("'--resource-group-prefix', `$env:RESOURCE_GROUP_PREFIX"))
         $deploy.run | Should -Match ([regex]::Escape("'--resource-location', `$env:RESOURCE_LOCATION"))
         $deploy.run | Should -Not -Match 'Invoke-AvmTestE2e'
-        $complete.run | Should -Match 'avm test e2e'
+        $complete.run | Should -Match 'avm -SkipModuleVersionCheck test e2e'
         $complete.run | Should -Not -Match 'Invoke-AvmTestE2e'
-        $recover.run | Should -Match 'avm test cleanup'
+        $recover.run | Should -Match 'avm -SkipModuleVersionCheck test cleanup'
         $recover.run | Should -Not -Match 'Invoke-AvmTestCleanup'
         $complete.if | Should -Match 'steps\.renew_oidc\.outcome == ''success'''
         $recover.if | Should -Match 'steps\.renew_oidc\.outcome == ''success'''

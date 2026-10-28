@@ -15,6 +15,9 @@ on:
       targetCommit:
         type: string
         required: true
+      authoringArtifact:
+        type: string
+        default: ''
 
 permissions: {}
 
@@ -26,6 +29,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      AVM_AUTHORING_MODULE: Avm.Authoring
     concurrency:
       group: ${{ fromJSON(inputs.testCase).ConcurrencyGroup }}
       queue: max
@@ -41,6 +46,19 @@ jobs:
           ref: ${{ inputs.targetCommit }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Download prepared authoring runtime
+        if: ${{ !fromJSON(inputs.testCase).E2eIgnore && inputs.authoringArtifact != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.authoringArtifact }}
+          path: ${{ runner.temp }}/avm-authoring
+      - name: Select prepared authoring runtime
+        if: ${{ !fromJSON(inputs.testCase).E2eIgnore && inputs.authoringArtifact != '' }}
+        shell: pwsh
+        run: |
+          $manifest = Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1'
+          if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { throw 'Prepared Avm.Authoring manifest is missing.' }
+          "AVM_AUTHORING_MODULE=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Initialize deployment context
         id: context
         if: ${{ !fromJSON(inputs.testCase).E2eIgnore }}
@@ -55,6 +73,7 @@ jobs:
           TOKEN_NAMEPREFIX: ${{ secrets.TOKEN_NAMEPREFIX }}
         run: |
           $ErrorActionPreference = 'Stop'
+          if ($env:AVM_AUTHORING_MODULE -eq 'Avm.Authoring') {
           $maxAttempts = 3
           for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
             try {
@@ -72,7 +91,23 @@ jobs:
               Start-Sleep -Seconds $delaySeconds
             }
           }
-          Import-Module Avm.Authoring -ErrorAction Stop
+          }
+          Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
+          if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+              try {
+                Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+                break
+              }
+              catch {
+                if ($attempt -eq 3) { throw }
+                $delaySeconds = 5 * [math]::Pow(2, $attempt - 1)
+                Write-Warning "PSResourceGet installation failed on attempt $attempt of 3: $($_.Exception.Message). Retrying in $delaySeconds seconds."
+                Start-Sleep -Seconds $delaySeconds
+              }
+            }
+          }
+          Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
           $capabilities = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities
           if ($capabilities.BicepWorkflowE2eRuntime -isnot [int] -or $capabilities.BicepWorkflowE2eRuntime -ne 1) {
             throw 'The installed Avm.Authoring package does not provide BicepWorkflowE2eRuntime = 1.'
@@ -109,7 +144,7 @@ jobs:
           $testCase = ConvertFrom-Json -InputObject $env:TEST_CASE -AsHashtable
           $context = Get-AvmBicepE2eTestContext -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH `
               -TestCase $testCase -PoolJson $env:TEST_SUBSCRIPTION_IDS -FallbackSubscriptionId $env:VALIDATE_SUBSCRIPTION_ID `
-              -ModuleClientIds $env:VALIDATE_MODULE_CLIENT_IDS -TenantId $env:VALIDATE_TENANT_ID -NamePrefix $env:TOKEN_NAMEPREFIX
+              -ModuleClientIds $env:VALIDATE_MODULE_CLIENT_IDS -TenantId $env:VALIDATE_TENANT_ID -NamePrefix $env:TOKEN_NAMEPREFIX -SkipModuleVersionCheck
           foreach ($property in $context.PSObject.Properties) {
             "$($property.Name)=$($property.Value)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           }
@@ -139,7 +174,7 @@ jobs:
           STATE_PATH: ${{ runner.temp }}/avm-bicep-state/${{ steps.context.outputs.ArtifactKey }}.cleanup.json
         run: |
           $ErrorActionPreference = 'Stop'
-          Import-Module Avm.Authoring -ErrorAction Stop
+          Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
           $null = New-Item -ItemType Directory -Path (Split-Path $env:STATE_PATH) -Force
           Set-Location (Join-Path $env:GITHUB_WORKSPACE $env:MODULE_PATH)
           $arguments = @(
@@ -152,7 +187,7 @@ jobs:
           if (-not [string]::IsNullOrWhiteSpace($env:RESOURCE_LOCATION)) {
             $arguments += '--resource-location', $env:RESOURCE_LOCATION
           }
-          avm @arguments
+          avm -SkipModuleVersionCheck @arguments
       - name: Renew OIDC sign-in for completion
         id: renew_oidc
         if: ${{ !cancelled() && (success() || failure()) && steps.deploy.outcome != 'skipped' }}
@@ -172,9 +207,9 @@ jobs:
           STATE_PATH: ${{ runner.temp }}/avm-bicep-state/${{ steps.context.outputs.ArtifactKey }}.cleanup.json
         run: |
           $ErrorActionPreference = 'Stop'
-          Import-Module Avm.Authoring -ErrorAction Stop
+          Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
           Set-Location (Join-Path $env:GITHUB_WORKSPACE $env:MODULE_PATH)
-          avm test e2e --ecosystem bicep --subscription-id $env:SUBSCRIPTION_ID `
+          avm -SkipModuleVersionCheck test e2e --ecosystem bicep --subscription-id $env:SUBSCRIPTION_ID `
             --tenant-id $env:TENANT_ID --phase Complete --cleanup-state-path $env:STATE_PATH --confirm=false
       - name: Recover unfinished native cleanup
         if: ${{ !cancelled() && failure() && steps.deploy.outcome != 'skipped' && fromJSON(inputs.workflowInput).removeDeployment == 'true' && steps.renew_oidc.outcome == 'success' }}
@@ -185,8 +220,8 @@ jobs:
           STATE_PATH: ${{ runner.temp }}/avm-bicep-state/${{ steps.context.outputs.ArtifactKey }}.cleanup.json
         run: |
           $ErrorActionPreference = 'Stop'
-          Import-Module Avm.Authoring -ErrorAction Stop
-          avm test cleanup --state-path $env:STATE_PATH --subscription-id $env:SUBSCRIPTION_ID `
+          Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
+          avm -SkipModuleVersionCheck test cleanup --state-path $env:STATE_PATH --subscription-id $env:SUBSCRIPTION_ID `
             --tenant-id $env:TENANT_ID --confirm=false
       - name: Retain recovery state
         if: always() && steps.context.outcome == 'success'

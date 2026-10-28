@@ -1764,7 +1764,23 @@ duplicate the reservation inventory, route reserved cases into ordinary native
 execution, or change the ordinary registry module workflows and publication
 approval policy as part of the thin-caller contract.
 
-Both entrypoints expose no `workflow_call` inputs. PR checks use the original
+Both entrypoints accept `authoringSource` and `authoringRef` through
+`workflow_call`. The source defaults to `gallery`; manual callers may instead
+select `repo`. A Gallery ref is an exact stable version, while a repository
+ref is a full commit SHA, branch, or tag in
+`Azure/azure-verified-modules-tools`. A blank Gallery ref selects the latest
+stable published package; a blank repository ref selects the highest stable
+version tag. Repository selection builds the checked-out commit with
+`build.ps1 build`, without requiring the candidate to be published.
+Resolve the version or commit once and publish the prepared module as a
+run-scoped artifact. Every nested job imports that exact artifact, including
+reruns of jobs whose successful bootstrap was not rerun. Log the actual
+source, version, ref and resolved SHA; a failed selection, build, download
+or import never falls back to another source. Automatic events cannot select
+the new overrides. The caller's static `uses` pin still selects workflow
+code independently of the selected module source.
+
+PR checks use the original
 caller's `github` event context. Automatic upstream PR checks admit `opened`,
 `reopened` and `synchronize` without a static-check label. A `labeled` event is
 admitted only when adding `PR: Run E2E Tests`; that label alone enables deployment
@@ -1773,7 +1789,7 @@ Fork PRs always run only the public-data static tier, irrespective of labels:
 packaged compliance and authored unit tests, with empty `AVM_CI_VARIABLES` and
 `AVM_CI_SECRETS` maps, no inherited secrets, OIDC, identity or subscription
 selection. Report protected policy and deployment tiers as not run, never as
-successful static results. Manual check dispatch has only `modulePaths`, an
+successful static results. Manual check dispatch additionally has `modulePaths`, an
 explicit comma-separated selection; it runs static, policy and deployment
 validation with cleanup and normal location defaults, without PR-label lookup
 or publication. No operation, phase, cleanup or location toggles are exposed.
@@ -1789,14 +1805,13 @@ tag planner must validate notes for every refreshed calculated child/parent
 target before creating or pushing any tag in that module's release plan.
 
 Callers pin the entrypoint `uses` reference once to a durable, merged tools
-commit SHA; an orphan premerge head or mutable branch is not the publication
-contract. New Bicep orchestration uses only relative reusable workflow calls
-from that entrypoint revision and the latest stable PSGallery `Avm.Authoring`
-package. It must not check out tools again, pin a second tools SHA, use
-`@main`, derive a source ref, or accept a caller-facing `tools-ref` override.
-Package bootstrap retries installation up to three times with five- and
-ten-second delays, then rethrows the final failure. Import and capability
-checks remain outside the retry.
+commit SHA for normal use; an orphan premerge head or mutable branch is not
+the publication contract. New Bicep orchestration uses relative reusable
+workflow calls from that entrypoint revision. A manually selected repository
+runtime does not change the workflow revision. Gallery bootstrap retries
+lookup or download up to three times with five- and ten-second delays, retaining
+the first successfully resolved version, then rethrows the final failure.
+Import and capability checks remain outside the retry.
 The runtime package must declare exact integer
 `PrivateData.AvmCapabilities.BicepWorkflowOrchestration = 1` before selection
 or release work and `BicepWorkflowE2eRuntime = 1` before E2E selection or
@@ -1812,7 +1827,7 @@ and retain their independent fail-closed dependency preflight.
 Direct callers of established legacy leaves continue to pin their tools `uses`
 reference and `tools-ref` to the same full immutable SHA. Nested reusable calls
 remain relative to the entrypoint revision. Executable package-runtime jobs
-check out only the complete caller at its intended target. Ordinary callers
+check out the complete caller at its intended target. Ordinary callers
 retain `github.sha`; generic callers forward their checked `targetCommit`
 through every validation tier.
 
@@ -2904,6 +2919,15 @@ manual-approval, or changed-path prerequisite. GitHub's separate approval
 policy for running workflows from external contributors still applies. The
 managed caller remains an unconditional forwarder; fork handling and test-tier
 decisions belong only in the reusable workflow.
+
+The reusable Terraform workflow accepts the same manual `authoringSource` and
+`authoringRef` selection as Bicep and shares its run-scoped prepared module.
+The existing `avm-authoring-version` Gallery version/range input remains
+supported; combining it with either new override fails explicitly. Automatic
+events retain their previous Gallery behavior. CI invokes supported
+`SkipModuleVersionCheck` switches on the dispatcher and exported cmdlets to
+avoid release-freshness checks; capability, tool, dependency, and security
+validation remains in force. Interactive CLI defaults are unchanged.
 
 Normal Terraform repository sync reconciles that repository-level policy to
 `first_time_contributors` after verified Terraform configuration succeeds.

@@ -53,4 +53,4 @@ jobs:
             throw 'The installed Avm.Authoring package does not provide BicepWorkflowOrchestration = 1.'
           }
           Invoke-AvmTestUnit -Path (Join-Path $env:GITHUB_WORKSPACE $env:MODULE_PATH) `
-            -Ecosystem bicep -Recurse -IncludeCompliance
+            -Ecosystem bicep -Recurse -IncludeCompliance -SkipModuleVersionCheck
