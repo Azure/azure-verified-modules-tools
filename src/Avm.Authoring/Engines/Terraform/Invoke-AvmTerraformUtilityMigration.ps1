@@ -163,6 +163,7 @@ function Invoke-AvmTerraformUtilityNativeMigration {
         [Parameter(Mandatory)] [ValidateSet('root', 'module', 'example', 'test')] [string] $Scope,
         [Parameter(Mandatory)] [object] $Options,
         [hashtable] $ProviderSourceFacts = @{},
+        [hashtable] $LocalProviderRequirements = @{},
         [string[]] $ProviderConfigurationFacts = @(),
         [string[]] $ProviderAliasFacts = @(),
         [AllowEmptyCollection()] [string[]] $CallsRequiringAzapi = @(),
@@ -174,6 +175,7 @@ function Invoke-AvmTerraformUtilityNativeMigration {
     $ErrorActionPreference = 'Stop'
     $variables = [ordered]@{
         provider_source_facts        = $ProviderSourceFacts
+        local_provider_requirements  = $LocalProviderRequirements
         provider_configuration_facts = @($ProviderConfigurationFacts)
         provider_alias_facts         = @($ProviderAliasFacts)
         calls_requiring_azapi        = @($CallsRequiringAzapi)
@@ -251,6 +253,7 @@ function Assert-AvmTerraformUtilityProviderMappingReview {
         [Parameter(Mandatory)] [string] $Path,
         [Parameter(Mandatory)] [object] $Options,
         [Parameter(Mandatory)] [hashtable] $ProviderSourceFacts,
+        [hashtable] $LocalProviderRequirements = @{},
         [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $CallsRequiringAzapi
     )
 
@@ -260,6 +263,7 @@ function Assert-AvmTerraformUtilityProviderMappingReview {
     $arguments = @(
         'debug', '--tf-dir', $Path, '--mptf-dir', $Options.ProfileDirs['utility-module'],
         '--mptf-var', ('provider_source_facts={0}' -f (ConvertTo-Json -InputObject $ProviderSourceFacts -Depth 10 -Compress)),
+        '--mptf-var', ('local_provider_requirements={0}' -f (ConvertTo-Json -InputObject $LocalProviderRequirements -Depth 10 -Compress).Replace('${', '$${').Replace('%{', '%%{')),
         '--mptf-var', ('provider_configuration_facts={0}' -f (ConvertTo-Json -InputObject @($facts.Configurations) -Compress)),
         '--mptf-var', ('provider_alias_facts={0}' -f (ConvertTo-Json -InputObject @($facts.Aliases) -Compress)),
         '--mptf-var', ('calls_requiring_azapi={0}' -f (ConvertTo-Json -InputObject @($CallsRequiringAzapi) -Compress)),
@@ -334,8 +338,17 @@ function Sync-AvmTerraformLocalProviderMapping {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
     $requirements = @{}
+    $originalSources = @{}
+    foreach ($scope in $Plans) {
+        $sources = @{}
+        foreach ($name in $scope.Before.requirements.Keys) {
+            $sources[$name] = [string]$scope.Before.requirements[$name]['source']
+        }
+        $originalSources[$scope.Target.Path] = $sources
+    }
     foreach ($scope in $Plans) {
         $providerSourceFacts = @{}
+        $localProviderRequirements = @{}
         foreach ($name in $scope.Dependencies.Keys) {
             $dependency = $scope.Dependencies[$name]
             if ($dependency -cnotin $DependencyPaths) { continue }
@@ -345,15 +358,20 @@ function Sync-AvmTerraformLocalProviderMapping {
             if (-not $requirements[$dependency].Contains('modtm')) {
                 $providerSourceFacts[$name] = @()
             }
+            $localProviderRequirements[$name] = @{
+                declared         = @($requirements[$dependency].Keys | Sort-Object)
+                original_sources = $originalSources[$dependency]
+            }
         }
-        if ($providerSourceFacts.Count -eq 0 -or
-            -not $PSCmdlet.ShouldProcess($scope.Target.Path, 'retire unsupported default ModTM mappings before dependency inspection')) {
+        if ($localProviderRequirements.Count -eq 0 -or
+            -not $PSCmdlet.ShouldProcess($scope.Target.Path, 'retire unsupported default local provider mappings before dependency inspection')) {
             continue
         }
         $facts = Assert-AvmTerraformUtilityProviderMappingReview -Path $scope.Target.Path -Options $Options `
-            -ProviderSourceFacts $providerSourceFacts -CallsRequiringAzapi @()
+            -ProviderSourceFacts $providerSourceFacts -LocalProviderRequirements $localProviderRequirements -CallsRequiringAzapi @()
         Invoke-AvmTerraformUtilityNativeMigration -Path $scope.Target.Path -Scope $scope.Target.Scope -Options $Options `
-            -ProviderSourceFacts $providerSourceFacts -ProviderConfigurationFacts @($facts.Configurations) `
+            -ProviderSourceFacts $providerSourceFacts -LocalProviderRequirements $localProviderRequirements `
+            -ProviderConfigurationFacts @($facts.Configurations) `
             -ProviderAliasFacts @($facts.Aliases) -ApplyUtilityMigration:$false
     }
 }
