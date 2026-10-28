@@ -1033,8 +1033,12 @@ function Get-AvmTerraformUnitTestModtmRequirementPlan {
             }
             if (-not $RequiredProviders[$dependency].Contains('modtm')) {
                 if ($dependency -cnotin $ModuleTargets.Path) {
-                    throw [AvmConfigurationException]::new(
-                        "Cannot preserve ModTM mocks for '$Path': unchanged dependency '$name' does not declare a ModTM source; review its provider inheritance.")
+                    $unchangedCall = $calls[$name]
+                    if ($unchangedCall -isnot [System.Collections.IDictionary] -or $unchangedCall.Contains('providers')) {
+                        throw [AvmConfigurationException]::new(
+                            "Cannot preserve ModTM mocks for '$Path': unchanged dependency '$name' does not declare a ModTM source; review its provider inheritance.")
+                    }
+                    continue
                 }
                 if (-not $ModuleProviderSources.ContainsKey($dependency)) {
                     $ModuleProviderSources[$dependency] = @{}
@@ -1070,6 +1074,10 @@ function Get-AvmTerraformUnitTestModtmRequirementPlan {
         }
         $existingRequirement = $RequiredProviders[$Path].Contains('modtm')
         if ($existingRequirement -and $dependencies.Count -eq 0) { return $null }
+        if ($dependencies.Count -eq 0 -and
+            -not ($OriginalRequirements.ContainsKey($Path) -and $OriginalRequirements[$Path].Contains('modtm'))) {
+            return $null
+        }
         if ($ModuleProviderSources[$Path].Count -eq 0) {
             throw [AvmConfigurationException]::new(
                 "Cannot preserve ModTM mocks for '$Path': no configuration dependency proves the missing source requirement.")
