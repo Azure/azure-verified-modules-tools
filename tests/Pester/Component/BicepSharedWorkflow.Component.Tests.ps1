@@ -35,7 +35,7 @@ Describe 'Component: Bicep PR entrypoint admission and routing' -Tag Component {
         $script:prEntrypoint = ConvertFrom-Yaml (Get-Content -LiteralPath (
                 Join-Path $script:repoRoot '.github' 'workflows' 'bicep-pr-check.yml') -Raw)
         $script:entrypointEnvironment = @{}
-        foreach ($name in @('GITHUB_WORKSPACE', 'GITHUB_OUTPUT', 'EVENT_NAME', 'REPOSITORY', 'HEAD_REPOSITORY',
+        foreach ($name in @('GITHUB_WORKSPACE', 'GITHUB_OUTPUT', 'RUNNER_TEMP', 'EVENT_NAME', 'REPOSITORY', 'HEAD_REPOSITORY',
                 'PR_LABELS', 'PULL_REQUEST_HEAD_COMMIT', 'TARGET_COMMIT', 'MODULE_PATHS')) {
             $script:entrypointEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
         }
@@ -45,6 +45,7 @@ Describe 'Component: Bicep PR entrypoint admission and routing' -Tag Component {
             $label = $script:eventLabel
             $eventName = $env:EVENT_NAME
             $repository = $env:REPOSITORY
+            $bootstrapResult = $script:bootstrapResult
             $workflowInput = if ($Outputs.ContainsKey('workflowInput')) {
                 $Outputs['workflowInput'] | ConvertFrom-Json
             }
@@ -58,7 +59,7 @@ Describe 'Component: Bicep PR entrypoint admission and routing' -Tag Component {
             }
             $Condition = $Condition.Replace(
                 'fromJSON(needs.initialize.outputs.workflowInput)', '$workflowInput')
-            $expression = $Condition.Replace('!cancelled()', '$true').
+            $expression = $Condition.Replace('!cancelled()', '$true').Replace('needs.bootstrap.result', '$bootstrapResult').
                 Replace('github.event_name', '$eventName').Replace('github.repository', '$repository').
                 Replace('github.event.action', '$action').Replace('github.event.label.name', '$label').
                 Replace('&&', '-and').Replace('||', '-or').Replace('!=', '-cne').Replace('==', '-ceq')
@@ -68,6 +69,9 @@ Describe 'Component: Bicep PR entrypoint admission and routing' -Tag Component {
             return & ([scriptblock]::Create($expression))
         }
         function Invoke-AvmPrEntrypointFixture {
+            if (-not (Test-AvmEntrypointCondition -Condition $script:prEntrypoint.jobs.bootstrap['if'])) {
+                return @{ routes = @() }
+            }
             if (-not (Test-AvmEntrypointCondition -Condition $script:prEntrypoint.jobs.initialize['if'])) {
                 return @{ routes = @() }
             }
@@ -129,12 +133,15 @@ function Get-TestSubscriptionTag {
 }
 '@)
         $script:entrypointBootstraps = 0
+        $script:entrypointImports = 0
+        $script:bootstrapResult = 'success'
         $script:reservationFailure = $false
         $script:entrypointChanges = "avm/res/mock/widget/main.bicep`navm/res/mock/reserved/main.bicep"
         $script:eventAction = 'synchronize'
         $script:eventLabel = ''
         $env:GITHUB_WORKSPACE = $script:entrypointRoot
         $env:GITHUB_OUTPUT = Join-Path $script:entrypointRoot 'outputs'
+        $env:RUNNER_TEMP = $script:entrypointRoot
         $env:EVENT_NAME = 'pull_request'
         $env:REPOSITORY = 'Azure/bicep-registry-modules'
         $env:HEAD_REPOSITORY = $env:REPOSITORY
@@ -144,7 +151,10 @@ function Get-TestSubscriptionTag {
         $env:MODULE_PATHS = ''
         $env:AVM_FIXTURE_EMPTY_SELECTION = 'false'
         Mock Install-Module {}
-        Mock Import-Module {}
+        Mock Import-Module {
+            $Name | Should -BeExactly (Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1')
+            $script:entrypointImports++
+        }
         Mock Install-PSResource { $script:entrypointBootstraps++ }
         Mock Get-Module {
             [pscustomobject]@{
@@ -213,6 +223,8 @@ function Get-TestSubscriptionTag {
         $controls.staticValidation | Should -BeExactly 'true'
         $controls.deploymentValidation | Should -BeExactly 'false'
         $controls.removeDeployment | Should -BeExactly 'true'
+        $script:entrypointImports | Should -Be 1
+        Should -Invoke Initialize-AvmBicepWorkflowMatrix -Exactly 1 -ParameterFilter { $SkipModuleVersionCheck }
     }
 
     It 'admits shared E2E with only its own label while retaining the legacy route' {
@@ -292,6 +304,13 @@ function Get-TestSubscriptionTag {
         (Invoke-AvmPrEntrypointFixture).routes | Should -HaveCount 0
         $script:entrypointBootstraps | Should -Be 0
     }
+
+    It 'does not initialize or select routes when bootstrap fails' {
+        $script:bootstrapResult = 'failure'
+        (Invoke-AvmPrEntrypointFixture).routes | Should -HaveCount 0
+        $script:entrypointImports | Should -Be 0
+        Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
+    }
 }
 
 Describe 'Component: Bicep release entrypoint discovery and publication' -Tag Component {
@@ -299,7 +318,7 @@ Describe 'Component: Bicep release entrypoint discovery and publication' -Tag Co
         $script:releaseEntrypoint = ConvertFrom-Yaml (Get-Content -LiteralPath (
                 Join-Path $script:repoRoot '.github' 'workflows' 'bicep-release.yml') -Raw)
         $script:releaseEntrypointEnvironment = @{}
-        foreach ($name in @('GITHUB_WORKSPACE', 'GITHUB_OUTPUT', 'EVENT_NAME', 'BASE_COMMIT', 'TARGET_COMMIT')) {
+        foreach ($name in @('GITHUB_WORKSPACE', 'GITHUB_OUTPUT', 'RUNNER_TEMP', 'EVENT_NAME', 'BASE_COMMIT', 'TARGET_COMMIT')) {
             $script:releaseEntrypointEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
         }
     }
@@ -335,14 +354,19 @@ function Write-AvmWorkflowOutput {
 }
 '@)
         $script:releaseEntrypointBootstraps = 0
+        $script:releaseEntrypointImports = 0
         $script:releaseEntrypointInvocation = $null
         $env:GITHUB_WORKSPACE = $root
         $env:GITHUB_OUTPUT = Join-Path $root 'outputs'
+        $env:RUNNER_TEMP = $root
         $env:EVENT_NAME = 'workflow_dispatch'
         $env:BASE_COMMIT = ''
         $env:TARGET_COMMIT = 'a' * 40
         Mock Install-Module {}
-        Mock Import-Module {}
+        Mock Import-Module {
+            $Name | Should -BeExactly (Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1')
+            $script:releaseEntrypointImports++
+        }
         Mock Install-PSResource { $script:releaseEntrypointBootstraps++ }
         Mock Get-Module {
             [pscustomobject]@{
@@ -361,7 +385,9 @@ function Write-AvmWorkflowOutput {
     It 'discovers each pending module independently for manual releases' {
         . ([scriptblock]::Create($script:releaseEntrypoint.jobs.initialize.steps[-1].run))
         $outputs = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
-        $script:releaseEntrypointBootstraps | Should -Be 1
+        $script:releaseEntrypointBootstraps | Should -Be 0
+        $script:releaseEntrypointImports | Should -Be 1
+        Should -Invoke Initialize-AvmBicepReleaseMatrix -Exactly 1 -ParameterFilter { $SkipModuleVersionCheck }
         $script:releaseEntrypointInvocation.EventName | Should -BeExactly 'workflow_dispatch'
         $script:releaseEntrypointInvocation.TargetCommit | Should -BeExactly ('a' * 40)
         $script:releaseEntrypointInvocation.BaseCommit | Should -BeNullOrEmpty
