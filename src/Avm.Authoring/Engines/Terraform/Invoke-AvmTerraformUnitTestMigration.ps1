@@ -79,7 +79,7 @@ function Get-AvmTerraformUnitTestInspection {
         throw [AvmConfigurationException]::new(
             "Cannot inspect Terraform unit test '$($Scope.File.FullName)': invalid global variables inspection.")
     }
-    foreach ($name in $inspection.test.run_modules.Keys) {
+    foreach ($name in $inspection.test.run_modules.get_Keys()) {
         $target = $inspection.test.run_modules[$name]
         if ($target -isnot [System.Collections.IDictionary] -or
             $target['kind'] -cnotin @('root', 'local') -or
@@ -111,7 +111,7 @@ function Get-AvmTerraformUnitTestInspection {
                 "Cannot inspect Terraform unit test '$($Scope.File.FullName)' run '$name': invalid location declaration inspection.")
         }
     }
-    if ($inspection.test.runs.Count -ne $inspection.test.run_modules.Count) {
+    if ($inspection.test.runs.get_Count() -ne $inspection.test.run_modules.get_Count()) {
         throw [AvmConfigurationException]::new(
             "Cannot inspect Terraform unit test '$($Scope.File.FullName)': run targets are incomplete.")
     }
@@ -142,7 +142,7 @@ function Get-AvmTerraformUnitTestSnapshot {
             Where-Object IsUnitTest) {
         $inspection = Get-AvmTerraformUnitTestInspection -Scope $scope -ModuleTargets $ModuleTargets -Options $Options
         if (@($inspection.test.mock_providers.Keys | Where-Object { $_ -cmatch '^modtm(\.|$)' }).Count -gt 0 -or
-            ($inspection.test['runs'] -is [System.Collections.IDictionary] -and $inspection.test.runs.Count -gt 0)) {
+            ($inspection.test['runs'] -is [System.Collections.IDictionary] -and $inspection.test.runs.get_Count() -gt 0)) {
             foreach ($path in @($scope.Owner.Path) + @($ModuleTargets.Path)) {
                 if (-not $requirements.ContainsKey($path)) {
                     $requirements[$path] = Get-AvmTerraformUnitTestRequiredProvider -Path $path -Options $Options
@@ -154,11 +154,11 @@ function Get-AvmTerraformUnitTestSnapshot {
                 if ($preservationProof) { break }
                 if ($provider -cnotin $mockedNames) {
                     $preservationProof = Test-AvmTerraformScopedProviderInUse -Scope $scope -ModuleTargets $ModuleTargets `
-                        -TargetPaths @($inspection.test.run_modules.Values | ForEach-Object { $_.dir }) `
+                        -TargetPaths @($inspection.test.run_modules.get_Values() | ForEach-Object { $_.dir }) `
                         -Cache $providerUse -Provider $provider -IncludeSelectedExamples
                 }
             }
-            foreach ($name in $inspection.test.run_modules.Keys) {
+            foreach ($name in $inspection.test.run_modules.get_Keys()) {
                 $targetPath = $inspection.test.run_modules[$name].dir
                 $instrumented = $targetPath -cin $utilityPaths -or
                 @($ModuleTargets | Where-Object { $_.Path -ceq $targetPath -and $_.Profiles -contains 'root' }).Count -gt 0
@@ -1154,7 +1154,7 @@ function Get-AvmTerraformTelemetryTestCountMigration {
     $instrumentedPaths = @($ModuleTargets | Where-Object { $_.Profiles -contains 'root' } |
             ForEach-Object { $_.Path })
     $count = 0
-    foreach ($name in $Test.runs.Keys) {
+    foreach ($name in $Test.runs.get_Keys()) {
         if ($Test.run_modules[$name].dir -cnotin $instrumentedPaths) { continue }
         $run = $Test.runs[$name]
         if (-not $run.Contains('assert')) { continue }
@@ -1211,7 +1211,7 @@ function Invoke-AvmTerraformUnitTestMigration {
                 "Unit test '$($scope.File.FullName)' changed while its modules were transformed; review it before retrying.")
         }
         $after = Get-AvmTerraformUnitTestInspection -Scope $scope -ModuleTargets $ModuleTargets -Options $Options
-        if ($after.test.run_modules.Count -ne $snapshot.Before.test.run_modules.Count) {
+        if ($after.test.run_modules.get_Count() -ne $snapshot.Before.test.run_modules.get_Count()) {
             throw [AvmConfigurationException]::new(
                 "Unit test '$($scope.File.FullName)' changed its run targets during migration.")
         }
@@ -1219,7 +1219,7 @@ function Invoke-AvmTerraformUnitTestMigration {
         $targetPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
         $globalLocationAuthored = $null -ne $after.test.variables -and
         $after.test.variables.mptf.attributes.Contains('location')
-        foreach ($name in $after.test.run_modules.Keys) {
+        foreach ($name in $after.test.run_modules.get_Keys()) {
             $target = $after.test.run_modules[$name]
             if (-not $snapshot.Before.test.run_modules.Contains($name) -or
                 $snapshot.Before.test.run_modules[$name].dir -cne $target.dir) {
@@ -1361,7 +1361,7 @@ function Invoke-AvmTerraformUnitTestMigration {
             $mappedAzapiRuns = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
             $preservedRealProviders = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
             $unsafeMappings = @(
-                foreach ($name in $after.test.runs.Keys) {
+                foreach ($name in $after.test.runs.get_Keys()) {
                     $run = $after.test.runs[$name]
                     $targetPath = $after.test.run_modules[$name].dir
                     if (-not $requiredProviders.ContainsKey($targetPath)) {
@@ -1495,8 +1495,8 @@ function Invoke-AvmTerraformUnitTestMigration {
             )
             $realProviders = @($realProviders | Where-Object { -not $preservedRealProviders.Contains($_) })
             $hasAzureMock = $hasAzureMock -or
-            ($after.test.runs.Count -gt 0 -and $mappedAzapiRuns.Count -eq $after.test.runs.Count)
-            if (($after.test.runs.Count -gt 0 -and -not $hasAzureMock) -or $realProviders.Count -gt 0 -or
+            ($after.test.runs.get_Count() -gt 0 -and $mappedAzapiRuns.Count -eq $after.test.runs.get_Count())
+            if (($after.test.runs.get_Count() -gt 0 -and -not $hasAzureMock) -or $realProviders.Count -gt 0 -or
                 $unsafeMappings.Count -gt 0) {
                 throw [AvmConfigurationException]::new(
                     "Cannot automatically migrate unit test '$($scope.File.FullName)': introduced providers need default mocks or complete known alias bindings; run provider mappings must use the same provider, without real providers, unknown aliases, or aliased target keys.")
@@ -1520,7 +1520,7 @@ function Invoke-AvmTerraformUnitTestMigration {
             $defaultsJson = (ConvertTo-Json -InputObject $encodedDefaults -Compress -EscapeHandling EscapeHtml).Replace('${', '$${').Replace('%{', '%%{')
             $arguments += @('--mptf-var', "telemetry_source_client_defaults=$defaultsJson")
         }
-        if ($providerMockBindings.Count -gt 0) {
+        if ($providerMockBindings.get_Count() -gt 0) {
             $bindingsJson = (ConvertTo-Json -InputObject $providerMockBindings -Depth 5 -Compress).Replace('${', '$${').Replace('%{', '%%{')
             $arguments += @('--mptf-var', "provider_mock_bindings=$bindingsJson")
         }
@@ -1644,7 +1644,7 @@ function Invoke-AvmTerraformUnitTestMigration {
         }
     }
     foreach ($plan in $plans | Where-Object {
-            $_.TelemetrySubscriptionResourceIds.Count -gt 0 -or $_.ProviderMockBindings.Count -gt 0 -or
+            $_.TelemetrySubscriptionResourceIds.Count -gt 0 -or $_.ProviderMockBindings.get_Count() -gt 0 -or
             $_.TelemetryCountMigration.ReferenceCount -gt 0 -or $_.RetiredAliasNames.Count -gt 0
         }) {
         $capabilities = [System.Collections.Generic.List[string]]::new()
@@ -1674,9 +1674,9 @@ function Invoke-AvmTerraformUnitTestMigration {
                 "try(transform.update_in_place.telemetry_mock[$nameJson].target_block_address == $addressJson, false) && " +
                 "try(trimspace(transform.update_in_place.telemetry_mock[$nameJson].dynamic_block_body) == $bodyJson, false)")
         }
-        if ($plan.ProviderMockBindings.Count -gt 0) {
+        if ($plan.ProviderMockBindings.get_Count() -gt 0) {
             $capabilityName = 'label-safe object merging and explicit mock provider bindings'
-            foreach ($name in $plan.ProviderMockBindings.Keys) {
+            foreach ($name in $plan.ProviderMockBindings.get_Keys()) {
                 $body = "providers = $($plan.ProviderMockBindings[$name])`n"
                 $bodyJson = (ConvertTo-Json -InputObject $body -Compress).Replace('${', '$${').Replace('%{', '%%{')
                 $nameJson = (ConvertTo-Json -InputObject $name -Compress).Replace('${', '$${').Replace('%{', '%%{')
@@ -1769,7 +1769,7 @@ function Invoke-AvmTerraformUnitTestMigration {
         foreach ($plan in $plans |
                 Where-Object {
                     $_.NewLocationPaths.Count -gt 0 -or $_.TelemetrySubscriptionResourceIds.Count -gt 0 -or
-                    $_.ProviderMockBindings.Count -gt 0 -or $_.TelemetryCountMigration.ReferenceCount -gt 0
+                    $_.ProviderMockBindings.get_Count() -gt 0 -or $_.TelemetryCountMigration.ReferenceCount -gt 0
                 }) {
             try {
                 $null = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList $plan.Arguments `

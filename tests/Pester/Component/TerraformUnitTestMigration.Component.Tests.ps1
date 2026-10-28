@@ -2032,6 +2032,30 @@ Context 'migration decisions' {
                 }
             }
 
+            It 'retains a rewritten alias binding for run label <Label>' -ForEach @(
+                @{ Label = 'keys' }
+                @{ Label = 'Values' }
+                @{ Label = 'count' }
+            ) {
+                foreach ($state in @($script:fixture.Before, $script:fixture.After)) {
+                    $state.test.runs[$Label] = $state.test.runs['root']
+                    $state.test.run_modules[$Label] = $state.test.run_modules['root']
+                    $state.test.runs.Remove('root')
+                    $state.test.run_modules.Remove('root')
+                }
+                $script:fixture.After.test.runs[$Label].mptf.attributes.providers =
+                    '{ azapi = azapi.alternate, modtm = modtm, random = random }'
+                Invoke-UnitMigrationFixture -Fixture $script:fixture
+                Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                    $UnitTestPlans[0].ProviderMockBindings.get_Count() -eq 1 -and
+                    $UnitTestPlans[0].ProviderMockBindings[$Label] -ceq '{ azapi = azapi.alternate,       }'
+                }
+                Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                    $ArgumentList[0] -eq 'debug' -and
+                    $ArgumentList[-1].Contains("provider_mocks[`"$Label`"].dynamic_block_body")
+                }
+            }
+
             It 'requests a default replacement without confusing it with the existing alias' {
                 $script:fixture.After.test.mock_providers.Remove('azapi')
                 Invoke-UnitMigrationFixture -Fixture $script:fixture
