@@ -663,6 +663,60 @@ Providers required by state:
                 [System.IO.File]::ReadAllBytes($script:dependencyJsonPath) | Should -Be $bytes
             }
 
+            It 'uses the captured descendant graph without modifying unchanged files: <Failure>' -ForEach @(
+                @{ Failure = $false }
+                @{ Failure = $true }
+            ) {
+                param($Failure)
+                $parameters = $script:dependencyParameters
+                $config = Split-Path -Parent $script:dependencyJsonPath
+                $nested = Join-Path $config 'nested'
+                $null = New-Item -ItemType Directory -Path $nested
+                $json = Join-Path $nested 'lookup.tf.json'
+                Set-Content -LiteralPath $json -Encoding utf8NoBOM -Value $(if ($Failure) { '{"provider":{"modtm":{}}}' } else { '{"locals":{"region":"eastus"}}' })
+                $parameters.ModuleManifests[$parameters.Path] = ConvertTo-Json -Depth 5 -Compress -InputObject @{
+                    Modules = @(
+                        @{ Key = ''; Dir = '.' }
+                        @{ Key = 'regions'; Dir = $config }
+                        @{ Key = 'regions.nested'; Dir = $nested }
+                    )
+                }
+                $snapshot = $parameters.ModuleManifests[$parameters.Path]
+                $bytes = [IO.File]::ReadAllBytes($json)
+                InModuleScope Avm.Authoring -Parameters @{
+                    Parameters = $parameters; Config = $config; Nested = $nested; Failure = $Failure
+                } {
+                    param($Parameters, $Config, $Nested, $Failure)
+                    Mock Get-AvmTerraformUnitTestRequiredProvider {
+                        if ($Path -ceq $Nested) { return @{ modtm = @{ source = 'Azure/modtm'; version = '= 0.3.5' } } }
+                        return @{}
+                    }
+                    Mock Invoke-AvmProcess {
+                        $calls = if ($WorkingDirectory -ceq $Config) { '{"nested":{"source":"./nested","mptf":{}}}' }
+                        else { '{"regions":{"source":"./unchanged","mptf":{}}}' }
+                        [pscustomobject]@{ StdOut = $calls; ExitCode = 0; StdErr = '' }
+                    }
+                    if ($Failure) {
+                        { Get-AvmTerraformUnitTestModtmRequirementPlan @Parameters } |
+                            Should -Throw '*JSON dependency requires review*'
+                        $Parameters.Plans.Count | Should -Be 0
+                        $Parameters.RequiredProviders[$Parameters.Path].Contains('modtm') | Should -BeFalse
+                    }
+                    else {
+                        $plan = Get-AvmTerraformUnitTestModtmRequirementPlan @Parameters
+                        $plan.Arguments | Should -Contain 'unit_test_modtm_dependencies=[]'
+                        $Parameters.RequiredProviders[$Parameters.Path].modtm.version | Should -BeExactly '= 0.3.5'
+                        $Parameters.RequiredProviders[$Config].Contains('modtm') | Should -BeFalse
+                        $Parameters.Plans.Count | Should -Be 1
+                    }
+                    $Parameters.PlanningPaths.Count | Should -Be 0
+                    Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -cne 'debug' }
+                    Should -Invoke Invoke-AvmTerraformInit -Exactly 0
+                }
+                [IO.File]::ReadAllBytes($json) | Should -Be $bytes
+                $parameters.ModuleManifests[$parameters.Path] | Should -BeExactly $snapshot
+            }
+
             It 'rejects <Shape> before inspecting provider requirements or planning writes' -TestCases @(
                 @{ Shape = 'malformed JSON'; Json = '{' }
                 @{ Shape = 'empty JSON'; Json = '' }

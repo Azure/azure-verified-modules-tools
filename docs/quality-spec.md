@@ -1235,7 +1235,17 @@ known local callers and example wrappers also receive only their proven
 required source declaration and any necessary existing-map augmentation. Newly synthesized
 requirements preserve an available original version constraint; otherwise
 inherit only literal constraints from their proven same-source required
-dependencies or local targets. Combine distinct inherited constraints by
+dependencies or local targets. An unchanged intermediary without a direct
+ModTM declaration may prove default inheritance through descendants in the
+same freshly captured installed manifest. Inspect its native calls and
+descendant declarations read-only; never reinitialize or transform downloaded
+modules, fabricate their requirements, or forward ModTM into an undeclared
+intermediary. Provider-free leaves contribute no provider proof. Explicit maps
+on these undeclared inheritance edges, aliases, differing local names,
+namespace conflicts and incomplete graph evidence require review. Carry all
+proven descendant version constraints back to the selected caller even when
+the intermediary itself contributes no declaration or binding edit.
+Combine distinct inherited constraints by
 intersection, without inventing a pin from installed versions. Missing or
 nonliteral constraint proof requires review; existing authored requirements remain
 unchanged. Default and complete example-wrapper regressions must check both
