@@ -8,7 +8,7 @@ function Invoke-AvmBicepLint {
         Engine implementation called by Invoke-AvmLint when the module
         context is Ecosystem='bicep'. Discovers all .bicep files (skipping
         dot-folders and node_modules), runs 'bicep lint <file> --diagnostics-format
-        defaultV2' per file via Invoke-AvmProcess, and parses the textual
+        default' per file via Invoke-AvmProcess, and parses the textual
         diagnostics into structured Issue objects.
 
         Each diagnostic line looks like:
@@ -59,7 +59,7 @@ function Invoke-AvmBicepLint {
     foreach ($file in $files) {
         $fileIndex++
         Write-AvmLog ("lint: file {0}/{1} = {2}" -f $fileIndex, $files.Count, $file.FullName) -Level Info | Out-Null
-        $arguments = @('lint', $file.FullName, '--diagnostics-format', 'defaultV2')
+        $arguments = @('lint', $file.FullName, '--diagnostics-format', 'default')
         if ($env:AVM_OFFLINE -eq '1') {
             $arguments += '--no-restore'
         }

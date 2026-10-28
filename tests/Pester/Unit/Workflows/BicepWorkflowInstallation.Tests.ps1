@@ -19,6 +19,11 @@ BeforeAll {
         param([string[]] $Name, [string] $Path, [switch] $SkipModuleVersionCheck)
         throw 'Tool installation must be mocked.'
     }
+    function Get-AvmBicepAzureDependency {
+        [CmdletBinding()]
+        param([switch] $SkipModuleVersionCheck)
+        throw 'Azure dependency inventory must be mocked.'
+    }
     function Get-AvmTool {
         [CmdletBinding()]
         param([string[]] $Name, [string] $Path, [switch] $SkipModuleVersionCheck)
@@ -67,7 +72,12 @@ Describe 'Bicep workflow packaged-compliance qualification' {
         $script:capability = 1
         $script:providerCapability = 1
         $script:selectionCapability = 1
+        $script:dependencyCapability = 1
         Mock Install-AvmWorkflowModule {}
+        Mock Get-AvmBicepAzureDependency {
+            [pscustomobject]@{ Name = 'Az.Accounts'; MinimumVersion = [version]'5.3.4' }
+            [pscustomobject]@{ Name = 'Az.Subscription'; MinimumVersion = [version]'0.12.0' }
+        }
         Mock Import-AvmWorkflowPackage {}
         Mock Install-AvmTool {}
         Mock Write-AvmWorkflowOutput {}
@@ -80,6 +90,7 @@ Describe 'Bicep workflow packaged-compliance qualification' {
                         BicepPackagedCompliance = $script:capability
                         BicepRequiredResourceProviders = $script:providerCapability
                         BicepTestSubscriptionSelection = $script:selectionCapability
+                        BicepAzureDependencyInventory = $script:dependencyCapability
                     }
                 }
             }
@@ -122,8 +133,23 @@ Describe 'Bicep workflow packaged-compliance qualification' {
     It 'requires native provider capability before preparing deployment dependencies' {
         Initialize-AvmWorkflow -Profile Deployment -Confirm:$false
         Should -Invoke Install-AvmWorkflowModule -Exactly 1 -ParameterFilter { $Name -eq 'Pester' -and $Version -eq [version]'5.7.1' }
-        Should -Invoke Install-AvmWorkflowModule -Exactly 1 -ParameterFilter { $Name -eq 'Az' -and $Minimum }
+        Should -Invoke Install-AvmWorkflowModule -Exactly 1 -ParameterFilter {
+            $Name -ceq 'Az.Subscription' -and $Version -eq [version]'0.12.0' -and $Minimum
+        }
         Should -Invoke Install-AvmTool -Exactly 1 -ParameterFilter { $Name -eq 'bicep' }
+    }
+
+    It 'rejects <Label> dependency bootstrap capability before provisioning' -ForEach @(
+        @{ Label = 'missing'; Value = $null }
+        @{ Label = 'zero'; Value = 0 }
+        @{ Label = 'unsupported'; Value = 2 }
+        @{ Label = 'string'; Value = '1' }
+        @{ Label = 'boolean'; Value = $true }
+    ) {
+        $script:dependencyCapability = $Value
+        { Initialize-AvmWorkflow -Profile Deployment -Confirm:$false } |
+            Should -Throw '*BicepAzureDependencyInventory capability 1*'
+        Should -Invoke Get-AvmBicepAzureDependency -Exactly 0
     }
 
     It 'rejects <Label> native provider capability before deployment preparation' -ForEach @(
@@ -186,6 +212,7 @@ Describe 'Bicep workflow packaged-compliance qualification' {
         Initialize-AvmWorkflow -Profile Deployment -WhatIf
         Should -Invoke Install-AvmWorkflowModule -Exactly 0
         Should -Invoke Import-AvmWorkflowPackage -Exactly 0
+        Should -Invoke Get-AvmBicepAzureDependency -Exactly 0
         Should -Invoke Install-AvmTool -Exactly 0
         Should -Invoke Write-AvmWorkflowOutput -Exactly 0
     }

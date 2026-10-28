@@ -136,6 +136,32 @@ Describe 'Terraform unit-test migration' {
             }
         }
 
+        It 'inspects and counts both run targets with label <Label>' -ForEach @(
+            @{ Label = 'Keys' }
+            @{ Label = 'Values' }
+            @{ Label = 'Count' }
+        ) {
+            foreach ($state in @($script:fixture.Before, $script:fixture.After)) {
+                $state.test.runs[$Label] = $state.test.runs['root']
+                $state.test.run_modules[$Label] = $state.test.run_modules['root']
+                $state.test.runs.Remove('root')
+                $state.test.run_modules.Remove('root')
+            }
+            $inspection = Read-UnitMigrationInspection -Fixture $script:fixture
+            @($inspection.test.runs.get_Keys()) | Should -HaveCount 2
+            $inspection.test.run_modules[$Label].dir | Should -BeExactly $script:fixture.Root
+            $inspection.test.run_modules['child'].dir | Should -BeExactly $script:fixture.Child
+            $inspection.test.runs[$Label].assert = @(
+                @{ mptf = @{ attributes = @{ condition = 'length(random_uuid.telemetry) == 1' } } })
+            $inspection.test.runs['child'].assert = @(
+                @{ mptf = @{ attributes = @{ condition = 'length(random_uuid.telemetry) == 0' } } })
+            InModuleScope Avm.Authoring -Parameters @{ Inspection = $inspection; Targets = $script:fixture.Targets } {
+                param($Inspection, $Targets)
+                (Get-AvmTerraformTelemetryTestCountMigration -Test $Inspection.test -ModuleTargets $Targets).ReferenceCount |
+                    Should -Be 2
+            }
+        }
+
         It 'reports malformed JSON rather than treating it as an empty test' {
             { Read-UnitMigrationInspection -Fixture $script:fixture -Json 'not json' } |
                 Should -Throw '*invalid MaPoTF JSON*'

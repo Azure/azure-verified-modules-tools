@@ -850,17 +850,23 @@ ModTM removal, conditional AzAPI insertion and declared-requirement retirement.
 PowerShell supplies only fresh dependency-tree and provider-configuration facts,
 surfaces the profile's literal-map review before writing, and must not parse,
 rebuild or replace authored provider-map expressions.
-For scopes with child module calls, defer early ModTM requirement retirement
+For scopes with child module calls, defer early ModTM and Random requirement retirement
 until the utility cleanup has fresh dependency proof, rather than temporarily
 dropping and regenerating a still-required source/version contract.
 Before loading a dependency tree, reconcile known local callers against their
 children's current native declarations, including callers selected through test
 files. Repeat this reconciliation after retiring a child's requirement: Terraform
 loads test-selected examples during `get`, before dependency-ordered caller
-restoration can run. Remove only unsupported `modtm = modtm` entries; preserve
-alias and different-local-name selections. A temporarily retired declaration
+restoration can run. Remove only unsupported `modtm = modtm` and
+`random = random` entries; preserve alias and different-local-name selections.
+Random cleanup additionally requires the child's original native declaration
+to identify HashiCorp Random and its current declaration to be absent.
+Missing original declarations and other provider sources remain review failures,
+not inferred obsolete bindings. A temporarily retired declaration
 may be restored only with the existing fresh dependency proof, after which a
 retained mixed map must again forward any genuinely required ModTM configuration.
+Genuine transitive Random use retains its authored source/version contract and
+explicit caller binding until the separate default-map inheritance pass.
 An intermediate native missing-provider-configuration warning may be tracked
 while repairing proven source bindings. All other diagnostics remain fatal,
 and a strict dependency recheck must pass before mock migration.
@@ -1479,6 +1485,11 @@ Azure CLI and PowerShell must confirm the same subscription, tenant, cloud
 and account before CLI cleanup. Do not log in, export tokens or install
 modules implicitly. The native dependency floors follow the Az 15.5.0
 bundle, plus Az.Subscription 0.12.0, which is distributed separately.
+`Get-AvmBicepAzureDependency` exposes that same dependency inventory without
+installing or importing modules. Workflow setup installs missing individual
+dependencies at those floors from the official PSGallery in CurrentUser scope,
+reuses compatible modules and honors offline mode. Deployment tests run in a
+fresh session; the read-only preflight still checks every dependency and command.
 Check the actual command provenance and parameter names or aliases.
 Make the selected Az.Accounts version visible in the current PowerShell
 process's global scope before importing other Az modules: nested clients
@@ -1790,6 +1801,9 @@ contract. New Bicep orchestration uses only relative reusable workflow calls
 from that entrypoint revision and the latest stable PSGallery `Avm.Authoring`
 package. It must not check out tools again, pin a second tools SHA, use
 `@main`, derive a source ref, or accept a caller-facing `tools-ref` override.
+Package bootstrap retries installation up to three times with five- and
+ten-second delays, then rethrows the final failure. Import and capability
+checks remain outside the retry.
 The runtime package must declare exact integer
 `PrivateData.AvmCapabilities.BicepWorkflowOrchestration = 1` before selection
 or release work and `BicepWorkflowE2eRuntime = 1` before E2E selection or
@@ -1798,6 +1812,10 @@ falling back to repository scripts. Package qualification must exercise this
 package-only path, including empty fork configuration, InPlace/Fresh retries,
 artifact state, and final-only cleanup; interface-parameter checks alone do
 not prove that behavior.
+Both native and retained deployment bootstraps require exact integer
+`BicepAzureDependencyInventory = 1` and provision the package's declared
+dependencies before OIDC sign-in. Deployment and cleanup run in fresh sessions
+and retain their independent fail-closed dependency preflight.
 Direct callers of established legacy leaves continue to pin their tools `uses`
 reference and `tools-ref` to the same full immutable SHA. Nested reusable calls
 remain relative to the entrypoint revision. Executable package-runtime jobs

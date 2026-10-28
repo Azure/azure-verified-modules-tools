@@ -458,4 +458,147 @@ module "regions" {
         $content | Should -Match 'azapi\s*=\s*azapi'
         $content | Should -Not -Match '(?m)^\s*modtm\s*='
     }
+
+    It 'transforms colliding local module and test-run labels without losing provider contracts' {
+        $key = Join-Path $script:root 'modules' 'key'
+        $secret = Join-Path $script:root 'modules' 'secret'
+        $tests = Join-Path $script:root 'tests' 'unit'
+        $null = New-Item -ItemType Directory -Path $key, $secret, $tests -Force
+        $null = Initialize-AvmModuleMetadata -Path $script:root -Ecosystem terraform -ModuleType utility -InputObject @{
+            moduleDisplayName = 'Module label collision'
+            moduleDescription = 'Preserves local calls and provider contracts with colliding labels.'
+            canonicalType = 'module-label-collision'
+            owners = @()
+        }
+        foreach ($child in @($key, $secret)) {
+            $null = Initialize-AvmModuleMetadata -Path $child -Ecosystem terraform -ModuleType utility -ChildModule -InputObject @{
+                moduleDisplayName = 'Module label child'
+                moduleDescription = 'A local child with an independently required provider.'
+                canonicalType = 'helper'
+            }
+            Set-Content -LiteralPath (Join-Path $child 'main.tf') -Encoding utf8NoBOM -Value @'
+terraform {
+  required_providers {
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6, < 4.0"
+    }
+  }
+}
+
+resource "random_uuid" "child" {}
+'@
+        }
+        Set-Content -LiteralPath $script:main -Encoding utf8NoBOM -Value @'
+terraform {
+  required_providers {
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6, < 4.0"
+    }
+  }
+}
+
+provider "random" {
+  alias = "owner"
+}
+
+resource "random_uuid" "owner" {}
+
+module "keys" {
+  source = "./modules/key"
+  providers = {
+    random = random.owner
+  }
+}
+
+module "Values" {
+  source = "./modules/secret"
+  providers = {
+    random = random.owner
+  }
+}
+'@
+        Set-Content -LiteralPath (Join-Path $tests 'labels.tftest.hcl') -Encoding utf8NoBOM -Value @'
+mock_provider "random" {}
+
+run "Keys" {
+  command = plan
+}
+
+run "Values" {
+  command = plan
+  module {
+    source = "./modules/secret"
+  }
+}
+
+run "Count" {
+  command = plan
+  module {
+    source = "./modules/key"
+  }
+}
+'@
+        InModuleScope Avm.Authoring -Parameters @{
+            Root = $script:root; Key = $key; Secret = $secret; Options = $script:options; Profiles = $script:profilesRoot
+        } {
+            param($Root, $Key, $Secret, $Options, $Profiles)
+            $Options.ProfileDirs['provider-contract'] = Join-Path $Profiles 'provider-contract'
+            $targets = @(
+                [pscustomobject]@{ Path = $Root; Scope = 'root'; Profiles = @('module', 'common') }
+                [pscustomobject]@{ Path = $Key; Scope = 'module'; Profiles = @('module', 'common') }
+                [pscustomobject]@{ Path = $Secret; Scope = 'module'; Profiles = @('module', 'common') }
+            )
+            $bindings = Get-AvmTerraformProviderContractBinding -Targets $targets -Snapshots @() -Options $Options
+            @($bindings[$Key]) | Should -Contain 'random'
+            @($bindings[$Secret]) | Should -Contain 'random'
+        }
+        $first = $null
+        foreach ($pass in 1..2) {
+            $result = avm transform -Path $script:root -Ecosystem terraform -ThrottleLimit 1 --passthru
+            $result.Status | Should -BeExactly 'pass'
+            $inventory = Get-TerraformAcceptanceFiles -Root $script:root
+            if ($pass -eq 1) {
+                $first = $inventory
+            }
+            else {
+                $inventory.Count | Should -Be $first.Count
+                foreach ($path in $first.Keys) {
+                    $inventory.ContainsKey($path) | Should -BeTrue
+                    $inventory[$path] | Should -BeExactly $first[$path]
+                }
+            }
+        }
+        $inspection = InModuleScope Avm.Authoring -Parameters @{ Root = $script:root; Options = $script:options } {
+            param($Root, $Options)
+            Get-AvmTerraformUtilityInspection -Path $Root -Options $Options -Scope root
+        }
+        $inspection.calls['keys'].source | Should -BeExactly './modules/key'
+        $inspection.calls['Values'].source | Should -BeExactly './modules/secret'
+        $inspection.calls['keys'].providers | Should -Match 'random\.owner'
+        $inspection.calls['Values'].providers | Should -Match 'random\.owner'
+        $inspection.requirements.random.version | Should -BeExactly '>= 3.6, < 4.0'
+        $testInspection = InModuleScope Avm.Authoring -Parameters @{
+            Root = $script:root; Key = $key; Secret = $secret; Options = $script:options
+        } {
+            param($Root, $Key, $Secret, $Options)
+            $targets = @(
+                [pscustomobject]@{ Path = $Root; Scope = 'root'; Profiles = @('root', 'module', 'common') }
+                [pscustomobject]@{ Path = $Key; Scope = 'module'; Profiles = @('module', 'common') }
+                [pscustomobject]@{ Path = $Secret; Scope = 'module'; Profiles = @('module', 'common') }
+            )
+            $scope = [pscustomobject]@{
+                File = Get-Item -LiteralPath (Join-Path $Root 'tests' 'unit' 'labels.tftest.hcl')
+                Owner = $targets[0]
+                RelativePath = 'tests/unit/labels.tftest.hcl'
+                IsUnitTest = $true
+            }
+            Get-AvmTerraformUnitTestInspection -Scope $scope -ModuleTargets $targets -Options $Options
+        }
+        $testInspection.test.runs.get_Count() | Should -Be 3
+        $testInspection.test.run_modules['Keys'].dir | Should -BeExactly $script:root
+        $testInspection.test.run_modules['Values'].dir | Should -BeExactly $secret
+        $testInspection.test.run_modules['Count'].dir | Should -BeExactly $key
+    }
 }

@@ -536,38 +536,287 @@ Describe 'Terraform utility migration planning' {
 
 }
 
+Describe 'Terraform utility module label collisions' {
+    BeforeEach {
+        InModuleScope Avm.Authoring -Parameters @{ Root = "$TestDrive" } {
+            param($Root)
+            $script:labelRoot = $Root
+            $script:labelChild = Join-Path $Root 'modules' 'key'
+            $script:labelSibling = Join-Path $Root 'modules' 'secret'
+            $script:labelTargets = @(
+                [pscustomobject]@{ Path = $Root; Scope = 'root' }
+                [pscustomobject]@{ Path = $script:labelChild; Scope = 'module' }
+                [pscustomobject]@{ Path = $script:labelSibling; Scope = 'module' }
+            )
+            $script:labelOptions = [pscustomobject]@{
+                ToolPath = 'mapotf'
+                EnvVars = @{}
+                ProfileDirs = @{ 'utility-module' = 'utility-profile' }
+                UtilityProviderSources = @{}
+            }
+            Mock Invoke-AvmProcess {
+                $json = if ($WorkingDirectory -ceq $script:labelRoot) {
+                    '{"calls":{"LABEL":{"source":"./modules/key","mptf":{"block_address":"module.LABEL"}},"secrets":{"source":"./modules/secret","mptf":{"block_address":"module.secrets"}}},"variables":{},"requirements":{"azapi":{"source":"Azure/azapi","version":"~> 2.12"}},"resources":{},"data_sources":{},"ephemeral":{},"migration":{"review":{},"calls":{}}}'.Replace('LABEL', $script:labelName)
+                }
+                elseif ($WorkingDirectory -ceq $script:labelChild) {
+                    '{"calls":{"regions":{"source":"Azure/avm-utl-regions/azurerm","version":"0.12.0","mptf":{"block_address":"module.regions"}}},"variables":{},"requirements":{},"resources":{},"data_sources":{},"ephemeral":{},"migration":{"review":{},"calls":{"regions":{"telemetry":true,"provider_source":"Azure/avm-utl-regions/azurerm","provider_version":"0.13.0"}}}}'
+                }
+                else {
+                    '{"calls":{},"variables":{},"requirements":{},"resources":{},"data_sources":{},"ephemeral":{},"migration":{"review":{},"calls":{}}}'
+                }
+                [pscustomobject]@{ StdOut = $json }
+            }
+            Mock Get-ChildItem { @() }
+            Mock Get-AvmTerraformUnitTestRequiredProvider {
+                ConvertFrom-Json -InputObject '{"azapi":{"source":"Azure/azapi","version":"~> 2.12"}}' -AsHashtable
+            }
+            Mock Get-AvmTerraformUnitTestProviderSource {
+                if ($Path -ceq $script:labelChild) { return @('registry.terraform.io/azure/azapi') }
+                if ($Path -ceq $script:labelSibling) { return @('registry.terraform.io/hashicorp/random') }
+                return @('registry.terraform.io/azure/azapi', 'registry.terraform.io/hashicorp/random')
+            }
+            Mock Assert-AvmTerraformUtilityProviderMappingReview { @{ Configurations = @(); Aliases = @() } }
+            Mock Get-AvmTerraformUtilityProviderConfigurationFact { @{ Configurations = @(); Aliases = @() } }
+            Mock Invoke-AvmTerraformUtilityNativeMigration {}
+            Mock Invoke-AvmMapotfTransformTarget {}
+        }
+    }
+
+    It 'traverses both local children and cleans up provider facts with label <Label>' -ForEach @(
+        @{ Label = 'ordinary' }
+        @{ Label = 'keys' }
+        @{ Label = 'Keys' }
+        @{ Label = 'values' }
+        @{ Label = 'Values' }
+        @{ Label = 'Count' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Label = $Label } {
+            param($Label)
+            $script:labelName = $Label
+            $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:labelTargets -Options $script:labelOptions)
+            $plans | Should -HaveCount 3
+            $paths = @($plans | ForEach-Object { $_.Target.Path })
+            $paths.IndexOf($script:labelChild) | Should -BeLessThan $paths.IndexOf($script:labelRoot)
+            $paths.IndexOf($script:labelSibling) | Should -BeLessThan $paths.IndexOf($script:labelRoot)
+            $rootPlan = $plans | Where-Object { $_.Target.Path -ceq $script:labelRoot }
+            $rootPlan.Before.calls.GetType().FullName | Should -BeExactly 'System.Management.Automation.OrderedHashtable'
+            $rootPlan.Dependencies.GetType().FullName | Should -BeExactly 'System.Collections.Hashtable'
+            @($rootPlan.Dependencies.get_Keys()) | Should -HaveCount 2
+            $rootPlan.Dependencies[$Label] | Should -BeExactly $script:labelChild
+            $rootPlan.Dependencies['secrets'] | Should -BeExactly $script:labelSibling
+            $rootPlan.Telemetry | Should -BeTrue
+
+            Invoke-AvmTerraformUtilityProviderCleanup -Plans $plans -ModuleTargets $script:labelTargets -Options $script:labelOptions
+            Should -Invoke Assert-AvmTerraformUtilityProviderMappingReview -ParameterFilter {
+                $Path -ceq $script:labelRoot -and
+                $ProviderSourceFacts.ContainsKey($script:labelName) -and
+                $ProviderSourceFacts.ContainsKey('secrets') -and
+                $ProviderSourceFacts[$script:labelName] -contains 'registry.terraform.io/azure/azapi' -and
+                $ProviderSourceFacts['secrets'] -contains 'registry.terraform.io/hashicorp/random' -and
+                $CallsRequiringAzapi -contains $script:labelName
+            } -Exactly 1
+            $script:labelOptions.UtilityProviderSources[$script:labelRoot] |
+                Should -Be @('registry.terraform.io/azure/azapi', 'registry.terraform.io/hashicorp/random')
+        }
+    }
+
+    It 'forwards local telemetry for label <Label> while preserving the sibling' -ForEach @(
+        @{ Label = 'ordinary' }
+        @{ Label = 'keys' }
+        @{ Label = 'Keys' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Label = $Label } {
+            param($Label)
+            $script:labelName = $Label
+            $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:labelTargets -Options $script:labelOptions)
+            Invoke-AvmTerraformUtilityMigration -Plans $plans -Options $script:labelOptions
+            Should -Invoke Assert-AvmTerraformUtilityProviderMappingReview -Exactly 1 -ParameterFilter {
+                $Path -ceq $script:labelRoot -and $CallsRequiringAzapi -contains $script:labelName -and
+                $CallsRequiringAzapi -notcontains 'secrets'
+            }
+        }
+    }
+
+    It 'reconciles both local provider contracts with label <Label>' -ForEach @(
+        @{ Label = 'ordinary' }
+        @{ Label = 'keys' }
+        @{ Label = 'Keys' }
+        @{ Label = 'values' }
+        @{ Label = 'Values' }
+        @{ Label = 'count' }
+        @{ Label = 'Count' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Label = $Label } {
+            param($Label)
+            $script:labelName = $Label
+            $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets $script:labelTargets -Options $script:labelOptions)
+            $childPlan = $plans | Where-Object { $_.Target.Path -ceq $script:labelChild }
+            $siblingPlan = $plans | Where-Object { $_.Target.Path -ceq $script:labelSibling }
+            $childPlan.Before.requirements = ConvertFrom-Json -AsHashtable -InputObject `
+                '{"random":{"source":"hashicorp/random","version":">= 3.6, < 4.0"}}'
+            $siblingPlan.Before.requirements = ConvertFrom-Json -AsHashtable -InputObject `
+                '{"modtm":{"source":"Azure/modtm","version":"~> 0.3"}}'
+            Mock Get-AvmTerraformUnitTestRequiredProvider {
+                if ($Path -ceq $script:labelChild) {
+                    return ConvertFrom-Json -AsHashtable -InputObject '{"random":{"source":"hashicorp/random","version":">= 3.6, < 4.0"}}'
+                }
+                return ConvertFrom-Json -AsHashtable -InputObject '{"modtm":{"source":"Azure/modtm","version":"~> 0.3"}}'
+            }
+            Sync-AvmTerraformLocalProviderMapping -Plans $plans -Options $script:labelOptions `
+                -DependencyPaths @($script:labelChild, $script:labelSibling)
+            Should -Invoke Assert-AvmTerraformUtilityProviderMappingReview -Exactly 1 -ParameterFilter {
+                $Path -ceq $script:labelRoot -and
+                $LocalProviderRequirements.get_Count() -eq 2 -and
+                $LocalProviderRequirements[$script:labelName].declared -contains 'random' -and
+                $LocalProviderRequirements[$script:labelName].original_sources['random'] -ceq 'hashicorp/random' -and
+                $LocalProviderRequirements['secrets'].declared -contains 'modtm' -and
+                $LocalProviderRequirements['secrets'].original_sources['modtm'] -ceq 'Azure/modtm' -and
+                $ProviderSourceFacts.ContainsKey($script:labelName) -and
+                -not $ProviderSourceFacts.ContainsKey('secrets')
+            }
+            Should -Invoke Invoke-AvmTerraformUtilityNativeMigration -Exactly 1 -ParameterFilter {
+                $Path -ceq $script:labelRoot -and $LocalProviderRequirements.get_Count() -eq 2
+            }
+        }
+    }
+
+    It 'plans a selected utility with label <Label>' -ForEach @(
+        @{ Label = 'ordinary' }
+        @{ Label = 'keys' }
+        @{ Label = 'Keys' }
+        @{ Label = 'values' }
+        @{ Label = 'Values' }
+        @{ Label = 'count' }
+        @{ Label = 'Count' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Label = $Label } {
+            param($Label)
+            $script:labelName = $Label
+            Mock Invoke-AvmProcess {
+                $json = '{"calls":{"LABEL":{"source":"Azure/avm-utl-regions/azurerm","version":"0.12.0","mptf":{"block_address":"module.LABEL"}}},"variables":{},"requirements":{},"resources":{},"data_sources":{},"ephemeral":{},"migration":{"review":{},"calls":{"LABEL":{"telemetry":true,"provider_source":"Azure/avm-utl-regions/azurerm","provider_version":"0.13.0"}}}}'.Replace('LABEL', $script:labelName)
+                [pscustomobject]@{ StdOut = $json }
+            }
+            $plans = @(Get-AvmTerraformUtilityMigrationPlan -Targets @($script:labelTargets[0]) -Options $script:labelOptions)
+            $plans | Should -HaveCount 1
+            @($plans[0].Calls.get_Keys()) | Should -Be @($Label)
+            $plans[0].Affected | Should -BeTrue
+            $plans[0].Telemetry | Should -BeTrue
+            Invoke-AvmTerraformUtilityMigration -Plans $plans -Options $script:labelOptions
+            Should -Invoke Invoke-AvmTerraformUtilityNativeMigration -Exactly 1 -ParameterFilter {
+                $Path -ceq $script:labelRoot -and $ApplyUtilityMigration
+            }
+        }
+    }
+}
+
+Describe 'Terraform provider contract call labels' {
+    It 'retains both incoming provider bindings when a local call is named Values' {
+        InModuleScope Avm.Authoring -Parameters @{ Root = "$TestDrive" } {
+            param($Root)
+            $child = Join-Path $Root 'modules' 'key'
+            $sibling = Join-Path $Root 'modules' 'secret'
+            $targets = @(
+                [pscustomobject]@{ Path = $Root }
+                [pscustomobject]@{ Path = $child }
+                [pscustomobject]@{ Path = $sibling }
+            )
+            $options = [pscustomobject]@{
+                ToolPath = 'mapotf'
+                EnvVars = @{}
+                ProfileDirs = @{ 'provider-contract' = 'profile' }
+            }
+            Mock Invoke-AvmProcess {
+                $json = if ($WorkingDirectory -ceq $Root) {
+                    '{"calls":{"Values":{"source":"./modules/key","providers":["azapi.owner"]},"secrets":{"source":"./modules/secret","providers":["random"]}},"requirements":{}}'
+                }
+                else {
+                    '{"calls":{},"requirements":{}}'
+                }
+                [pscustomobject]@{ StdOut = $json }
+            }
+            $bindings = Get-AvmTerraformProviderContractBinding -Targets $targets -Snapshots @() -Options $options
+            @($bindings[$child]) | Should -Be @('azapi')
+            @($bindings[$sibling]) | Should -Be @('random')
+        }
+    }
+}
+
 Describe 'Terraform utility provider mapping proof' {
-    It 'reconciles only selected local callers whose child no longer declares ModTM' {
+    It 'keeps authored provider source strings literal in native review and transform arguments' {
+        InModuleScope Avm.Authoring {
+            $options = [pscustomobject]@{
+                ToolPath = 'mapotf'; EnvVars = @{}; ProfileDirs = @{ 'utility-module' = 'profile' }
+            }
+            $requirements = @{ child = @{ declared = @(); original_sources = @{ random = 'example/${literal}%{literal}' } } }
+            Mock Get-AvmTerraformUtilityProviderConfigurationFact { @{ Configurations = @(); Aliases = @() } }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ StdOut = '{}' } }
+            $null = Assert-AvmTerraformUtilityProviderMappingReview -Path 'fixture' -Options $options `
+                -ProviderSourceFacts @{} -LocalProviderRequirements $requirements -CallsRequiringAzapi @()
+            Invoke-AvmTerraformUtilityNativeMigration -Path 'fixture' -Scope root -Options $options `
+                -LocalProviderRequirements $requirements -ApplyUtilityMigration:$false
+            Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter {
+                @($ArgumentList | Where-Object { $_ -clike 'local_provider_requirements=*' -and $_ -cmatch '\$\$\{literal\}%%\{literal\}' }).Count -eq 1
+            }
+        }
+    }
+
+    It 'supplies current native declarations for selected local callers without inventing provider sources' {
         InModuleScope Avm.Authoring -Parameters @{ Root = "$TestDrive" } {
             param($Root)
             $retired = Join-Path $Root 'modules' 'retired'
             $retained = Join-Path $Root 'modules' 'retained'
+            $random = Join-Path $Root 'modules' 'random'
             $unselected = Join-Path $Root 'modules' 'unselected'
             $targets = @(
                 [pscustomobject]@{
                     Target = [pscustomobject]@{ Path = $Root; Scope = 'root' }
-                    Dependencies = @{ retired = $retired; retained = $retained; unselected = $unselected }
+                    Dependencies = @{ retired = $retired; retained = $retained; random = $random; unselected = $unselected }
+                    Before = @{ requirements = @{} }
                 }
                 [pscustomobject]@{
                     Target = [pscustomobject]@{ Path = Join-Path $Root 'examples' 'management'; Scope = 'example' }
                     Dependencies = @{ shared = $retired }
+                    Before = @{ requirements = @{} }
+                }
+                [pscustomobject]@{
+                    Target = [pscustomobject]@{ Path = $retired }
+                    Dependencies = @{}
+                    Before = @{ requirements = @{ random = @{ source = 'hashicorp/random'; version = '>= 3.6, < 4.0' } } }
+                }
+                [pscustomobject]@{
+                    Target = [pscustomobject]@{ Path = $retained }
+                    Dependencies = @{}
+                    Before = @{ requirements = @{} }
+                }
+                [pscustomobject]@{
+                    Target = [pscustomobject]@{ Path = $random }
+                    Dependencies = @{}
+                    Before = @{ requirements = @{} }
                 }
             )
             Mock Get-AvmTerraformUnitTestRequiredProvider {
                 if ($Path -ceq $retained) { return @{ modtm = @{ source = 'Azure/modtm'; version = '~> 0.3' } } }
+                if ($Path -ceq $random) { return @{ random = @{ source = 'hashicorp/random'; version = '>= 3.6, < 4.0' } } }
                 return @{}
             }
             Mock Assert-AvmTerraformUtilityProviderMappingReview {
                 $CallsRequiringAzapi | Should -HaveCount 0
-                $ProviderSourceFacts.Count | Should -Be 1
+                $ProviderSourceFacts.ContainsKey('retained') | Should -BeFalse
                 @($ProviderSourceFacts.Values)[0] | Should -HaveCount 0
+                if ($LocalProviderRequirements.ContainsKey('random')) {
+                    $LocalProviderRequirements.random.declared | Should -Be @('random')
+                    $LocalProviderRequirements.retained.declared | Should -Be @('modtm')
+                    $LocalProviderRequirements.retired.original_sources.random | Should -BeExactly 'hashicorp/random'
+                }
+                @($LocalProviderRequirements.Keys | Where-Object { $LocalProviderRequirements[$_].declared.Count -eq 0 }).Count | Should -Be 1
                 @{ Configurations = @(); Aliases = @() }
             }
             Mock Invoke-AvmTerraformUtilityNativeMigration {}
             Sync-AvmTerraformLocalProviderMapping -Plans $targets -Options ([pscustomobject]@{}) `
-                -DependencyPaths @($retired, $retained)
+                -DependencyPaths @($retired, $retained, $random)
             Should -Invoke Get-AvmTerraformUnitTestRequiredProvider -Exactly 1 -ParameterFilter { $Path -ceq $retired }
             Should -Invoke Get-AvmTerraformUnitTestRequiredProvider -Exactly 1 -ParameterFilter { $Path -ceq $retained }
+            Should -Invoke Get-AvmTerraformUnitTestRequiredProvider -Exactly 1 -ParameterFilter { $Path -ceq $random }
             Should -Invoke Get-AvmTerraformUnitTestRequiredProvider -Exactly 0 -ParameterFilter { $Path -ceq $unselected }
             Should -Invoke Invoke-AvmTerraformUtilityNativeMigration -Exactly 2 -ParameterFilter {
                 -not $ApplyUtilityMigration -and -not $ProviderFactsComplete -and
@@ -692,8 +941,12 @@ Describe 'Terraform utility provider mapping proof' {
         }
     }
 
-    It 'surfaces native provider-map review before a transform writes' {
-        InModuleScope Avm.Authoring {
+    It 'surfaces native provider-map review before a transform writes: <Evidence>' -ForEach @(
+        @{ Evidence = 'dependency sources'; Sources = @{ regions = @('registry.terraform.io/azure/azapi') }; Requirements = @{} }
+        @{ Evidence = 'local declarations'; Sources = @{}; Requirements = @{ regions = @{ declared = @(); original_sources = @{ random = 'hashicorp/random' } } } }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Sources = $Sources; Requirements = $Requirements } {
+            param($Sources, $Requirements)
             $options = [pscustomobject]@{
                 ToolPath = 'mapotf'; EnvVars = @{}; ProfileDirs = @{ 'utility-module' = 'profile' }
             }
@@ -701,7 +954,7 @@ Describe 'Terraform utility provider mapping proof' {
             Mock Invoke-AvmProcess { [pscustomobject]@{ StdOut = '{"regions":{}}' } }
             {
                 Assert-AvmTerraformUtilityProviderMappingReview -Path 'fixture' -Options $options `
-                    -ProviderSourceFacts @{ regions = @('registry.terraform.io/azure/azapi') } `
+                    -ProviderSourceFacts $Sources -LocalProviderRequirements $Requirements `
                     -CallsRequiringAzapi regions
             } | Should -Throw '*requires review*'
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -ceq 'debug' }

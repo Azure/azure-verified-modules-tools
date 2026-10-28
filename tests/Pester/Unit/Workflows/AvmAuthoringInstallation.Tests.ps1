@@ -20,6 +20,26 @@ BeforeDiscovery {
             WorkflowName = $workflowName
             InstallScript = $run.Groups['script'].Value -replace '(?m)^ {10}', ''
             HasBootstrap = $workflowName -eq 'terraform-module.yml'
+            IsBicep = $false
+        }
+    }
+    foreach ($workflowFile in Get-ChildItem -LiteralPath $workflowRoot -Filter 'bicep*.yml') {
+        $workflow = Get-Content -LiteralPath $workflowFile.FullName -Raw
+        $installCount = [regex]::Matches($workflow, 'Install-PSResource -Name Avm\.Authoring').Count
+        $blocks = [regex]::Matches(
+            $workflow,
+            '(?ms)^          \$maxAttempts = 3\r?\n.*?^          Import-Module Avm\.Authoring -ErrorAction Stop\r?$'
+        )
+        if ($blocks.Count -ne $installCount) {
+            throw [System.InvalidOperationException]::new("Could not isolate every installer in $($workflowFile.Name).")
+        }
+        for ($index = 0; $index -lt $blocks.Count; $index++) {
+            $installCases += @{
+                WorkflowName = "$($workflowFile.Name) [$($index + 1)]"
+                InstallScript = $blocks[$index].Value -replace '(?m)^ {10}', ''
+                HasBootstrap = $true
+                IsBicep = $true
+            }
         }
     }
 }
@@ -179,7 +199,7 @@ Describe 'Avm.Authoring installation in <WorkflowName>' -ForEach $installCases {
         Should -Invoke avm -Times 0 -Exactly
     }
 
-    if ($HasBootstrap) {
+    if ($HasBootstrap -and -not $IsBicep) {
         It 'preserves the requested version <RequestedVersion> on every attempt' -ForEach @(
             @{ RequestedVersion = '1.2.3' }
             @{ RequestedVersion = '[1.2.3,2.0.0)' }
@@ -200,6 +220,8 @@ Describe 'Avm.Authoring installation in <WorkflowName>' -ForEach $installCases {
             }
         }
 
+    }
+    if ($HasBootstrap) {
         It 'retries a failed PSResourceGet bootstrap before installing Avm.Authoring' {
             Mock Get-Module { } -ParameterFilter {
                 $ListAvailable -and $Name -eq 'Microsoft.PowerShell.PSResourceGet'

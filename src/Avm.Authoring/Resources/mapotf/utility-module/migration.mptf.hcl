@@ -3,6 +3,14 @@ variable "provider_source_facts" {
   default = {}
 }
 
+variable "local_provider_requirements" {
+  type = map(object({
+    declared         = set(string)
+    original_sources = map(string)
+  }))
+  default = {}
+}
+
 variable "provider_configuration_facts" {
   type    = set(string)
   default = []
@@ -111,11 +119,20 @@ locals {
     for name, call in data.module.utility.result : name => object_entries(call.providers)
     if contains(keys(call), "providers") && can(object_entries(call.providers))
   }
+  retired_local_random_contracts = toset([
+    for name, requirements in var.local_provider_requirements : name
+    if !contains(requirements.declared, "random") &&
+    try(contains(["", "random", "hashicorp/random", "registry.terraform.io/hashicorp/random"],
+    lower(requirements.original_sources.random)), false)
+  ])
   provider_mapping_review = {
     for name, call in data.module.utility.result : name => call
     if contains(keys(call), "providers") &&
-    contains(keys(var.provider_source_facts), name) &&
-    !contains(var.provider_source_facts[name], local.provider_addresses.modtm) &&
+    (
+      (contains(keys(var.provider_source_facts), name) &&
+      !contains(var.provider_source_facts[name], local.provider_addresses.modtm)) ||
+      contains(local.retired_local_random_contracts, name)
+    ) &&
     !can(object_entries(call.providers))
   }
   modtm_provider_mappings = {
@@ -123,6 +140,11 @@ locals {
     if contains(keys(var.provider_source_facts), name) &&
     !contains(var.provider_source_facts[name], local.provider_addresses.modtm) &&
     try(entries.modtm == "modtm", false)
+  }
+  random_provider_mappings = {
+    for name, entries in local.provider_mapping_entries : name => entries
+    if contains(local.retired_local_random_contracts, name) &&
+    try(entries.random == "random", false)
   }
   retained_provider_mappings = {
     for name, entries in local.modtm_provider_mappings : name => entries
@@ -147,7 +169,8 @@ locals {
       length([
         for call_name, entries in local.provider_mapping_entries : entries
         if contains(keys(entries), name) &&
-        !(name == "modtm" && contains(keys(local.modtm_provider_mappings), call_name))
+        !(name == "modtm" && contains(keys(local.modtm_provider_mappings), call_name)) &&
+        !(name == "random" && contains(keys(local.random_provider_mappings), call_name))
       ]) > 0 ||
       length([
         for call_name in keys(var.provider_source_facts) : call_name
@@ -201,11 +224,23 @@ transform "remove_object_attributes" "utility_modtm_provider_mappings" {
   remove_empty_attribute = true
 }
 
+transform "remove_object_attributes" "local_random_provider_mappings" {
+  for_each               = local.random_provider_mappings
+  target_block_address   = "module.${each.key}"
+  attribute_path         = ["providers"]
+  keys                   = ["random"]
+  remove_empty_attribute = true
+  depends_on             = [transform.remove_object_attributes.utility_modtm_provider_mappings]
+}
+
 transform "update_in_place" "utility_azapi_provider_mappings" {
   for_each                = local.azapi_provider_mappings
   target_block_address    = "module.${each.key}"
   merge_object_attributes = true
-  depends_on              = [transform.remove_object_attributes.utility_modtm_provider_mappings]
+  depends_on              = [
+    transform.remove_object_attributes.utility_modtm_provider_mappings,
+    transform.remove_object_attributes.local_random_provider_mappings,
+  ]
   asraw {
     providers = {
       azapi = azapi
