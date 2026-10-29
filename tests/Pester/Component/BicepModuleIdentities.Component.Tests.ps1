@@ -273,6 +273,21 @@ Describe 'Bicep module identity entry points with real files and mocked services
             Should -Be @('init', 'plan', 'show', 'show')
     }
 
+    It 'plans the complete identity inventory from a manually dispatched trusted branch' {
+        $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
+        $env:GITHUB_REF = 'refs/heads/jaredholgate-microsoft-subscription-vending-identity-sync'
+        $env:GITHUB_WORKFLOW_REF =
+            'Azure/azure-verified-modules-tools/.github/workflows/repository-management-bicep-sync.yml@refs/heads/jaredholgate-microsoft-subscription-vending-identity-sync'
+
+        $result = & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath |
+            ConvertFrom-Json -AsHashtable
+
+        $result.Status | Should -BeExactly 'Planned'
+        $result.ModuleCount | Should -Be 2
+        @($script:state.Parameters.modules.Keys) |
+            Should -Be @('avm/res/fabric/capacity', 'avm/res/storage/storage-account')
+    }
+
     It 'applies only additive registry credentials to existing identities through the guarded entry point' {
         $script:state.Plan = New-AvmTestBicepIdentityPlan -KnownClient
         foreach ($change in $script:state.Plan.resource_changes) {

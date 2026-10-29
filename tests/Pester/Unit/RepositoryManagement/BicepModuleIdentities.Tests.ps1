@@ -10,6 +10,71 @@ BeforeAll {
     )
 }
 
+Describe 'Bicep sync trusted run context' {
+    BeforeEach {
+        $script:originalBicepSyncEnvironment = @{}
+        foreach ($name in @(
+                'GITHUB_ACTIONS', 'GITHUB_REPOSITORY', 'GITHUB_EVENT_NAME', 'GITHUB_REF', 'GITHUB_WORKFLOW_REF',
+                'GITHUB_REPOSITORY_ID', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_SHA'
+            )) {
+            $script:originalBicepSyncEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+        }
+        $env:GITHUB_ACTIONS = 'true'
+        $env:GITHUB_REPOSITORY = 'Azure/azure-verified-modules-tools'
+        $env:GITHUB_EVENT_NAME = 'schedule'
+        $env:GITHUB_REF = 'refs/heads/main'
+        $env:GITHUB_WORKFLOW_REF =
+            'Azure/azure-verified-modules-tools/.github/workflows/repository-management-bicep-sync.yml@refs/heads/main'
+        $env:GITHUB_REPOSITORY_ID = '1239632211'
+        $env:GITHUB_RUN_ID = '123456789'
+        $env:GITHUB_RUN_ATTEMPT = '1'
+        $env:GITHUB_SHA = '0123456789012345678901234567890123456789'
+    }
+
+    AfterEach {
+        foreach ($name in $script:originalBicepSyncEnvironment.Keys) {
+            $value = if ($null -eq $script:originalBicepSyncEnvironment[$name]) {
+                [NullString]::Value
+            }
+            else {
+                $script:originalBicepSyncEnvironment[$name]
+            }
+            [Environment]::SetEnvironmentVariable($name, $value)
+        }
+    }
+
+    It 'accepts scheduled main with exact workflow evidence' {
+        $context = Resolve-AvmBicepSyncRunContext
+        $context.WorkflowRef |
+            Should -BeExactly 'Azure/azure-verified-modules-tools/.github/workflows/repository-management-bicep-sync.yml@refs/heads/main'
+        $context.IsManualBranch | Should -BeFalse
+    }
+
+    It 'accepts a manually dispatched branch only when its workflow evidence matches' {
+        $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
+        $env:GITHUB_REF = 'refs/heads/jaredholgate-microsoft-subscription-vending-identity-sync'
+        $env:GITHUB_WORKFLOW_REF =
+            'Azure/azure-verified-modules-tools/.github/workflows/repository-management-bicep-sync.yml@refs/heads/jaredholgate-microsoft-subscription-vending-identity-sync'
+
+        $context = Resolve-AvmBicepSyncRunContext
+        $context.IsManualBranch | Should -BeTrue
+        (Get-AvmBicepIdentityPublicationContext).workflowRef | Should -BeExactly $env:GITHUB_WORKFLOW_REF
+    }
+
+    It 'rejects scheduled branch runs, tags, and mismatched workflow evidence: <Case>' -ForEach @(
+        @{ Case = 'scheduled branch'; Event = 'schedule'; Ref = 'refs/heads/feature'; WorkflowRef = 'refs/heads/feature' }
+        @{ Case = 'tag'; Event = 'workflow_dispatch'; Ref = 'refs/tags/v1'; WorkflowRef = 'refs/tags/v1' }
+        @{ Case = 'mismatched workflow'; Event = 'workflow_dispatch'; Ref = 'refs/heads/feature'; WorkflowRef = 'refs/heads/main' }
+    ) {
+        $env:GITHUB_EVENT_NAME = $Event
+        $env:GITHUB_REF = $Ref
+        $env:GITHUB_WORKFLOW_REF =
+            "Azure/azure-verified-modules-tools/.github/workflows/repository-management-bicep-sync.yml@$WorkflowRef"
+
+        { Resolve-AvmBicepSyncRunContext } | Should -Throw '*trusted Tools main or a manual trusted-repository branch*'
+    }
+}
+
 Describe 'Bicep module identity configuration' {
     It 'uses exactly the Terraform defaults for every unlisted root, including Fabric and management-group modules' {
         $terraform = Get-Content -LiteralPath (Join-Path $script:root 'repository-management' 'repository-config' 'config.json') -Raw | ConvertFrom-Json

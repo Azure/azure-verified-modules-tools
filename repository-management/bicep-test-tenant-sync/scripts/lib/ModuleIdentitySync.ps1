@@ -3,9 +3,7 @@ function Resolve-AvmBicepIdentitySyncContext {
     [OutputType([pscustomobject])]
     param()
 
-    if ($env:GITHUB_REF -cne 'refs/heads/main') {
-        throw [System.InvalidOperationException]::new('Bicep identity sync requires trusted Tools main in GitHub Actions.')
-    }
+    $null = Resolve-AvmBicepSyncRunContext
     $tools = Resolve-AvmRepositorySyncFederationContext
     $repository = Invoke-RepositoryGitHubApi -Endpoint 'repos/Azure/bicep-registry-modules'
     if ($null -eq $repository -or $repository.full_name -cne 'Azure/bicep-registry-modules' -or

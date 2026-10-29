@@ -1988,10 +1988,15 @@ multiple module identities: workflow selection is not a federated per-module
 isolation boundary. Never substitute the Tools validation credential for a
 registry caller. Keep the old shared Bicep identity unchanged.
 
-The scheduled main-only Bicep identity reconciliation can apply the additive
-credentials after merge, so its merge/apply and subsequent registry cutover
-require separate approval. Branch publication and review checks do not apply
-the credentials or establish live login readiness.
+The scheduled Bicep identity reconciliation runs only from `main`. A manually
+dispatched run may use a trusted Tools repository branch when its workflow
+reference exactly matches that branch and it checks out the immutable dispatched
+commit. It still reconciles the complete identity-state inventory and retains
+the saved-plan ownership guard; selection must not omit state resources. Only
+the canonical subscription-vending billing-scope publication is target-scoped.
+Merge/apply and subsequent registry cutover require separate approval. Branch
+publication and review checks do not apply credentials or establish live login
+readiness.
 
 The registry's existing `bicepconfig.json` selects
 `docs/templates/avm-readme-v1.scriban` with `includeRoot=docs/templates`.

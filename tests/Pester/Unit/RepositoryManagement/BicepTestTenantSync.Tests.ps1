@@ -1202,14 +1202,20 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
         $script:workflow | Should -Not -Match 'enable_test_tenant_sync|AVM_BAMI_TEST_TENANT_SYNC_ENABLED'
     }
 
-    It 'requires trusted Tools main for every job, excluding forks, other repositories and non-main refs' {
+    It 'keeps scheduled runs on main and permits only manual trusted-repository branch runs' {
         $script:variablesJob | Should -Not -BeNullOrEmpty
         foreach ($job in @($script:variablesJob, $script:identitiesJob)) {
             $condition = [regex]::Match($job, '(?ms)^    if: >-\n(.*?)(?=^    runs-on:)').Groups[1].Value
             [regex]::Replace($condition, '\s+', ' ').Trim() | Should -BeExactly (@(
-                "github.repository == 'Azure/azure-verified-modules-tools'",
-                "github.ref == 'refs/heads/main'"
-            ) -join ' && ')
+                "github.repository == 'Azure/azure-verified-modules-tools' &&",
+                '(',
+                "github.ref == 'refs/heads/main' ||",
+                '(',
+                "github.event_name == 'workflow_dispatch' &&",
+                "startsWith(github.ref, 'refs/heads/')",
+                ')',
+                ')'
+            ) -join ' ')
         }
         @([regex]::Matches($script:workflow, '(?m)^    if:')) | Should -HaveCount 2
     }
@@ -1266,11 +1272,15 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
         @([regex]::Matches($script:workflow, '(?m)^          INPUT_PERMISSION-')) | Should -HaveCount 3
     }
 
-    It 'pins both actions and checks out trusted main without persisted credentials' {
+    It 'pins both actions and checks out the immutable dispatched revision without persisted credentials' {
         $references = @([regex]::Matches($script:variablesJob, '(?m)^\s+uses: ([^@\s]+)@([^\s]+)'))
         $references | Should -HaveCount 2
         foreach ($reference in $references) { $reference.Groups[2].Value | Should -Match '^[0-9a-f]{40}$' }
-        $script:variablesJob | Should -Match '(?s)uses: actions/checkout@[0-9a-f]{40}.*?ref: main\n\s+persist-credentials: false'
+        $checkouts = @([regex]::Matches(
+                $script:workflow,
+                '(?s)uses: actions/checkout@[0-9a-f]{40}.*?ref: \$\{\{ github\.sha \}\}\n\s+persist-credentials: false'
+            ))
+        $checkouts | Should -HaveCount 2
         $script:variablesJob | Should -Match '\$env:AVM_APP_SLUG -cne ''azure-verified-modules'''
     }
 

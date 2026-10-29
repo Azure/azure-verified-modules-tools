@@ -188,14 +188,34 @@ function ConvertTo-AvmBicepIdentityMapping {
     return $mapping
 }
 
+function Resolve-AvmBicepSyncRunContext {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param()
+
+    $branchRun = $env:GITHUB_EVENT_NAME -ceq 'workflow_dispatch' -and
+        $env:GITHUB_REF -cmatch '^refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]*$'
+    $mainRun = $env:GITHUB_REF -ceq 'refs/heads/main'
+    $workflow = "Azure/azure-verified-modules-tools/.github/workflows/repository-management-bicep-sync.yml@$($env:GITHUB_REF)"
+    if ($env:GITHUB_ACTIONS -cne 'true' -or $env:GITHUB_REPOSITORY -cne 'Azure/azure-verified-modules-tools' -or
+        (-not $mainRun -and -not $branchRun) -or $env:GITHUB_WORKFLOW_REF -cne $workflow) {
+        throw [System.InvalidOperationException]::new(
+            'Bicep sync requires trusted Tools main or a manual trusted-repository branch run with matching workflow evidence.'
+        )
+    }
+    return [pscustomobject]@{
+        WorkflowRef = $workflow
+        IsManualBranch = $branchRun -and -not $mainRun
+    }
+}
+
 function Get-AvmBicepIdentityPublicationContext {
     [CmdletBinding()]
     [OutputType([System.Collections.IDictionary])]
     param()
 
-    $workflow = 'Azure/azure-verified-modules-tools/.github/workflows/repository-management-bicep-sync.yml@refs/heads/main'
-    if ($env:GITHUB_ACTIONS -cne 'true' -or $env:GITHUB_REPOSITORY -cne 'Azure/azure-verified-modules-tools' -or
-        $env:GITHUB_REF -cne 'refs/heads/main' -or $env:GITHUB_WORKFLOW_REF -cne $workflow -or
+    $run = Resolve-AvmBicepSyncRunContext
+    if (
         $env:GITHUB_REPOSITORY_ID -cnotmatch '^[1-9][0-9]*$' -or
         $env:GITHUB_RUN_ID -cnotmatch '^[1-9][0-9]*$' -or $env:GITHUB_RUN_ATTEMPT -cnotmatch '^[1-9][0-9]*$' -or
         $env:GITHUB_SHA -cnotmatch '^[0-9a-f]{40}$') {
@@ -203,7 +223,7 @@ function Get-AvmBicepIdentityPublicationContext {
     }
     return [ordered]@{
         repositoryId = $env:GITHUB_REPOSITORY_ID
-        workflowRef = $workflow
+        workflowRef = $run.WorkflowRef
         commit = $env:GITHUB_SHA
         runId = $env:GITHUB_RUN_ID
         runAttempt = $env:GITHUB_RUN_ATTEMPT
