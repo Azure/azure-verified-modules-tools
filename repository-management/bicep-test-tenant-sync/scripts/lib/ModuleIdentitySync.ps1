@@ -70,6 +70,8 @@ function Assert-AvmBicepIdentityPlan {
     $resources = @(Get-AvmTerraformPlannedResource -Module $Plan['planned_values']['root_module'])
     $moduleAddresses = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $approvedStateMoveAddresses = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $rejectedPlanResources = [System.Collections.Generic.List[object]]::new()
+    $rejectionSignatures = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $identityNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($path in $Modules.Keys) {
         Assert-AvmBicepModulePath -Path $path
@@ -146,12 +148,31 @@ function Assert-AvmBicepIdentityPlan {
             else {
                 'import-operation'
             }
-            Write-Information (
-                "Bicep plan rejection [$rejectionCategory]: address=$address; mode=$mode; type=$type; " +
-                "provider_name=$providerName; actions=$actions."
-            ) -InformationAction Continue
-            throw [System.InvalidOperationException]::new('Bicep plans may only manage dedicated identities, exact federation and individual group edges with their expected providers.')
+            $rejection = [pscustomobject]@{
+                Category = $rejectionCategory
+                Address = $address
+                Mode = $mode
+                Type = $type
+                ProviderName = $providerName
+                Actions = $actions
+            }
+            $signature = [string]::Join("`0", @(
+                    $rejection.Category, $rejection.Address, $rejection.Mode, $rejection.Type,
+                    $rejection.ProviderName, $rejection.Actions
+                ))
+            if ($rejectionSignatures.Add($signature)) {
+                $rejectedPlanResources.Add($rejection)
+            }
         }
+    }
+    foreach ($rejection in $rejectedPlanResources) {
+        Write-Information (
+            "Bicep plan rejection [$($rejection.Category)]: address=$($rejection.Address); mode=$($rejection.Mode); " +
+            "type=$($rejection.Type); provider_name=$($rejection.ProviderName); actions=$($rejection.Actions)."
+        ) -InformationAction Continue
+    }
+    if ($rejectedPlanResources.Count -gt 0) {
+        throw [System.InvalidOperationException]::new('Bicep plans may only manage dedicated identities, exact federation and individual group edges with their expected providers.')
     }
     $clients = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $principals = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)

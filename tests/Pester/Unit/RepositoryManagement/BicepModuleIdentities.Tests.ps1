@@ -516,6 +516,62 @@ Describe 'Bicep identity saved-plan ownership guard' {
         ($captured | Out-String) | Should -Not -Match $secret
     }
 
+    It 'reports every rejected resource in plan order without disclosing raw values' {
+        $previousAddress = 'synthetic-previous-address-must-not-be-disclosed'
+        $secret = 'synthetic-secret-must-not-be-disclosed'
+        $identity = $script:plan.resource_changes[0]
+        $identity.previous_address = $previousAddress
+        $script:plan.resource_changes += @(
+            @{
+                address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.identity_role_assignment'
+                mode = 'managed'
+                type = 'azapi_resource'
+                provider_name = 'registry.terraform.io/azure/azapi'
+                change = @{ actions = @('create'); after = @{ secret = $secret } }
+            }
+            @{
+                address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.unapproved_user_assigned_identity'
+                mode = 'managed'
+                type = 'azapi_resource'
+                provider_name = 'registry.terraform.io/azure/azapi'
+                change = @{ actions = @('delete'); before = @{ secret = $secret } }
+            }
+        )
+
+        $captured = & {
+            try {
+                Assert-AvmBicepIdentityPlan @script:guard
+            }
+            catch {
+                $_
+            }
+        } 6>&1
+
+        $diagnostics = @($captured | Where-Object {
+                $_ -is [System.Management.Automation.InformationRecord] -and
+                ([string]$_.MessageData).StartsWith('Bicep plan rejection [', [System.StringComparison]::Ordinal)
+            } | ForEach-Object MessageData)
+        $diagnostics | Should -HaveCount 3
+        $diagnostics[0] | Should -BeExactly (
+            'Bicep plan rejection [state-address-move]: ' +
+            'address=module.bicep["avm/res/fabric/capacity"].azapi_resource.identity[0]; ' +
+            'mode=managed; type=azapi_resource; provider_name=registry.terraform.io/azure/azapi; actions=no-op.'
+        )
+        $diagnostics[1] | Should -BeExactly (
+            'Bicep plan rejection [unexpected-resource]: ' +
+            'address=module.bicep["avm/res/fabric/capacity"].azapi_resource.identity_role_assignment; ' +
+            'mode=managed; type=azapi_resource; provider_name=registry.terraform.io/azure/azapi; actions=create.'
+        )
+        $diagnostics[2] | Should -BeExactly (
+            'Bicep plan rejection [unexpected-resource]: ' +
+            'address=module.bicep["avm/res/fabric/capacity"].azapi_resource.unapproved_user_assigned_identity; ' +
+            'mode=managed; type=azapi_resource; provider_name=registry.terraform.io/azure/azapi; actions=delete.'
+        )
+        ($captured | Out-String) | Should -Match 'may only manage dedicated identities'
+        ($captured | Out-String) | Should -Not -Match $previousAddress
+        ($captured | Out-String) | Should -Not -Match $secret
+    }
+
     It 'continues rejecting forbidden dedicated identity and role operations: <Case>' -ForEach @(
         @{
             Case = 'user-assigned identity'
