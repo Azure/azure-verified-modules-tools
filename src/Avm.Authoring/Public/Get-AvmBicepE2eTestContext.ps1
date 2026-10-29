@@ -23,6 +23,9 @@ function Get-AvmBicepE2eTestContext {
         Required JSON object mapping canonical module roots to client GUIDs.
     .PARAMETER TenantId
         Required nonempty tenant GUID.
+    .PARAMETER ModuleSubscriptionCleanupManagementGroupIds
+        Optional JSON object mapping the canonical subscription-vending root to
+        the isolated management group used only for subscription cleanup.
     .PARAMETER NamePrefix
         Optional one-to-three-character lowercase prefix for reviewed isolated
         execution. Fallback execution uses no prefix.
@@ -31,7 +34,7 @@ function Get-AvmBicepE2eTestContext {
     .OUTPUTS
         PSCustomObject with SubscriptionId, TenantId, ClientId, ModulePath,
         Example, NamePrefix, ArtifactKey, IsolationMode, ConcurrencyGroup, and
-        RequireResourceIsolation.
+        RequireResourceIsolation, and SubscriptionCleanupManagementGroupId.
     .EXAMPLE
         PS> Get-AvmBicepE2eTestContext -Root $repo -ModulePath $module -TestCase $matrix[0] -FallbackSubscriptionId $subscription -ModuleClientIds $mapping -TenantId $tenant
     #>
@@ -45,6 +48,7 @@ function Get-AvmBicepE2eTestContext {
         [AllowEmptyString()] [string] $FallbackSubscriptionId,
         [Parameter(Mandatory)] [AllowEmptyString()] [string] $ModuleClientIds,
         [Parameter(Mandatory)] [AllowEmptyString()] [string] $TenantId,
+        [AllowEmptyString()] [string] $ModuleSubscriptionCleanupManagementGroupIds,
         [AllowEmptyString()] [string] $NamePrefix,
         [switch] $SkipModuleVersionCheck
     )

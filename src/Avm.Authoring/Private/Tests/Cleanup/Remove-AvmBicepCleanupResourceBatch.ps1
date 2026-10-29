@@ -24,6 +24,13 @@ function Remove-AvmBicepCleanupResourceBatch {
 
     $requireCompleteRemovalForBatch = [bool]$RequireCompleteRemoval
     $validated = ConvertTo-AvmBicepCleanupState -State $State
+    $subscriptionCleanupManagementGroupId = if ($null -ne $validated['case'] -and
+        $validated['case'].Contains('subscriptionCleanupManagementGroupId')) {
+        $validated['case']['subscriptionCleanupManagementGroupId']
+    }
+    else {
+        ''
+    }
     $byId = [System.Collections.Generic.Dictionary[string, object]]::new(
         [System.StringComparer]::OrdinalIgnoreCase)
     $orderInput = @(
@@ -103,7 +110,8 @@ function Remove-AvmBicepCleanupResourceBatch {
                     try {
                         Invoke-AvmBicepAzureContext -SubscriptionId $subscription -TenantId $State['tenantId'] -ScriptBlock {
                             Assert-AvmBicepCleanupGroupOwnership -State $State -ResourceId $resource['id']
-                            Remove-AvmBicepResource -ResourceId $resource['id'] -Type $resource['type'] -Confirm:$false
+                            Remove-AvmBicepResource -ResourceId $resource['id'] -Type $resource['type'] `
+                                -SubscriptionCleanupManagementGroupId $subscriptionCleanupManagementGroupId -Confirm:$false
                         } -Confirm:$false
                         $resource['removed'] = $true
                     }

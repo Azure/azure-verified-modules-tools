@@ -44,5 +44,6 @@ $configuration = ConvertFrom-AvmTestTenantJson -Json (
     Get-Content -LiteralPath (Join-Path $repositoryRoot 'repository-management' 'bicep-config' 'config.json') -Raw -ErrorAction Stop
 )
 $options.BillingScopes = Resolve-AvmBicepSubscriptionVendingBillingScopes -Configuration $configuration -Values $values
+$options.SubscriptionCleanupManagementGroups = Resolve-AvmBicepSubscriptionCleanupManagementGroups -Configuration $configuration -Values $values
 Invoke-AvmBicepTestTenantSync -Values $values @options | ConvertTo-Json -Depth 5
 $global:LASTEXITCODE = 0

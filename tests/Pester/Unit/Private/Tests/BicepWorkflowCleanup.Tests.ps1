@@ -552,6 +552,33 @@ Describe 'Bicep workflow cleanup native handlers' {
         }
     }
 
+    It 'uses the persisted isolated target before any subscription cleanup mutation' {
+        InModuleScope Avm.Authoring {
+            Mock Get-AzSubscription {
+                [pscustomobject]@{ Name = 'bami-sub-vending-case'; Id = '00000000-0000-0000-0000-000000000003'; State = 'Enabled' }
+            }
+            Mock Set-AzContext {}
+            Mock Invoke-AvmBicepCleanupLookup { $null }
+            Mock New-AzManagementGroupSubscription {}
+            Mock Remove-AzResourceGroup {}
+            Mock Disable-AzSubscription {}
+            Remove-AvmBicepResource -ResourceId '/providers/Microsoft.Subscription/aliases/bami-sub-vending-case' `
+                -Type 'Microsoft.Subscription/aliases' -SubscriptionCleanupManagementGroupId 'avm-subscription-vending'
+            Should -Invoke New-AzManagementGroupSubscription -Exactly 1 -ParameterFilter { $GroupName -eq 'avm-subscription-vending' }
+        }
+    }
+
+    It 'rejects an invalid isolated target before subscription cleanup mutation' {
+        InModuleScope Avm.Authoring {
+            Mock Get-AzSubscription { throw 'Must not inspect subscription.' }
+            Mock Set-AzContext { throw 'Must not set context.' }
+            { Remove-AvmBicepResource -ResourceId '/providers/Microsoft.Subscription/aliases/bami-sub-vending-case' `
+                    -Type 'Microsoft.Subscription/aliases' -SubscriptionCleanupManagementGroupId '..' } | Should -Throw
+            Should -Invoke Get-AzSubscription -Exactly 0
+            Should -Invoke Set-AzContext -Exactly 0
+        }
+    }
+
     It 'uses checked CLI invocations for CDN deletion' {
         InModuleScope Avm.Authoring {
             Mock Invoke-AvmBicepCleanupCli {

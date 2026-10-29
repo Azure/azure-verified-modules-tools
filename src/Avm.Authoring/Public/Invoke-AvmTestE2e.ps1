@@ -107,6 +107,10 @@ function Invoke-AvmTestE2e {
         With UseCiInputs, omitting this parameter uses the configured CI target.
         An explicitly supplied value always takes precedence and is validated;
         an invalid or empty explicit value is never replaced by a CI fallback.
+    .PARAMETER SubscriptionCleanupManagementGroupId
+        Bicep-only: explicit isolated management group for subscription-alias
+        cleanup. It is persisted before deployment and cannot be supplied to
+        Complete, which uses the recorded target.
     .PARAMETER Location
         Bicep deployment-metadata location, fixed across regional retries.
         Also the placement fallback for explicitly global resource types.
@@ -209,6 +213,7 @@ function Invoke-AvmTestE2e {
         [string] $SubscriptionId,
         [string] $TenantId,
         [string] $ManagementGroupId,
+        [string] $SubscriptionCleanupManagementGroupId,
         [string] $Location,
         [string] $ResourceLocation,
         [string] $ResourceGroupPrefix,
@@ -243,7 +248,7 @@ function Invoke-AvmTestE2e {
     }
     $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
     $bicepOptions = @(
-        'Recurse', 'SubscriptionId', 'TenantId', 'ManagementGroupId', 'Location',
+        'Recurse', 'SubscriptionId', 'TenantId', 'ManagementGroupId', 'SubscriptionCleanupManagementGroupId', 'Location',
         'ResourceLocation', 'ResourceGroupPrefix', 'TokenFile', 'Tokens', 'ParameterFile', 'Parameters',
         'UseCiInputs', 'TestSubscriptionIds', 'SubscriptionSelectionSeed', 'SubscriptionJobIndex',
         'Phase', 'CleanupStatePath', 'KeepResources', 'DeploymentRetryLimit', 'ValidationRetryLimit', 'RequireResourceIsolation'

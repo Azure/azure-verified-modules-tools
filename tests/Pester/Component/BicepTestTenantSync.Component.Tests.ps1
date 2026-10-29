@@ -127,7 +127,8 @@ Describe 'Bicep test tenant entry point with a synthetic bundle and mocked GitHu
             $variableName = $ArgumentList[13].Substring(5)
             $variableName | Should -BeIn @(
                 'VALIDATE_TENANT_ID', 'VALIDATE_CLIENT_ID', 'VALIDATE_SUBSCRIPTION_IDS',
-                'VALIDATE_MANAGEMENT_GROUP_ID', 'VALIDATE_PERSISTENT_SUBSCRIPTION_ID'
+                'VALIDATE_MANAGEMENT_GROUP_ID', 'VALIDATE_PERSISTENT_SUBSCRIPTION_ID',
+                'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'
             )
             $entryState.WriteNames.Add($variableName)
             $entryState.Variables[$variableName] = & $newVariable -Name $variableName `
@@ -159,15 +160,15 @@ Describe 'Bicep test tenant entry point with a synthetic bundle and mocked GitHu
         finally { Pop-Location }
         $result.Status | Should -BeExactly 'Planned'
         $result.PlanOnly | Should -BeTrue
-        $result.ChangedNames | Should -HaveCount 5
+        $result.ChangedNames | Should -HaveCount 6
         $script:entryState.WriteNames | Should -HaveCount 0
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter { $ArgumentList[4] -ceq 'GET' }
     }
 
-    It 'publishes only five execution fields and leaves all unrelated variables untouched' {
+    It 'publishes execution fields and the isolated cleanup target without touching unrelated variables' {
         $result = & $script:entryPath -Apply | ConvertFrom-Json -AsHashtable
         $result.Status | Should -BeExactly 'Published'
-        $script:entryState.WriteNames | Should -HaveCount 5
+        $script:entryState.WriteNames | Should -HaveCount 6
         @($script:entryState.WriteNames) | Should -Not -Contain 'TEST_BAMI_MODULE_PATHS'
         $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value |
             Should -BeExactly 'malformed-retired-selector'
@@ -236,7 +237,7 @@ Describe 'Bicep test tenant entry point with a synthetic bundle and mocked GitHu
             -Name 'VALIDATE_TENANT_ID' -Value $script:sourceValues.TEST_BAMI_TENANT_ID
         $result = & $script:entryPath -Apply | ConvertFrom-Json -AsHashtable
         $result.Status | Should -BeExactly 'Published'
-        $script:entryState.WriteNames | Should -HaveCount 4
+        $script:entryState.WriteNames | Should -HaveCount 5
         @($script:entryState.WriteNames) | Should -Not -Contain 'VALIDATE_TENANT_ID'
 
         $script:entryState.WriteNames.Clear()
@@ -260,11 +261,11 @@ Describe 'Bicep test tenant entry point with a synthetic bundle and mocked GitHu
         $result.Status | Should -BeExactly 'Published'
         $result.PlanOnly | Should -BeFalse
         $result.Target | Should -BeExactly 'Azure/bicep-registry-modules'
-        $script:entryState.WriteNames | Should -HaveCount 5
+        $script:entryState.WriteNames | Should -HaveCount 6
         @($script:entryState.WriteNames) | Should -Not -Contain 'TEST_BAMI_MODULE_PATHS'
         $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value | Should -BeExactly 'malformed-retired-selector'
         $script:entryState.Variables.ARM_TENANT_ID.value | Should -BeExactly 'legacy-value'
-        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 13 -ParameterFilter { $ArgumentList[4] -ceq 'GET' }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 15 -ParameterFilter { $ArgumentList[4] -ceq 'GET' }
     }
 
     It 'rejects an incorrect or missing App slug before the workflow can publish' -ForEach @(
@@ -424,7 +425,7 @@ if ($method -ceq 'GET') { $response | ConvertTo-Json -Depth 10 -Compress }
         $actual = Set-AvmBicepTestTenantVariable -Expected $expected -Name 'VALIDATE_SUBSCRIPTION_IDS' -Value $value
         $actual.VALIDATE_SUBSCRIPTION_IDS.Value | Should -BeExactly $value
         @($actual.VALIDATE_SUBSCRIPTION_IDS.Value | ConvertFrom-Json) | Should -HaveCount 28
-        $actual.Count | Should -Be 6
+        $actual.Count | Should -Be 7
         $actual.Contains('TEST_BAMI_MODULE_PATHS') | Should -BeFalse
         $state = Get-Content -LiteralPath $script:boundaryStatePath -Raw | ConvertFrom-Json -AsHashtable
         $state.Request[4] | Should -BeExactly $Method

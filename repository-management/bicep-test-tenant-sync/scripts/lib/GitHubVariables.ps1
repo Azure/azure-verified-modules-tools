@@ -9,6 +9,7 @@ function Get-AvmBicepTestTenantVariableNames {
     'VALIDATE_MANAGEMENT_GROUP_ID'
     'VALIDATE_PERSISTENT_SUBSCRIPTION_ID'
     'VALIDATE_MODULE_CLIENT_IDS'
+    'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'
 }
 
 function Set-AvmBicepRegistryBillingScopeSecret {
@@ -67,7 +68,7 @@ function Invoke-AvmBicepTestTenantVariableApi {
         [ValidateSet(
             'VALIDATE_TENANT_ID', 'VALIDATE_CLIENT_ID', 'VALIDATE_SUBSCRIPTION_IDS',
             'VALIDATE_MANAGEMENT_GROUP_ID', 'VALIDATE_PERSISTENT_SUBSCRIPTION_ID',
-            'VALIDATE_MODULE_CLIENT_IDS', IgnoreCase = $false
+            'VALIDATE_MODULE_CLIENT_IDS', 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS', IgnoreCase = $false
         )] [string] $Name,
         [AllowEmptyString()] [string] $Value,
         [ValidateRange(1, 10000)] [int] $Page = 1

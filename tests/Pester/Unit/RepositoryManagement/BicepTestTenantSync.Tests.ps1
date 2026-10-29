@@ -929,6 +929,40 @@ Describe 'Guarded nonsecret Bicep variable publication' {
             Should -Invoke Set-AvmBicepRegistryBillingScopeSecret -Exactly 1
         }
     }
+
+    Context 'Subscription-vending cleanup-target publication' {
+        BeforeEach {
+            Initialize-BicepSyncTestCandidate
+            $script:cleanupManagementGroups = [ordered]@{
+                'avm/ptn/lz/sub-vending' = 'avm-subscription-vending'
+            }
+        }
+
+        It 'publishes the canonical isolated cleanup target as a nonsecret variable' {
+            $result = Invoke-AvmBicepTestTenantSync -Values $script:values `
+                -SubscriptionCleanupManagementGroups $script:cleanupManagementGroups -Apply
+            $result.Status | Should -BeExactly 'Published'
+            $result.ChangedNames | Should -Be @('VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS')
+            $script:consumer['VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'].Value |
+                Should -BeExactly '{"avm/ptn/lz/sub-vending":"avm-subscription-vending"}'
+        }
+
+        It 'rejects noncanonical cleanup-target mappings before GitHub reads or writes' {
+            { Invoke-AvmBicepTestTenantSync -Values $script:values -SubscriptionCleanupManagementGroups @{
+                    'avm/res/storage/storage-account' = 'avm-subscription-vending'
+                } -Apply } | Should -Throw '*canonical subscription-vending root*'
+            Should -Invoke Get-AvmBicepTestTenantSnapshot -Exactly 0
+            Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
+        }
+
+        It 'does not retarget an established isolated cleanup destination' {
+            $null = Invoke-AvmBicepTestTenantSync -Values $script:values `
+                -SubscriptionCleanupManagementGroups $script:cleanupManagementGroups -Apply
+            { Invoke-AvmBicepTestTenantSync -Values $script:values -SubscriptionCleanupManagementGroups @{
+                    'avm/ptn/lz/sub-vending' = 'other-vending-group'
+                } -Apply } | Should -Throw '*cannot be retargeted*'
+        }
+    }
 }
 
 Describe 'Narrow GitHub nonsecret variable adapter' {
@@ -1015,7 +1049,7 @@ Describe 'Narrow GitHub nonsecret variable adapter' {
         Should -Invoke Invoke-RepositorySyncProcess -Exactly 0
     }
 
-    It 'snapshots the five execution variables and module mapping while ignoring old aliases and legacy values' {
+    It 'snapshots the five execution variables and module mappings while ignoring old aliases and legacy values' {
         $unmanaged = @(
             'ARM_TENANT_ID', 'TEST_BAMI_CONTROLLER_CLIENT_ID', 'TEST_BAMI_MODULE_PATHS',
             'TEST_BAMI_TENANT_ID', 'TEST_BAMI_BICEP_CLIENT_ID', 'TEST_BAMI_SUBSCRIPTION_IDS',
@@ -1030,8 +1064,10 @@ Describe 'Narrow GitHub nonsecret variable adapter' {
             )
         }
         $snapshot = Get-AvmBicepTestTenantSnapshot
-        $snapshot.Count | Should -Be 6
-        @($snapshot.Keys | Sort-Object) | Should -Be @((@($script:executionNames) + 'VALIDATE_MODULE_CLIENT_IDS') | Sort-Object)
+        $snapshot.Count | Should -Be 7
+        @($snapshot.Keys | Sort-Object) | Should -Be @((@($script:executionNames) + @(
+                    'VALIDATE_MODULE_CLIENT_IDS', 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'
+                )) | Sort-Object)
         $snapshot.VALIDATE_TENANT_ID.Value | Should -BeExactly 'fixture-value'
         $snapshot.VALIDATE_TENANT_ID.CreatedAt | Should -BeExactly '2026-09-01T00:00:00.0000000Z'
         $snapshot.VALIDATE_TENANT_ID.UpdatedAt | Should -BeExactly '2026-09-15T00:00:00.0000000Z'
@@ -1040,7 +1076,7 @@ Describe 'Narrow GitHub nonsecret variable adapter' {
 
     It 'distinguishes genuinely absent variables from unreadable collection responses' {
         $snapshot = Get-AvmBicepTestTenantSnapshot
-        $snapshot.Count | Should -Be 6
+        $snapshot.Count | Should -Be 7
         @($snapshot.Values | Where-Object { $null -ne $_ }) | Should -HaveCount 0
         $script:response.StdOut = ''
         { Get-AvmBicepTestTenantSnapshot } | Should -Throw '*empty variable collection*'

@@ -16,7 +16,7 @@ sign-in, Azure call, deployment, cleanup, or artifact write.
 ## Syntax
 
 ```powershell
-Get-AvmBicepE2eTestContext [-Root] <string> [-ModulePath] <string> [-TestCase] <Object> [[-PoolJson] <string>] [[-FallbackSubscriptionId] <string>] [-ModuleClientIds] <string> [-TenantId] <string> [[-NamePrefix] <string>] [-SkipModuleVersionCheck] [<CommonParameters>]
+Get-AvmBicepE2eTestContext [-Root] <string> [-ModulePath] <string> [-TestCase] <Object> [[-PoolJson] <string>] [[-FallbackSubscriptionId] <string>] [-ModuleClientIds] <string> [-TenantId] <string> [[-ModuleSubscriptionCleanupManagementGroupIds] <string>] [[-NamePrefix] <string>] [-SkipModuleVersionCheck] [<CommonParameters>]
 ```
 
 ## Parameters
@@ -60,6 +60,20 @@ Exact repository-relative module selected for the workflow leg.
 | Accept pipeline input | false |
 | Accept wildcard characters | false |
 
+### -ModuleSubscriptionCleanupManagementGroupIds
+
+Optional JSON object mapping the canonical subscription-vending root to
+the isolated management group used only for subscription cleanup.
+
+| Property | Value |
+| --- | --- |
+| Type | `String` |
+| Required | false |
+| Position | 8 |
+| Default value |  |
+| Accept pipeline input | false |
+| Accept wildcard characters | false |
+
 ### -NamePrefix
 
 Optional one-to-three-character lowercase prefix for reviewed isolated
@@ -69,7 +83,7 @@ execution. Fallback execution uses no prefix.
 | --- | --- |
 | Type | `String` |
 | Required | false |
-| Position | 8 |
+| Position | 9 |
 | Default value |  |
 | Accept pipeline input | false |
 | Accept wildcard characters | false |
@@ -151,4 +165,4 @@ Get-AvmBicepE2eTestContext -Root $repo -ModulePath $module -TestCase $matrix[0] 
 
 - `PSCustomObject with SubscriptionId, TenantId, ClientId, ModulePath,
 Example, NamePrefix, ArtifactKey, IsolationMode, ConcurrencyGroup, and
-RequireResourceIsolation.`
+RequireResourceIsolation, and SubscriptionCleanupManagementGroupId.`

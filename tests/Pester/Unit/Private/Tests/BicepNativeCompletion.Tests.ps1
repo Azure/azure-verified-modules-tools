@@ -35,11 +35,12 @@ Describe 'Bicep native cleanup case contract' {
             if ($Scope -eq 'mg') { $script:caseInput.managementGroupId = 'existing-group' }
             $script:caseInput['parameters'] = @{ value = 'must-not-be-copied' }
             $result = ConvertTo-AvmBicepCleanupCase -Case $script:caseInput
-            $result.psbase.Count | Should -Be 7
+            $result.psbase.Count | Should -Be 8
             $result['scope'] | Should -BeExactly $Scope
             $result['path'] | Should -BeExactly 'child/tests/e2e/defaults/main.test.bicep'
             $result.Contains('parameters') | Should -BeFalse
             $result['completionStarted'] | Should -BeFalse
+            $result['subscriptionCleanupManagementGroupId'] | Should -BeExactly ''
             $script:caseInput.ContainsKey('parameters') | Should -BeTrue
         }
     }

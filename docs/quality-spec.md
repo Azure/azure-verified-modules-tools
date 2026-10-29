@@ -2056,7 +2056,14 @@ dispatched run may use a trusted Tools repository branch when its workflow
 reference exactly matches that branch and it checks out the immutable dispatched
 commit. It still reconciles the complete identity-state inventory and retains
 the saved-plan ownership guard; selection must not omit state resources. Only
-the canonical subscription-vending billing-scope publication is target-scoped.
+the canonical subscription-vending billing-scope publication and isolated
+subscription-cleanup management-group publication are target-scoped. The
+runtime accepts each map only for `avm/ptn/lz/sub-vending`; its billing scope
+must be the validated MCA invoice-section resource ID and is supplied only as
+the `secureString` `subscriptionBillingScope` parameter. The cleanup target is
+persisted before deployment and is validated before subscription move, resource
+group deletion, or subscription disablement. Legacy cleanup remains unchanged
+when no explicit target is recorded.
 Merge/apply and subsequent registry cutover require separate approval. Branch
 publication and review checks do not apply credentials or establish live login
 readiness.

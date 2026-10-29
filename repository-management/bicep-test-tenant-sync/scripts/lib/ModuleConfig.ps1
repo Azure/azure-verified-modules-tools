@@ -152,6 +152,43 @@ function ConvertTo-AvmBicepModuleBillingScopeJson {
     return ConvertTo-Json -InputObject $result -Compress -Depth 3
 }
 
+function Resolve-AvmBicepSubscriptionCleanupManagementGroups {
+    [CmdletBinding()]
+    [OutputType([System.Collections.IDictionary])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Configuration,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Values
+    )
+
+    $selector = 'avm/ptn/lz/sub-vending'
+    $identities = Resolve-AvmBicepModuleExistingIdentities -ModulePaths @($selector) -Configuration $Configuration
+    $result = [ordered]@{}
+    if ($identities.Contains($selector)) {
+        $identity = Resolve-AvmSubscriptionVendingIdentity -ExistingIdentity $identities[$selector] -Values $Values
+        $result[$selector] = $identity['management_group_id']
+    }
+    return $result
+}
+
+function ConvertTo-AvmBicepModuleSubscriptionCleanupManagementGroupJson {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [System.Collections.IDictionary] $ManagementGroups
+    )
+
+    $selector = 'avm/ptn/lz/sub-vending'
+    if ($ManagementGroups.Count -gt 1 -or
+        ($ManagementGroups.Count -eq 1 -and -not $ManagementGroups.Contains($selector)) -or
+        ($ManagementGroups.Contains($selector) -and (
+            $ManagementGroups[$selector] -isnot [string] -or
+            $ManagementGroups[$selector] -cnotmatch '^[A-Za-z0-9_().-]{1,90}$' -or
+            $ManagementGroups[$selector] -in @('.', '..') -or $ManagementGroups[$selector].EndsWith('.')))) {
+        throw [System.ArgumentException]::new('Only the canonical subscription-vending root may receive a valid Bicep Registry cleanup management group.')
+    }
+    return ConvertTo-Json -InputObject $ManagementGroups -Compress -Depth 3
+}
+
 function ConvertTo-AvmBicepIdentityMapping {
     [CmdletBinding()]
     [OutputType([System.Collections.IDictionary])]

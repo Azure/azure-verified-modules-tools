@@ -145,13 +145,23 @@ Describe 'Bicep module identity entry points with real files and mocked services
                     $body = @{ total_count = $state.Variables.Count; variables = @($state.Variables.Values) }
                 }
                 else {
-                    $ArgumentList[-2] | Should -BeExactly '--input'
-                    $state.RequestPaths.Add($ArgumentList[-1])
-                    $request = Get-Content -LiteralPath $ArgumentList[-1] -Raw | ConvertFrom-Json -AsHashtable
-                    $request.name | Should -BeExactly 'VALIDATE_MODULE_CLIENT_IDS'
-                    $state.Writes.Add($request.name)
-                    $state.Variables[$request.name] = @{
-                        name = $request.name; value = $request.value
+                    if ($ArgumentList[-2] -ceq '--input') {
+                        $state.RequestPaths.Add($ArgumentList[-1])
+                        $request = Get-Content -LiteralPath $ArgumentList[-1] -Raw | ConvertFrom-Json -AsHashtable
+                        $name = $request.name
+                        $value = $request.value
+                    }
+                    else {
+                        $name = (@($ArgumentList | Where-Object { $_ -clike 'name=*' })[0]).Substring(5)
+                        $value = (@($ArgumentList | Where-Object { $_ -clike 'value=*' })[0]).Substring(6)
+                    }
+                    $name | Should -BeIn @(
+                        'VALIDATE_MODULE_CLIENT_IDS',
+                        'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'
+                    )
+                    $state.Writes.Add($name)
+                    $state.Variables[$name] = @{
+                        name = $name; value = $value
                         created_at = '2026-10-01T00:00:00Z'; updated_at = '2026-10-09T00:00:00Z'
                     }
                     $body = @{}
@@ -340,10 +350,18 @@ Describe 'Bicep module identity entry points with real files and mocked services
         [Text.Encoding]::UTF8.GetString($bytes) | Should -Not -Match '\r|\n'
         $publication = & $script:publisherPath -ModuleClientIdPath $script:mappingPath -Apply | ConvertFrom-Json -AsHashtable
         $publication.Status | Should -BeExactly 'Published'
-        $script:state.Writes | Should -Be @('VALIDATE_MODULE_CLIENT_IDS')
+        $script:state.Writes | Should -Be @(
+            'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS',
+            'VALIDATE_MODULE_CLIENT_IDS'
+        )
         $remaining = [ordered]@{}
         foreach ($name in $script:state.Variables.Keys) {
-            if ($name -cne 'VALIDATE_MODULE_CLIENT_IDS') { $remaining[$name] = $script:state.Variables[$name] }
+            if ($name -cnotin @(
+                'VALIDATE_MODULE_CLIENT_IDS',
+                'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'
+            )) {
+                $remaining[$name] = $script:state.Variables[$name]
+            }
         }
         ConvertTo-Json -InputObject $remaining -Depth 5 -Compress | Should -BeExactly $script:beforeVariables
         @($script:state.Calls | Where-Object Command -CEQ 'terraform' | ForEach-Object { $_.Arguments[0] }) |
@@ -368,15 +386,23 @@ Describe 'Bicep module identity entry points with real files and mocked services
         $publication = & $script:publisherPath -ModuleClientIdPath $script:mappingPath `
             -IdentityMigrationPath $script:migrationPath -Apply | ConvertFrom-Json -AsHashtable
         $publication.Status | Should -BeExactly 'Published'
-        $script:state.Writes | Should -Be @('VALIDATE_MODULE_CLIENT_IDS')
+        $script:state.Writes | Should -Be @(
+            'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS',
+            'VALIDATE_MODULE_CLIENT_IDS'
+        )
         $remaining = [ordered]@{}
         foreach ($name in $script:state.Variables.Keys) {
-            if ($name -cne 'VALIDATE_MODULE_CLIENT_IDS') { $remaining[$name] = $script:state.Variables[$name] }
+            if ($name -cnotin @(
+                'VALIDATE_MODULE_CLIENT_IDS',
+                'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'
+            )) {
+                $remaining[$name] = $script:state.Variables[$name]
+            }
         }
         ConvertTo-Json -InputObject $remaining -Depth 5 -Compress | Should -BeExactly $script:beforeVariables
         (& $script:publisherPath -ModuleClientIdPath $script:mappingPath -IdentityMigrationPath $script:migrationPath -Apply |
             ConvertFrom-Json -AsHashtable).Status | Should -BeExactly 'Published'
-        $script:state.Writes | Should -HaveCount 1
+        $script:state.Writes | Should -HaveCount 2
     }
 
     It 'refuses a naming apply without a path for its verified publication evidence' {

@@ -6,7 +6,9 @@ function Remove-AvmBicepResource {
         [string] $ResourceId,
 
         [Parameter(Mandatory = $true)]
-        [string] $Type
+        [string] $Type,
+
+        [string] $SubscriptionCleanupManagementGroupId
     )
 
     Set-StrictMode -Version 3.0
@@ -479,7 +481,19 @@ function Remove-AvmBicepResource {
             }
             break
         }
-        { $PSItem -eq 'Microsoft.Subscription/aliases' -and $ResourceId -like '*dep-sub-blzv-tests*' } {
+        { $PSItem -eq 'Microsoft.Subscription/aliases' -and (
+                $ResourceId -like '*dep-sub-blzv-tests*' -or -not [string]::IsNullOrWhiteSpace($SubscriptionCleanupManagementGroupId)
+            ) } {
+            $targetManagementGroupId = if ([string]::IsNullOrWhiteSpace($SubscriptionCleanupManagementGroupId)) {
+                'bicep-lz-vending-automation-decom'
+            }
+            else {
+                $SubscriptionCleanupManagementGroupId
+            }
+            if ($targetManagementGroupId -cnotmatch '^[A-Za-z0-9_().-]{1,90}$' -or
+                $targetManagementGroupId -in @('.', '..') -or $targetManagementGroupId.EndsWith('.')) {
+                throw [AvmConfigurationException]::new('Subscription cleanup requires a valid target management group before mutation.')
+            }
             $subscriptionName = $ResourceId.Split('/')[4]
             $subscriptions = @(Get-AzSubscription | Where-Object { $_.Name -eq $subscriptionName })
             if ($subscriptions.Count -ne 1) {
@@ -491,19 +505,19 @@ function Remove-AvmBicepResource {
 
             $null = Set-AzContext -SubscriptionId $subscriptionId -Scope Process -ErrorAction Stop
 
-            if (Invoke-AvmBicepCleanupLookup -Command 'Get-AzResourceGroup' -Parameters @{ Name = 'NetworkWatcherRG' }) {
-                if ($PSCmdlet.ShouldProcess('Resource Group [NetworkWatcherRG]', 'Remove')) {
-                    $null = Remove-AzResourceGroup -Name 'NetworkWatcherRG' -Force
+            if (-not (Invoke-AvmBicepCleanupLookup -Command 'Get-AzManagementGroupSubscription' -Parameters @{
+                        GroupName      = $targetManagementGroupId
+                        SubscriptionId = $subscriptionId
+                    })) {
+                Write-Verbose ('[*] Moving resource [{0}] of type [{1}] to management group: {2}' -f $subscriptionName, $Type, $targetManagementGroupId) -Verbose
+                if ($PSCmdlet.ShouldProcess("Subscription [$subscriptionName] to Management Group: $targetManagementGroupId", 'Move')) {
+                    $null = New-AzManagementGroupSubscription -GroupName $targetManagementGroupId -SubscriptionId $subscriptionId
                 }
             }
 
-            if (-not (Invoke-AvmBicepCleanupLookup -Command 'Get-AzManagementGroupSubscription' -Parameters @{
-                        GroupName      = 'bicep-lz-vending-automation-decom'
-                        SubscriptionId = $subscriptionId
-                    })) {
-                Write-Verbose ('[*] Moving resource [{0}] of type [{1}] to management group: bicep-lz-vending-automation-decom' -f $subscriptionName, $Type) -Verbose
-                if ($PSCmdlet.ShouldProcess("Subscription [$subscriptionName] to Management Group: bicep-lz-vending-automation-decom", 'Move')) {
-                    $null = New-AzManagementGroupSubscription -GroupName 'bicep-lz-vending-automation-decom' -SubscriptionId $subscriptionId
+            if (Invoke-AvmBicepCleanupLookup -Command 'Get-AzResourceGroup' -Parameters @{ Name = 'NetworkWatcherRG' }) {
+                if ($PSCmdlet.ShouldProcess('Resource Group [NetworkWatcherRG]', 'Remove')) {
+                    $null = Remove-AzResourceGroup -Name 'NetworkWatcherRG' -Force
                 }
             }
 
