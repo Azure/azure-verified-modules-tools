@@ -539,6 +539,30 @@ Describe 'Bicep identity saved-plan ownership guard' {
             Should -Throw '*may only manage dedicated identities*'
     }
 
+    It 'classifies state address moves without disclosing either address' {
+        $secret = 'synthetic-previous-address-must-not-be-disclosed'
+        $script:plan.resource_changes[0].previous_address = $secret
+
+        $captured = & {
+            try {
+                Assert-AvmBicepIdentityPlan @script:guard
+            }
+            catch {
+                $_
+            }
+        } 6>&1
+
+        $diagnostic = @($captured | Where-Object {
+                $_ -is [System.Management.Automation.InformationRecord] -and
+                ([string]$_.MessageData).StartsWith(
+                    'Bicep plan rejection [state-address-move]:',
+                    [System.StringComparison]::Ordinal
+                )
+            })
+        $diagnostic | Should -HaveCount 1
+        ($captured | Out-String) | Should -Not -Match $secret
+    }
+
     It 'allows revoking only a membership belonging to the same dedicated principal' {
         $removed = @{
             address = 'module.bicep["avm/res/fabric/capacity"].azuread_group_member.test_permissions["retired group"]'
