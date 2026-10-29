@@ -406,15 +406,20 @@ Describe 'Terraform workflow required-feature preflight' -Tag Component {
         $script:previousClientId = $env:ARM_CLIENT_ID
         $script:previousTenantId = $env:ARM_TENANT_ID
         $script:previousModulePath = $env:PSModulePath
+        $script:previousRunnerTemp = $env:RUNNER_TEMP
         $script:preflightRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $null = New-Item -ItemType Directory -Path $script:preflightRoot
         Set-Location -LiteralPath $script:preflightRoot
         $env:PSModulePath = "$(Join-Path $script:repoRoot 'src')$([IO.Path]::PathSeparator)$env:PSModulePath"
+        $env:RUNNER_TEMP = $script:preflightRoot
         $env:GITHUB_OUTPUT = Join-Path $script:preflightRoot 'output.txt'
         $env:SELECTED_SUBSCRIPTION_ID = $script:subscription
         $env:ARM_SUBSCRIPTION_ID = $script:otherSubscription
         $env:ARM_CLIENT_ID = 'fake-test-client'
         $env:ARM_TENANT_ID = 'fake-test-tenant'
+        Mock Import-Module {
+            $Name | Should -BeExactly (Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1')
+        }
         Mock Test-AvmModuleVersion -ModuleName Avm.Authoring {}
         Mock Resolve-AvmAzureCli -ModuleName Avm.Authoring {
             throw 'Feature preflight must not resolve Azure CLI.'
@@ -431,6 +436,8 @@ Describe 'Terraform workflow required-feature preflight' -Tag Component {
         $env:ARM_CLIENT_ID = $script:previousClientId
         $env:ARM_TENANT_ID = $script:previousTenantId
         $env:PSModulePath = $script:previousModulePath
+        $runnerTemp = if ($null -eq $script:previousRunnerTemp) { [NullString]::Value } else { $script:previousRunnerTemp }
+        [Environment]::SetEnvironmentVariable('RUNNER_TEMP', $runnerTemp, 'Process')
     }
 
     It 'does not signal Azure login for a module without the manifest' {

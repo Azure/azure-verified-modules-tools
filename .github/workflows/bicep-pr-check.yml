@@ -2,17 +2,45 @@ name: 'Reusable: Bicep PR check'
 
 on:
   workflow_call:
+    inputs:
+      authoringSource:
+        description: Where to obtain the Avm.Authoring PowerShell module.
+        type: string
+        default: gallery
+      authoringRef:
+        description: 'Avm.Authoring reference: authoringSource=gallery uses a package version (blank = latest); authoringSource=repo uses a tools SHA, tag or branch (blank = latest stable tag).'
+        type: string
+        default: ''
 
 permissions: {}
 
 jobs:
+  bootstrap:
+    name: Prepare authoring runtime
+    if: |
+      !cancelled() &&
+      (github.event_name == 'workflow_dispatch' || (
+        github.repository == 'Azure/bicep-registry-modules' &&
+        github.event_name == 'pull_request' && (
+          contains(fromJSON('["opened","reopened","synchronize"]'), github.event.action) ||
+          (github.event.action == 'labeled' && github.event.label.name == 'PR: Run E2E Tests')
+        )
+      ))
+    permissions:
+      contents: read
+    uses: ./.github/workflows/authoring-bootstrap.yml
+    with:
+      authoringSource: ${{ inputs.authoringSource }}
+      authoringRef: ${{ inputs.authoringRef }}
+
   initialize:
     name: Select modules and test routes
+    needs: bootstrap
     runs-on: ubuntu-latest
     permissions:
       contents: read
     if: |
-      !cancelled() &&
+      !cancelled() && needs.bootstrap.result == 'success' &&
       (github.event_name == 'workflow_dispatch' || (
         github.repository == 'Azure/bicep-registry-modules' &&
         github.event_name == 'pull_request' && (
@@ -38,6 +66,11 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Download prepared authoring runtime
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.bootstrap.outputs.artifact }}
+          path: ${{ runner.temp }}/avm-authoring
       - name: Initialize checks
         id: initialize
         shell: pwsh
@@ -51,14 +84,9 @@ jobs:
           MODULE_PATHS: ${{ github.event.inputs.modulePaths }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
-            Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
-          }
-          Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
-          Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
-          Import-Module Avm.Authoring -ErrorAction Stop
+          Import-Module (Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1') -ErrorAction Stop
           $capabilities = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities
-          if ($capabilities.BicepWorkflowOrchestration -ne 1) {
+          if ($capabilities.BicepWorkflowOrchestration -isnot [int] -or $capabilities.BicepWorkflowOrchestration -ne 1) {
             throw 'The installed Avm.Authoring package does not provide BicepWorkflowOrchestration = 1.'
           }
 
@@ -76,6 +104,7 @@ jobs:
             StaticValidation = $true
             DeploymentValidation = $deployment
             RemoveDeployment = $true
+            SkipModuleVersionCheck = $true
           }
           $outputs = Initialize-AvmBicepWorkflowMatrix @parameters
           . (Join-Path $env:GITHUB_WORKSPACE 'utilities' 'pipelines' 'sharedScripts' 'Get-TestSubscriptionTag.ps1')
@@ -109,26 +138,44 @@ jobs:
           }
 
   check:
-    name: Check [${{ matrix.modulePath }}]
-    needs: initialize
-    if: needs.initialize.outputs.forkStatic != 'true' && needs.initialize.outputs.hasSharedModules == 'true'
+    name: '${{ matrix.modulePath }}: PR check'
+    needs: [bootstrap, initialize]
+    if: needs.initialize.outputs.hasModules == 'true'
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.initialize.outputs.moduleMatrix) }}
+    uses: ./.github/workflows/bicep-module-runtime.yml
+    with:
+      modulePath: ${{ matrix.modulePath }}
+      targetCommit: ${{ needs.initialize.outputs.targetCommit }}
+      authoringArtifact: ${{ needs.bootstrap.outputs.artifact }}
+
+  e2e:
+    name: '${{ matrix.modulePath }}: E2E tests'
+    needs: [bootstrap, initialize]
+    if: |
+      needs.initialize.outputs.forkStatic != 'true' &&
+      needs.initialize.outputs.hasSharedModules == 'true' &&
+      fromJSON(needs.initialize.outputs.workflowInput).deploymentValidation == 'true'
     permissions:
       contents: read
       id-token: write
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.initialize.outputs.sharedModuleMatrix) }}
-    uses: ./.github/workflows/bicep-module-runtime.yml
+    uses: ./.github/workflows/bicep-module-runtime-e2e.yml
     with:
       workflowInput: ${{ needs.initialize.outputs.workflowInput }}
       modulePath: ${{ matrix.modulePath }}
       moduleTestFilePaths: ${{ matrix.moduleTestFilePaths }}
-      psRuleModuleTestFilePaths: ${{ matrix.psRuleModuleTestFilePaths }}
       targetCommit: ${{ needs.initialize.outputs.targetCommit }}
+      authoringArtifact: ${{ needs.bootstrap.outputs.artifact }}
     secrets: inherit
 
   check_legacy:
-    name: Check [${{ matrix.modulePath }}] (legacy)
+    name: '${{ matrix.modulePath }}: E2E tests (legacy)'
     needs: initialize
     if: needs.initialize.outputs.forkStatic != 'true' && needs.initialize.outputs.hasLocalModules == 'true'
     permissions:
@@ -146,16 +193,3 @@ jobs:
       baseCommit: ${{ needs.initialize.outputs.baseCommit }}
       targetCommit: ${{ needs.initialize.outputs.targetCommit }}
     secrets: inherit
-
-  check_fork:
-    name: Static check [${{ matrix.modulePath }}] (fork)
-    needs: initialize
-    if: needs.initialize.outputs.forkStatic == 'true' && needs.initialize.outputs.hasModules == 'true'
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.initialize.outputs.moduleMatrix) }}
-    uses: ./.github/workflows/bicep-module-runtime-static.yml
-    with:
-      modulePath: ${{ matrix.modulePath }}

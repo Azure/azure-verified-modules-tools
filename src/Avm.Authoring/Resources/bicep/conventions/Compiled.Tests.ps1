@@ -98,10 +98,9 @@ Describe 'Compiled Bicep: <Label>' -ForEach $cases {
         }
         if ($null -ne $Case.ArtifactBytes) {
             It 'matches the checked-in template to the compiler output' -Tag 'avm.bicep.json-stale', 'file:main.json' {
-                [System.Linq.Enumerable]::SequenceEqual(
-                    [byte[]]$Case.ArtifactBytes,
-                    [System.Text.UTF8Encoding]::new($false).GetBytes($Case.CompiledJson)) |
-                    Should -BeTrue -Because 'run avm pre-commit and commit the generated main.json'
+                $Case.ArtifactError | Should -BeNullOrEmpty
+                $Case.ArtifactDrift |
+                    Should -BeNullOrEmpty -Because 'run avm pre-commit and commit the generated main.json'
             }
         }
     }

@@ -62,7 +62,10 @@ Describe 'Invoke-AvmBicepLint' {
         $count | Should -Be 2
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmProcess -Exactly 2
+            Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter {
+                $ArgumentList[0] -eq 'lint' -and
+                $ArgumentList[2] -eq '--diagnostics-format' -and $ArgumentList[3] -ceq 'default'
+            }
         }
     }
 

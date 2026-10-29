@@ -83,7 +83,7 @@ function Invoke-UnitMigrationFixture {
         $directory = Split-Path -Parent $Fixture.Scope.File.FullName
         $null = New-Item -ItemType Directory -Path $directory -Force
         $conditions = @(
-            foreach ($run in $Fixture.After.test.runs.Values) {
+            foreach ($run in $Fixture.After.test.runs.get_Values()) {
                 if ($run.Contains('assert')) {
                     foreach ($assertion in $run.assert) {
                         if ($assertion -is [System.Collections.IDictionary] -and

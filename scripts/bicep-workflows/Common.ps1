@@ -215,7 +215,7 @@ function Initialize-AvmWorkflow {
             Static { 'BicepPackagedCompliance' }
             Policy { 'PowerShellModuleArchiveRecovery'; 'BicepTestSubscriptionSelection' }
             Matrix { 'BicepTestSubscriptionSelection' }
-            Deployment { 'BicepRequiredResourceProviders'; 'BicepTestSubscriptionSelection' }
+            Deployment { 'BicepRequiredResourceProviders'; 'BicepTestSubscriptionSelection'; 'BicepAzureDependencyInventory' }
         }
         $package = Get-Module Avm.Authoring | Select-Object -First 1
         $capabilities = if ($null -ne $package -and $package.PrivateData -is [Collections.IDictionary]) {
@@ -278,8 +278,15 @@ function Initialize-AvmWorkflow {
                 throw [InvalidOperationException]::new("The selected package lacks native Bicep $parameter support.")
             }
         }
-        $null = Install-AvmWorkflowModule -Name Az -Version 15.5.0 -Minimum -Confirm:$false
-        $null = Install-AvmWorkflowModule -Name Az.Subscription -Version 0.12.0 -Minimum -Confirm:$false
+        foreach ($dependency in Get-AvmBicepAzureDependency -SkipModuleVersionCheck) {
+            if ($env:AVM_OFFLINE -eq '1' -and @(
+                    Get-Module -ListAvailable -Name $dependency.Name |
+                        Where-Object { $_.Version -ge $dependency.MinimumVersion }
+                ).Count -eq 0) {
+                throw [InvalidOperationException]::new("AVM_OFFLINE=1 prevents installing $($dependency.Name).")
+            }
+            $null = Install-AvmWorkflowModule -Name $dependency.Name -Version $dependency.MinimumVersion -Minimum -Confirm:$false
+        }
     }
     if ($Profile -notin @('Package', 'Matrix')) {
         $null = Install-AvmTool -Name bicep -Path $Path -SkipModuleVersionCheck

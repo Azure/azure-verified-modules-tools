@@ -84,6 +84,14 @@ function Get-AvmBicepCompiledConventionInput {
         $artifactInspectable = $true
         $artifactBytes = [System.IO.File]::ReadAllBytes($artifactPath)
     }
+    $artifactDrift = $null
+    $artifactError = $null
+    if ($artifactInspectable) {
+        try {
+            $artifactDrift = Get-AvmBicepCompiledJsonDrift -CompiledJson $Module.Json -CurrentBytes $artifactBytes
+        }
+        catch [AvmConfigurationException] { $artifactError = $_.Exception.Message }
+    }
     $variables = if ($template['variables'] -is [System.Collections.IDictionary]) { $template['variables'] } else { @{} }
     $outputs = if ($template['outputs'] -is [System.Collections.IDictionary]) { $template['outputs'] } else { @{} }
     $definitions = if ($template['definitions'] -is [System.Collections.IDictionary]) { $template['definitions'] } else { @{} }
@@ -129,6 +137,8 @@ function Get-AvmBicepCompiledConventionInput {
         ArtifactPath            = $artifactPath
         ArtifactBytes           = $artifactBytes
         ArtifactInspectable     = $artifactInspectable
+        ArtifactDrift           = $artifactDrift
+        ArtifactError           = $artifactError
         CompiledJson            = $Module.Json
         ParameterNameExceptions = @((Get-AvmBicepConfiguration)['conventionExemptions']['parameterNameExceptions'])
     }

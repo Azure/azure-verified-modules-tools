@@ -16,14 +16,183 @@ BeforeAll {
     foreach ($directory in Get-ChildItem -LiteralPath (Join-Path $script:root '.github' 'actions') -Directory -Filter 'bicep-*') {
         $script:actions[$directory.Name] = ConvertFrom-Yaml (Get-Content -LiteralPath (Join-Path $directory.FullName 'action.yml') -Raw)
     }
+    $runtimeContext = $script:workflows['bicep-module-runtime-deployment'].jobs.deploy.steps |
+        Where-Object { $_['id'] -ceq 'context' }
+    $tokens = $null
+    $errors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseInput($runtimeContext.run, [ref]$tokens, [ref]$errors)
+    if ($errors.Count -gt 0) { throw 'The runtime deployment context script is invalid.' }
+    $statements = @($ast.EndBlock.Statements)
+    $start = @($statements | Where-Object { $_.Extent.Text -match '^\$capabilities\s*=' })[0].Extent.StartOffset
+    $end = @($statements | Where-Object { $_.Extent.Text -match '^\$testCase\s*=' })[0].Extent.StartOffset
+    $script:dependencyBootstrap = [scriptblock]::Create($runtimeContext.run.Substring($start, $end - $start))
+    $resourceBootstrap = @($statements | Where-Object {
+            $_.Extent.Text -match '^if \(-not \(Get-Module -ListAvailable -Name Microsoft\.PowerShell\.PSResourceGet\)\)'
+        })[0]
+    $script:resourceBootstrap = [scriptblock]::Create($resourceBootstrap.Extent.Text)
+    function Get-AvmBicepAzureDependency {
+        [CmdletBinding()]
+        param([switch] $SkipModuleVersionCheck)
+        throw 'Dependency inventory must be mocked.'
+    }
+    function Get-PSResourceRepository {
+        [CmdletBinding()]
+        param([string] $Name)
+        throw 'Gallery lookup must be mocked.'
+    }
+    function Install-PSResource {
+        [CmdletBinding()]
+        param([string] $Name, [string] $Version, [string] $Repository, [string] $Scope, [switch] $TrustRepository, [switch] $Quiet)
+        throw 'Dependency provisioning must be mocked.'
+    }
+    function Install-Module {
+        [CmdletBinding()]
+        param([string] $Name, [string] $Scope, [switch] $Force, [switch] $AllowClobber)
+        throw 'Package manager provisioning must be mocked.'
+    }
+}
+
+Describe 'Bicep prepared runtime package manager bootstrap' {
+    BeforeEach {
+        Mock Get-Module { [pscustomobject]@{ Name = 'Microsoft.PowerShell.PSResourceGet' } }
+        Mock Install-Module {}
+        Mock Start-Sleep {}
+        Mock Write-Warning {}
+    }
+
+    It 'reuses an available package manager' {
+        & $script:resourceBootstrap
+        Should -Invoke Install-Module -Exactly 0
+    }
+
+    It 'retries provisioning when the prepared runtime has no package manager' {
+        Mock Get-Module {}
+        $script:attempts = 0
+        Mock Install-Module {
+            $script:attempts++
+            if ($script:attempts -eq 1) { throw 'HTTP 503' }
+        }
+        & $script:resourceBootstrap
+        Should -Invoke Install-Module -Exactly 2 -ParameterFilter {
+            $Name -eq 'Microsoft.PowerShell.PSResourceGet' -and $Scope -eq 'CurrentUser' -and $ErrorAction -eq 'Stop'
+        }
+        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 5 }
+    }
+
+    It 'fails closed when the package manager cannot be provisioned' {
+        Mock Get-Module {}
+        Mock Install-Module { throw 'HTTP 503' }
+        { & $script:resourceBootstrap } | Should -Throw '*503*'
+        Should -Invoke Install-Module -Exactly 3
+    }
+}
+
+Describe 'Bicep runtime dependency bootstrap behavior' {
+    BeforeEach {
+        $script:savedOffline = [Environment]::GetEnvironmentVariable('AVM_OFFLINE')
+        [Environment]::SetEnvironmentVariable('AVM_OFFLINE', [NullString]::Value)
+        $script:runtimeCapability = 1
+        $script:dependencyCapability = 1
+        Mock Get-Module {
+            [pscustomobject]@{ PrivateData = @{ AvmCapabilities = @{
+                        BicepWorkflowE2eRuntime = $script:runtimeCapability
+                        BicepAzureDependencyInventory = $script:dependencyCapability
+                    } } }
+        } -ParameterFilter { $Name -eq 'Avm.Authoring' }
+        $global:AvmRuntimeDependencyFixture = @{}
+        Mock Get-AvmBicepAzureDependency {
+            [pscustomobject]@{ Name = 'Az.Accounts'; MinimumVersion = [version]'5.3.4' }
+            [pscustomobject]@{ Name = 'Az.Subscription'; MinimumVersion = [version]'0.12.0' }
+        }
+        Mock Get-Module {
+            $key = [string]$Name
+            if ($global:AvmRuntimeDependencyFixture.ContainsKey($key)) {
+                [pscustomobject]@{ Version = $global:AvmRuntimeDependencyFixture[$key] }
+            }
+        } -ParameterFilter { $ListAvailable }
+        Mock Get-PSResourceRepository { [pscustomobject]@{ Uri = 'https://www.powershellgallery.com/api/v2' } }
+        Mock Install-PSResource { $global:AvmRuntimeDependencyFixture[$Name] = [version]$Version }
+        Mock Start-Sleep {}
+        Mock Write-Warning {}
+    }
+
+    AfterEach {
+        $offline = if ($null -eq $script:savedOffline) { [NullString]::Value } else { $script:savedOffline }
+        [Environment]::SetEnvironmentVariable('AVM_OFFLINE', $offline)
+        Remove-Variable AvmRuntimeDependencyFixture -Scope Global -ErrorAction SilentlyContinue
+    }
+
+    It 'reuses compatible dependencies and provisions missing Subscription after qualification' {
+        $global:AvmRuntimeDependencyFixture['Az.Accounts'] = [version]'6.0.0'
+        & $script:dependencyBootstrap
+        Should -Invoke Install-PSResource -Exactly 1 -ParameterFilter {
+            $Name -ceq 'Az.Subscription' -and $Version -ceq '0.12.0' -and $Scope -ceq 'CurrentUser' -and $Repository -ceq 'PSGallery'
+        }
+    }
+
+    It 'rejects <Label> bootstrap capability without provisioning' -ForEach @(
+        @{ Label = 'missing'; Value = $null }
+        @{ Label = 'string'; Value = '1' }
+        @{ Label = 'boolean'; Value = $true }
+        @{ Label = 'unsupported'; Value = 2 }
+    ) {
+        $script:dependencyCapability = $Value
+        { & $script:dependencyBootstrap } | Should -Throw '*BicepAzureDependencyInventory*'
+        Should -Invoke Install-PSResource -Exactly 0
+    }
+
+    It 'stops before provisioning when runtime capability is not an integer' {
+        $script:runtimeCapability = '1'
+        { & $script:dependencyBootstrap } | Should -Throw '*BicepWorkflowE2eRuntime*'
+        Should -Invoke Install-PSResource -Exactly 0
+    }
+
+    It 'reconciles an installed dependency after a transient failure without repeating installation' {
+        $global:AvmRuntimeDependencyFixture['Az.Accounts'] = [version]'5.3.4'
+        Mock Install-PSResource {
+            $global:AvmRuntimeDependencyFixture[$Name] = [version]$Version
+            throw [Net.Http.HttpRequestException]::new('HTTP 504')
+        }
+        & $script:dependencyBootstrap
+        Should -Invoke Install-PSResource -Exactly 1
+        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 5 }
+    }
+
+    It 'rejects a nonofficial gallery before installing' {
+        Mock Get-PSResourceRepository { [pscustomobject]@{ Uri = 'https://example.invalid' } }
+        { & $script:dependencyBootstrap } | Should -Throw '*official HTTPS*'
+        Should -Invoke Install-PSResource -Exactly 0
+    }
+
+    It 'fails if the installer does not provide the required module' {
+        Mock Install-PSResource {}
+        { & $script:dependencyBootstrap } | Should -Throw '*did not provide Az.Accounts*'
+    }
+
+    It 'does not contact the gallery offline and fails when a dependency is missing' {
+        $env:AVM_OFFLINE = '1'
+        $global:AvmRuntimeDependencyFixture['Az.Accounts'] = [version]'5.3.4'
+        { & $script:dependencyBootstrap } | Should -Throw '*AVM_OFFLINE=1*Az.Subscription*'
+        Should -Invoke Get-PSResourceRepository -Exactly 0
+        Should -Invoke Install-PSResource -Exactly 0
+    }
+
+    It 'bounds transient installation failures to three attempts' {
+        Mock Install-PSResource { throw [Net.Http.HttpRequestException]::new('HTTP 503') }
+        { & $script:dependencyBootstrap } | Should -Throw '*503*'
+        Should -Invoke Install-PSResource -Exactly 3
+        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 5 }
+        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 10 }
+    }
 }
 
 Describe 'Bicep reusable workflow ownership and syntax' {
-    It 'exposes zero-input PR check and release entrypoints' {
+    It 'exposes the same source selection on both entrypoints' {
         $script:entrypoints.Count | Should -Be 2
         foreach ($entrypoint in $script:entrypoints) {
             @($entrypoint.on.Keys) | Should -Be @('workflow_call')
-            $entrypoint.on.workflow_call | Should -BeNullOrEmpty
+            @($entrypoint.on.workflow_call.inputs.Keys | Sort-Object) | Should -Be @('authoringRef', 'authoringSource')
+            $entrypoint.on.workflow_call.inputs.authoringSource.default | Should -BeExactly 'gallery'
             $entrypoint.permissions.Count | Should -Be 0
         }
     }
@@ -76,12 +245,13 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         }
     }
 
-    It 'uses only the published package runtime for new Bicep orchestration' {
+    It 'retains direct-call Gallery fallback and runtime capabilities' {
         $runtimeNames = @(
             'bicep-module-runtime', 'bicep-module-runtime-deployment',
-            'bicep-module-runtime-release', 'bicep-module-runtime-static'
+            'bicep-module-runtime-e2e', 'bicep-module-runtime-release',
+            'bicep-module-runtime-static'
         )
-        @($script:workflows.Keys | Where-Object { $_ -in $runtimeNames }) | Should -HaveCount 4
+        @($script:workflows.Keys | Where-Object { $_ -in $runtimeNames }) | Should -HaveCount 5
         foreach ($workflow in $runtimeNames | ForEach-Object { $script:workflows[$_] }) {
             $text = $workflow | ConvertTo-Json -Depth 100
             $text | Should -Not -Match '\.avm-tools|\.avm-entrypoint|tools-ref|github\.workflow_sha'
@@ -95,18 +265,45 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $tagging.run | Should -Match 'PendingRelease'
     }
 
-    It 'forwards least-privilege permissions through the package runtime deployment call' {
+    It 'keeps authoring checks secret-free and limits deployment credentials to E2E' {
         $prCheck = $script:entrypoints | Where-Object name -EQ 'Reusable: Bicep PR check'
         $prCheck.jobs.check.permissions.contents | Should -BeExactly 'read'
-        $prCheck.jobs.check.permissions.'id-token' | Should -BeExactly 'write'
+        $prCheck.jobs.check.permissions.Contains('id-token') | Should -BeFalse
+        $prCheck.jobs.check.Contains('secrets') | Should -BeFalse
 
         $runtime = $script:workflows['bicep-module-runtime']
         $runtime.permissions.Count | Should -Be 0
-        $deployment = $runtime.jobs.deploy
+        @($runtime.jobs.Keys | Sort-Object) | Should -Be @('pr-check', 'unit-test')
+        foreach ($job in $runtime.jobs.Values) {
+            $job.permissions.contents | Should -BeExactly 'read'
+            $job.permissions.Contains('id-token') | Should -BeFalse
+            ($job | ConvertTo-Json -Depth 20) | Should -Not -Match '\bsecrets\b|AVM_CI_|azure/login|environment:'
+        }
+        $runtime.jobs.'pr-check'.steps[-1].run | Should -Match '(?m)^\s*avm -SkipModuleVersionCheck pr-check\s*$'
+        $runtime.jobs.'unit-test'.steps[-1].run | Should -Match 'avm -SkipModuleVersionCheck test unit --recurse --include-compliance'
+
+        $e2e = $script:workflows['bicep-module-runtime-e2e']
+        $deployment = $e2e.jobs.deploy
         $deployment.uses | Should -BeExactly './.github/workflows/bicep-module-runtime-deployment.yml'
         @($deployment.permissions.Keys | Sort-Object) | Should -Be @('contents', 'id-token')
         $deployment.permissions.contents | Should -BeExactly 'read'
         $deployment.permissions.'id-token' | Should -BeExactly 'write'
+        $e2e.jobs.'select-deployments'.steps[-1].run | Should -Not -Match 'ConvertFrom-Json.*NoEnumerate'
+    }
+
+    It 'acquires each runtime case lock only in the executable lifecycle job, never its waiting caller' {
+        $caller = $script:workflows['bicep-module-runtime-e2e'].jobs.deploy
+        $caller.Contains('concurrency') | Should -BeFalse
+        $caller.uses | Should -BeExactly './.github/workflows/bicep-module-runtime-deployment.yml'
+        $caller.with.testCase | Should -BeExactly '${{ toJSON(matrix.testCase) }}'
+        $leaf = $script:workflows['bicep-module-runtime-deployment'].jobs.deploy
+        $leaf.Contains('uses') | Should -BeFalse
+        $leaf.concurrency.group | Should -BeExactly '${{ fromJSON(inputs.testCase).ConcurrencyGroup }}'
+        $leaf.concurrency.queue | Should -BeExactly 'max'
+        $leaf.environment | Should -BeExactly 'avm-validation'
+        foreach ($phase in @('Deploy native test case', 'Assert and complete native test case', 'Recover unfinished native cleanup')) {
+            @($leaf.steps | Where-Object { $_['name'] -ceq $phase }).Count | Should -Be 1
+        }
     }
 
     It 'keeps nested reusable calls relative and forwards the immutable tools contract' {
@@ -117,6 +314,31 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             $job.with.Contains('avm-authoring-version') | Should -BeFalse
             $job.secrets | Should -BeExactly 'inherit'
         }
+    }
+
+    It 'runs packaged deployment phases through the CLI with renewable completion and recovery guards' {
+        $steps = $script:workflows['bicep-module-runtime-deployment'].jobs.deploy.steps
+        $deploy = $steps | Where-Object { $_['id'] -eq 'deploy' }
+        $renew = $steps | Where-Object { $_['id'] -eq 'renew_oidc' }
+        $complete = $steps | Where-Object { $_['name'] -eq 'Assert and complete native test case' }
+        $recover = $steps | Where-Object { $_['name'] -eq 'Recover unfinished native cleanup' }
+
+        $renew | Should -Not -BeNullOrEmpty
+        $deploy.env.METADATA_LOCATION | Should -BeExactly 'WestEurope'
+        $deploy.env.RESOURCE_GROUP_PREFIX | Should -BeExactly 'avm'
+        $deploy.env.RESOURCE_LOCATION | Should -BeExactly '${{ fromJSON(inputs.workflowInput).customLocation }}'
+        $deploy.run | Should -Match "'test', 'e2e'"
+        $deploy.run | Should -Match ([regex]::Escape("'--location', `$env:METADATA_LOCATION"))
+        $deploy.run | Should -Match ([regex]::Escape("'--resource-group-prefix', `$env:RESOURCE_GROUP_PREFIX"))
+        $deploy.run | Should -Match ([regex]::Escape("'--resource-location', `$env:RESOURCE_LOCATION"))
+        $deploy.run | Should -Not -Match 'Invoke-AvmTestE2e'
+        $complete.run | Should -Match 'avm -SkipModuleVersionCheck test e2e'
+        $complete.run | Should -Not -Match 'Invoke-AvmTestE2e'
+        $recover.run | Should -Match 'avm -SkipModuleVersionCheck test cleanup'
+        $recover.run | Should -Not -Match 'Invoke-AvmTestCleanup'
+        $complete.if | Should -Match 'steps\.renew_oidc\.outcome == ''success'''
+        $recover.if | Should -Match 'steps\.renew_oidc\.outcome == ''success'''
+        $recover.if | Should -Match "removeDeployment == 'true'"
     }
 
     It 'keeps generic validation and nested deployment on the same explicit target commit' {

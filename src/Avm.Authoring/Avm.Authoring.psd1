@@ -11,6 +11,7 @@
     FunctionsToExport    = @(
         'Export-AvmReadmeNote',
         'Get-AvmAuthoringPlaceholder',
+        'Get-AvmBicepAzureDependency',
         'Get-AvmBicepE2eDeploymentMatrix',
         'Get-AvmBicepE2eTestContext',
         'Get-AvmBicepPendingReleasePlan',
@@ -60,6 +61,7 @@
             PowerShellModuleArchiveRecovery = 1
             BicepWorkflowOrchestration      = 1
             BicepWorkflowE2eRuntime         = 1
+            BicepAzureDependencyInventory   = 1
         }
         PSData          = @{
             Tags         = @('Azure', 'AVM', 'AzureVerifiedModules', 'Bicep', 'Terraform', 'Authoring', 'CLI', 'PSEdition_Core')

@@ -15,7 +15,7 @@ BeforeAll {
         $env:AVM_MPTF_CONFIG_DIR = $null
         $env:TF_PLUGIN_CACHE_DIR = $null
         Import-Module (Join-Path $moduleRoot 'Avm.Authoring.psd1') -Force
-        . (Join-Path $PSScriptRoot '..' '..' 'Helpers' 'TerraformQualification.ps1')
+        . (Join-Path $PSScriptRoot '..' '..' 'Helpers' 'TerraformAcceptance.ps1')
         $script:mapotfPath = InModuleScope 'Avm.Authoring' { (Resolve-AvmTool -Name mapotf).Path }
         $script:terraformPath = InModuleScope 'Avm.Authoring' { (Resolve-AvmTool -Name terraform).Path }
         $script:processEnvironment = InModuleScope 'Avm.Authoring' -Parameters @{ ToolPath = $script:terraformPath } {
@@ -462,14 +462,19 @@ run "explicit" {
         (($version.StdOut | ConvertFrom-Json).provider_selections | ConvertTo-Json -Compress) | Should -BeExactly $selections
     }
 
-It 'preserves default and alias bindings with fully mocked providers and rejects an unmocked dependency' {
-        $root = Join-Path $TestDrive 'mocked-provider-bindings'
+It 'preserves default and alias bindings through <Graph> with fully mocked providers and rejects an unmocked dependency' -ForEach @(
+    @{ Graph = 'direct dependencies'; Transitive = $false; TransitiveOnly = $false }
+    @{ Graph = 'an unchanged intermediary and mixed Regions versions'; Transitive = $true; TransitiveOnly = $false }
+    @{ Graph = 'only an unchanged intermediary and modern Regions sibling'; Transitive = $true; TransitiveOnly = $true }
+) {
+        param($Transitive, $TransitiveOnly)
+        $root = Join-Path $TestDrive "mocked-provider-bindings-$Transitive-$TransitiveOnly"
         $dependency = Join-Path $root '.published' 'dependency'
         $unit = Join-Path $root 'tests' 'unit'
-        New-TelemetryModule -Root $root -WithLegacy -WithLocation
+        New-TelemetryModule -Root $root -WithLegacy:(-not $TransitiveOnly) -WithLocation
         $null = New-Item -ItemType Directory -Path $dependency, $unit -Force
         $requirements = Join-Path $root 'terraform.tf'
-        Set-Content -LiteralPath $requirements -Encoding utf8NoBOM -Value @'
+        $requirementsContent = @'
 terraform {
   required_version = ">= 1.9.0, < 2.0.0"
   required_providers {
@@ -492,6 +497,15 @@ terraform {
   }
 }
 '@
+        if ($TransitiveOnly) {
+            $requirementsContent = $requirementsContent.Replace(@'
+    modtm = {
+      source  = "Azure/modtm"
+      version = "~> 0.3"
+    }
+'@, '')
+        }
+        Set-Content -LiteralPath $requirements -Encoding utf8NoBOM -Value $requirementsContent
         Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
 resource "time_static" "current" {}
 module "published" {
@@ -506,6 +520,59 @@ module "implicit" {
   source = "./.published/dependency"
 }
 '@
+        $unchangedFiles = @{}
+        if ($Transitive) {
+            $config = Join-Path $root '.published' 'config'
+            $leaf = Join-Path $root '.published' 'leaf'
+            $null = New-Item -ItemType Directory -Path $config, $leaf -Force
+            Set-Content -LiteralPath (Join-Path $config 'main.tf') -Encoding utf8NoBOM -Value @'
+module "dependency" {
+  source = "../dependency"
+}
+module "regions" {
+  source  = "Azure/avm-utl-regions/azurerm"
+  version = "0.12.0"
+  use_cached_data = true
+}
+module "leaf" {
+  source = "../leaf"
+}
+output "identity" {
+  value = module.dependency.identity
+}
+'@
+            Set-Content -LiteralPath (Join-Path $leaf 'main.tf') -Value 'locals { value = "provider-free" }' -Encoding utf8NoBOM
+            Set-Content -LiteralPath (Join-Path $config 'lookup.tf.json') -Value '{"locals":{"region":"eastus"}}' -Encoding utf8NoBOM
+            $main = Join-Path $root 'main.tf'
+            $content = [IO.File]::ReadAllText($main).Replace(
+                "module `"implicit`" {`n  source = `"./.published/dependency`"",
+                "module `"implicit`" {`n  source = `"./.published/config`"")
+            if ($TransitiveOnly) {
+                $content = $content.Replace(@'
+module "published" {
+  source = "./.published/dependency"
+  providers = {
+    azapi  = azapi
+    modtm  = modtm
+    random = random
+  }
+}
+'@, '')
+            }
+            [IO.File]::WriteAllText($main, $content, [Text.UTF8Encoding]::new($false))
+            Add-Content -LiteralPath $main -Encoding utf8NoBOM -Value @'
+module "regions" {
+  source  = "Azure/avm-utl-regions/azurerm"
+  version = "0.12.0"
+  use_cached_data = true
+}
+'@
+            foreach ($directory in @($config, $leaf)) {
+                foreach ($file in Get-ChildItem -LiteralPath $directory -File) {
+                    $unchangedFiles[$file.FullName] = [Convert]::ToBase64String([IO.File]::ReadAllBytes($file.FullName))
+                }
+            }
+        }
         $published = Join-Path $dependency 'main.tf'
         Set-Content -LiteralPath $published -Encoding utf8NoBOM -Value @'
 terraform {
@@ -603,6 +670,7 @@ run "defaults" {
     condition = (
       module.published.identity.azure == "default-azure" &&
       module.published.identity.modtm == "default-modtm" &&
+      module.implicit.identity.modtm == "default-modtm" &&
       module.published.identity.random == "default-random" &&
       time_static.current.id == "default-time" &&
       terraform_data.telemetry[0].id == "mocked-builtin"
@@ -624,6 +692,7 @@ run "aliases" {
     condition = (
       module.published.identity.azure == "aliased-azure" &&
       module.published.identity.modtm == "aliased-modtm" &&
+      module.implicit.identity.modtm == "aliased-modtm" &&
       module.published.identity.random == "aliased-random" &&
       time_static.current.id == "aliased-time" &&
       terraform_data.telemetry[0].id == "mocked-builtin"
@@ -632,8 +701,15 @@ run "aliases" {
   }
 }
 '@
+        if ($TransitiveOnly) {
+            $content = [IO.File]::ReadAllText($testPath).Replace('module.published.identity', 'module.implicit.identity')
+            [IO.File]::WriteAllText($testPath, $content, [Text.UTF8Encoding]::new($false))
+            [IO.File]::ReadAllText($requirements) | Should -Not -Match '(?m)^\s*modtm\s*='
+        }
+        $initialTestDirectory = if ($TransitiveOnly) { 'tests/initialization-only' } else { 'tests/unit' }
+        $null = New-Item -ItemType Directory -Path (Join-Path $root $initialTestDirectory) -Force
         $null = Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $root `
-            -ArgumentList @('init', '-backend=false', '-input=false', '-no-color', '-test-directory=tests/unit')
+            -ArgumentList @('init', '-backend=false', '-input=false', '-no-color', "-test-directory=$initialTestDirectory")
         $lockPath = Join-Path $root '.terraform.lock.hcl'
         $manifestPath = Join-Path $root '.terraform' 'modules' 'modules.json'
         $lock = [IO.File]::ReadAllBytes($lockPath)
@@ -647,11 +723,59 @@ run "aliases" {
         $before.runs.defaults.mptf.attributes.Contains('providers') | Should -BeFalse
         [IO.File]::ReadAllText($requirements) | Should -Not -Match '(?m)^\s*terraform\s*='
         (Invoke-TelemetryEngine -Root $root).Status | Should -BeExactly 'pass'
+        if ($TransitiveOnly) {
+            InModuleScope Avm.Authoring -Parameters @{
+                Root = $root; Tool = $script:mapotfPath; Profiles = $script:profilesRoot; Environment = $script:processEnvironment
+            } {
+                param($Root, $Tool, $Profiles, $Environment)
+                $providers = Get-AvmTerraformUnitTestRequiredProvider -Path $Root -Options ([pscustomobject]@{
+                        ToolPath = $Tool
+                        ProfileDirs = @{ module = Join-Path $Profiles 'module' }
+                        EnvVars = $Environment
+                    })
+                $providers.modtm.source | Should -BeExactly 'registry.terraform.io/azure/modtm'
+                $providers.modtm.version | Should -Match '(^|,\s*)= 0\.3\.5(,|$)'
+            }
+        }
+        [IO.File]::ReadAllBytes($lockPath) | Should -Be $lock
+        [IO.File]::ReadAllBytes($manifestPath) | Should -Be $manifest
+        if ($Transitive) {
+            $null = Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $root `
+                -ArgumentList @('init', '-backend=false', '-input=false', '-lockfile=readonly', '-no-color', '-test-directory=tests/unit')
+            $manifest = [IO.File]::ReadAllBytes($manifestPath)
+            $installed = [Text.Encoding]::UTF8.GetString($manifest) | ConvertFrom-Json -AsHashtable
+            @($installed.Modules | Where-Object Key -CEQ 'regions')[0].Version | Should -BeExactly '0.13.0'
+            @($installed.Modules | Where-Object Key -CEQ 'implicit.regions')[0].Version | Should -BeExactly '0.12.0'
+            $null = Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $root -ArgumentList @('validate', '-no-color')
+            $lintConfig = Join-Path $TestDrive 'modtm-contract.tflint.hcl'
+            Set-Content -LiteralPath $lintConfig -Encoding utf8NoBOM -Value @'
+plugin "terraform" {
+  enabled = true
+  preset = "recommended"
+}
+rule "terraform_required_providers" { enabled = true }
+rule "terraform_unused_required_providers" { enabled = true }
+'@
+            InModuleScope Avm.Authoring -Parameters @{ Root = $root; Config = $lintConfig; Environment = $script:processEnvironment } {
+                param($Root, $Config, $Environment)
+                $lint = Invoke-AvmProcess -FilePath (Resolve-AvmTool -Name tflint).Path -WorkingDirectory $Root `
+                    -EnvVars $Environment -ArgumentList @(
+                        '--config', $Config, '--only=terraform_required_providers',
+                        '--only=terraform_unused_required_providers', '--format=json'
+                    )
+                @((ConvertFrom-Json -InputObject $lint.StdOut).issues) | Should -HaveCount 0
+            }
+        }
         $calls = (Invoke-TelemetryProcess -FilePath $script:mapotfPath -Root $root -ArgumentList @(
             'debug', '--tf-dir', $root, '--mptf-dir', (Join-Path $script:profilesRoot 'provider-inheritance'),
             '--eval', 'data.module.provider_inheritance.result'
         )).StdOut | ConvertFrom-Json -AsHashtable
-        $calls.published.Contains('providers') | Should -BeFalse
+        if ($TransitiveOnly) {
+            $calls.Contains('published') | Should -BeFalse
+        }
+        else {
+            $calls.published.Contains('providers') | Should -BeFalse
+        }
         $calls.implicit.Contains('providers') | Should -BeFalse
         $after = (Invoke-TelemetryProcess -FilePath $script:mapotfPath -Root $root -ArgumentList $inspectionArguments).
             StdOut | ConvertFrom-Json -AsHashtable
@@ -666,12 +790,22 @@ run "aliases" {
         $result = Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $root `
             -ArgumentList @('test', '-no-color', '-test-directory=tests/unit')
         $result.StdOut | Should -Match 'Success! 2 passed, 0 failed'
+        $repeatFiles = Get-TerraformAcceptanceFiles -Root $root
         $drift = Invoke-TelemetryEngine -Root $root -CheckDrift
         $drift.Status | Should -BeExactly 'pass' -Because ($drift.Changed -join ', ')
         (Invoke-TelemetryEngine -Root $root).Changed | Should -BeNullOrEmpty
+        $repeatedFiles = Get-TerraformAcceptanceFiles -Root $root
+        $repeatedFiles.Count | Should -Be $repeatFiles.Count
+        foreach ($file in $repeatFiles.Keys) {
+            $repeatedFiles.ContainsKey($file) | Should -BeTrue
+            $repeatedFiles[$file] | Should -BeExactly $repeatFiles[$file] -Because "$file must remain byte-stable"
+        }
         [IO.File]::ReadAllBytes($published) | Should -Be $publishedBytes
         [IO.File]::ReadAllBytes($lockPath) | Should -Be $lock
         [IO.File]::ReadAllBytes($manifestPath) | Should -Be $manifest
+        foreach ($file in $unchangedFiles.Keys) {
+            [Convert]::ToBase64String([IO.File]::ReadAllBytes($file)) | Should -BeExactly $unchangedFiles[$file]
+        }
 
         $validTest = [IO.File]::ReadAllBytes($testPath)
         Set-Content -LiteralPath (Join-Path $unit 'unmocked-dependency.tftest.hcl') -Encoding utf8NoBOM -Value @'

@@ -63,8 +63,9 @@ as Status='fail'. This makes stale governed files a hard CI
 failure so the module is refreshed before merge rather than
 silently rewritten in CI. For Bicep the sync step is unsupported and
 skipped. Bicep policy runs the required and advisory PSRule baselines
-when its repository config and selected test sources are available;
-missing inputs fail the check. Bicep policy, convention, and docs
+when its repository config and selected test sources are available.
+Its public namePrefix test token defaults to 'gci'; other missing
+inputs fail the check. Bicep policy, convention, and docs
 must report inspectable results rather than skipping. The required
 docs step checks README drift and confirms every selected source-backed
 README was rendered; source-less READMEs are reported separately.
@@ -248,15 +249,13 @@ with 'avm test unit'.
 
 ## Notes
 
-The reusable Terraform workflow runs one shared unit-test job for fork
-and same-repository pull requests, independently of pr-check. Unit tests
-and fork pr-check omit GitHub environments, subscription selection,
-Azure OIDC permissions, and secret/variable preparation. Inherited secret
-and variable payloads are replaced with empty objects. Only GitHub's
-automatically provided read-only token remains available; no configured
-secrets are required. Unit fixtures and repository hooks must work
-without Azure credentials. Fork pr-check excludes only check policy and
-its Conftest prerequisite.
+The reusable workflows run one shared unit-test job for fork and
+same-repository pull requests, independently of pr-check. Bicep
+pr-check runs the complete public gauntlet with no GitHub environment,
+subscription selection, Azure OIDC permission, secret map, or
+configured secret. The portable Bicep policy defaults are identical for
+local and CI invocations. Terraform fork pr-check excludes only check
+policy and its Conftest prerequisite.
 
 Normal branch pr-check retains the full checks and credentials, using
 the pr-check environment for OIDC without required reviewers.

@@ -364,7 +364,14 @@ authentication. Preflight failures retain ordinary post-hook cleanup behavior.
 ### Terraform policy recovery staging
 
 Terraform policy checks stage examples under `Get-AvmFolder -Kind Cache` in
-`policy-stage/avm-policy-<unique-id>`. Immediately before its pre hook, each
+`policy-stage/avm-policy-<unique-id>`. Provider-schema output may omit schemas
+only when its format is supported and every installed configuration is
+conservatively proven provider-free; unknown constructs or provider
+requirements fail closed. A `removed` block is provider-free only with an
+explicit `destroy = false` lifecycle and no other removal actions. Declared
+and configured providers must have their corresponding schemas. Normal
+Terraform validation, planning and Conftest evaluation still apply.
+Immediately before its pre hook, each
 example marks cleanup required and confirms it only after its post hook returns
 successfully. Examples that never start hooks do not require fixture cleanup.
 The parent checks every example after workers finish; failed, interrupted, or
@@ -843,17 +850,23 @@ ModTM removal, conditional AzAPI insertion and declared-requirement retirement.
 PowerShell supplies only fresh dependency-tree and provider-configuration facts,
 surfaces the profile's literal-map review before writing, and must not parse,
 rebuild or replace authored provider-map expressions.
-For scopes with child module calls, defer early ModTM requirement retirement
+For scopes with child module calls, defer early ModTM and Random requirement retirement
 until the utility cleanup has fresh dependency proof, rather than temporarily
 dropping and regenerating a still-required source/version contract.
 Before loading a dependency tree, reconcile known local callers against their
 children's current native declarations, including callers selected through test
 files. Repeat this reconciliation after retiring a child's requirement: Terraform
 loads test-selected examples during `get`, before dependency-ordered caller
-restoration can run. Remove only unsupported `modtm = modtm` entries; preserve
-alias and different-local-name selections. A temporarily retired declaration
+restoration can run. Remove only unsupported `modtm = modtm` and
+`random = random` entries; preserve alias and different-local-name selections.
+Random cleanup additionally requires the child's original native declaration
+to identify HashiCorp Random and its current declaration to be absent.
+Missing original declarations and other provider sources remain review failures,
+not inferred obsolete bindings. A temporarily retired declaration
 may be restored only with the existing fresh dependency proof, after which a
 retained mixed map must again forward any genuinely required ModTM configuration.
+Genuine transitive Random use retains its authored source/version contract and
+explicit caller binding until the separate default-map inheritance pass.
 An intermediate native missing-provider-configuration warning may be tracked
 while repairing proven source bindings. All other diagnostics remain fatal,
 and a strict dependency recheck must pass before mock migration.
@@ -1222,7 +1235,17 @@ known local callers and example wrappers also receive only their proven
 required source declaration and any necessary existing-map augmentation. Newly synthesized
 requirements preserve an available original version constraint; otherwise
 inherit only literal constraints from their proven same-source required
-dependencies or local targets. Combine distinct inherited constraints by
+dependencies or local targets. An unchanged intermediary without a direct
+ModTM declaration may prove default inheritance through descendants in the
+same freshly captured installed manifest. Inspect its native calls and
+descendant declarations read-only; never reinitialize or transform downloaded
+modules, fabricate their requirements, or forward ModTM into an undeclared
+intermediary. Provider-free leaves contribute no provider proof. Explicit maps
+on these undeclared inheritance edges, aliases, differing local names,
+namespace conflicts and incomplete graph evidence require review. Carry all
+proven descendant version constraints back to the selected caller even when
+the intermediary itself contributes no declaration or binding edit.
+Combine distinct inherited constraints by
 intersection, without inventing a pin from installed versions. Missing or
 nonliteral constraint proof requires review; existing authored requirements remain
 unchanged. Default and complete example-wrapper regressions must check both
@@ -1292,7 +1315,17 @@ For Bicep formatting, `avm pr-check` compares `bicep format --stdout` with
 the original source bytes and never rewrites the working copy. `avm pre-commit`
 still formats in place.
 The Bicep transform compares the exact bytes from `bicep build --stdout`
-with each module's main.json. Pre-commit writes missing or stale output only
+with each module's main.json, except only the string value tokens at the exact
+root paths `metadata._generator.version` and `metadata._generator.templateHash`.
+Validate both documents as strict JSON objects with unique decoded property
+names before comparison. A present generator must contain both nonempty string
+values. Locate those tokens from parsed structure without reserializing JSON;
+preserve every other byte, including property spelling/order, whitespace,
+newlines, BOM, unknown generator fields and similarly named fields elsewhere.
+Malformed artifacts and invalid UTF-8 fail explicitly, without overwriting them.
+Transform, packaged convention and compliance checks share this comparator;
+provenance-only differences preserve the checked-in bytes and timestamp.
+Pre-commit writes missing or stale output only
 after all selected modules build successfully, with rollback on write failure;
 `avm pr-check` reports each missing or stale artifact with an `avm pre-commit`
 remedy and never changes repository files. Compilation requires a nonempty,
@@ -1462,6 +1495,11 @@ Azure CLI and PowerShell must confirm the same subscription, tenant, cloud
 and account before CLI cleanup. Do not log in, export tokens or install
 modules implicitly. The native dependency floors follow the Az 15.5.0
 bundle, plus Az.Subscription 0.12.0, which is distributed separately.
+`Get-AvmBicepAzureDependency` exposes that same dependency inventory without
+installing or importing modules. Workflow setup installs missing individual
+dependencies at those floors from the official PSGallery in CurrentUser scope,
+reuses compatible modules and honors offline mode. Deployment tests run in a
+fresh session; the read-only preflight still checks every dependency and command.
 Check the actual command provenance and parameter names or aliases.
 Make the selected Az.Accounts version visible in the current PowerShell
 process's global scope before importing other Az modules: nested clients
@@ -1743,7 +1781,23 @@ duplicate the reservation inventory, route reserved cases into ordinary native
 execution, or change the ordinary registry module workflows and publication
 approval policy as part of the thin-caller contract.
 
-Both entrypoints expose no `workflow_call` inputs. PR checks use the original
+Both entrypoints accept `authoringSource` and `authoringRef` through
+`workflow_call`. The source defaults to `gallery`; manual callers may instead
+select `repo`. A Gallery ref is an exact stable version, while a repository
+ref is a full commit SHA, branch, or tag in
+`Azure/azure-verified-modules-tools`. A blank Gallery ref selects the latest
+stable published package; a blank repository ref selects the highest stable
+version tag. Repository selection builds the checked-out commit with
+`build.ps1 build`, without requiring the candidate to be published.
+Resolve the version or commit once and publish the prepared module as a
+run-scoped artifact. Every nested job imports that exact artifact, including
+reruns of jobs whose successful bootstrap was not rerun. Log the actual
+source, version, ref and resolved SHA; a failed selection, build, download
+or import never falls back to another source. Automatic events cannot select
+the new overrides. The caller's static `uses` pin still selects workflow
+code independently of the selected module source.
+
+PR checks use the original
 caller's `github` event context. Automatic upstream PR checks admit `opened`,
 `reopened` and `synchronize` without a static-check label. A `labeled` event is
 admitted only when adding `PR: Run E2E Tests`; that label alone enables deployment
@@ -1752,7 +1806,7 @@ Fork PRs always run only the public-data static tier, irrespective of labels:
 packaged compliance and authored unit tests, with empty `AVM_CI_VARIABLES` and
 `AVM_CI_SECRETS` maps, no inherited secrets, OIDC, identity or subscription
 selection. Report protected policy and deployment tiers as not run, never as
-successful static results. Manual check dispatch has only `modulePaths`, an
+successful static results. Manual check dispatch additionally has `modulePaths`, an
 explicit comma-separated selection; it runs static, policy and deployment
 validation with cleanup and normal location defaults, without PR-label lookup
 or publication. No operation, phase, cleanup or location toggles are exposed.
@@ -1768,11 +1822,13 @@ tag planner must validate notes for every refreshed calculated child/parent
 target before creating or pushing any tag in that module's release plan.
 
 Callers pin the entrypoint `uses` reference once to a durable, merged tools
-commit SHA; an orphan premerge head or mutable branch is not the publication
-contract. New Bicep orchestration uses only relative reusable workflow calls
-from that entrypoint revision and the latest stable PSGallery `Avm.Authoring`
-package. It must not check out tools again, pin a second tools SHA, use
-`@main`, derive a source ref, or accept a caller-facing `tools-ref` override.
+commit SHA for normal use; an orphan premerge head or mutable branch is not
+the publication contract. New Bicep orchestration uses relative reusable
+workflow calls from that entrypoint revision. A manually selected repository
+runtime does not change the workflow revision. Gallery bootstrap retries
+lookup or download up to three times with five- and ten-second delays, retaining
+the first successfully resolved version, then rethrows the final failure.
+Import and capability checks remain outside the retry.
 The runtime package must declare exact integer
 `PrivateData.AvmCapabilities.BicepWorkflowOrchestration = 1` before selection
 or release work and `BicepWorkflowE2eRuntime = 1` before E2E selection or
@@ -1781,10 +1837,14 @@ falling back to repository scripts. Package qualification must exercise this
 package-only path, including empty fork configuration, InPlace/Fresh retries,
 artifact state, and final-only cleanup; interface-parameter checks alone do
 not prove that behavior.
+Both native and retained deployment bootstraps require exact integer
+`BicepAzureDependencyInventory = 1` and provision the package's declared
+dependencies before OIDC sign-in. Deployment and cleanup run in fresh sessions
+and retain their independent fail-closed dependency preflight.
 Direct callers of established legacy leaves continue to pin their tools `uses`
 reference and `tools-ref` to the same full immutable SHA. Nested reusable calls
 remain relative to the entrypoint revision. Executable package-runtime jobs
-check out only the complete caller at its intended target. Ordinary callers
+check out the complete caller at its intended target. Ordinary callers
 retain `github.sha`; generic callers forward their checked `targetCommit`
 through every validation tier.
 
@@ -1911,7 +1971,10 @@ release containing the other required runtime and policy interfaces.
 
 Keep `avm-validation` for selection/execution and `publish-approval` for tag
 approval. One per-case lifecycle lock covers deployment, assertions, post hooks,
-cleanup and cleanup-only recovery. Queue rather than cancel. The deployment
+cleanup and cleanup-only recovery. Only the executable runtime deployment job
+acquires the matrix case's concurrency group; its reusable-call E2E parent must
+not acquire that same group while waiting for the child. Retain the existing
+group identity and `queue: max`. Queue rather than cancel. The deployment
 job alone receives full CI variables/secrets, including its pre-login isolation
 input check. Retain generic `gci` and separate custom resource location from fixed
 `WestEurope` metadata location. Renewal precedes Complete after either a
@@ -2878,6 +2941,15 @@ manual-approval, or changed-path prerequisite. GitHub's separate approval
 policy for running workflows from external contributors still applies. The
 managed caller remains an unconditional forwarder; fork handling and test-tier
 decisions belong only in the reusable workflow.
+
+The reusable Terraform workflow accepts the same manual `authoringSource` and
+`authoringRef` selection as Bicep and shares its run-scoped prepared module.
+The existing `avm-authoring-version` Gallery version/range input remains
+supported; combining it with either new override fails explicitly. Automatic
+events retain their previous Gallery behavior. CI invokes supported
+`SkipModuleVersionCheck` switches on the dispatcher and exported cmdlets to
+avoid release-freshness checks; capability, tool, dependency, and security
+validation remains in force. Interactive CLI defaults are unchanged.
 
 Normal Terraform repository sync reconciles that repository-level policy to
 `first_time_contributors` after verified Terraform configuration succeeds.

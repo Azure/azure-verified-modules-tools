@@ -17,8 +17,9 @@ function Invoke-AvmBicepCheckPolicy {
         VALIDATE_SUBSCRIPTION_IDS or its TEST_SUBSCRIPTION_IDS alias (first
         entry matching the exact root reservation map), with
         VALIDATE_SUBSCRIPTION_ID as a General-only fallback, VALIDATE_TENANT_ID,
-        VALIDATE_MANAGEMENT_GROUP_ID (or ARM_MGMTGROUP_ID), TOKEN_NAMEPREFIX,
-        and localToken_* environment variables.
+        VALIDATE_MANAGEMENT_GROUP_ID (or ARM_MGMTGROUP_ID), and localToken_*
+        environment variables. namePrefix defaults to the portable public value
+        'gci'; localToken_namePrefix or TOKEN_NAMEPREFIX can override it.
 
     .PARAMETER Context
         Bicep module context produced by Get-AvmModuleContext.

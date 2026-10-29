@@ -171,6 +171,11 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         @{ Variant = 'filtered-root'; ExpectedCode = '' }
         @{ Variant = 'empty-filter'; ExpectedCode = '' }
         @{ Variant = 'warning'; ExpectedCode = '' }
+        @{ Variant = 'provenance'; ExpectedCode = '' }
+        @{ Variant = 'template-drift'; ExpectedCode = 'avm.bicep.json-stale' }
+        @{ Variant = 'malformed-artifact'; ExpectedCode = 'avm.bicep.json-stale' }
+        @{ Variant = 'crlf-artifact'; ExpectedCode = 'avm.bicep.json-stale' }
+        @{ Variant = 'bom-artifact'; ExpectedCode = 'avm.bicep.json-stale' }
     ) {
         foreach ($path in @($script:modulePath, (Join-Path $script:modulePath 'child'))) {
             $metadataPath = Join-Path $path 'metadata.json'
@@ -212,6 +217,34 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
                 $data.telemetryIdPrefix = '46d3xbcp.res.7654321'
                 $data | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $metadataPath
             }
+            $artifactBefore = $null
+            if ($Variant -in @('provenance', 'template-drift', 'malformed-artifact', 'crlf-artifact', 'bom-artifact')) {
+                $artifact = Join-Path $Path 'main.json'
+                $original = [System.IO.File]::ReadAllText($artifact)
+                $script:provenanceCompiled = $original.Replace('0.47.16.16243', '0.48.1.52935').Replace(
+                    '18275710714278981656', '987654321')
+                Mock Invoke-AvmProcess {
+                    [pscustomobject]@{ ExitCode = 0; StdOut = $script:provenanceCompiled; StdErr = '' }
+                } -ParameterFilter { $ArgumentList[2] -ceq (Join-Path $Path 'main.bicep') }
+                $changed = switch ($Variant) {
+                    'template-drift' { $original.Replace('Standard_LRS', 'Standard_GRS') }
+                    'malformed-artifact' { '{invalid' }
+                    'crlf-artifact' { $original.Replace("`n", "`r`n") }
+                    'bom-artifact' { [string][char]0xFEFF + $original }
+                    default { $original }
+                }
+                [System.IO.File]::WriteAllText($artifact, $changed, [Text.UTF8Encoding]::new($false))
+                $artifactBefore = [System.IO.File]::ReadAllBytes($artifact)
+                $context = Get-AvmModuleContext -Path $Path -Ecosystem bicep
+                if ($Variant -eq 'malformed-artifact') {
+                    { Invoke-AvmBicepTransform -Context $context -CheckDrift } |
+                        Should -Throw '*Checked-in main.json contains invalid JSON*'
+                }
+                else {
+                    $drift = Invoke-AvmBicepTransform -Context $context -CheckDrift
+                    $drift.Status | Should -Be $(if ($Variant -eq 'provenance') { 'pass' } else { 'fail' })
+                }
+            }
             Mock Invoke-AvmBicepDocs {
                 if (-not $PreparationOnly -or -not $CheckDrift) { throw 'Compliance must only prepare docs before its native run.' }
                 [pscustomobject]@{ ReadmeInputs = $script:preparedReadmes; Issues = @() }
@@ -225,6 +258,9 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             if ($Variant -in @('filtered', 'filtered-root')) { $selection.TestName = '*Bicep module layout*' }
             if ($Variant -eq 'empty-filter') { $selection.TestName = 'does-not-exist*' }
             $result = Invoke-AvmTestUnit -Path $Path -Recurse:($Variant -ne 'filtered-root') -IncludeCompliance @selection
+            if ($null -ne $artifactBefore) {
+                [System.IO.File]::ReadAllBytes($artifact) | Should -Be $artifactBefore
+            }
             $result.ComplianceFile | Should -BeLike '*Resources*bicep*Compliance.Tests.ps1'
             if ($Variant -eq 'filtered') {
                 $result.RunsTotal | Should -Be 22
