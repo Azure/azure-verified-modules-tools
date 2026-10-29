@@ -479,6 +479,66 @@ Describe 'Bicep identity saved-plan ownership guard' {
         { Assert-AvmBicepIdentityPlan @script:guard } | Should -Throw
     }
 
+    It 'emits a sanitized diagnostic when rejecting an unexpected plan resource' {
+        $secret = 'synthetic-secret-must-not-be-disclosed'
+        $script:plan.resource_changes += @{
+            address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.identity_role_assignment'
+            mode = 'managed'
+            type = 'azapi_resource'
+            provider_name = 'registry.terraform.io/azure/azapi'
+            change = @{
+                actions = @('create')
+                after = @{ secret = $secret }
+            }
+        }
+
+        $captured = & {
+            try {
+                Assert-AvmBicepIdentityPlan @script:guard
+            }
+            catch {
+                $_
+            }
+        } 6>&1
+
+        $diagnostic = @($captured | Where-Object {
+                $_ -is [System.Management.Automation.InformationRecord] -and
+                ([string]$_.MessageData).StartsWith(
+                    'Bicep plan rejection [unexpected-resource]:',
+                    [System.StringComparison]::Ordinal
+                )
+            })
+        $diagnostic | Should -HaveCount 1
+        $diagnostic[0].MessageData | Should -BeExactly (
+            'Bicep plan rejection [unexpected-resource]: ' +
+            'address=module.bicep["avm/res/fabric/capacity"].azapi_resource.identity_role_assignment; ' +
+            'mode=managed; type=azapi_resource; provider_name=registry.terraform.io/azure/azapi; actions=create.'
+        )
+        ($captured | Out-String) | Should -Not -Match $secret
+    }
+
+    It 'continues rejecting forbidden dedicated identity and role operations: <Case>' -ForEach @(
+        @{
+            Case = 'user-assigned identity'
+            Address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.unapproved_user_assigned_identity'
+        }
+        @{
+            Case = 'role assignment'
+            Address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.identity_role_assignment'
+        }
+    ) {
+        $script:plan.resource_changes += @{
+            address = $Address
+            mode = 'managed'
+            type = 'azapi_resource'
+            provider_name = 'registry.terraform.io/azure/azapi'
+            change = @{ actions = @('create') }
+        }
+
+        { Assert-AvmBicepIdentityPlan @script:guard } |
+            Should -Throw '*may only manage dedicated identities*'
+    }
+
     It 'allows revoking only a membership belonging to the same dedicated principal' {
         $removed = @{
             address = 'module.bicep["avm/res/fabric/capacity"].azuread_group_member.test_permissions["retired group"]'
