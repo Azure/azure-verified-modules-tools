@@ -108,6 +108,159 @@ Describe 'Terraform ModTM restoration module enumeration' {
     }
 }
 
+Describe 'Terraform unchanged ModTM inheritance proof' {
+    BeforeEach {
+        InModuleScope Avm.Authoring -Parameters @{ Root = (Join-Path $TestDrive 'caller') } {
+            param($Root)
+            $script:inheritanceRoot = $Root
+            $script:config = Join-Path $Root '.published' 'config'
+            $script:regions = Join-Path $Root '.published' 'regions'
+            $script:leaf = Join-Path $Root '.published' 'leaf'
+            $script:inheritedRequirements = @{
+                $config = @{}
+                $regions = @{ modtm = @{ source = 'Azure/modtm'; version = '>= 0.3.2, < 0.4.0' } }
+                $leaf = @{}
+            }
+            $script:inheritedManifest = @{
+                Modules = @(
+                    @{ Key = ''; Dir = '.' }
+                    @{ Key = 'config'; Dir = $config }
+                    @{ Key = 'config.regions'; Dir = $regions }
+                    @{ Key = 'config.leaf'; Dir = $leaf }
+                )
+            }
+            $script:inheritedCalls = @{
+                $config = @{ regions = @{ source = 'Azure/avm-utl-regions/azurerm'; mptf = @{} }; leaf = @{ source = './leaf'; mptf = @{} } }
+                $leaf = @{}
+            }
+            $script:inheritedOptions = [pscustomobject]@{
+                ToolPath = 'mapotf'
+                ProfileDirs = @{ 'provider-restore' = 'provider-restore'; module = 'module' }
+                EnvVars = @{}
+            }
+            Mock Get-ChildItem { @() }
+            Mock Get-AvmTerraformUnitTestProviderSource { throw 'Read-only proof must use the captured manifest.' }
+            Mock Invoke-AvmProcess {
+                if ($ArgumentList[0] -cne 'debug') { throw 'Read-only proof must not execute a transform.' }
+                [pscustomobject]@{ StdOut = ConvertTo-Json -InputObject $script:inheritedCalls[$WorkingDirectory] -Depth 10 -Compress }
+            }
+            Mock Get-AvmTerraformUnitTestRequiredProvider { $script:inheritedRequirements[$Path] }
+        }
+    }
+
+    It 'proves a grandchild constraint without fabricating a requirement on an unchanged intermediary' {
+        InModuleScope Avm.Authoring {
+            $proof = Get-AvmTerraformUnitTestInheritedModtmRequirement -Root $inheritanceRoot -ModuleKey config `
+                -Manifest $inheritedManifest -Options $inheritedOptions -RequiredProviders $inheritedRequirements `
+                -PlanningPaths ([Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal))
+            $proof.Required | Should -BeTrue
+            @($proof.Versions) | Should -Be @('>= 0.3.2, < 0.4.0')
+            $inheritedRequirements[$config].Contains('modtm') | Should -BeFalse
+            Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -cne 'debug' }
+        }
+    }
+
+    It 'does not turn a genuinely provider-free leaf into a ModTM dependency' {
+        InModuleScope Avm.Authoring {
+            $proof = Get-AvmTerraformUnitTestInheritedModtmRequirement -Root $inheritanceRoot -ModuleKey config.leaf `
+                -Manifest $inheritedManifest -Options $inheritedOptions -RequiredProviders $inheritedRequirements `
+                -PlanningPaths ([Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal))
+            $proof.Required | Should -BeFalse
+            @($proof.Versions) | Should -HaveCount 0
+        }
+    }
+
+    It 'rejects unproven inheritance: <Case>' -TestCases @(
+        @{ Case = 'wrong namespace'; Change = 'wrong' }
+        @{ Case = 'implicit HashiCorp source'; Change = 'missing-source' }
+        @{ Case = 'different local name'; Change = 'renamed' }
+        @{ Case = 'nonliteral constraint'; Change = 'version' }
+        @{ Case = 'missing installed descendant'; Change = 'manifest' }
+        @{ Case = 'missing native descendant'; Change = 'missing-call' }
+        @{ Case = 'computed provider map'; Change = 'mapping' }
+        @{ Case = 'aliased provider map'; Change = 'alias-map' }
+        @{ Case = 'unproven alias requirement'; Change = 'aliases' }
+        @{ Case = 'malformed native calls'; Change = 'calls' }
+        @{ Case = 'cycle'; Change = 'cycle' }
+    ) {
+        param($Change)
+        InModuleScope Avm.Authoring -Parameters @{ Change = $Change } {
+            param($Change)
+            switch ($Change) {
+                wrong { $inheritedRequirements[$regions].modtm.source = 'example/modtm' }
+                missing-source { $inheritedRequirements[$regions].modtm.Remove('source') }
+                renamed { $inheritedRequirements[$regions] = @{ telemetry = @{ source = 'Azure/modtm'; version = '~> 0.3' } } }
+                version { $inheritedRequirements[$regions].modtm.version = '${var.version}' }
+                manifest { $inheritedManifest.Modules = @($inheritedManifest.Modules | Where-Object Key -CNE 'config.regions') }
+                missing-call { $inheritedCalls[$config].Remove('regions') }
+                mapping { $inheritedCalls[$config].regions.providers = 'local.providers' }
+                alias-map { $inheritedCalls[$config].regions.providers = '{ modtm = modtm.owner }' }
+                aliases { $inheritedRequirements[$regions].modtm.configuration_aliases = @('modtm.owner') }
+                calls { $inheritedCalls[$config] = @() }
+                cycle { $inheritedManifest.Modules[2].Dir = $config }
+            }
+            $paths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            { Get-AvmTerraformUnitTestInheritedModtmRequirement -Root $inheritanceRoot -ModuleKey config `
+                    -Manifest $inheritedManifest -Options $inheritedOptions -RequiredProviders $inheritedRequirements `
+                    -PlanningPaths $paths } | Should -Throw -ExceptionType ([AvmConfigurationException])
+            $paths.Count | Should -Be 0
+            $inheritedRequirements[$config].Contains('modtm') | Should -BeFalse
+        }
+    }
+
+    It 'restores the selected caller from mixed graphs without forwarding to the intermediary: <Contract>' -ForEach @(
+        @{ Contract = 'synthesized intersection'; Authored = $false }
+        @{ Contract = 'stronger authored requirement'; Authored = $true }
+        @{ Contract = 'nonliteral original constraint rejected'; Authored = $true; Invalid = $true }
+    ) {
+        param($Authored, $Invalid = $false)
+        InModuleScope Avm.Authoring -Parameters @{ Authored = $Authored; Invalid = $Invalid } {
+            param($Authored, $Invalid)
+            $source = 'registry.terraform.io/azure/modtm'
+            $strict = Join-Path $config 'strict'
+            $inheritedManifest.Modules += @{ Key = 'config.strict'; Dir = $strict }
+            $inheritedCalls[$config].strict = @{ source = './strict'; mptf = @{} }
+            $inheritedRequirements[$strict] = @{ modtm = @{ source = 'Azure/modtm'; version = '= 0.3.5' } }
+            $inheritedCalls[$inheritanceRoot] = @{
+                config = @{ source = 'git::https://example.invalid/config'; mptf = @{} }
+                current = @{ source = 'Azure/avm-utl-regions/azurerm'; version = '0.13.0'; mptf = @{} }
+            }
+            $parameters = @{
+                Path = $inheritanceRoot
+                ModuleTargets = @([pscustomobject]@{ Path = $inheritanceRoot })
+                Options = $inheritedOptions
+                RequiredProviders = $inheritedRequirements + @{ $inheritanceRoot = @{} }
+                ProviderSources = @{ $inheritanceRoot = @($source, 'registry.terraform.io/azure/azapi') }
+                ModuleProviderSources = @{ $inheritanceRoot = @{ config = @($source); current = @('registry.terraform.io/azure/azapi') } }
+                ModuleManifests = @{ $inheritanceRoot = ConvertTo-Json -InputObject $inheritedManifest -Depth 10 -Compress }
+                OriginalRequirements = @{}
+                Plans = @{}
+                PlanningPaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+                BindDependencies = $true
+            }
+            if ($Authored) {
+                $parameters.OriginalRequirements[$inheritanceRoot] = @{ modtm = @{ source = 'Azure/modtm'; version = '= 0.3.5' } }
+            }
+            if ($Invalid) {
+                $parameters.OriginalRequirements[$inheritanceRoot].modtm.version = '${var.version}'
+                { Get-AvmTerraformUnitTestModtmRequirementPlan @parameters } |
+                    Should -Throw '*original provider source, version, or aliases require review*'
+                $parameters.Plans.Count | Should -Be 0
+                $parameters.RequiredProviders[$inheritanceRoot].Contains('modtm') | Should -BeFalse
+                return
+            }
+            $plan = Get-AvmTerraformUnitTestModtmRequirementPlan @parameters
+            $expected = if ($Authored) { '= 0.3.5' } else { '= 0.3.5, >= 0.3.2, < 0.4.0' }
+            $parameters.RequiredProviders[$inheritanceRoot].modtm.version | Should -BeExactly $expected
+            $plan.Arguments | Should -Contain 'unit_test_modtm_dependencies=[]'
+            $parameters.Plans.Count | Should -Be 1
+            $parameters.Plans.ContainsKey($config) | Should -BeFalse
+            $parameters.RequiredProviders[$config].Contains('modtm') | Should -BeFalse
+            Should -Invoke Get-AvmTerraformUnitTestProviderSource -Exactly 0
+        }
+    }
+}
+
 Describe 'Terraform unit-test migration' {
     BeforeEach {
         $script:fixture = New-UnitMigrationFixture

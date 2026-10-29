@@ -1093,9 +1093,14 @@ mapping still requires the same baseline proof even without a root telemetry
 profile on that target.
 Only root and child modules establish test-file ownership; example and
 standalone test targets do not change which files are direct unit tests.
-After source transformation, only a target that gained a previously absent,
-required `location` input receives a per-run `location = "eastus"` in its
-provider-mocked tests. Existing global and per-run values, including nulls
+After source transformation, a target that gained a previously absent required
+`location`, or whose location changed from absent, required, or a non-null
+default to the guarded telemetry-only null default, receives a per-run
+`location = "eastus"` in its provider-mocked tests. Telemetry-only inputs do not
+receive this value in runs whose effective telemetry setting is literal false;
+per-run settings override global settings and then the module default.
+Already optional null inputs and unrelated optional inputs remain unchanged.
+Existing global and per-run location values, including nulls
 and expressions, remain authored. This test-only value is not a production
 default and never replaces per-hub regions or repairs unrelated pre-existing
 missing inputs. Assertions, targets and telemetry opt-outs are preserved.
@@ -1255,7 +1260,17 @@ known local callers and example wrappers also receive only their proven
 required source declaration and any necessary existing-map augmentation. Newly synthesized
 requirements preserve an available original version constraint; otherwise
 inherit only literal constraints from their proven same-source required
-dependencies or local targets. Combine distinct inherited constraints by
+dependencies or local targets. An unchanged intermediary without a direct
+ModTM declaration may prove default inheritance through descendants in the
+same freshly captured installed manifest. Inspect its native calls and
+descendant declarations read-only; never reinitialize or transform downloaded
+modules, fabricate their requirements, or forward ModTM into an undeclared
+intermediary. Provider-free leaves contribute no provider proof. Explicit maps
+on these undeclared inheritance edges, aliases, differing local names,
+namespace conflicts and incomplete graph evidence require review. Carry all
+proven descendant version constraints back to the selected caller even when
+the intermediary itself contributes no declaration or binding edit.
+Combine distinct inherited constraints by
 intersection, without inventing a pin from installed versions. Missing or
 nonliteral constraint proof requires review; existing authored requirements remain
 unchanged. Default and complete example-wrapper regressions must check both
