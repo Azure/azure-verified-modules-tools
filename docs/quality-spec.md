@@ -712,10 +712,27 @@ owner/canonical metadata edits do not.
 
 MaPoTF instruments Terraform roots and children with a `telemetryIdPrefix`.
 Children without a prefix do not create telemetry, but those deploying Azure
-resources still require `var.location`. Every module root except a utility
-that deploys no Azure resources requires `var.location`; MaPoTF adds a required,
-non-nullable string input without a default when it is absent and preserves
-authored declarations. Instrumented modules also get `enable_telemetry`
+resources still require `var.location`. Instrumented modules also expose this
+input for their telemetry deployment. MaPoTF initially adds a missing location
+as a required, non-nullable string.
+The dependency-ordered module-call pass makes an instrumented module's string
+`location` optional with `default = null` when native block inspection finds no
+non-telemetry location dependency. This includes global resources and callers
+that only forward location to optional local children. The variable remains
+nullable (the explicit `true` is removed by common formatting) and receives
+`!var.enable_telemetry || var.location != null` validation. With telemetry off,
+omitted and explicit null locations are accepted; telemetry on, including its
+default, requires a non-null region. Preserve authored descriptions and other
+validations. Non-telemetry references, including indirect use through
+`local.main_location`, and missing required child inputs keep location required.
+Uninspected top-level block kinds conservatively retain the required contract;
+only the exact state-only removal blocks generated for retired telemetry are
+exempt from that guard.
+Remove the exact generated unused-declaration directive when its canonical
+location input becomes telemetry-only; preserve unrelated or authored ignores.
+If business code starts consuming a previously generated optional input, remove
+its null default and restore `nullable = false`. Other authored resource-location
+contracts remain unchanged. Instrumented modules also get `enable_telemetry`
 (default `true`). The deployment uses `var.location`, including in globally
 scoped modules. Choose a valid region for the target cloud. Local module
 calls forward the parent's location when the child needs it and no location
@@ -728,8 +745,9 @@ Helpers without that input remain unchanged. Supported example calls expose and 
 missing inputs. Only newly generated example `location` inputs default to
 `"eastus"`, so runnable examples remain usable by noninteractive plans.
 Authored example declarations, defaults, required inputs, and per-item regions
-are preserved; reusable module inputs still receive no default. Override the
-example value when another region or cloud is required.
+are preserved; reusable inputs needed outside telemetry still receive no
+generated default. Override the example value when another region or cloud
+is required.
 Variable blocks are sorted after missing location inputs are
 created, so the first transform already satisfies drift checks.
 
@@ -976,7 +994,9 @@ generated location and provider-contract exceptions. The packaged root TFLint
 profile disables the retired
 `modtm` provider requirement, as the module and example profiles already do.
 
-The packaged AVM TFLint ruleset is pinned to released v1.4.0.
+The packaged AVM TFLint ruleset is pinned to released v1.4.1. Its location rule
+accepts the guarded nullable telemetry-only input without disabling validation
+of required resource-location interfaces.
 AzureRM remains optional, but declared version constraints must exclude 5.0.0
 and later in root, child and example scopes. The existing source and
 compatibility checks still apply; excluding individual 5.x versions does not

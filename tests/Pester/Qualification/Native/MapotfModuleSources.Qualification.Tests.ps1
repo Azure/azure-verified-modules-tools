@@ -154,6 +154,51 @@ module "config" {
         Get-Content -LiteralPath $main -Raw | Should -BeExactly $first
     }
 
+It 'preserves the local child location contract: <Contract>' -ForEach @(
+        @{ Contract = 'required'; Default = ''; Optional = $false }
+        @{ Contract = 'non-null default'; Default = 'default = "eastus"'; Optional = $false }
+        @{ Contract = 'telemetry-only'; Default = 'default = null'; Optional = $true }
+    ) {
+        $root = Join-Path $TestDrive ("child-location-" + ($Contract -replace ' ', '-'))
+        $child = Join-Path $root 'modules' 'child'
+        $null = New-Item -ItemType Directory -Path $child -Force
+        Set-Content -LiteralPath (Join-Path $child 'variables.tf') -Encoding utf8NoBOM -Value @"
+variable "location" {
+  type = string
+  $Default
+}
+variable "enable_telemetry" {
+  type = bool
+  default = true
+}
+"@
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+module "child" {
+  source = "./modules/child"
+}
+'@
+        $profile = Join-Path $repoRoot 'src' 'Avm.Authoring' 'Resources' 'mapotf' 'module-call'
+        $first = ''
+        foreach ($pass in 1..2) {
+            $null = Invoke-ModuleSourceProcess -FilePath $script:mapotfPath -WorkingDirectory $root -ArgumentList @(
+                'transform', '--tf-dir', $root, '--mptf-dir', $profile
+            )
+            $variables = [IO.File]::ReadAllText((Join-Path $root 'variables.tf'))
+            $location = [regex]::Match($variables, '(?ms)^variable "location" \{.*?^\}').Value
+            if ($Optional) {
+                $location | Should -Match 'default\s*=\s*null'
+                $location | Should -Match '!var\.enable_telemetry \|\| var\.location != null'
+            }
+            else {
+                $location | Should -Not -Match 'default\s*='
+                $location | Should -Match 'nullable\s*=\s*false'
+            }
+            [IO.File]::ReadAllText((Join-Path $root 'main.tf')) | Should -Match 'location\s*=\s*var\.location'
+            if ($pass -eq 1) { $first = $variables }
+            else { $variables | Should -BeExactly $first }
+        }
+    }
+
 It 'forwards root telemetry through local children on the first pass with instrumentation=<Instrumented>' -ForEach @(
         @{ Instrumented = $true }
         @{ Instrumented = $false }
@@ -258,7 +303,6 @@ run "root_opt_out" {
   command = plan
   variables {
     enable_telemetry = false
-    $locationInput
   }
   assert {
     condition     = output.enabled == false && output.direct_enabled == false
@@ -293,12 +337,16 @@ run "root_opt_in" {
             if ($Instrumented) {
                 Get-Content -LiteralPath (Join-Path $wrapper 'main.tf') -Raw | Should -Match 'enable_telemetry\s*=\s*false'
                 @(Get-ChildItem -LiteralPath $wrapper -File -Filter '*.tf' |
-                        ForEach-Object { [IO.File]::ReadAllText($_.FullName) }) -join "`n" | Should -Not -Match 'variable "enable_telemetry"'
+                        ForEach-Object { [IO.File]::ReadAllText($_.FullName) }) -join "`n" | Should -Not -Match 'variable "(enable_telemetry|location)"'
             }
             foreach ($path in $scopes) {
                 $content = @(Get-ChildItem -LiteralPath $path -File -Filter '*.tf' | Sort-Object Name |
                         ForEach-Object { [IO.File]::ReadAllText($_.FullName) }) -join "`n"
                 if (-not $Instrumented) { $content | Should -Not -Match 'variable "location"' }
+                elseif ($path -ne $plain -and $path -ne $wrapper) {
+                    $content | Should -Match '(?s)variable "location" \{[^}]*default\s*=\s*null'
+                    $content | Should -Match '!var\.enable_telemetry \|\| var\.location != null'
+                }
                 if ($pass -eq 1) { $first[$path] = $content }
                 else { $content | Should -BeExactly $first[$path] }
             }

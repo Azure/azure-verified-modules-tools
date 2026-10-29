@@ -44,6 +44,59 @@ AfterAll {
         Remove-Module -Name Avm.Authoring -Force -ErrorAction SilentlyContinue
     }
 
+It 'accepts generated telemetry-only locations with the released root and submodule lint profiles' {
+        $root = Join-Path $TestDrive 'telemetry-location'
+        $null = New-Item -ItemType Directory -Path $root
+        [IO.File]::WriteAllText((Join-Path $root 'variables.tf'), @'
+variable "location" {
+  type     = string
+  nullable = false
+}
+
+variable "enable_telemetry" {
+  type    = bool
+  default = true
+}
+'@)
+        [IO.File]::WriteAllText((Join-Path $root 'main.telemetry.tf'), @'
+locals {
+  main_location = var.location
+}
+
+resource "azapi_resource" "telemetry" {
+  count    = var.enable_telemetry ? 1 : 0
+  type     = "Microsoft.Resources/deployments@2025-04-01"
+  location = local.main_location
+}
+'@)
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            Root = $root; ConfigDir = $script:configDir; Tflint = $script:tflint.Path
+        } {
+            param($Root, $ConfigDir, $Tflint)
+            $mapotf = Resolve-AvmTool -Name mapotf
+            $profile = Resolve-AvmMapotfConfigDir -Root $Root -ProfileName 'module-call'
+            $null = Invoke-AvmProcess -FilePath $mapotf.Path -WorkingDirectory $Root -ArgumentList @(
+                'transform', '--tf-dir', $Root, '--mptf-dir', $profile
+            )
+            $variablesPath = Join-Path $Root 'variables.tf'
+            $content = [IO.File]::ReadAllText($variablesPath)
+            $content | Should -Match 'default\s*=\s*null'
+            $content | Should -Match '!var.enable_telemetry \|\| var.location != null'
+            foreach ($config in @('avm.tflint.hcl', 'avm.tflint_module.hcl')) {
+                $arguments = @('--config', (Join-Path $ConfigDir $config), '--only=avm_interface_location', '--format=json')
+                $lint = Invoke-AvmProcess -FilePath $Tflint -WorkingDirectory $Root -ArgumentList $arguments -IgnoreExitCode
+                $lint.ExitCode | Should -Be 0 -Because ($lint.StdOut + $lint.StdErr)
+            }
+            [IO.File]::WriteAllText($variablesPath, $content.Replace(
+                '!var.enable_telemetry || var.location != null', 'var.location == null || var.location != null'))
+            $invalid = Invoke-AvmProcess -FilePath $Tflint -WorkingDirectory $Root -IgnoreExitCode -ArgumentList @(
+                '--config', (Join-Path $ConfigDir 'avm.tflint.hcl'), '--only=avm_interface_location', '--format=json'
+            )
+            $invalid.ExitCode | Should -Not -Be 0
+            ($invalid.StdOut | ConvertFrom-Json).issues.rule.name | Should -Contain 'avm_interface_location'
+        }
+    }
+
 It 'lints sibling composition in the staged repository without changing the checkout' {
         $root = Join-Path $TestDrive 'sibling-composition'
         $sources = [ordered]@{

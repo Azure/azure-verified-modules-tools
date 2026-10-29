@@ -583,6 +583,52 @@ function Get-AvmTerraformLocationInspection {
     return $declaration
 }
 
+function Remove-AvmTelemetryLocationLintDirective {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][object[]] $Targets,
+        [Parameter(Mandatory)][object] $Options
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+
+    $directive = '# tflint-ignore: terraform_unused_declarations'
+    foreach ($target in $Targets) {
+        $path = Join-Path $target.Path 'variables.tf'
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        $content = [IO.File]::ReadAllText($path)
+        if ($content -cnotmatch ('(?m)^' + [regex]::Escape($directive) + '\r?\nvariable "location" \{')) { continue }
+        $declaration = Get-AvmTerraformLocationInspection -Path $target.Path -Options $Options
+        if ($null -eq $declaration -or
+            $declaration['type'] -cne 'string' -or
+            -not $declaration.Contains('default') -or $null -ne $declaration['default'] -or
+            $declaration['description'] -cne "The Azure region for this module's resources or telemetry deployment." -or
+            $declaration.mptf.range['file_name'] -cne 'variables.tf') {
+            continue
+        }
+        $guarded = @($declaration['validation'] | Where-Object {
+                $_ -is [Collections.IDictionary] -and
+                ($_['condition'] -creplace '\s', '') -ceq '!var.enable_telemetry||var.location!=null'
+            }).Count -gt 0
+        if (-not $guarded) { continue }
+        $lines = @($content -split '\r?\n')
+        $startLine = $declaration.mptf.range['start_line']
+        if (($startLine -isnot [int] -and $startLine -isnot [long]) -or
+            $startLine -lt 1 -or $startLine -gt $lines.Count -or
+            $lines[$startLine - 1] -cne 'variable "location" {') {
+            throw [AvmConfigurationException]::new("Cannot remove the retired location lint directive in '$path': invalid native source range.")
+        }
+        if ($startLine -lt 2 -or $lines[$startLine - 2] -cne $directive) { continue }
+        $offsets = [regex]::Matches($content, '(?m)^')
+        $start = $offsets[$startLine - 2].Index
+        $length = $offsets[$startLine - 1].Index - $start
+        if ($PSCmdlet.ShouldProcess($path, 'remove the retired unused-location exemption from the generated telemetry-only input')) {
+            [IO.File]::WriteAllText($path, $content.Remove($start, $length), [Text.UTF8Encoding]::new($false))
+        }
+    }
+}
+
 function Set-AvmRequiredLocationLintDirective {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -1369,6 +1415,7 @@ function Invoke-AvmTerraformTransform {
                 -Options $transformOptions -OriginalRequirements $originalProviderRequirements -AllowPathFallback:$AllowPathFallback
         }
         Remove-AvmTelemetryTagLintDirective -Targets $moduleTargets
+        Remove-AvmTelemetryLocationLintDirective -Targets $moduleTargets -Options $transformOptions
         if ($newLocationTargets.Count -gt 0) {
             Set-AvmRequiredLocationLintDirective -Targets $newLocationTargets -Options $transformOptions
         }
