@@ -958,6 +958,108 @@ function Get-AvmTerraformUnitTestPreservedProviderBinding {
     return $bindings
 }
 
+function Get-AvmTerraformUnitTestInheritedModtmRequirement {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)] [string] $Root,
+        [Parameter(Mandatory)] [string] $ModuleKey,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Manifest,
+        [Parameter(Mandatory)] [object] $Options,
+        [Parameter(Mandatory)] [hashtable] $RequiredProviders,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [System.Collections.Generic.HashSet[string]] $PlanningPaths
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+    $review = "Cannot prove unchanged ModTM inheritance for '$Root' module '$ModuleKey'"
+    $record = @($Manifest.Modules | Where-Object { $_.Key -ceq $ModuleKey })
+    if ($record.Count -ne 1) {
+        throw [AvmConfigurationException]::new("$review`: no exact installed module-call match.")
+    }
+    $path = [System.IO.Path]::TrimEndingDirectorySeparator([System.IO.Path]::GetFullPath($record[0].Dir, $Root))
+    if (-not $PlanningPaths.Add($path)) {
+        throw [AvmConfigurationException]::new("$review`: cyclic provider dependencies require review.")
+    }
+    try {
+        foreach ($file in @(Get-ChildItem -LiteralPath $path -File |
+                    Where-Object { $_.Name.EndsWith('.tf.json', [System.StringComparison]::OrdinalIgnoreCase) })) {
+            Assert-AvmTerraformLocalsOnlyJson -Path $file.FullName -ReviewMessage "$review`: JSON dependency requires review"
+        }
+        if (-not $RequiredProviders.ContainsKey($path)) {
+            $RequiredProviders[$path] = Get-AvmTerraformUnitTestRequiredProvider -Path $path -Options $Options
+        }
+        $requirements = $RequiredProviders[$path]
+        foreach ($name in $requirements.get_Keys()) {
+            if ($name -cne 'modtm' -and $requirements[$name]['source'] -imatch '(^|/)modtm$') {
+                throw [AvmConfigurationException]::new("$review`: a different ModTM local name requires review.")
+            }
+        }
+        if ($requirements.Contains('modtm')) {
+            $provider = $requirements.modtm
+            if ($provider['source'] -notin @('Azure/modtm', 'registry.terraform.io/azure/modtm') -or
+                ($null -ne $provider['configuration_aliases'] -and @($provider.configuration_aliases).Count -gt 0)) {
+                throw [AvmConfigurationException]::new("$review`: the provider source or configuration aliases require review.")
+            }
+            $version = $provider['version']
+            if ($null -ne $version -and
+                ($version -isnot [string] -or $version.Contains('${') -or $version.Contains('%{'))) {
+                throw [AvmConfigurationException]::new("$review`: a nonliteral version constraint requires review.")
+            }
+            return [pscustomobject]@{
+                Required = $true
+                Versions = @($version | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            }
+        }
+        $result = Invoke-AvmProcess -FilePath $Options.ToolPath -ArgumentList @(
+            'debug', '--tf-dir', $path, '--mptf-dir', $Options.ProfileDirs['provider-restore'],
+            '--eval', 'data.module.unit_test_modtm_calls.result'
+        ) -WorkingDirectory $path -EnvVars $Options.EnvVars
+        try {
+            $calls = ConvertFrom-Json -InputObject $result.StdOut -AsHashtable -ErrorAction Stop
+        }
+        catch {
+            throw [AvmConfigurationException]::new("$review`: invalid native module-call JSON. $($_.Exception.Message)")
+        }
+        if ($calls -isnot [System.Collections.IDictionary]) {
+            throw [AvmConfigurationException]::new("$review`: native module-call inspection is incomplete.")
+        }
+        $installedCalls = @(
+            foreach ($module in $Manifest.Modules) {
+                $separator = $module.Key.LastIndexOf('.')
+                if ($separator -ge 0 -and $module.Key.Substring(0, $separator) -ceq $ModuleKey) {
+                    $module.Key.Substring($separator + 1)
+                }
+            }
+        )
+        $callNames = [System.Collections.Generic.HashSet[string]]::new([string[]]@($calls.get_Keys()), [System.StringComparer]::Ordinal)
+        if (-not $callNames.SetEquals([string[]]$installedCalls)) {
+            throw [AvmConfigurationException]::new("$review`: native calls and the installed descendant graph do not match.")
+        }
+        $required = $false
+        $versions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        foreach ($name in $calls.get_Keys()) {
+            $call = $calls[$name]
+            if ($call -isnot [System.Collections.IDictionary] -or
+                $call['mptf'] -isnot [System.Collections.IDictionary]) {
+                throw [AvmConfigurationException]::new("$review`: invalid native module-call metadata for '$name'.")
+            }
+            $proof = Get-AvmTerraformUnitTestInheritedModtmRequirement -Root $Root -ModuleKey "$ModuleKey.$name" `
+                -Manifest $Manifest -Options $Options -RequiredProviders $RequiredProviders -PlanningPaths $PlanningPaths
+            if (-not $proof.Required) { continue }
+            if ($call.Contains('providers')) {
+                throw [AvmConfigurationException]::new("$review`: an explicit provider map on '$name' requires review of default inheritance.")
+            }
+            $required = $true
+            foreach ($version in $proof.Versions) { $null = $versions.Add($version) }
+        }
+        return [pscustomobject]@{ Required = $required; Versions = [string[]]@($versions) }
+    }
+    finally {
+        $null = $PlanningPaths.Remove($path)
+    }
+}
+
 function Get-AvmTerraformUnitTestModtmRequirementPlan {
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -1033,8 +1135,20 @@ function Get-AvmTerraformUnitTestModtmRequirementPlan {
             }
             if (-not $RequiredProviders[$dependency].Contains('modtm')) {
                 if ($dependency -cnotin $ModuleTargets.Path) {
-                    throw [AvmConfigurationException]::new(
-                        "Cannot preserve ModTM mocks for '$Path': unchanged dependency '$name' does not declare a ModTM source; review its provider inheritance.")
+                    $call = $calls[$name]
+                    if ($call -isnot [System.Collections.IDictionary] -or
+                        $call['mptf'] -isnot [System.Collections.IDictionary] -or $call.Contains('providers')) {
+                        throw [AvmConfigurationException]::new(
+                            "Cannot preserve ModTM mocks for '$Path': unchanged dependency '$name' has an unproven provider map; review its default inheritance.")
+                    }
+                    $proof = Get-AvmTerraformUnitTestInheritedModtmRequirement -Root $Path -ModuleKey $name `
+                        -Manifest $manifest -Options $Options -RequiredProviders $RequiredProviders -PlanningPaths $PlanningPaths
+                    if (-not $proof.Required) {
+                        throw [AvmConfigurationException]::new(
+                            "Cannot preserve ModTM mocks for '$Path': unchanged dependency '$name' has no proven Azure/modtm requirement in its installed graph.")
+                    }
+                    foreach ($version in $proof.Versions) { $null = $dependencyVersions.Add($version) }
+                    continue
                 }
                 if (-not $ModuleProviderSources.ContainsKey($dependency)) {
                     $ModuleProviderSources[$dependency] = @{}
@@ -1079,7 +1193,8 @@ function Get-AvmTerraformUnitTestModtmRequirementPlan {
             $OriginalRequirements.ContainsKey($Path) -and $OriginalRequirements[$Path].Contains('modtm')) {
             $original = $OriginalRequirements[$Path].modtm
             if ($original['source'] -notin @('Azure/modtm', $source) -or
-                ($null -ne $original['version'] -and $original['version'] -isnot [string]) -or
+                ($null -ne $original['version'] -and
+                ($original['version'] -isnot [string] -or $original.version.Contains('${') -or $original.version.Contains('%{'))) -or
                 ($null -ne $original['configuration_aliases'] -and @($original.configuration_aliases).Count -gt 0)) {
                 throw [AvmConfigurationException]::new(
                     "Cannot preserve ModTM mocks for '$Path': the original provider source, version, or aliases require review.")
