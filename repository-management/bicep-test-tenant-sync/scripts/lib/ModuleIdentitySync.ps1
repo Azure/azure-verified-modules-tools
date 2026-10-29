@@ -18,6 +18,37 @@ function Resolve-AvmBicepIdentitySyncContext {
     }
 }
 
+function Test-AvmBicepDedicatedIdentityStateMove {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Resource,
+        [Parameter(Mandatory)] [string] $ModuleAddress,
+        [Parameter(Mandatory)] [string] $ModulePath,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $ExistingIdentities
+    )
+
+    $change = $Resource['change']
+    if ($ExistingIdentities.Contains($ModulePath) -or
+        $Resource['mode'] -cne 'managed' -or
+        $Resource['type'] -cne 'azapi_resource' -or
+        $Resource['provider_name'] -cne 'registry.terraform.io/azure/azapi' -or
+        $Resource['address'] -cne "$ModuleAddress.azapi_resource.identity[0]" -or
+        $Resource['previous_address'] -cne "$ModuleAddress.azapi_resource.identity" -or
+        $change -isnot [System.Collections.IDictionary] -or
+        $change['actions'] -isnot [System.Collections.IList] -or
+        $change['actions'].Count -ne 1 -or
+        $change['actions'][0] -cne 'no-op' -or
+        $null -ne $change['importing'] -or
+        $change['before'] -isnot [System.Collections.IDictionary] -or
+        $change['after'] -isnot [System.Collections.IDictionary]) {
+        return $false
+    }
+
+    return (ConvertTo-Json -InputObject $change['before'] -Depth 100 -Compress) -ceq
+        (ConvertTo-Json -InputObject $change['after'] -Depth 100 -Compress)
+}
+
 function Assert-AvmBicepIdentityPlan {
     [CmdletBinding()]
     param(
@@ -38,6 +69,7 @@ function Assert-AvmBicepIdentityPlan {
     }
     $resources = @(Get-AvmTerraformPlannedResource -Module $Plan['planned_values']['root_module'])
     $moduleAddresses = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $approvedStateMoveAddresses = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $identityNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($path in $Modules.Keys) {
         Assert-AvmBicepModulePath -Path $path
@@ -51,11 +83,13 @@ function Assert-AvmBicepIdentityPlan {
         if ($resource -isnot [System.Collections.IDictionary] -or $resource['address'] -isnot [string]) {
             throw [System.InvalidOperationException]::new('Bicep plan resources must have explicit addresses.')
         }
-        $match = [regex]::Match($resource['address'], '^(module\.bicep\["[^"]+"\])\.(.+)$')
+        $match = [regex]::Match($resource['address'], '^(module\.bicep\["([^"]+)"\])\.(.+)$')
         if (-not $match.Success -or -not $moduleAddresses.Contains($match.Groups[1].Value)) {
             throw [System.InvalidOperationException]::new('Bicep plan contains a foreign or removed module; identity retirement requires a separate change.')
         }
-        $suffix = $match.Groups[2].Value
+        $moduleAddress = $match.Groups[1].Value
+        $modulePath = $match.Groups[2].Value
+        $suffix = $match.Groups[3].Value
         $expectedProvider = $null
         if ($resource['mode'] -ceq 'managed' -and $resource['type'] -ceq 'azapi_resource' -and
             $suffix -cin @(
@@ -81,8 +115,13 @@ function Assert-AvmBicepIdentityPlan {
                 ($resource['type'] -ceq 'azuread_group' -and $suffix -cmatch '^data\.azuread_group\.test_permissions\["(?:[^"\\]|\\.)+"\]$'))) {
             $expectedProvider = 'registry.terraform.io/hashicorp/azuread'
         }
+        $approvedStateMove = Test-AvmBicepDedicatedIdentityStateMove -Resource $resource `
+            -ModuleAddress $moduleAddress -ModulePath $modulePath -ExistingIdentities $ExistingIdentities
+        if ($approvedStateMove) {
+            $null = $approvedStateMoveAddresses.Add($resource['address'])
+        }
         if (-not $expectedProvider -or $resource['provider_name'] -cne $expectedProvider -or
-            ($resource.Contains('previous_address') -and $resource['previous_address'] -cne $resource['address']) -or
+            (($resource.Contains('previous_address') -and $resource['previous_address'] -cne $resource['address']) -and -not $approvedStateMove) -or
             ($resource.Contains('change') -and $null -ne $resource['change']['importing'])) {
             $address = if ($resource['address'] -is [string]) { $resource['address'] } else { '<invalid>' }
             $mode = if ($resource['mode'] -is [string]) { $resource['mode'] } else { '<invalid>' }
@@ -120,9 +159,22 @@ function Assert-AvmBicepIdentityPlan {
     foreach ($path in $Modules.Keys) {
         $address = "module.bicep[`"$path`"]"
         $prefix = "$address."
+        $resourceChanges = foreach ($change in @($Plan['resource_changes'] | Where-Object { $_['address'].StartsWith($prefix, [StringComparison]::Ordinal) })) {
+            if (-not $approvedStateMoveAddresses.Contains($change['address'])) {
+                $change
+                continue
+            }
+            $normalizedChange = [ordered]@{}
+            foreach ($key in $change.Keys) {
+                if ($key -cne 'previous_address') {
+                    $normalizedChange[$key] = $change[$key]
+                }
+            }
+            $normalizedChange
+        }
         $slice = @{
             errored = $false
-            resource_changes = @($Plan['resource_changes'] | Where-Object { $_['address'].StartsWith($prefix, [StringComparison]::Ordinal) })
+            resource_changes = @($resourceChanges)
             planned_values = @{ root_module = @{ resources = @($resources | Where-Object { $_['address'].StartsWith($prefix, [StringComparison]::Ordinal) }) } }
             prior_state = $Plan['prior_state']
         }
