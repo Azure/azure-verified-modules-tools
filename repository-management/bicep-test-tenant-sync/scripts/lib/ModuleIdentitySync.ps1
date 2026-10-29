@@ -95,8 +95,20 @@ function Assert-AvmBicepIdentityPlan {
             else {
                 '<invalid>'
             }
+            $rejectionCategory = if (-not $expectedProvider) {
+                'unexpected-resource'
+            }
+            elseif ($resource['provider_name'] -cne $expectedProvider) {
+                'unexpected-provider'
+            }
+            elseif ($resource.Contains('previous_address') -and $resource['previous_address'] -cne $resource['address']) {
+                'state-address-move'
+            }
+            else {
+                'import-operation'
+            }
             Write-Information (
-                "Bicep plan rejection [unexpected-resource]: address=$address; mode=$mode; type=$type; " +
+                "Bicep plan rejection [$rejectionCategory]: address=$address; mode=$mode; type=$type; " +
                 "provider_name=$providerName; actions=$actions."
             ) -InformationAction Continue
             throw [System.InvalidOperationException]::new('Bicep plans may only manage dedicated identities, exact federation and individual group edges with their expected providers.')
