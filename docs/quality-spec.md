@@ -1684,6 +1684,14 @@ never reuse a parent deployment's export for a child. Both cleanup and retry
 classification read deployment operations with API `2025-04-01` to preserve
 extension metadata; record and resource-group reads remain unchanged.
 
+Rejected REST response envelopes retain the original failure and report only
+fixed response/status/content shapes, a typed HTTP status in the valid range,
+recognized ARM error codes from bounded strict JSON, and single GUID-shaped
+request or correlation IDs from their named headers. Unknown codes, malformed
+or ambiguous values, other headers, raw response bodies and error messages
+are not reported. Missing diagnostics never change response acceptance or
+permit cleanup of a container whose discovery failed.
+
 After a successful deployment, pass its exact REST outputs to case-local
 Pester assertions, then run `post.ps1`, then cleanup. Output envelopes support
 the Azure PowerShell `Type`/`Value` properties without changing authored

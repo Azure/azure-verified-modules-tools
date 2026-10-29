@@ -454,6 +454,68 @@ Describe 'Component: Bicep cleanup state and context' -Tag Component {
         }
     }
 
+    It 'blocks both container types after a REST failure and resumes only after successful rediscovery' {
+        InModuleScope Avm.Authoring -Parameters @{ File = $script:statePath } {
+            param($File)
+            $created = New-AvmBicepCleanupState -Path $File -Environment AzureCloud `
+                -SubscriptionId '00000000-0000-0000-0000-000000000001' `
+                -TenantId '00000000-0000-0000-0000-000000000002'
+            $script:deployment = '/providers/Microsoft.Management/managementGroups/existing/providers/Microsoft.Resources/deployments/attempt'
+            $script:group = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test'
+            $script:managementGroup = '/providers/Microsoft.Management/managementGroups/created'
+            $created.State.deployments.Add(@{ id = $script:deployment; status = 'Succeeded'; preflightRejected = $false })
+            foreach ($resource in ConvertTo-AvmBicepCleanupResource -ResourceIds @($script:group, $script:managementGroup)) {
+                $created.State.resources.Add(@{
+                        id = $resource.resourceId; type = $resource.type
+                        removed = $false; postProcessed = $false; metadataCaptured = $false
+                        managedResourceGroupIds = @(); originalSoftDeleteFeatureState = ''
+                    })
+            }
+            Save-AvmBicepCleanupState -State $created.State -Path $File
+            Mock Assert-AvmBicepAzureDependency {}
+            Mock Assert-AvmBicepAzureIdentity {}
+            Mock Get-Command { [pscustomobject]@{ Source = 'fake-az' } }
+            $script:failRead = $true
+            Mock Invoke-AzRestMethod {
+                if ($script:failRead) {
+                    return @{
+                        StatusCode = 403
+                        Content = '{"error":{"code":"AuthorizationFailed","message":"body-secret"}}'
+                        Headers = @{ 'x-ms-request-id' = '11111111-2222-3333-4444-555555555555' }
+                    }
+                }
+                @{ StatusCode = 200; Content = '{"value":[]}' }
+            }
+            Mock Initialize-AvmBicepCleanupResource { param($Resource) $Resource['metadataCaptured'] = $true }
+            Mock Remove-AvmBicepResource {}
+            Mock Remove-AvmBicepResourceRemainder {}
+            $parameters = @{
+                StatePath = $File
+                SubscriptionId = '00000000-0000-0000-0000-000000000001'
+                TenantId = '00000000-0000-0000-0000-000000000002'
+                SearchRetryLimit = 1
+                RemovalRetryLimit = 1
+                RemovalRetryInterval = 0
+            }
+            $first = Invoke-AvmBicepCleanup @parameters
+            $first.Cleaned | Should -BeFalse
+            $first.Issues[0].Code | Should -BeExactly 'LookupFailed'
+            $first.Issues[0].Message | Should -Match 'status=HTTP 403.*code=AuthorizationFailed.*x-ms-request-id='
+            $first.Issues[0].Message | Should -Not -Match 'body-secret'
+            $first.Pending | Should -Contain $script:group
+            $first.Pending | Should -Contain $script:managementGroup
+            Should -Invoke Remove-AvmBicepResource -Exactly 0
+            (Read-AvmBicepCleanupState -Path $File).status | Should -BeExactly 'CleanupPending'
+
+            $script:failRead = $false
+            $second = Invoke-AvmBicepCleanup @parameters
+            $second.Cleaned | Should -BeTrue
+            (Read-AvmBicepCleanupState -Path $File).status | Should -BeExactly 'Complete'
+            Should -Invoke Invoke-AzRestMethod -Exactly 2
+            Should -Invoke Remove-AvmBicepResource -Exactly 2
+        }
+    }
+
     It 'blocks an unverified owned group and all of its discovered children' {
         InModuleScope Avm.Authoring -Parameters @{ File = $script:statePath } {
             param($File)
