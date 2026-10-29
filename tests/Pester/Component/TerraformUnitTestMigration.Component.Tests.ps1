@@ -2195,6 +2195,54 @@ Context 'migration decisions' {
             }
         }
 
+        It 'supplies test locations when telemetry introduces a null default: <InputState>' -TestCases @(
+            @{ InputState = 'absent' }
+            @{ InputState = 'required' }
+            @{ InputState = 'non-null default' }
+        ) {
+            param($InputState)
+            foreach ($target in $script:fixture.Targets) {
+                if ($InputState -eq 'required') {
+                    $script:fixture.Before.modules[$target.Path].variables.location = @{ required = $true; default = $null }
+                }
+                elseif ($InputState -eq 'non-null default') {
+                    $script:fixture.Before.modules[$target.Path].variables.location = @{ required = $false; default = '"uksouth"' }
+                }
+                $script:fixture.After.modules[$target.Path].variables.location = @{
+                    required = $false
+                    type = 'string'
+                    default = 'null'
+                }
+                $script:fixture.After.modules[$target.Path].variables.enable_telemetry = @{ required = $false; default = 'true' }
+            }
+            Invoke-UnitMigrationFixture -Fixture $script:fixture
+            Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                $UnitTestPlans[0].NewLocationPaths.Count -eq 2
+            }
+            Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                $ArgumentList[0] -eq 'transform'
+            }
+        }
+
+        It 'preserves existing null defaults during repeated telemetry migration: <Default>' -TestCases @(
+            @{ Default = $null }
+            @{ Default = 'null' }
+        ) {
+            param($Default)
+            foreach ($target in $script:fixture.Targets) {
+                foreach ($snapshot in @($script:fixture.Before, $script:fixture.After)) {
+                    $snapshot.modules[$target.Path].variables.location = @{
+                        required = $false
+                        type = 'string'
+                        default = $Default
+                    }
+                    $snapshot.modules[$target.Path].variables.enable_telemetry = @{ required = $false; default = 'true' }
+                }
+            }
+            Invoke-UnitMigrationFixture -Fixture $script:fixture
+            Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+        }
+
         It 'does not repair a pre-existing input or invent a value for an optional or absent input' -TestCases @(
             @{ InputState = 'pre-existing' }
             @{ InputState = 'optional' }

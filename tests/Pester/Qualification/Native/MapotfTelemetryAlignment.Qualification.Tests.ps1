@@ -1193,6 +1193,256 @@ run "disabled" {
         $result.StdOut | Should -Match 'Success! 2 passed, 0 failed\.'
     }
 
+It 'migrates unit-test regions for telemetry-only locations: <Declaration>, global opt-out <GlobalDisabled>' -ForEach @(
+    foreach ($declaration in @('missing', 'required', 'defaulted')) {
+        foreach ($disabled in @($false, $true)) {
+            @{ Declaration = $declaration; GlobalDisabled = $disabled }
+        }
+    }
+) {
+    $root = Join-Path $TestDrive "unit-optional-location-$Declaration-$GlobalDisabled"
+    New-TelemetryModule -Root $root -WithLocation:($Declaration -eq 'defaulted')
+    if ($Declaration -eq 'required') {
+        Set-Content -LiteralPath (Join-Path $root 'variables.tf') -Value 'variable "location" { type = string }' -Encoding utf8NoBOM
+    }
+    $unit = Join-Path $root 'tests' 'unit'
+    $null = New-Item -ItemType Directory -Path $unit -Force
+    $testPath = Join-Path $unit 'location.tftest.hcl'
+    $testSource = @'
+mock_provider "terraform" {}
+mock_provider "azapi" {
+  mock_data "azapi_client_config" {
+    defaults = {
+      subscription_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000001"
+    }
+  }
+}
+run "defaults" {
+  command = plan
+}
+run "enabled" {
+  command = plan
+  variables {
+    enable_telemetry = true
+  }
+}
+run "disabled" {
+  command = plan
+  variables {
+    enable_telemetry = false
+  }
+  assert {
+    condition     = var.location == null && length(azapi_resource.telemetry) == 0
+    error_message = "A telemetry opt-out must not gain an unnecessary test region."
+  }
+}
+run "authored" {
+  command = plan
+  variables {
+    enable_telemetry = true
+    location         = "uksouth"
+  }
+}
+run "explicit_null" {
+  command = plan
+  variables {
+    enable_telemetry = true
+    location         = null
+  }
+  expect_failures = [var.location]
+}
+'@
+    if ($GlobalDisabled) {
+        $testSource += "`nvariables { enable_telemetry = false }`n"
+    }
+    Set-Content -LiteralPath $testPath -Value $testSource -Encoding utf8NoBOM
+    (Invoke-TelemetryEngine -Root $root).Status | Should -BeExactly 'pass'
+    $inspection = (Invoke-TelemetryProcess -FilePath $script:mapotfPath -Root $root -ArgumentList @(
+        'debug', '--tf-dir', $root, '--test-file', 'tests/unit/location.tftest.hcl',
+        '--mptf-dir', (Join-Path $script:profilesRoot 'unit-test'), '--eval', 'data.test_file.this.result'
+    )).StdOut | ConvertFrom-Json -AsHashtable
+    $inspection.runs.enabled.variables[0].mptf.attributes.location | Should -BeExactly 'eastus'
+    $inspection.runs.authored.variables[0].mptf.attributes.location | Should -BeExactly 'uksouth'
+    $inspection.runs.explicit_null.variables[0].mptf.attributes.location | Should -Be $null
+    $inspection.runs.disabled.variables[0].mptf.attributes.Contains('location') | Should -BeFalse
+    if ($GlobalDisabled) {
+        $inspection.runs.defaults.Contains('variables') | Should -BeFalse
+    }
+    else {
+        $inspection.runs.defaults.variables[0].mptf.attributes.location | Should -BeExactly 'eastus'
+    }
+    Assert-TelemetryTerraformValid -Root $root -TestDirectory 'tests/unit'
+    $result = Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $root `
+        -ArgumentList @('test', '-no-color', '-test-directory=tests/unit')
+    $result.StdOut | Should -Match '5 passed, 0 failed'
+    $first = [IO.File]::ReadAllBytes($testPath)
+    (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -BeExactly 'pass'
+    (Invoke-TelemetryEngine -Root $root).Changed | Should -BeNullOrEmpty
+    [IO.File]::ReadAllBytes($testPath) | Should -Be $first
+}
+
+It 'requires a telemetry-only location only when enabled and preserves authored validations: <Declaration>' -ForEach @(
+    @{ Declaration = 'missing'; Source = '' }
+    @{ Declaration = 'required'; Source = 'variable "location" { type = string }' }
+    @{
+        Declaration = 'previously generated'
+        Source = @'
+# tflint-ignore: terraform_unused_declarations
+variable "location" {
+  type        = string
+  description = "The Azure region for this module's resources or telemetry deployment."
+  nullable    = false
+}
+'@
+    }
+    @{
+        Declaration = 'authored'
+        Source = @'
+# tflint-ignore: terraform_unused_declarations
+variable "location" {
+  type        = string
+  description = "An authored description."
+  default     = "eastus"
+  nullable    = false
+  validation {
+    condition     = var.location == null ? true : length(var.location) > 0
+    error_message = "Use a nonempty region."
+  }
+}
+'@
+    }
+) {
+    $root = Join-Path $TestDrive "optional-location-$Declaration"
+    New-TelemetryModule -Root $root
+    Set-Content -LiteralPath (Join-Path $root 'main.tf') -Value 'locals { fixture = true }' -Encoding utf8NoBOM
+    if ($Source) {
+        Set-Content -LiteralPath (Join-Path $root 'variables.tf') -Value $Source -Encoding utf8NoBOM
+    }
+    Set-Content -LiteralPath (Join-Path $root 'retired.tf') -Encoding utf8NoBOM -Value @'
+removed {
+  from = modtm_telemetry.telemetry
+  lifecycle {
+    destroy = false
+  }
+}
+'@
+    Invoke-TelemetryEngine -Root $root | Out-Null
+    $variablesPath = Join-Path $root 'variables.tf'
+    $first = [IO.File]::ReadAllText($variablesPath)
+    $first | Should -Match '(?s)variable "location" \{[^}]*default\s*=\s*null'
+    [regex]::Match($first, '(?ms)^variable "location" \{.*?^\}').Value | Should -Not -Match 'nullable\s*=\s*false'
+    if ($Declaration -eq 'previously generated') {
+        $first | Should -Not -Match 'tflint-ignore'
+    }
+    if ($Declaration -eq 'authored') {
+        $first | Should -Match 'An authored description\.'
+        $first | Should -Match 'Use a nonempty region\.'
+        $first | Should -Match '# tflint-ignore: terraform_unused_declarations'
+    }
+    $tests = Join-Path $root 'tests' 'unit'
+    $null = New-Item -ItemType Directory -Path $tests -Force
+    Set-Content -LiteralPath (Join-Path $tests 'location.tftest.hcl') -Encoding utf8NoBOM -Value @'
+mock_provider "terraform" {}
+mock_provider "azapi" {
+  mock_data "azapi_client_config" {
+    defaults = {
+      subscription_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000001"
+    }
+  }
+}
+
+run "disabled_omitted" {
+  command = plan
+  variables {
+    enable_telemetry = false
+  }
+  assert {
+    condition     = length(azapi_resource.telemetry) == 0
+    error_message = "Disabled telemetry must not need a location."
+  }
+}
+
+run "disabled_null" {
+  command = plan
+  variables {
+    enable_telemetry = false
+    location         = null
+  }
+}
+
+run "enabled_region" {
+  command = plan
+  variables {
+    location = "eastus"
+  }
+  assert {
+    condition     = azapi_resource.telemetry[0].location == "eastus"
+    error_message = "Enabled telemetry must use the supplied region."
+  }
+}
+
+run "enabled_omitted" {
+  command         = plan
+  expect_failures = [var.location]
+}
+
+run "enabled_null" {
+  command = plan
+  variables {
+    location = null
+  }
+  expect_failures = [var.location]
+}
+'@
+    Assert-TelemetryTerraformValid -Root $root -TestDirectory 'tests/unit'
+    $execution = Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $root -ArgumentList @('test', '-no-color', '-test-directory=tests/unit')
+    $execution.StdOut | Should -Match '5 passed, 0 failed'
+    Invoke-TelemetryEngine -Root $root | Out-Null
+    [IO.File]::ReadAllText($variablesPath) | Should -BeExactly $first
+    (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -BeExactly 'pass'
+}
+
+It 'keeps business location dependencies required: <Usage>' -ForEach @(
+    @{ Usage = 'resource'; Source = "resource `"terraform_data`" `"business`" {`n  input = var.location`n}" }
+    @{ Usage = 'local'; Source = 'locals { business_region = var.location }' }
+    @{ Usage = 'telemetry local alias'; Source = "resource `"terraform_data`" `"business`" {`n  input = local.main_location`n}" }
+    @{ Usage = 'output'; Source = "output `"business_region`" {`n  value = var.location`n}" }
+    @{ Usage = 'commented traversal'; Source = "resource `"terraform_data`" `"business`" {`n  input = var /* region */ . location`n}" }
+    @{ Usage = 'data'; Source = "data `"terraform_remote_state`" `"business`" {`n  backend = var.location`n}" }
+    @{ Usage = 'uninspected provider'; Source = "provider `"azapi`" {`n  environment = var.location`n}" }
+) {
+    $root = Join-Path $TestDrive ("required-location-" + ($Usage -replace ' ', '-'))
+    New-TelemetryModule -Root $root
+    Set-Content -LiteralPath (Join-Path $root 'main.tf') -Value $Source -Encoding utf8NoBOM
+    Invoke-TelemetryEngine -Root $root | Out-Null
+    $variables = [IO.File]::ReadAllText((Join-Path $root 'variables.tf'))
+    $location = [regex]::Match($variables, '(?ms)^variable "location" \{.*?^\}').Value
+    $location | Should -Match 'nullable\s*=\s*false'
+    $location | Should -Not -Match 'default\s*='
+}
+
+It 'restores a required location when business code begins using a telemetry-only input' {
+    $root = Join-Path $TestDrive 'new-business-location'
+    New-TelemetryModule -Root $root
+    $main = Join-Path $root 'main.tf'
+    Set-Content -LiteralPath $main -Value 'locals { fixture = true }' -Encoding utf8NoBOM
+    Invoke-TelemetryEngine -Root $root | Out-Null
+    $variablesPath = Join-Path $root 'variables.tf'
+    [IO.File]::ReadAllText($variablesPath) | Should -Match '(?s)variable "location" \{[^}]*default\s*=\s*null'
+    Set-Content -LiteralPath $main -Encoding utf8NoBOM -Value @'
+resource "terraform_data" "business" {
+  input = var.location
+}
+'@
+    Invoke-TelemetryEngine -Root $root | Out-Null
+    $first = [IO.File]::ReadAllText($variablesPath)
+    $location = [regex]::Match($first, '(?ms)^variable "location" \{.*?^\}').Value
+    $location | Should -Match 'nullable\s*=\s*false'
+    $location | Should -Not -Match 'default\s*='
+    Invoke-TelemetryEngine -Root $root | Out-Null
+    [IO.File]::ReadAllText($variablesPath) | Should -BeExactly $first
+}
+
 It 'appends deterministic additional map content without changing null or empty telemetry names' {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-TelemetryModule -Root $root

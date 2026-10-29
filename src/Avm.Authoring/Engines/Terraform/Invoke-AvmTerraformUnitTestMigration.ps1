@@ -1347,8 +1347,19 @@ function Invoke-AvmTerraformUnitTestMigration {
             $run = $after.test.runs[$name]
             $runLocationAuthored = $run.Contains('variables') -and
             $run.variables[0].mptf.attributes.Contains('location')
-            if (-not $beforeVariables.Contains('location') -and $afterVariables.Contains('location') -and
-                $afterVariables.location.required -eq $true -and
+            $newRequiredLocation = -not $beforeVariables.Contains('location') -and
+            $afterVariables.Contains('location') -and $afterVariables.location.required -eq $true
+            $newTelemetryLocation = $afterVariables.Contains('location') -and
+            $afterVariables.location.required -eq $false -and
+            $afterVariables.location['type'] -ceq 'string' -and
+            $afterVariables.location.Contains('default') -and
+            ($null -eq $afterVariables.location['default'] -or $afterVariables.location['default'] -ceq 'null') -and
+            $afterVariables.Contains('enable_telemetry') -and
+            (-not $beforeVariables.Contains('location') -or
+            $beforeVariables.location.required -eq $true -or
+            -not $beforeVariables.location.Contains('default') -or
+            ($null -ne $beforeVariables.location['default'] -and $beforeVariables.location['default'] -cne 'null'))
+            if (($newRequiredLocation -or $newTelemetryLocation) -and
                 -not $globalLocationAuthored -and -not $runLocationAuthored) {
                 $null = $newLocations.Add($target.dir)
             }

@@ -201,6 +201,7 @@ Describe 'Module Resources packaging' {
                 'sort_outputs.mptf.hcl'
             )
             'module-call' = @(
+                'optional_telemetry_location.mptf.hcl'
                 'propagate_telemetry.mptf.hcl'
             )
             'variable-order' = @(

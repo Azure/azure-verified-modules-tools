@@ -54,7 +54,7 @@ locals {
 }
 
 transform "new_block" "parent_location" {
-  for_each       = length(var.test_wrapper ? local.missing_location_calls : local.location_calls) > 0 && length(data.variable.location.result) == 0 ? toset([1]) : toset([])
+  for_each       = length(var.test_wrapper ? local.missing_location_calls : local.location_calls) > 0 && length(data.variable.location.result) == 0 && !local.location_telemetry_optional ? toset([1]) : toset([])
   new_block_type = "variable"
   labels         = ["location"]
   filename       = "variables.tf"
@@ -62,6 +62,23 @@ transform "new_block" "parent_location" {
     type        = string
     description = "The Azure region for this module's resources or telemetry deployment."
     nullable    = false
+  }
+}
+
+transform "new_block" "parent_optional_location" {
+  for_each       = length(local.location_calls) > 0 && length(data.variable.location.result) == 0 && local.location_telemetry_optional ? toset([1]) : toset([])
+  new_block_type = "variable"
+  labels         = ["location"]
+  filename       = "variables.tf"
+  asraw {
+    type        = string
+    default     = null
+    description = "The Azure region for this module's resources or telemetry deployment."
+
+    validation {
+      condition     = !var.enable_telemetry || var.location != null
+      error_message = "The location must not be null when telemetry is enabled."
+    }
   }
 }
 
@@ -95,6 +112,7 @@ transform "update_in_place" "propagate_telemetry_and_location" {
   }
   depends_on = [
     transform.new_block.parent_location,
+    transform.new_block.parent_optional_location,
     transform.new_block.parent_enable_telemetry,
     transform.reorder_attributes.expand_inline_calls,
   ]
@@ -120,6 +138,7 @@ transform "update_in_place" "propagate_location" {
   }
   depends_on = [
     transform.new_block.parent_location,
+    transform.new_block.parent_optional_location,
     transform.reorder_attributes.expand_inline_calls,
   ]
 }
