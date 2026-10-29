@@ -152,6 +152,8 @@ function Invoke-AvmBicepTestTenantSync {
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Values,
         [System.Collections.IDictionary] $ModuleClientIds,
         [System.Collections.IDictionary] $IdentityMigration,
+        [System.Collections.IDictionary] $BillingScopes,
+        [System.Collections.IDictionary] $SubscriptionCleanupManagementGroups,
         [Parameter(ParameterSetName = 'Plan')] [switch] $PlanOnly = $true,
         [Parameter(Mandatory, ParameterSetName = 'Apply')] [switch] $Apply
     )
@@ -181,20 +183,30 @@ function Invoke-AvmBicepTestTenantSync {
         }
         $null = ConvertFrom-AvmBicepIdentityMigration -Migration $IdentityMigration -ClientIds $ModuleClientIds -Settings $bundle
     }
+    $billingScopeSecret = $null
+    if ($PSBoundParameters.ContainsKey('BillingScopes')) {
+        $billingScopeSecret = ConvertTo-AvmBicepModuleBillingScopeJson -BillingScopes $BillingScopes
+    }
+    if ($PSBoundParameters.ContainsKey('SubscriptionCleanupManagementGroups')) {
+        $projection['VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'] =
+            ConvertTo-AvmBicepModuleSubscriptionCleanupManagementGroupJson -ManagementGroups $SubscriptionCleanupManagementGroups
+    }
     $snapshot = Get-AvmBicepTestTenantSnapshot
     $retargetedNames = @(
         foreach ($name in $projection.Keys) {
             if ($null -ne $snapshot[$name] -and $snapshot[$name].Value -cne $projection[$name]) { $name }
         }
     )
-    if (@($retargetedNames | Where-Object { $_ -cne 'VALIDATE_SUBSCRIPTION_IDS' }).Count -gt 0) {
+    if (@($retargetedNames | Where-Object {
+                $_ -cnotin @('VALIDATE_SUBSCRIPTION_IDS', 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS')
+            }).Count -gt 0) {
         throw [System.InvalidOperationException]::new(
             "Existing BAMI execution values cannot change: $($retargetedNames -join ', '). Retargeting requires coordinated maintenance; routine publication cannot overwrite present values."
         )
     }
     if ($retargetedNames -ccontains 'VALIDATE_SUBSCRIPTION_IDS') {
         if (@($projection.Keys | Where-Object {
-                    $_ -cne 'VALIDATE_MODULE_CLIENT_IDS' -and $null -eq $snapshot[$_]
+                    $_ -cnotin @('VALIDATE_MODULE_CLIENT_IDS', 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS') -and $null -eq $snapshot[$_]
                 }).Count -gt 0 -or [string]::IsNullOrEmpty($snapshot['VALIDATE_SUBSCRIPTION_IDS'].Value)) {
             throw [System.InvalidOperationException]::new('Existing BAMI execution values cannot change: VALIDATE_SUBSCRIPTION_IDS. Tag updates require the complete matching Bicep execution bundle; missing or empty values require coordinated maintenance.')
         }
@@ -208,23 +220,38 @@ function Invoke-AvmBicepTestTenantSync {
                 -ClientIds $ModuleClientIds -ForbiddenClientIds $forbidden -IdentityMigration $IdentityMigration -Settings $bundle
         }
     }
+    $cleanupTargetName = 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'
+    if ($projection.Contains($cleanupTargetName) -and $null -ne $snapshot[$cleanupTargetName] -and
+        $snapshot[$cleanupTargetName].Value -cne '{}' -and
+        $projection[$cleanupTargetName] -cne '{}' -and
+        $snapshot[$cleanupTargetName].Value -cne $projection[$cleanupTargetName]) {
+        throw [System.InvalidOperationException]::new(
+            'Existing subscription-vending cleanup target cannot be retargeted by routine publication.'
+        )
+    }
     $changes = @(
         foreach ($name in $projection.Keys) {
             if ($null -eq $snapshot[$name] -or
-                ($name -cin @('VALIDATE_MODULE_CLIENT_IDS', 'VALIDATE_SUBSCRIPTION_IDS') -and
+                ($name -cin @('VALIDATE_MODULE_CLIENT_IDS', 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS', 'VALIDATE_SUBSCRIPTION_IDS') -and
                     $snapshot[$name].Value -cne $projection[$name])) { $name }
         }
     )
     $publishing = $PSCmdlet.ParameterSetName -ceq 'Apply' -and $Apply.IsPresent
+    $secretAction = if ($null -ne $billingScopeSecret) { 'Set' } else { 'None' }
     $result = [ordered]@{
         Target = 'Azure/bicep-registry-modules'
         Status = if ($changes.Count -eq 0) { 'NoChange' } else { 'Planned' }
         PlanOnly = -not $publishing
-        HasChanges = $changes.Count -gt 0
+        HasChanges = $changes.Count -gt 0 -or $secretAction -cne 'None'
         ChangedNames = $changes
+        BillingScopeSecretAction = $secretAction
+    }
+    if ($secretAction -cne 'None' -and $result.Status -ceq 'NoChange') {
+        $result.Status = 'Planned'
     }
     if (-not $publishing) { return [pscustomobject]$result }
-    if ($changes.Count -gt 0 -and -not $PSCmdlet.ShouldProcess($result.Target, 'Publish nonsecret Bicep variables with guarded subscription tags and verified module naming transitions')) {
+    if (($changes.Count -gt 0 -or $secretAction -cne 'None') -and
+        -not $PSCmdlet.ShouldProcess($result.Target, 'Publish nonsecret Bicep variables and the guarded billing-scope environment secret')) {
         $result.Status = 'Preview'
         $result.PlanOnly = $true
         return [pscustomobject]$result
@@ -242,6 +269,9 @@ function Invoke-AvmBicepTestTenantSync {
                 throw [System.InvalidOperationException]::new("Complete execution-value readback does not match $name.")
             }
         }
+        if ($secretAction -ceq 'Set') {
+            Set-AvmBicepRegistryBillingScopeSecret -Value $billingScopeSecret -Confirm:$false
+        }
         $final = Get-AvmBicepTestTenantSnapshot
         Assert-AvmBicepTestTenantSnapshot -Expected $snapshot -Actual $final -Stage 'final publication readback'
     }
@@ -251,7 +281,7 @@ function Invoke-AvmBicepTestTenantSync {
             $_.Exception
         )
     }
-    if ($changes.Count -gt 0) {
+    if ($changes.Count -gt 0 -or $secretAction -cne 'None') {
         $result.Status = 'Published'
     }
     return [pscustomobject]$result

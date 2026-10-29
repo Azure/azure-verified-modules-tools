@@ -65,7 +65,7 @@ function New-AvmTestBicepIdentityOutputs {
     $identities = [ordered]@{}
     foreach ($module in $plan.planned_values.root_module.child_modules) {
         $path = [regex]::Match($module.address, '^module\.bicep\["([^"]+)"\]$').Groups[1].Value
-        $identity = @($module.resources | Where-Object { $_.address.EndsWith('.azapi_resource.identity') })[0].values
+        $identity = @($module.resources | Where-Object { $_.address.EndsWith('.azapi_resource.identity[0]') })[0].values
         $identities[$path] = @{
             tenant_id = $identity.output.properties.tenantId
             client_id = $identity.output.properties.clientId

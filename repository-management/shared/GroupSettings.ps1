@@ -94,6 +94,55 @@ function ConvertTo-AvmEntraGroupNames {
     return ,$result.ToArray()
 }
 
+function ConvertTo-AvmExistingIdentitySetting {
+    [CmdletBinding()]
+    [OutputType([System.Collections.IDictionary])]
+    param([Parameter(Mandatory)] [object] $Value)
+
+    $setting = ConvertTo-AvmSettingDictionary -Value $Value
+    $expectedKeys = @('name', 'resourceGroupName', 'manageEntraGroups')
+    if ($setting.Count -ne $expectedKeys.Count -or
+        @($setting.Keys | Where-Object { $_ -cnotin $expectedKeys }).Count -gt 0 -or
+        $setting['name'] -isnot [string] -or
+        $setting['name'] -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_-]{2,89}$' -or
+        $setting['resourceGroupName'] -isnot [string] -or
+        $setting['resourceGroupName'] -cnotmatch '^[A-Za-z0-9_().-]{1,90}$' -or
+        $setting['resourceGroupName'].EndsWith('.') -or
+        $setting['manageEntraGroups'] -isnot [bool]) {
+        throw [System.ArgumentException]::new(
+            'existingIdentity must contain only a valid name, resourceGroupName, and Boolean manageEntraGroups.'
+        )
+    }
+    return [ordered]@{
+        name              = $setting['name']
+        resourceGroupName = $setting['resourceGroupName']
+        manageEntraGroups = $setting['manageEntraGroups']
+    }
+}
+
+function Resolve-AvmGroupExistingIdentity {
+    [CmdletBinding()]
+    [OutputType([System.Collections.IDictionary])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Groups,
+        [Parameter(Mandatory)] [string] $SelectorProperty,
+        [Parameter(Mandatory)] [string] $Item
+    )
+
+    $selected = @(
+        foreach ($entry in @(Get-AvmOrderedGroup -Groups $Groups -SelectorProperty $SelectorProperty -Item $Item)) {
+            if ($entry.Group.Contains('existingIdentity')) {
+                ConvertTo-AvmExistingIdentitySetting -Value $entry.Group['existingIdentity']
+            }
+        }
+    )
+    if ($selected.Count -gt 1) {
+        throw [System.ArgumentException]::new("Only one matching group may configure existingIdentity for '$Item'.")
+    }
+    if ($selected.Count -eq 0) { return $null }
+    return $selected[0]
+}
+
 function Resolve-AvmGroupEntraGroups {
     [CmdletBinding()]
     [OutputType([string[]])]

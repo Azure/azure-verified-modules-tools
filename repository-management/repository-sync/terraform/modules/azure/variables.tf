@@ -52,6 +52,24 @@ variable "identity_name" {
   }
 }
 
+variable "existing_identity" {
+  type = object({
+    name                = string
+    resource_id         = string
+    client_id           = string
+    principal_id        = string
+    federation_name_key = string
+    manage_entra_groups = bool
+  })
+  description = "Bootstrap-owned identity evidence. When set, the module reads this exact identity and manages only its configured federation and, when selected, individual Entra group edges."
+  default     = null
+
+  validation {
+    condition     = var.existing_identity == null ? true : can(regex("^[A-Za-z0-9][A-Za-z0-9_-]{2,89}$", var.existing_identity.name))
+    error_message = "Existing identity evidence must bind one valid UAMI, nonempty client/principal GUIDs, and federation names no longer than 120 characters."
+  }
+}
+
 variable "github_workflow_ref" {
   type        = string
   description = "Optional top-level caller workflow binding in addition to the reusable job workflow."

@@ -195,6 +195,74 @@ function Get-AvmBamiSettings {
     return $result
 }
 
+function Resolve-AvmSubscriptionVendingIdentity {
+    [CmdletBinding()]
+    [OutputType([System.Collections.IDictionary])]
+    param(
+        [AllowNull()] [System.Collections.IDictionary] $ExistingIdentity,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Values
+    )
+
+    if ($null -eq $ExistingIdentity) { return $null }
+    $settings = Get-AvmBamiSettings -Values $Values
+    $identity = ConvertTo-AvmExistingIdentitySetting -Value $ExistingIdentity
+    if ($identity['name'] -cne 'id-avm-subscription-vending' -or
+        $identity['resourceGroupName'] -cne 'rg-avm-managed-identities') {
+        throw [System.ArgumentException]::new(
+            'Only the bootstrap-owned id-avm-subscription-vending identity in rg-avm-managed-identities may be selected.'
+        )
+    }
+
+    $resourceIdName = 'TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID'
+    $clientIdName = 'TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID'
+    $principalIdName = 'TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID'
+    $managementGroupName = 'TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID'
+    $billingScopeName = 'TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE'
+    $expectedResourceId = "/subscriptions/$($settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'])/resourceGroups/$($identity['resourceGroupName'])/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$($identity['name'])"
+    $resourceId = $Values[$resourceIdName]
+    if ($resourceId -isnot [string] -or $resourceId -ine $expectedResourceId) {
+        throw [System.ArgumentException]::new("$resourceIdName must exactly bind the configured bootstrap identity.")
+    }
+
+    $result = [ordered]@{
+        name                       = $identity['name']
+        resource_group_name        = $identity['resourceGroupName']
+        resource_id                = $expectedResourceId
+        manage_entra_groups        = $identity['manageEntraGroups']
+        management_group_id        = $Values[$managementGroupName]
+        billing_scope              = $Values[$billingScopeName]
+    }
+    foreach ($entry in @(
+            @{ Name = $clientIdName; Target = 'client_id' },
+            @{ Name = $principalIdName; Target = 'principal_id' }
+        )) {
+        $id = [guid]::Empty
+        $value = $Values[$entry.Name]
+        if ($value -isnot [string] -or -not [guid]::TryParseExact($value, 'D', [ref]$id) -or
+            $id -eq [guid]::Empty -or $id.ToString() -in @(
+                $settings['TEST_BAMI_CONTROLLER_CLIENT_ID'], $settings['TEST_BAMI_BICEP_CLIENT_ID']
+            )) {
+            throw [System.ArgumentException]::new("$($entry.Name) must be a nonempty identity GUID distinct from the controller and Bicep identities.")
+        }
+        $result[$entry.Target] = $id.ToString()
+    }
+    if ($result['management_group_id'] -isnot [string] -or
+        $result['management_group_id'] -cnotmatch '^[a-zA-Z0-9_().-]{1,90}$' -or
+        $result['management_group_id'].EndsWith('.') -or
+        $result['management_group_id'] -ceq $settings['TEST_BAMI_MANAGEMENT_GROUP_ID']) {
+        throw [System.ArgumentException]::new(
+            "$managementGroupName must be a distinct valid management-group name for subscription vending."
+        )
+    }
+    if ($result['billing_scope'] -isnot [string] -or
+        $result['billing_scope'] -cnotmatch '^/providers/Microsoft\.Billing/billingAccounts/[A-Za-z0-9:_-]+/billingProfiles/[A-Za-z0-9_-]+/invoiceSections/[A-Za-z0-9_-]+$') {
+        throw [System.ArgumentException]::new(
+            "$billingScopeName must be an invoice-section resource ID for subscription vending."
+        )
+    }
+    return $result
+}
+
 function Get-AvmGeneralTestSubscription {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [System.Collections.IDictionary] $Settings)

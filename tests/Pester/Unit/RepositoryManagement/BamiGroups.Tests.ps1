@@ -69,4 +69,37 @@ Describe 'Configured repository Entra memberships' {
             { Resolve-AvmRepositoryEntraGroups -Groups $groups -RepositoryId 'example' } | Should -Throw
         }
     }
+
+    It 'binds only subscription vending to the complete bootstrap-owned identity evidence' {
+        $settings = New-AvmTestBamiSettings
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID =
+            '/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-avm-managed-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-subscription-vending'
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID = '10000000-0000-4000-8000-000000000006'
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID = '10000000-0000-4000-8000-000000000007'
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID = 'avm-subscription-vending'
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE =
+            '/providers/Microsoft.Billing/billingAccounts/account/billingProfiles/profile/invoiceSections/section'
+
+        $vending = Resolve-RepositorySettings -repositoryConfig $script:config -repoId 'avm-ptn-alz-sub-vending'
+        $vending.ExistingIdentity.name | Should -BeExactly 'id-avm-subscription-vending'
+        $vending.ExistingIdentity.resourceGroupName | Should -BeExactly 'rg-avm-managed-identities'
+        $vending.ExistingIdentity.manageEntraGroups | Should -BeFalse
+        $vending.EntraGroups | Should -Be @(
+            'avm-test-entra-readers',
+            'avm-test-management-group-owners',
+            'avm-test-subscription-vending-owners',
+            'avm-test-management-group-iam-admins'
+        )
+
+        $resolved = Resolve-AvmSubscriptionVendingIdentity -ExistingIdentity $vending.ExistingIdentity -Values $settings
+        $resolved.resource_id | Should -BeExactly $settings.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID
+        $resolved.management_group_id | Should -BeExactly 'avm-subscription-vending'
+        $resolved.billing_scope | Should -BeExactly $settings.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE
+
+        (Resolve-RepositorySettings -repositoryConfig $script:config -repoId 'avm-ptn-example-repo').ExistingIdentity |
+            Should -BeNullOrEmpty
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE = '/providers/Microsoft.Billing/billingAccounts/account'
+        { Resolve-AvmSubscriptionVendingIdentity -ExistingIdentity $vending.ExistingIdentity -Values $settings } |
+            Should -Throw '*invoice-section*'
+    }
 }

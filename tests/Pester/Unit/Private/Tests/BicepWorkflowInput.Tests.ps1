@@ -133,6 +133,43 @@ Describe 'Bicep workflow CI parameter inputs' {
         }
     }
 
+    It 'applies the canonical billing scope as a secure string without changing a colon' {
+        InModuleScope Avm.Authoring {
+            $scope = '/providers/Microsoft.Billing/billingAccounts/ABC:123/billingProfiles/profile/invoiceSections/section'
+            $actual = Get-AvmBicepCiParameter -TemplateParameters @{
+                subscriptionBillingScope = @{ type = 'secureString' }
+            } -Secrets @{
+                VALIDATE_MODULE_BILLING_SCOPES = '{"avm/ptn/lz/sub-vending":"/providers/Microsoft.Billing/billingAccounts/ABC:123/billingProfiles/profile/invoiceSections/section"}'
+            } -ModulePath 'avm/ptn/lz/sub-vending'
+            $actual['subscriptionBillingScope'] | Should -BeOfType [securestring]
+            $actual['subscriptionBillingScope'].Length | Should -Be $scope.Length
+        }
+    }
+
+    It 'rejects malformed canonical billing-scope input without exposing its value' {
+        InModuleScope Avm.Authoring {
+            $failure = $null
+            try {
+                $null = Get-AvmBicepCiParameter -TemplateParameters @{ subscriptionBillingScope = @{ type = 'secureString' } } `
+                    -Secrets @{ VALIDATE_MODULE_BILLING_SCOPES = '{"avm/ptn/lz/sub-vending":"not-a-scope"}' } `
+                    -ModulePath 'avm/ptn/lz/sub-vending'
+            }
+            catch { $failure = $_ }
+            $failure | Should -Not -BeNullOrEmpty
+            $failure.Exception.Message | Should -Not -Match 'not-a-scope'
+        }
+    }
+
+    It 'requires a secure subscription billing-scope parameter' {
+        InModuleScope Avm.Authoring {
+            {
+                Get-AvmBicepCiParameter -TemplateParameters @{ subscriptionBillingScope = @{ type = 'string' } } `
+                    -Secrets @{ VALIDATE_MODULE_BILLING_SCOPES = '{"avm/ptn/lz/sub-vending":"/providers/Microsoft.Billing/billingAccounts/ABC:123/billingProfiles/profile/invoiceSections/section"}' } `
+                    -ModulePath 'avm/ptn/lz/sub-vending'
+            } | Should -Throw -ExpectedMessage '*secureString*'
+        }
+    }
+
     It 'rejects an unsupported, missing or circular type reference: <Reference>' -ForEach @(
         @{ Reference = 'https://example.invalid/definition' }
         @{ Reference = '#/definitions/missing' }

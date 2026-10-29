@@ -1,5 +1,7 @@
 function ConvertTo-AvmBicepCleanupCase {
     [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAlignAssignmentStatement', '',
+        Justification = 'The ordered output fields preserve the cleanup-state schema.')]
     [OutputType([System.Collections.Specialized.OrderedDictionary])]
     param(
         [Parameter(Mandatory)]
@@ -9,6 +11,12 @@ function ConvertTo-AvmBicepCleanupCase {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
+    $subscriptionCleanupManagementGroupId = if ($Case.Contains('subscriptionCleanupManagementGroupId')) {
+        $Case['subscriptionCleanupManagementGroupId']
+    }
+    else {
+        ''
+    }
     foreach ($key in @('path', 'scope', 'managementGroupId', 'resourceGroupName', 'metadataLocation', 'sourceHash')) {
         if ($Case[$key] -isnot [string] -or $Case[$key] -match '[\x00-\x1f\x7f]') {
             throw [AvmConfigurationException]::new("Cleanup case requires a valid string '$key'.")
@@ -44,10 +52,22 @@ function ConvertTo-AvmBicepCleanupCase {
     elseif ($Case['managementGroupId'].Length -ne 0) {
         throw [AvmConfigurationException]::new('Only management-group cleanup cases may specify a management group name.')
     }
+    if ($subscriptionCleanupManagementGroupId -isnot [string] -or
+        $subscriptionCleanupManagementGroupId -match '[\x00-\x1f\x7f]' -or
+        ($subscriptionCleanupManagementGroupId.Length -gt 0 -and (
+            $subscriptionCleanupManagementGroupId -cnotmatch '^[A-Za-z0-9_().-]{1,90}$' -or
+            $subscriptionCleanupManagementGroupId -in @('.', '..') -or
+            $subscriptionCleanupManagementGroupId.EndsWith('.')))) {
+        throw [AvmConfigurationException]::new('Cleanup case has an invalid subscription cleanup management group name.')
+    }
     return [ordered]@{
-        path = $path; scope = $Case['scope']
-        resourceGroupName = $Case['resourceGroupName']; managementGroupId = $Case['managementGroupId']
-        metadataLocation = $Case['metadataLocation']; sourceHash = $Case['sourceHash']
+        path                                 = $path
+        scope                                = $Case['scope']
+        resourceGroupName                    = $Case['resourceGroupName']
+        managementGroupId                    = $Case['managementGroupId']
+        metadataLocation                     = $Case['metadataLocation']
+        sourceHash                           = $Case['sourceHash']
+        subscriptionCleanupManagementGroupId = $subscriptionCleanupManagementGroupId
         completionStarted = $Case['completionStarted']
     }
 }

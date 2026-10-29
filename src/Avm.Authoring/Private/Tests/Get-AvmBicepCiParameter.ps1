@@ -12,7 +12,9 @@ function Get-AvmBicepCiParameter {
 
         [System.Collections.IDictionary] $Secrets = @{},
 
-        [string] $KeyVaultName
+        [string] $KeyVaultName,
+
+        [string] $ModulePath
     )
 
     Set-StrictMode -Version 3.0
@@ -62,8 +64,37 @@ function Get-AvmBicepCiParameter {
             }
         }
     }
+    $billingScopeMapName = 'VALIDATE_MODULE_BILLING_SCOPES'
+    if (-not [string]::IsNullOrWhiteSpace($ModulePath) -and $Secrets.Contains($billingScopeMapName)) {
+        $mapJson = $Secrets[$billingScopeMapName]
+        try {
+            $billingScopes = ConvertFrom-AvmStrictJson -Json $mapJson -RejectCaseInsensitiveDuplicates
+        }
+        catch [System.Exception] {
+            throw [AvmConfigurationException]::new('The module billing-scope map is invalid.', $_.Exception)
+        }
+        $root = 'avm/ptn/lz/sub-vending'
+        if ($billingScopes -isnot [System.Collections.IDictionary] -or $billingScopes.Count -gt 1 -or
+            ($billingScopes.Count -eq 1 -and -not $billingScopes.Contains($root)) -or
+            ($billingScopes.Contains($root) -and (
+                $billingScopes[$root] -isnot [string] -or
+                $billingScopes[$root] -cnotmatch '^/providers/Microsoft\.Billing/billingAccounts/[A-Za-z0-9:_-]+/billingProfiles/[A-Za-z0-9_-]+/invoiceSections/[A-Za-z0-9_-]+$'
+            ))) {
+            throw [AvmConfigurationException]::new('The module billing-scope map must contain only the canonical invoice-section scope.')
+        }
+        if ($ModulePath -ceq $root) {
+            if (-not $names.ContainsKey('subscriptionBillingScope')) {
+                throw [AvmConfigurationException]::new('The subscription-vending billing scope requires a subscriptionBillingScope parameter.')
+            }
+            $selected[$names['subscriptionBillingScope']] = @{
+                Name   = $billingScopeMapName
+                Value  = $billingScopes[$root]
+                Secret = $true
+            }
+        }
+    }
     $result = @{}
-    foreach ($name in $selected.psbase.Keys) {
+    foreach ($name in @($selected.psbase.Keys)) {
         $entry = $selected[$name]
         $value = $entry.Value
         if ($value -isnot [string]) {
@@ -85,6 +116,9 @@ function Get-AvmBicepCiParameter {
             $definition = $TemplateDefinitions[$typeName]
         }
         $type = Get-AvmPropertyValue -InputObject $definition -Name 'type'
+        if ($entry.Name -ceq $billingScopeMapName -and $type -cne 'secureString') {
+            throw [AvmConfigurationException]::new('The subscription-vending billing scope requires a secureString parameter.')
+        }
         if ($entry.Secret -and $type -notin @('secureString', 'secureObject')) {
             Write-AvmLog -Level Warning -Message "CI secret '$($entry.Name)' targets non-secure parameter '$name'."
         }

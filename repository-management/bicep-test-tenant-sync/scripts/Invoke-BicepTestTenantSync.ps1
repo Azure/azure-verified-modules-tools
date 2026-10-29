@@ -27,6 +27,11 @@ $values = [ordered]@{
     TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME = $env:TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME
     TEST_BAMI_BICEP_CLIENT_ID = $env:TEST_BAMI_BICEP_CLIENT_ID
     TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID = $env:TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID
+    TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID = $env:TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID
+    TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID = $env:TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID
+    TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID = $env:TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID
+    TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID = $env:TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID
+    TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE = $env:TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE
 }
 $options = if ($PSCmdlet.ParameterSetName -ceq 'Apply') { @{ Apply = $Apply } } else { @{ PlanOnly = $PlanOnly } }
 if ($ModuleClientIdPath) {
@@ -35,5 +40,10 @@ if ($ModuleClientIdPath) {
 if ($IdentityMigrationPath) {
     $options.IdentityMigration = ConvertFrom-AvmTestTenantJson -Json (Get-Content -LiteralPath $IdentityMigrationPath -Raw -ErrorAction Stop)
 }
+$configuration = ConvertFrom-AvmTestTenantJson -Json (
+    Get-Content -LiteralPath (Join-Path $repositoryRoot 'repository-management' 'bicep-config' 'config.json') -Raw -ErrorAction Stop
+)
+$options.BillingScopes = Resolve-AvmBicepSubscriptionVendingBillingScopes -Configuration $configuration -Values $values
+$options.SubscriptionCleanupManagementGroups = Resolve-AvmBicepSubscriptionCleanupManagementGroups -Configuration $configuration -Values $values
 Invoke-AvmBicepTestTenantSync -Values $values @options | ConvertTo-Json -Depth 5
 $global:LASTEXITCODE = 0

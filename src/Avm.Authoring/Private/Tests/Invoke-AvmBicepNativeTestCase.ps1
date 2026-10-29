@@ -1,5 +1,7 @@
 function Invoke-AvmBicepNativeTestCase {
     [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAlignAssignmentStatement', '',
+        Justification = 'Execution and cleanup-state fields intentionally preserve a stable serialized contract.')]
     [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)] [pscustomobject] $Item,
@@ -9,6 +11,7 @@ function Invoke-AvmBicepNativeTestCase {
         [Parameter(Mandatory)] [string] $AzPath,
         [Parameter(Mandatory)] [hashtable] $CiInput,
         [string] $ManagementGroupId,
+        [string] $SubscriptionCleanupManagementGroupId,
         [string] $ResourceGroupPrefix,
         [string] $ResourceLocation,
         [string] $StatePath,
@@ -27,13 +30,19 @@ function Invoke-AvmBicepNativeTestCase {
         }
     }
     $executionOptions = @{
-        Location = $Location; RepositoryRoot = $RepositoryRoot; AzPath = $AzPath; CiInput = $CiInput
-        SubscriptionId = $Item.SubscriptionId; TenantId = $TenantId
-        ManagementGroupId = $ManagementGroupId; ResourceGroupPrefix = $ResourceGroupPrefix
-        ResourceLocation = $ResourceLocation; StatePath = $StatePath; Phase = $Phase
-        DeploymentRetryLimit = $DeploymentRetryLimit; ValidationRetryLimit = $ValidationRetryLimit
-        KeepResources       = [bool]$KeepResources
-        RecoveryDeadlineUtc = (Get-Date -AsUTC).AddSeconds($Item.RetryPolicy['observation']['coordinatorTimeoutSeconds'])
+        Location                                 = $Location
+        RepositoryRoot                           = $RepositoryRoot
+        AzPath                                   = $AzPath
+        CiInput                                  = $CiInput
+        SubscriptionId                           = $Item.SubscriptionId
+        TenantId                                 = $TenantId
+        ManagementGroupId                        = $ManagementGroupId
+        ResourceGroupPrefix                      = $ResourceGroupPrefix
+        SubscriptionCleanupManagementGroupId = $SubscriptionCleanupManagementGroupId
+        ResourceLocation                         = $ResourceLocation; StatePath = $StatePath; Phase = $Phase
+        DeploymentRetryLimit                     = $DeploymentRetryLimit; ValidationRetryLimit = $ValidationRetryLimit
+        KeepResources                            = [bool]$KeepResources
+        RecoveryDeadlineUtc                      = (Get-Date -AsUTC).AddSeconds($Item.RetryPolicy['observation']['coordinatorTimeoutSeconds'])
     }
     Invoke-AvmBicepAzureContext -SubscriptionId $Item.SubscriptionId -TenantId $TenantId -ScriptBlock {
         Assert-AvmBicepAzureIdentity -AzPath $executionOptions.AzPath -SubscriptionId $Item.SubscriptionId -TenantId $TenantId
@@ -76,9 +85,14 @@ function Invoke-AvmBicepNativeTestCase {
         $state['attempts'] = @()
         $groupName = if ($Item.Scope -eq 'group') { '{0}-{1}' -f $executionOptions.ResourceGroupPrefix, $Item.RunId } else { '' }
         $state['case'] = [ordered]@{
-            path = $Item.Case.RelativePath; scope = $Item.Scope; resourceGroupName = $groupName
-            managementGroupId = if ($Item.Scope -eq 'mg') { $executionOptions.ManagementGroupId } else { '' }
-            metadataLocation = $executionOptions.Location; sourceHash = $Item.SourceHash; completionStarted = $false
+            path                                 = $Item.Case.RelativePath
+            scope                                = $Item.Scope
+            resourceGroupName                    = $groupName
+            managementGroupId                    = if ($Item.Scope -eq 'mg') { $executionOptions.ManagementGroupId } else { '' }
+            subscriptionCleanupManagementGroupId = $executionOptions.SubscriptionCleanupManagementGroupId
+            metadataLocation                     = $executionOptions.Location
+            sourceHash                           = $Item.SourceHash
+            completionStarted                    = $false
         }
         Save-AvmBicepCleanupState -State $state -Path $handle.Path -Confirm:$false
         Write-AvmLog -Level Info -Message "Bicep cleanup state for '$($Item.Case.RelativeDirectory)': $($handle.Path)"
@@ -99,7 +113,7 @@ function Invoke-AvmBicepNativeTestCase {
             }
             $baseParameters = Get-AvmBicepCiParameter -TemplateParameters $ciParameters -TemplateDefinitions $definitions `
                 -Variables $executionOptions.CiInput.Variables -Secrets $executionOptions.CiInput.Secrets `
-                -KeyVaultName $executionOptions.CiInput.KeyVaultName
+                -KeyVaultName $executionOptions.CiInput.KeyVaultName -ModulePath $Item.Case.ModuleRoot
             $baseTime = [datetime]::UtcNow.ToString('u', [cultureinfo]::InvariantCulture)
             $unavailableRegions = @()
             $mode = 'Initial'

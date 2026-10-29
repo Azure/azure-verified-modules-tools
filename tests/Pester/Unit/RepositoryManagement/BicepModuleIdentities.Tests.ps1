@@ -10,6 +10,71 @@ BeforeAll {
     )
 }
 
+Describe 'Bicep sync trusted run context' {
+    BeforeEach {
+        $script:originalBicepSyncEnvironment = @{}
+        foreach ($name in @(
+                'GITHUB_ACTIONS', 'GITHUB_REPOSITORY', 'GITHUB_EVENT_NAME', 'GITHUB_REF', 'GITHUB_WORKFLOW_REF',
+                'GITHUB_REPOSITORY_ID', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_SHA'
+            )) {
+            $script:originalBicepSyncEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+        }
+        $env:GITHUB_ACTIONS = 'true'
+        $env:GITHUB_REPOSITORY = 'Azure/azure-verified-modules-tools'
+        $env:GITHUB_EVENT_NAME = 'schedule'
+        $env:GITHUB_REF = 'refs/heads/main'
+        $env:GITHUB_WORKFLOW_REF =
+            'Azure/azure-verified-modules-tools/.github/workflows/repository-management-bicep-sync.yml@refs/heads/main'
+        $env:GITHUB_REPOSITORY_ID = '1239632211'
+        $env:GITHUB_RUN_ID = '123456789'
+        $env:GITHUB_RUN_ATTEMPT = '1'
+        $env:GITHUB_SHA = '0123456789012345678901234567890123456789'
+    }
+
+    AfterEach {
+        foreach ($name in $script:originalBicepSyncEnvironment.Keys) {
+            $value = if ($null -eq $script:originalBicepSyncEnvironment[$name]) {
+                [NullString]::Value
+            }
+            else {
+                $script:originalBicepSyncEnvironment[$name]
+            }
+            [Environment]::SetEnvironmentVariable($name, $value)
+        }
+    }
+
+    It 'accepts scheduled main with exact workflow evidence' {
+        $context = Resolve-AvmBicepSyncRunContext
+        $context.WorkflowRef |
+            Should -BeExactly 'Azure/azure-verified-modules-tools/.github/workflows/repository-management-bicep-sync.yml@refs/heads/main'
+        $context.IsManualBranch | Should -BeFalse
+    }
+
+    It 'accepts a manually dispatched branch only when its workflow evidence matches' {
+        $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
+        $env:GITHUB_REF = 'refs/heads/jaredholgate-microsoft-subscription-vending-identity-sync'
+        $env:GITHUB_WORKFLOW_REF =
+            'Azure/azure-verified-modules-tools/.github/workflows/repository-management-bicep-sync.yml@refs/heads/jaredholgate-microsoft-subscription-vending-identity-sync'
+
+        $context = Resolve-AvmBicepSyncRunContext
+        $context.IsManualBranch | Should -BeTrue
+        (Get-AvmBicepIdentityPublicationContext).workflowRef | Should -BeExactly $env:GITHUB_WORKFLOW_REF
+    }
+
+    It 'rejects scheduled branch runs, tags, and mismatched workflow evidence: <Case>' -ForEach @(
+        @{ Case = 'scheduled branch'; Event = 'schedule'; Ref = 'refs/heads/feature'; WorkflowRef = 'refs/heads/feature' }
+        @{ Case = 'tag'; Event = 'workflow_dispatch'; Ref = 'refs/tags/v1'; WorkflowRef = 'refs/tags/v1' }
+        @{ Case = 'mismatched workflow'; Event = 'workflow_dispatch'; Ref = 'refs/heads/feature'; WorkflowRef = 'refs/heads/main' }
+    ) {
+        $env:GITHUB_EVENT_NAME = $Event
+        $env:GITHUB_REF = $Ref
+        $env:GITHUB_WORKFLOW_REF =
+            "Azure/azure-verified-modules-tools/.github/workflows/repository-management-bicep-sync.yml@$WorkflowRef"
+
+        { Resolve-AvmBicepSyncRunContext } | Should -Throw '*trusted Tools main or a manual trusted-repository branch*'
+    }
+}
+
 Describe 'Bicep module identity configuration' {
     It 'uses exactly the Terraform defaults for every unlisted root, including Fabric and management-group modules' {
         $terraform = Get-Content -LiteralPath (Join-Path $script:root 'repository-management' 'repository-config' 'config.json') -Raw | ConvertFrom-Json
@@ -38,6 +103,49 @@ Describe 'Bicep module identity configuration' {
         $selected[$paths[4]] | Should -Contain 'avm-test-subscription-persistent-readers'
         $selected[$paths[5]] | Should -Contain 'avm-test-subscription-persistent-readers'
         $selected[$paths[3]] | Should -Not -Contain 'avm-test-subscription-persistent-readers'
+    }
+
+    It 'selects the bootstrap subscription-vending identity only for its exact root' {
+        $identities = Resolve-AvmBicepModuleExistingIdentities -ModulePaths @(
+            'avm/ptn/lz/sub-vending', 'avm/res/storage/storage-account'
+        ) -Configuration $script:configuration
+        @($identities.Keys) | Should -Be @('avm/ptn/lz/sub-vending')
+        $identities['avm/ptn/lz/sub-vending'].name | Should -BeExactly 'id-avm-subscription-vending'
+        $identities['avm/ptn/lz/sub-vending'].resourceGroupName | Should -BeExactly 'rg-avm-managed-identities'
+        $identities['avm/ptn/lz/sub-vending'].manageEntraGroups | Should -BeTrue
+    }
+
+    It 'binds the billing scope only to the configured vending root with complete bootstrap evidence' {
+        $settings = New-AvmTestBamiSettings
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID =
+            '/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-avm-managed-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-subscription-vending'
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID = '10000000-0000-4000-8000-000000000006'
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID = '10000000-0000-4000-8000-000000000007'
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID = 'avm-subscription-vending'
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE =
+            '/providers/Microsoft.Billing/billingAccounts/account:segment/billingProfiles/profile/invoiceSections/section'
+
+        $scopes = Resolve-AvmBicepSubscriptionVendingBillingScopes -Configuration $script:configuration -Values $settings
+        $scopes.Keys | Should -Be @('avm/ptn/lz/sub-vending')
+        $scopes['avm/ptn/lz/sub-vending'] | Should -BeExactly $settings.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE
+        ConvertTo-AvmBicepModuleBillingScopeJson -BillingScopes $scopes |
+            Should -BeExactly ('{"avm/ptn/lz/sub-vending":"' + $settings.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE + '"}')
+
+        $settings.Remove('TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE')
+        { Resolve-AvmBicepSubscriptionVendingBillingScopes -Configuration $script:configuration -Values $settings } |
+            Should -Throw '*invoice-section*'
+    }
+
+    It 'publishes an empty billing scope map only when the vending selector is absent' {
+        $configuration = ConvertFrom-AvmTestTenantJson -Json (
+            Get-Content -LiteralPath (Join-Path $script:root 'repository-management' 'bicep-config' 'config.json') -Raw
+        )
+        $configuration['moduleGroups'] = @($configuration['moduleGroups'] | Where-Object { $_['name'] -cne 'subscription-vending-identity' })
+        $scopes = Resolve-AvmBicepSubscriptionVendingBillingScopes -Configuration $configuration -Values (New-AvmTestBamiSettings)
+        $scopes.Count | Should -Be 0
+        ConvertTo-AvmBicepModuleBillingScopeJson -BillingScopes $scopes | Should -BeExactly '{}'
+        { ConvertTo-AvmBicepModuleBillingScopeJson -BillingScopes @{ 'avm/res/storage/storage-account' = 'scope' } } |
+            Should -Throw '*canonical subscription-vending root*'
     }
 
     It 'accumulates ordered names without replacing defaults and validates unmatched declarations' {
@@ -369,6 +477,66 @@ Describe 'Bicep identity saved-plan ownership guard' {
     ) {
         & $Edit $script:plan
         { Assert-AvmBicepIdentityPlan @script:guard } | Should -Throw
+    }
+
+    It 'emits a sanitized diagnostic when rejecting an unexpected plan resource' {
+        $secret = 'synthetic-secret-must-not-be-disclosed'
+        $script:plan.resource_changes += @{
+            address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.identity_role_assignment'
+            mode = 'managed'
+            type = 'azapi_resource'
+            provider_name = 'registry.terraform.io/azure/azapi'
+            change = @{
+                actions = @('create')
+                after = @{ secret = $secret }
+            }
+        }
+
+        $captured = & {
+            try {
+                Assert-AvmBicepIdentityPlan @script:guard
+            }
+            catch {
+                $_
+            }
+        } 6>&1
+
+        $diagnostic = @($captured | Where-Object {
+                $_ -is [System.Management.Automation.InformationRecord] -and
+                ([string]$_.MessageData).StartsWith(
+                    'Bicep plan rejection [unexpected-resource]:',
+                    [System.StringComparison]::Ordinal
+                )
+            })
+        $diagnostic | Should -HaveCount 1
+        $diagnostic[0].MessageData | Should -BeExactly (
+            'Bicep plan rejection [unexpected-resource]: ' +
+            'address=module.bicep["avm/res/fabric/capacity"].azapi_resource.identity_role_assignment; ' +
+            'mode=managed; type=azapi_resource; provider_name=registry.terraform.io/azure/azapi; actions=create.'
+        )
+        ($captured | Out-String) | Should -Not -Match $secret
+    }
+
+    It 'continues rejecting forbidden dedicated identity and role operations: <Case>' -ForEach @(
+        @{
+            Case = 'user-assigned identity'
+            Address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.unapproved_user_assigned_identity'
+        }
+        @{
+            Case = 'role assignment'
+            Address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.identity_role_assignment'
+        }
+    ) {
+        $script:plan.resource_changes += @{
+            address = $Address
+            mode = 'managed'
+            type = 'azapi_resource'
+            provider_name = 'registry.terraform.io/azure/azapi'
+            change = @{ actions = @('create') }
+        }
+
+        { Assert-AvmBicepIdentityPlan @script:guard } |
+            Should -Throw '*may only manage dedicated identities*'
     }
 
     It 'allows revoking only a membership belonging to the same dedicated principal' {

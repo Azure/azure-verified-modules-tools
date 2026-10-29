@@ -1029,6 +1029,34 @@ function Get-AvmBicepWorkflowTestCaseValueInternal {
     return $property.Value
 }
 
+function Get-AvmBicepWorkflowSubscriptionCleanupManagementGroupInternal {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [string] $ModuleRoot,
+        [AllowEmptyString()] [string] $ModuleSubscriptionCleanupManagementGroupIds
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ModuleSubscriptionCleanupManagementGroupIds)) { return '' }
+    try {
+        $mapping = ConvertFrom-AvmStrictJson -Json $ModuleSubscriptionCleanupManagementGroupIds -RejectCaseInsensitiveDuplicates
+    }
+    catch [System.Exception] {
+        throw [ArgumentException]::new('Module subscription cleanup management groups must be valid JSON.', $_.Exception)
+    }
+    $root = 'avm/ptn/lz/sub-vending'
+    if ($mapping -isnot [Collections.IDictionary] -or $mapping.Count -gt 1 -or
+        ($mapping.Count -eq 1 -and -not $mapping.Contains($root)) -or
+        ($mapping.Contains($root) -and (
+            $mapping[$root] -isnot [string] -or
+            $mapping[$root] -cnotmatch '^[A-Za-z0-9_().-]{1,90}$' -or
+            $mapping[$root] -in @('.', '..') -or $mapping[$root].EndsWith('.')))) {
+        throw [ArgumentException]::new('Module subscription cleanup management groups must contain only one valid canonical target.')
+    }
+    if ($ModuleRoot -ceq $root) { return [string]$mapping[$root] }
+    return ''
+}
+
 function Get-AvmBicepE2eTestContextInternal {
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -1040,6 +1068,7 @@ function Get-AvmBicepE2eTestContextInternal {
         [AllowEmptyString()] [string] $FallbackSubscriptionId,
         [Parameter(Mandatory)] [AllowEmptyString()] [string] $ModuleClientIds,
         [Parameter(Mandatory)] [AllowEmptyString()] [string] $TenantId,
+        [AllowEmptyString()] [string] $ModuleSubscriptionCleanupManagementGroupIds,
         [AllowEmptyString()] [string] $NamePrefix,
         [scriptblock] $ToolResolver,
         [scriptblock] $ToolInstaller,
@@ -1047,6 +1076,8 @@ function Get-AvmBicepE2eTestContextInternal {
     )
 
     $identity = Get-AvmBicepWorkflowModuleIdentityInternal -Root $Root -ModulePath $ModulePath -ModuleClientIds $ModuleClientIds -TenantId $TenantId
+    $subscriptionCleanupManagementGroupId = Get-AvmBicepWorkflowSubscriptionCleanupManagementGroupInternal `
+        -ModuleRoot $identity.ModuleRoot -ModuleSubscriptionCleanupManagementGroupIds $ModuleSubscriptionCleanupManagementGroupIds
     $caseIdentityKey = Get-AvmBicepWorkflowTestCaseValueInternal -TestCase $TestCase -Name IdentityKey -Optional
     if ($caseIdentityKey -cne $identity.IdentityKey) { throw [ArgumentException]::new('The selected module identity no longer matches its root, client and tenant. Rerun selection.') }
     $seed = [int](Get-AvmBicepWorkflowTestCaseValueInternal -TestCase $TestCase -Name SelectionSeed)
@@ -1086,5 +1117,6 @@ function Get-AvmBicepE2eTestContextInternal {
         ModulePath = $selected.ModulePath; Example = $example; NamePrefix = $prefix
         ArtifactKey = "bicep-e2e-$($selected.Key)-$index"; IsolationMode = $isolation.IsolationMode
         ConcurrencyGroup = $isolation.ConcurrencyGroup; RequireResourceIsolation = $isolation.IsolationMode -ne 'fallback'
+        SubscriptionCleanupManagementGroupId = $subscriptionCleanupManagementGroupId
     }
 }

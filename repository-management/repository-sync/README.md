@@ -80,6 +80,33 @@ test-pool secrets receive only the ordered `General` projection, including legac
 untagged entries; no General subscriptions is an error before plan/apply or
 publication. This is default/test selection isolation, not a permission change.
 
+### Subscription-vending bootstrap identity
+
+Only `avm-ptn-alz-sub-vending` may select the bootstrap-owned
+`id-avm-subscription-vending` in `rg-avm-managed-identities`. Its selector
+requires these complete, independently validated values:
+`TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID`,
+`TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID`,
+`TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID`,
+`TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID`, and
+`TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE`. Other repositories retain
+dedicated identities and do not require this scoped bundle.
+
+Repository sync reads rather than creates or deletes that UAMI. Bicep owns its
+Entra membership edges; Terraform manages only its own
+`terraform-sub-vending` federated credentials. The credential names therefore
+cannot collide with Bicep's `bicep-sub-vending` credentials. The controller
+needs the bootstrap-defined, exact-UAMI federation-manager role; it receives no
+write/delete permission on the UAMI or its resource group.
+
+For that repository alone, sync publishes `TF_VAR_subscription_billing_scope`
+and `TF_VAR_subscription_management_group_id` as Actions secrets, as well as
+the nonsecret `TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID` Variable.
+The billing scope must be a verified invoice-section resource ID. Roll out in
+order: bootstrap publication, Bicep identity sync, Terraform repository sync,
+then the separately approved live e2e. No consumer workflow or test is run by
+this sync.
+
 Manual `plan_only` defaults to `true`. Preview and apply both produce one complete native
 plan, even when a new identity's client ID is unknown. Apply validates that saved
 plan and applies it once. Foreign GitHub ownership, unexpected addresses/providers,

@@ -315,7 +315,7 @@ Describe 'Candidate plan and output safety' {
         $result.client_id | Should -BeExactly $identity.client_id
         $identity.identity_resource_id = $identity.identity_resource_id.Replace('w5sagent', 'windowsagent')
         { ConvertTo-AvmBamiConsumerSettings -Identity $identity -Settings $script:settings -Repository $repository } |
-            Should -Throw '*dedicated test identity*'
+            Should -Throw '*expected test identity*'
     }
 
     It 'requires the refreshed snapshot rather than configured values or planned data: <Case>' -ForEach @(
@@ -763,14 +763,32 @@ Describe 'Candidate plan and output safety' {
             $identity = New-AvmTestBamiIdentity
             $identity.client_id = $client
             { ConvertTo-AvmBamiConsumerSettings -Identity $identity -Settings $script:settings -Repository $script:repository } |
-                Should -Throw '*dedicated test identity*'
+                Should -Throw '*expected test identity*'
         }
         foreach ($field in @('tenant_id', 'repository_id', 'repository_owner_id', 'identity_resource_id')) {
             $identity = New-AvmTestBamiIdentity
             $identity[$field] = 'wrong'
             { ConvertTo-AvmBamiConsumerSettings -Identity $identity -Settings $script:settings -Repository $script:repository } |
-                Should -Throw '*dedicated test identity*'
+                Should -Throw '*expected test identity*'
         }
+    }
+
+    It 'accepts a configured bootstrap identity only when the applied output matches it' {
+        $existingIdentity = @{
+            resource_id = '/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-avm-managed-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-subscription-vending'
+            client_id   = '10000000-0000-4000-8000-000000000006'
+        }
+        $identity = New-AvmTestBamiIdentity
+        $identity.identity_resource_id = $existingIdentity.resource_id
+
+        $result = ConvertTo-AvmBamiConsumerSettings -Identity $identity -Settings $script:settings `
+            -Repository $script:repository -ExistingIdentity $existingIdentity
+        $result.client_id | Should -BeExactly $existingIdentity.client_id
+
+        $identity.client_id = '10000000-0000-4000-8000-000000000016'
+        { ConvertTo-AvmBamiConsumerSettings -Identity $identity -Settings $script:settings `
+                -Repository $script:repository -ExistingIdentity $existingIdentity } |
+            Should -Throw '*expected test identity*'
     }
 
     It 'revalidates reserved subscriptions before constructing the internal root override' {
@@ -831,7 +849,10 @@ Describe 'Terraform effective contract and state wiring' {
         foreach ($name in @('ARM_TENANT_ID', 'ARM_CLIENT_ID', 'TEST_SUBSCRIPTION_IDS')) {
             $secrets | Should -Match ('secret_name\s*=\s*"' + $name + '"')
         }
-        ([regex]::Matches($secrets, 'resource "github_actions_secret"')).Count | Should -Be 3
+        ([regex]::Matches($secrets, 'resource "github_actions_secret"')).Count | Should -Be 5
+        foreach ($name in @('TF_VAR_subscription_billing_scope', 'TF_VAR_subscription_management_group_id')) {
+            $secrets | Should -Match ('secret_name\s*=\s*"' + $name + '"')
+        }
         $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'terraform-module.yml')
         $merge = [regex]::Match($workflow, '(?s)\$combined = @\{\}\s+foreach \(\$k in \$varsMap.Keys\) \{.*?\}\s+foreach \(\$k in \$secretsMap.Keys\) \{.*?\}')
         $merge.Success | Should -BeTrue
@@ -892,9 +913,9 @@ Describe 'Terraform effective contract and state wiring' {
         }
         $validation = [regex]::Match($azure, '(?sm)^resource "azapi_resource" "validation_federated_credential" \{.*?^\}').Value
         $validation | Should -Not -BeNullOrEmpty
-        $validation | Should -Match 'parent_id\s*=\s*azapi_resource.identity.id'
-        $validation | Should -Match 'locks\s*=\s*\[azapi_resource.identity.id\]'
-        $validation | Should -Match 'name\s*=\s*"\$\{local.owner_repo_name\}-avm-validation"'
+        $validation | Should -Match 'parent_id\s*=\s*local.identity_resource_id'
+        $validation | Should -Match 'locks\s*=\s*\[local.identity_resource_id\]'
+        $validation | Should -Match 'name\s*=\s*"\$\{local.federation_identity_name\}-avm-validation"'
         $validation | Should -Match 'subject\s*=\s*"repository_owner_id:\$\{var.github_organization_id\}:repository_id:\$\{var.repository_sync_repository_id\}:environment:avm-validation"'
         $validation | Should -Not -Match 'repository_owner_id:[0-9]|repository_id:[0-9]'
         $validation | Should -Not -Match 'job_workflow_ref:|ref:refs/heads/'

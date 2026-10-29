@@ -10,6 +10,13 @@ BeforeAll {
     . (Join-Path $script:root 'tests' 'fixtures' 'BicepIdentities.ps1')
     $script:originalEnvironment = @{}
     $script:values = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)
+    $script:values.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID =
+        '/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-avm-managed-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-subscription-vending'
+    $script:values.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID = '10000000-0000-4000-8000-000000000006'
+    $script:values.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID = '10000000-0000-4000-8000-000000000007'
+    $script:values.TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID = 'avm-subscription-vending'
+    $script:values.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE =
+        '/providers/Microsoft.Billing/billingAccounts/account:segment/billingProfiles/profile/invoiceSections/section'
     $script:backendValues = @{
         ARM_BACKEND_TENANT_ID = '20000000-0000-4000-8000-000000000001'
         ARM_BACKEND_SUBSCRIPTION_ID = '20000000-0000-4000-8000-000000000002'
@@ -113,10 +120,18 @@ Describe 'Bicep module identity entry points with real files and mocked services
             New-Item -ItemType File -Path $path
         }.GetNewClosure())
         Mock Invoke-AvmProcess -ModuleName Avm.Authoring -MockWith ({
-            param($FilePath, $ArgumentList, $EnvVars, $WorkingDirectory, $StreamOutput, $OnStdOutLine, $OnStdErrLine)
+            param($FilePath, $ArgumentList, $EnvVars, $WorkingDirectory, $StreamOutput, $OnStdOutLine, $OnStdErrLine, $StandardInputPath)
             $command = [IO.Path]::GetFileNameWithoutExtension($FilePath)
             $state.Calls.Add(@{ Command = $command; Arguments = $ArgumentList; Environment = $EnvVars; Directory = $WorkingDirectory })
             if ($command -ceq 'gh') {
+                if ($ArgumentList[0] -ceq 'secret') {
+                    $ArgumentList | Should -Be @(
+                        'secret', 'set', 'VALIDATE_MODULE_BILLING_SCOPES',
+                        '--repo', 'Azure/bicep-registry-modules', '--env', 'avm'
+                    )
+                    Test-Path -LiteralPath $StandardInputPath | Should -BeTrue
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+                }
                 $ArgumentList[0] | Should -BeExactly 'api'
                 $ArgumentList[4] | Should -BeIn @('GET', 'POST', 'PATCH')
                 if ($ArgumentList[-1] -ceq 'repos/Azure/azure-verified-modules-tools') {
@@ -130,13 +145,23 @@ Describe 'Bicep module identity entry points with real files and mocked services
                     $body = @{ total_count = $state.Variables.Count; variables = @($state.Variables.Values) }
                 }
                 else {
-                    $ArgumentList[-2] | Should -BeExactly '--input'
-                    $state.RequestPaths.Add($ArgumentList[-1])
-                    $request = Get-Content -LiteralPath $ArgumentList[-1] -Raw | ConvertFrom-Json -AsHashtable
-                    $request.name | Should -BeExactly 'VALIDATE_MODULE_CLIENT_IDS'
-                    $state.Writes.Add($request.name)
-                    $state.Variables[$request.name] = @{
-                        name = $request.name; value = $request.value
+                    if ($ArgumentList[-2] -ceq '--input') {
+                        $state.RequestPaths.Add($ArgumentList[-1])
+                        $request = Get-Content -LiteralPath $ArgumentList[-1] -Raw | ConvertFrom-Json -AsHashtable
+                        $name = $request.name
+                        $value = $request.value
+                    }
+                    else {
+                        $name = (@($ArgumentList | Where-Object { $_ -clike 'name=*' })[0]).Substring(5)
+                        $value = (@($ArgumentList | Where-Object { $_ -clike 'value=*' })[0]).Substring(6)
+                    }
+                    $name | Should -BeIn @(
+                        'VALIDATE_MODULE_CLIENT_IDS',
+                        'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'
+                    )
+                    $state.Writes.Add($name)
+                    $state.Variables[$name] = @{
+                        name = $name; value = $value
                         created_at = '2026-10-01T00:00:00Z'; updated_at = '2026-10-09T00:00:00Z'
                     }
                     $body = @{}
@@ -258,6 +283,21 @@ Describe 'Bicep module identity entry points with real files and mocked services
             Should -Be @('init', 'plan', 'show', 'show')
     }
 
+    It 'plans the complete identity inventory from a manually dispatched trusted branch' {
+        $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
+        $env:GITHUB_REF = 'refs/heads/jaredholgate-microsoft-subscription-vending-identity-sync'
+        $env:GITHUB_WORKFLOW_REF =
+            'Azure/azure-verified-modules-tools/.github/workflows/repository-management-bicep-sync.yml@refs/heads/jaredholgate-microsoft-subscription-vending-identity-sync'
+
+        $result = & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath |
+            ConvertFrom-Json -AsHashtable
+
+        $result.Status | Should -BeExactly 'Planned'
+        $result.ModuleCount | Should -Be 2
+        @($script:state.Parameters.modules.Keys) |
+            Should -Be @('avm/res/fabric/capacity', 'avm/res/storage/storage-account')
+    }
+
     It 'applies only additive registry credentials to existing identities through the guarded entry point' {
         $script:state.Plan = New-AvmTestBicepIdentityPlan -KnownClient
         foreach ($change in $script:state.Plan.resource_changes) {
@@ -310,10 +350,18 @@ Describe 'Bicep module identity entry points with real files and mocked services
         [Text.Encoding]::UTF8.GetString($bytes) | Should -Not -Match '\r|\n'
         $publication = & $script:publisherPath -ModuleClientIdPath $script:mappingPath -Apply | ConvertFrom-Json -AsHashtable
         $publication.Status | Should -BeExactly 'Published'
-        $script:state.Writes | Should -Be @('VALIDATE_MODULE_CLIENT_IDS')
+        $script:state.Writes | Should -Be @(
+            'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS',
+            'VALIDATE_MODULE_CLIENT_IDS'
+        )
         $remaining = [ordered]@{}
         foreach ($name in $script:state.Variables.Keys) {
-            if ($name -cne 'VALIDATE_MODULE_CLIENT_IDS') { $remaining[$name] = $script:state.Variables[$name] }
+            if ($name -cnotin @(
+                'VALIDATE_MODULE_CLIENT_IDS',
+                'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'
+            )) {
+                $remaining[$name] = $script:state.Variables[$name]
+            }
         }
         ConvertTo-Json -InputObject $remaining -Depth 5 -Compress | Should -BeExactly $script:beforeVariables
         @($script:state.Calls | Where-Object Command -CEQ 'terraform' | ForEach-Object { $_.Arguments[0] }) |
@@ -338,15 +386,23 @@ Describe 'Bicep module identity entry points with real files and mocked services
         $publication = & $script:publisherPath -ModuleClientIdPath $script:mappingPath `
             -IdentityMigrationPath $script:migrationPath -Apply | ConvertFrom-Json -AsHashtable
         $publication.Status | Should -BeExactly 'Published'
-        $script:state.Writes | Should -Be @('VALIDATE_MODULE_CLIENT_IDS')
+        $script:state.Writes | Should -Be @(
+            'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS',
+            'VALIDATE_MODULE_CLIENT_IDS'
+        )
         $remaining = [ordered]@{}
         foreach ($name in $script:state.Variables.Keys) {
-            if ($name -cne 'VALIDATE_MODULE_CLIENT_IDS') { $remaining[$name] = $script:state.Variables[$name] }
+            if ($name -cnotin @(
+                'VALIDATE_MODULE_CLIENT_IDS',
+                'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'
+            )) {
+                $remaining[$name] = $script:state.Variables[$name]
+            }
         }
         ConvertTo-Json -InputObject $remaining -Depth 5 -Compress | Should -BeExactly $script:beforeVariables
         (& $script:publisherPath -ModuleClientIdPath $script:mappingPath -IdentityMigrationPath $script:migrationPath -Apply |
-            ConvertFrom-Json -AsHashtable).Status | Should -BeExactly 'NoChange'
-        $script:state.Writes | Should -HaveCount 1
+            ConvertFrom-Json -AsHashtable).Status | Should -BeExactly 'Published'
+        $script:state.Writes | Should -HaveCount 2
     }
 
     It 'refuses a naming apply without a path for its verified publication evidence' {

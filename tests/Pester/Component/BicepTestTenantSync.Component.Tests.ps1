@@ -19,6 +19,11 @@ BeforeAll {
         TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME = 'rg-bami-test'
         TEST_BAMI_BICEP_CLIENT_ID = '44444444-4444-4444-8444-444444444444'
         TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID = '55555555-5555-4555-8555-555555555555'
+        TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID = '/subscriptions/33333333-3333-4333-8333-333333333333/resourceGroups/rg-avm-managed-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-subscription-vending'
+        TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID = '77777777-7777-4777-8777-777777777777'
+        TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID = '88888888-8888-4888-8888-888888888888'
+        TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID = 'avm-subscription-vending'
+        TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE = '/providers/Microsoft.Billing/billingAccounts/account:segment/billingProfiles/profile/invoiceSections/section'
     }
     $script:originalEnvironment = @{}
     $script:sourceByTarget = [ordered]@{
@@ -70,6 +75,7 @@ Describe 'Bicep test tenant entry point with a synthetic bundle and mocked GitHu
                 TEST_BAMI_MODULE_PATHS = New-BicepEntryVariable -Name 'TEST_BAMI_MODULE_PATHS' -Value 'malformed-retired-selector'
             }
             WriteNames = [System.Collections.Generic.List[string]]::new()
+            SecretWrites = [System.Collections.Generic.List[string]]::new()
             LostExecutionResponse = $false
             BlockedExecutable = Join-Path $TestDrive 'gh-must-never-start'
         }
@@ -88,8 +94,17 @@ Describe 'Bicep test tenant entry point with a synthetic bundle and mocked GitHu
             $Name -ceq 'gh' -and $CommandType -eq 'Application'
         }
         Mock Invoke-AvmProcess -ModuleName Avm.Authoring -MockWith ({
-            param($FilePath, $ArgumentList, $EnvVars)
+            param($FilePath, $ArgumentList, $EnvVars, $StandardInputPath)
             $FilePath | Should -BeExactly $entryState.BlockedExecutable
+            if ($ArgumentList[0] -ceq 'secret') {
+                $ArgumentList | Should -Be @(
+                    'secret', 'set', 'VALIDATE_MODULE_BILLING_SCOPES',
+                    '--repo', 'Azure/bicep-registry-modules', '--env', 'avm'
+                )
+                Test-Path -LiteralPath $StandardInputPath | Should -BeTrue
+                $entryState.SecretWrites.Add([System.IO.File]::ReadAllText($StandardInputPath))
+                return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
             $ArgumentList[0] | Should -BeExactly 'api'
             $ArgumentList[2] | Should -BeExactly 'github.com'
             $EnvVars.GH_TOKEN | Should -BeExactly 'fixture-installation-token'
@@ -112,7 +127,8 @@ Describe 'Bicep test tenant entry point with a synthetic bundle and mocked GitHu
             $variableName = $ArgumentList[13].Substring(5)
             $variableName | Should -BeIn @(
                 'VALIDATE_TENANT_ID', 'VALIDATE_CLIENT_ID', 'VALIDATE_SUBSCRIPTION_IDS',
-                'VALIDATE_MANAGEMENT_GROUP_ID', 'VALIDATE_PERSISTENT_SUBSCRIPTION_ID'
+                'VALIDATE_MANAGEMENT_GROUP_ID', 'VALIDATE_PERSISTENT_SUBSCRIPTION_ID',
+                'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'
             )
             $entryState.WriteNames.Add($variableName)
             $entryState.Variables[$variableName] = & $newVariable -Name $variableName `
@@ -144,15 +160,15 @@ Describe 'Bicep test tenant entry point with a synthetic bundle and mocked GitHu
         finally { Pop-Location }
         $result.Status | Should -BeExactly 'Planned'
         $result.PlanOnly | Should -BeTrue
-        $result.ChangedNames | Should -HaveCount 5
+        $result.ChangedNames | Should -HaveCount 6
         $script:entryState.WriteNames | Should -HaveCount 0
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter { $ArgumentList[4] -ceq 'GET' }
     }
 
-    It 'publishes only five execution fields and leaves all unrelated variables untouched' {
+    It 'publishes execution fields and the isolated cleanup target without touching unrelated variables' {
         $result = & $script:entryPath -Apply | ConvertFrom-Json -AsHashtable
         $result.Status | Should -BeExactly 'Published'
-        $script:entryState.WriteNames | Should -HaveCount 5
+        $script:entryState.WriteNames | Should -HaveCount 6
         @($script:entryState.WriteNames) | Should -Not -Contain 'TEST_BAMI_MODULE_PATHS'
         $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value |
             Should -BeExactly 'malformed-retired-selector'
@@ -173,7 +189,7 @@ Describe 'Bicep test tenant entry point with a synthetic bundle and mocked GitHu
         $result | ConvertTo-Json -Depth 5 | Should -Not -Match 'fixture-installation-token|11111111|22222222|33333333|rg-bami-test'
     }
 
-    It 'returns NoChange for matching execution values regardless of a retired selector change' {
+    It 'republishes the billing-scope secret without changing matching execution values' {
         $null = & $script:entryPath -Apply
         $script:entryState.WriteNames.Clear()
         $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value = '[]'
@@ -181,9 +197,10 @@ Describe 'Bicep test tenant entry point with a synthetic bundle and mocked GitHu
             $script:entryState.Variables.TEST_BAMI_MODULE_PATHS | ConvertTo-Json -Compress
 
         $result = & $script:entryPath -Apply | ConvertFrom-Json -AsHashtable
-        $result.Status | Should -BeExactly 'NoChange'
+        $result.Status | Should -BeExactly 'Published'
         $result.ChangedNames | Should -HaveCount 0
         $script:entryState.WriteNames | Should -HaveCount 0
+        $script:entryState.SecretWrites | Should -HaveCount 2
         $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value | Should -BeExactly '[]'
     }
 
@@ -211,7 +228,7 @@ Describe 'Bicep test tenant entry point with a synthetic bundle and mocked GitHu
         $published[1].tag | Should -BeExactly 'General'
         $published[2].Contains('tag') | Should -BeFalse
         $script:entryState.WriteNames.Clear()
-        (& $script:workflowRun | ConvertFrom-Json -AsHashtable).Status | Should -BeExactly 'NoChange'
+        (& $script:workflowRun | ConvertFrom-Json -AsHashtable).Status | Should -BeExactly 'Published'
         $script:entryState.WriteNames | Should -HaveCount 0
     }
 
@@ -220,7 +237,7 @@ Describe 'Bicep test tenant entry point with a synthetic bundle and mocked GitHu
             -Name 'VALIDATE_TENANT_ID' -Value $script:sourceValues.TEST_BAMI_TENANT_ID
         $result = & $script:entryPath -Apply | ConvertFrom-Json -AsHashtable
         $result.Status | Should -BeExactly 'Published'
-        $script:entryState.WriteNames | Should -HaveCount 4
+        $script:entryState.WriteNames | Should -HaveCount 5
         @($script:entryState.WriteNames) | Should -Not -Contain 'VALIDATE_TENANT_ID'
 
         $script:entryState.WriteNames.Clear()
@@ -244,11 +261,11 @@ Describe 'Bicep test tenant entry point with a synthetic bundle and mocked GitHu
         $result.Status | Should -BeExactly 'Published'
         $result.PlanOnly | Should -BeFalse
         $result.Target | Should -BeExactly 'Azure/bicep-registry-modules'
-        $script:entryState.WriteNames | Should -HaveCount 5
+        $script:entryState.WriteNames | Should -HaveCount 6
         @($script:entryState.WriteNames) | Should -Not -Contain 'TEST_BAMI_MODULE_PATHS'
         $script:entryState.Variables.TEST_BAMI_MODULE_PATHS.value | Should -BeExactly 'malformed-retired-selector'
         $script:entryState.Variables.ARM_TENANT_ID.value | Should -BeExactly 'legacy-value'
-        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 13 -ParameterFilter { $ArgumentList[4] -ceq 'GET' }
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 15 -ParameterFilter { $ArgumentList[4] -ceq 'GET' }
     }
 
     It 'rejects an incorrect or missing App slug before the workflow can publish' -ForEach @(
@@ -408,7 +425,7 @@ if ($method -ceq 'GET') { $response | ConvertTo-Json -Depth 10 -Compress }
         $actual = Set-AvmBicepTestTenantVariable -Expected $expected -Name 'VALIDATE_SUBSCRIPTION_IDS' -Value $value
         $actual.VALIDATE_SUBSCRIPTION_IDS.Value | Should -BeExactly $value
         @($actual.VALIDATE_SUBSCRIPTION_IDS.Value | ConvertFrom-Json) | Should -HaveCount 28
-        $actual.Count | Should -Be 6
+        $actual.Count | Should -Be 7
         $actual.Contains('TEST_BAMI_MODULE_PATHS') | Should -BeFalse
         $state = Get-Content -LiteralPath $script:boundaryStatePath -Raw | ConvertFrom-Json -AsHashtable
         $state.Request[4] | Should -BeExactly $Method

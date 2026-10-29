@@ -66,8 +66,11 @@ function Resolve-AvmBicepModuleSettings {
     $groups = @($Configuration['moduleGroups'])
     foreach ($entry in $groups) {
         $group = ConvertTo-AvmSettingDictionary -Value $entry
-        if (@($group.Keys | Where-Object { $_ -cnotin @('name', 'order', 'modules', 'entraGroups', 'testTenant') }).Count -gt 0) {
+        if (@($group.Keys | Where-Object { $_ -cnotin @('name', 'order', 'modules', 'entraGroups', 'testTenant', 'existingIdentity') }).Count -gt 0) {
             throw [System.ArgumentException]::new('Bicep module groups contain unsupported settings.')
+        }
+        if ($group.Contains('existingIdentity')) {
+            $null = ConvertTo-AvmExistingIdentitySetting -Value $group['existingIdentity']
         }
         foreach ($selector in @($group['modules'])) {
             if ($selector -ceq '*') { continue }
@@ -89,6 +92,103 @@ function Resolve-AvmBicepModuleSettings {
     return $result
 }
 
+function Resolve-AvmBicepModuleExistingIdentities {
+    [CmdletBinding()]
+    [OutputType([System.Collections.IDictionary])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $ModulePaths,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Configuration
+    )
+
+    $groups = @($Configuration['moduleGroups'])
+    $result = [ordered]@{}
+    foreach ($path in @($ModulePaths | Sort-Object -CaseSensitive)) {
+        $identity = Resolve-AvmGroupExistingIdentity -Groups $groups -SelectorProperty 'modules' -Item $path
+        if ($null -ne $identity) { $result[$path] = $identity }
+    }
+    return $result
+}
+
+function Resolve-AvmBicepSubscriptionVendingBillingScopes {
+    [CmdletBinding()]
+    [OutputType([System.Collections.IDictionary])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Configuration,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Values
+    )
+
+    $selector = 'avm/ptn/lz/sub-vending'
+    $null = Resolve-AvmBicepModuleSettings -ModulePaths @($selector) -Configuration $Configuration
+    $identities = Resolve-AvmBicepModuleExistingIdentities -ModulePaths @($selector) -Configuration $Configuration
+    $result = [ordered]@{}
+    if ($identities.Contains($selector)) {
+        $identity = Resolve-AvmSubscriptionVendingIdentity -ExistingIdentity $identities[$selector] -Values $Values
+        $result[$selector] = $identity['billing_scope']
+    }
+    return $result
+}
+
+function ConvertTo-AvmBicepModuleBillingScopeJson {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [System.Collections.IDictionary] $BillingScopes
+    )
+
+    $selector = 'avm/ptn/lz/sub-vending'
+    if ($BillingScopes.Count -gt 1 -or
+        ($BillingScopes.Count -eq 1 -and -not $BillingScopes.Contains($selector))) {
+        throw [System.ArgumentException]::new('Only the canonical subscription-vending root may receive a Bicep Registry billing scope.')
+    }
+    $result = [ordered]@{}
+    if ($BillingScopes.Contains($selector)) {
+        $scope = $BillingScopes[$selector]
+        if ($scope -isnot [string] -or
+            $scope -cnotmatch '^/providers/Microsoft\.Billing/billingAccounts/[A-Za-z0-9:_-]+/billingProfiles/[A-Za-z0-9_-]+/invoiceSections/[A-Za-z0-9_-]+$') {
+            throw [System.ArgumentException]::new('The Bicep Registry billing scope must be an invoice-section resource ID.')
+        }
+        $result[$selector] = $scope
+    }
+    return ConvertTo-Json -InputObject $result -Compress -Depth 3
+}
+
+function Resolve-AvmBicepSubscriptionCleanupManagementGroups {
+    [CmdletBinding()]
+    [OutputType([System.Collections.IDictionary])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Configuration,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Values
+    )
+
+    $selector = 'avm/ptn/lz/sub-vending'
+    $identities = Resolve-AvmBicepModuleExistingIdentities -ModulePaths @($selector) -Configuration $Configuration
+    $result = [ordered]@{}
+    if ($identities.Contains($selector)) {
+        $identity = Resolve-AvmSubscriptionVendingIdentity -ExistingIdentity $identities[$selector] -Values $Values
+        $result[$selector] = $identity['management_group_id']
+    }
+    return $result
+}
+
+function ConvertTo-AvmBicepModuleSubscriptionCleanupManagementGroupJson {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [System.Collections.IDictionary] $ManagementGroups
+    )
+
+    $selector = 'avm/ptn/lz/sub-vending'
+    if ($ManagementGroups.Count -gt 1 -or
+        ($ManagementGroups.Count -eq 1 -and -not $ManagementGroups.Contains($selector)) -or
+        ($ManagementGroups.Contains($selector) -and (
+            $ManagementGroups[$selector] -isnot [string] -or
+            $ManagementGroups[$selector] -cnotmatch '^[A-Za-z0-9_().-]{1,90}$' -or
+            $ManagementGroups[$selector] -in @('.', '..') -or $ManagementGroups[$selector].EndsWith('.')))) {
+        throw [System.ArgumentException]::new('Only the canonical subscription-vending root may receive a valid Bicep Registry cleanup management group.')
+    }
+    return ConvertTo-Json -InputObject $ManagementGroups -Compress -Depth 3
+}
+
 function ConvertTo-AvmBicepIdentityMapping {
     [CmdletBinding()]
     [OutputType([System.Collections.IDictionary])]
@@ -96,6 +196,7 @@ function ConvertTo-AvmBicepIdentityMapping {
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Identities,
         [Parameter(Mandatory)] [string[]] $ModulePaths,
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Settings,
+        [AllowEmptyCollection()] [System.Collections.IDictionary] $ExistingIdentities = @{},
         [switch] $Legacy
     )
 
@@ -109,6 +210,9 @@ function ConvertTo-AvmBicepIdentityMapping {
         $identity = $Identities[$path]
         $name = Get-AvmTestIdentityName -ModulePath $path -Legacy:$Legacy
         $expectedId = "/subscriptions/$($settings.TEST_BAMI_ADMIN_SUBSCRIPTION_ID)/resourceGroups/$($settings.TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME)/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$name"
+        if (-not $Legacy -and $ExistingIdentities.Contains($path)) {
+            $expectedId = $ExistingIdentities[$path]['resource_id']
+        }
         if ($identity -isnot [System.Collections.IDictionary] -or $identity.Count -ne 3 -or
             $identity['tenant_id'] -ine $settings.TEST_BAMI_TENANT_ID -or
             $identity['identity_resource_id'] -ine $expectedId) {
@@ -121,14 +225,34 @@ function ConvertTo-AvmBicepIdentityMapping {
     return $mapping
 }
 
+function Resolve-AvmBicepSyncRunContext {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param()
+
+    $branchRun = $env:GITHUB_EVENT_NAME -ceq 'workflow_dispatch' -and
+        $env:GITHUB_REF -cmatch '^refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]*$'
+    $mainRun = $env:GITHUB_REF -ceq 'refs/heads/main'
+    $workflow = "Azure/azure-verified-modules-tools/.github/workflows/repository-management-bicep-sync.yml@$($env:GITHUB_REF)"
+    if ($env:GITHUB_ACTIONS -cne 'true' -or $env:GITHUB_REPOSITORY -cne 'Azure/azure-verified-modules-tools' -or
+        (-not $mainRun -and -not $branchRun) -or $env:GITHUB_WORKFLOW_REF -cne $workflow) {
+        throw [System.InvalidOperationException]::new(
+            'Bicep sync requires trusted Tools main or a manual trusted-repository branch run with matching workflow evidence.'
+        )
+    }
+    return [pscustomobject]@{
+        WorkflowRef = $workflow
+        IsManualBranch = $branchRun -and -not $mainRun
+    }
+}
+
 function Get-AvmBicepIdentityPublicationContext {
     [CmdletBinding()]
     [OutputType([System.Collections.IDictionary])]
     param()
 
-    $workflow = 'Azure/azure-verified-modules-tools/.github/workflows/repository-management-bicep-sync.yml@refs/heads/main'
-    if ($env:GITHUB_ACTIONS -cne 'true' -or $env:GITHUB_REPOSITORY -cne 'Azure/azure-verified-modules-tools' -or
-        $env:GITHUB_REF -cne 'refs/heads/main' -or $env:GITHUB_WORKFLOW_REF -cne $workflow -or
+    $run = Resolve-AvmBicepSyncRunContext
+    if (
         $env:GITHUB_REPOSITORY_ID -cnotmatch '^[1-9][0-9]*$' -or
         $env:GITHUB_RUN_ID -cnotmatch '^[1-9][0-9]*$' -or $env:GITHUB_RUN_ATTEMPT -cnotmatch '^[1-9][0-9]*$' -or
         $env:GITHUB_SHA -cnotmatch '^[0-9a-f]{40}$') {
@@ -136,7 +260,7 @@ function Get-AvmBicepIdentityPublicationContext {
     }
     return [ordered]@{
         repositoryId = $env:GITHUB_REPOSITORY_ID
-        workflowRef = $workflow
+        workflowRef = $run.WorkflowRef
         commit = $env:GITHUB_SHA
         runId = $env:GITHUB_RUN_ID
         runAttempt = $env:GITHUB_RUN_ATTEMPT

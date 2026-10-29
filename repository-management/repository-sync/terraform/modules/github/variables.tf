@@ -21,6 +21,20 @@ variable "test_subscription_ids" {
   description = "List of subscription IDs to use for testing."
 }
 
+variable "subscription_vending_management_group_id" {
+  type        = string
+  description = "Optional subscription-vending management group identifier for the selected repository."
+  default     = null
+  nullable    = true
+}
+
+variable "subscription_vending_billing_scope" {
+  type        = string
+  description = "Optional invoice-section billing scope for the selected subscription-vending repository."
+  default     = null
+  nullable    = true
+}
+
 variable "github_repository_owner" {
   type        = string
   description = "Owner of the GitHub repositories."

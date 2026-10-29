@@ -79,6 +79,22 @@ putting the mapping on the command line. Existing variables are protected by
 the shared pre-write and readback checks; unacknowledged writes are never
 retried or rolled back automatically.
 
+### Subscription-vending billing scope handoff
+
+When the exact `avm/ptn/lz/sub-vending` selector remains configured and the
+complete bootstrap-owned vending identity tuple verifies, the variable sync
+publishes the `avm` environment secret `VALIDATE_MODULE_BILLING_SCOPES` in the
+Bicep Registry. Its compact JSON value contains only that canonical root and
+its invoice-section resource ID. If the selector is removed, it publishes
+`{}` so a previous scope cannot be reused. The value is provided to `gh` on
+standard input from an ephemeral workspace file, never as an argument or log
+value.
+
+The Bicep Registry workflow must select this secret only by the canonical
+`avm/ptn/lz/sub-vending` root, then fall back to its legacy Key Vault lookup.
+No generic management-group selector or CI Key Vault/permission change is
+part of this handoff.
+
 The plan guard rejects foreign state, unrelated identity deletion or replacement, direct
 role assignments, moved/imported identities, widened federation and incomplete
 group/provider evidence. Removing a configured membership is allowed only for

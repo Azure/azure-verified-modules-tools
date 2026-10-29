@@ -1,5 +1,5 @@
 output "client_id" {
-  value = azapi_resource.identity.output.properties.clientId
+  value = local.identity_properties.clientId
 
   precondition {
     condition     = local.member_is_repository_identity
@@ -12,7 +12,7 @@ output "tenant_id" {
 }
 
 output "identity_resource_id" {
-  value = azapi_resource.identity.id
+  value = local.identity_resource_id
 }
 
 output "test_group_contract" {
@@ -33,6 +33,12 @@ output "test_group_contract" {
         display_name     = group.display_name
         security_enabled = group.security_enabled
       }
+    }
+    expected_identity = {
+      client_id            = local.identity_properties.clientId
+      principal_id         = local.identity_properties.principalId
+      externally_managed   = var.existing_identity != null
+      manages_entra_groups = var.existing_identity == null || var.existing_identity.manage_entra_groups
     }
   }
 }

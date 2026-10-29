@@ -9,6 +9,56 @@ function Get-AvmBicepTestTenantVariableNames {
     'VALIDATE_MANAGEMENT_GROUP_ID'
     'VALIDATE_PERSISTENT_SUBSCRIPTION_ID'
     'VALIDATE_MODULE_CLIENT_IDS'
+    'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'
+}
+
+function Set-AvmBicepRegistryBillingScopeSecret {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Value
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+    if ($env:AVM_OFFLINE -ceq '1') {
+        throw [System.InvalidOperationException]::new('AVM_OFFLINE=1: refusing GitHub secret operations.')
+    }
+    $token = $env:GH_TOKEN
+    if ([string]::IsNullOrWhiteSpace($token)) {
+        throw [System.InvalidOperationException]::new('Bicep secret synchronization requires an explicit target-scoped app installation token in GH_TOKEN.')
+    }
+    $target = 'Azure/bicep-registry-modules:avm/VALIDATE_MODULE_BILLING_SCOPES'
+    if (-not $PSCmdlet.ShouldProcess($target, 'Publish an environment secret')) {
+        throw [System.OperationCanceledException]::new('The environment secret write was not approved.')
+    }
+
+    $bodyPath = $null
+    try {
+        # gh reads an unspecified --body from standard input, keeping the secret out of argv and logs.
+        $bodyPath = Join-Path -Path ([System.IO.Path]::GetFullPath((Get-Location).ProviderPath)) `
+            -ChildPath ('.avm-billing-scope-' + [guid]::NewGuid().ToString('N') + '.body')
+        [System.IO.File]::WriteAllText($bodyPath, $Value, [System.Text.UTF8Encoding]::new($false))
+        $response = Invoke-RepositorySyncProcess -Command 'gh' -Arguments @(
+            'secret', 'set', 'VALIDATE_MODULE_BILLING_SCOPES',
+            '--repo', 'Azure/bicep-registry-modules', '--env', 'avm'
+        ) -StandardInputPath $bodyPath -TimeoutSec 60 -EnvVars @{
+            GH_TOKEN = $token
+            GH_ENTERPRISE_TOKEN = $null
+            GITHUB_ENTERPRISE_TOKEN = $null
+        }
+    }
+    finally {
+        if ($null -ne $bodyPath) {
+            Remove-Item -LiteralPath $bodyPath -Force -ErrorAction Stop
+        }
+    }
+    if ($response.ExitCode -ne 0) {
+        $httpStatus = [regex]::Match([string]$response.StdErr, '\(HTTP ([0-9]{3})\)')
+        $detail = if ($httpStatus.Success) { "; HTTP $($httpStatus.Groups[1].Value)" } else { '' }
+        throw [System.InvalidOperationException]::new(
+            "GitHub environment secret publication failed (exit $($response.ExitCode)$detail). Verify the target token has Actions secrets write permission."
+        )
+    }
 }
 
 function Invoke-AvmBicepTestTenantVariableApi {
@@ -18,7 +68,7 @@ function Invoke-AvmBicepTestTenantVariableApi {
         [ValidateSet(
             'VALIDATE_TENANT_ID', 'VALIDATE_CLIENT_ID', 'VALIDATE_SUBSCRIPTION_IDS',
             'VALIDATE_MANAGEMENT_GROUP_ID', 'VALIDATE_PERSISTENT_SUBSCRIPTION_ID',
-            'VALIDATE_MODULE_CLIENT_IDS', IgnoreCase = $false
+            'VALIDATE_MODULE_CLIENT_IDS', 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS', IgnoreCase = $false
         )] [string] $Name,
         [AllowEmptyString()] [string] $Value,
         [ValidateRange(1, 10000)] [int] $Page = 1

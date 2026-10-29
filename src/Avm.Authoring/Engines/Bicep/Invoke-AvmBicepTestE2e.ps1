@@ -13,6 +13,7 @@ function Invoke-AvmBicepTestE2e {
         [string] $SubscriptionId,
         [string] $TenantId,
         [string] $ManagementGroupId,
+        [string] $SubscriptionCleanupManagementGroupId,
         [string] $Location,
         [string] $ResourceLocation,
         [string] $ResourceGroupPrefix,
@@ -62,7 +63,8 @@ function Invoke-AvmBicepTestE2e {
             throw [AvmConfigurationException]::new('The saved case is missing or ignored in this checkout. Use avm test cleanup without running source.')
         }
         if ($Example.Count -gt 0 -or $UseCiInputs -or $Tokens.psbase.Count -gt 0 -or $Parameters.psbase.Count -gt 0 -or
-            $TokenFile -or $ParameterFile -or $TestSubscriptionIds -or $ResourceLocation -or $ResourceGroupPrefix -or $ManagementGroupId) {
+            $TokenFile -or $ParameterFile -or $TestSubscriptionIds -or $ResourceLocation -or $ResourceGroupPrefix -or $ManagementGroupId -or
+            $SubscriptionCleanupManagementGroupId) {
             throw [AvmConfigurationException]::new('Complete selects its case and deployment inputs from state; do not supply deployment-only options.')
         }
         if ($Location -and ($Location -replace '\s', '').ToLowerInvariant() -cne $state['case']['metadataLocation']) {
@@ -140,6 +142,11 @@ function Invoke-AvmBicepTestE2e {
     if ($ManagementGroupId -and ($ManagementGroupId -cnotmatch '^[A-Za-z0-9_().-]{1,90}$' -or
             $ManagementGroupId.EndsWith('.') -or $ManagementGroupId -in @('.', '..'))) {
         throw [AvmConfigurationException]::new('Bicep e2e -ManagementGroupId must be a safe group name, not an ARM resource ID.')
+    }
+    if ($SubscriptionCleanupManagementGroupId -and (
+            $SubscriptionCleanupManagementGroupId -cnotmatch '^[A-Za-z0-9_().-]{1,90}$' -or
+            $SubscriptionCleanupManagementGroupId.EndsWith('.') -or $SubscriptionCleanupManagementGroupId -in @('.', '..'))) {
+        throw [AvmConfigurationException]::new('Bicep e2e -SubscriptionCleanupManagementGroupId must be a safe group name.')
     }
     $requirementsByModule = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
     if ($Phase -ne 'Complete') {
@@ -272,6 +279,7 @@ function Invoke-AvmBicepTestE2e {
                     })
                 $run = Invoke-AvmBicepNativeTestCase -Item $item -TenantId $tenant -Location $Location `
                     -RepositoryRoot $repoRoot -AzPath $az.Source -CiInput $ci -ManagementGroupId $ManagementGroupId `
+                    -SubscriptionCleanupManagementGroupId $SubscriptionCleanupManagementGroupId `
                     -ResourceGroupPrefix $ResourceGroupPrefix -ResourceLocation $ResourceLocation -StatePath $CleanupStatePath `
                     -Phase $Phase -DeploymentRetryLimit $DeploymentRetryLimit -ValidationRetryLimit $ValidationRetryLimit `
                     -KeepResources:$KeepResources -Confirm:$false

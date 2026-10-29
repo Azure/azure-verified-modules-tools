@@ -23,23 +23,30 @@ jobs:
     name: Sync test tenant variables
     if: >-
       github.repository == 'Azure/azure-verified-modules-tools' &&
-      github.ref == 'refs/heads/main'
+      (
+        github.ref == 'refs/heads/main' ||
+        (
+          github.event_name == 'workflow_dispatch' &&
+          startsWith(github.ref, 'refs/heads/')
+        )
+      )
     runs-on: ubuntu-latest
     environment: avm
     timeout-minutes: 20
     steps:
-      - name: Checkout trusted tools
+      - name: Checkout immutable tools revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Create target-scoped Variables token
+      - name: Create target-scoped Variables and secrets token
         id: variables-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         env:
           # The pinned parser supports this permission, but its input manifest omits it.
           INPUT_PERMISSION-ACTIONS-VARIABLES: write
+          INPUT_PERMISSION-SECRETS: write
         with:
           client-id: ${{ vars.AVM_APP_CLIENT_ID }}
           private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
@@ -60,6 +67,11 @@ jobs:
           TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME: ${{ vars.TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME }}
           TEST_BAMI_BICEP_CLIENT_ID: ${{ vars.TEST_BAMI_BICEP_CLIENT_ID }}
           TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID }}
+          TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID: ${{ vars.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID }}
+          TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID: ${{ vars.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID }}
+          TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID: ${{ vars.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID }}
+          TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID: ${{ vars.TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID }}
+          TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE: ${{ vars.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE }}
         run: |
           if ($env:AVM_APP_SLUG -cne 'azure-verified-modules') {
             throw 'The configured GitHub App is not azure-verified-modules.'
@@ -72,7 +84,13 @@ jobs:
     needs: sync-test-tenant-variables
     if: >-
       github.repository == 'Azure/azure-verified-modules-tools' &&
-      github.ref == 'refs/heads/main'
+      (
+        github.ref == 'refs/heads/main' ||
+        (
+          github.event_name == 'workflow_dispatch' &&
+          startsWith(github.ref, 'refs/heads/')
+        )
+      )
     runs-on: ubuntu-latest
     environment: avm
     timeout-minutes: 90
@@ -88,11 +106,16 @@ jobs:
       TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME: ${{ vars.TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME }}
       TEST_BAMI_BICEP_CLIENT_ID: ${{ vars.TEST_BAMI_BICEP_CLIENT_ID }}
       TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID }}
+      TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID: ${{ vars.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID }}
+      TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID: ${{ vars.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID }}
+      TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID: ${{ vars.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID }}
+      TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID: ${{ vars.TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID }}
+      TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE: ${{ vars.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE }}
     steps:
-      - name: Checkout trusted tools
+      - name: Checkout immutable tools revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Checkout Bicep source inventory

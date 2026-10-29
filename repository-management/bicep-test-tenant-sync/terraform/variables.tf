@@ -16,6 +16,19 @@ variable "modules" {
   }
 }
 
+variable "existing_identities" {
+  type = map(object({
+    name                = string
+    resource_id         = string
+    client_id           = string
+    principal_id        = string
+    federation_name_key = string
+    manage_entra_groups = bool
+  }))
+  description = "Bootstrap-owned identity evidence keyed by canonical Bicep root module path."
+  default     = {}
+}
+
 variable "bami_test_settings" {
   type = object({
     tenant_id                    = string

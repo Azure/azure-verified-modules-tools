@@ -11,6 +11,20 @@
       "modules": ["*"]
     },
     {
+      "name": "subscription-vending-identity",
+      "entraGroups": [
+        "avm-test-subscription-vending-owners"
+      ],
+      "existingIdentity": {
+        "name": "id-avm-subscription-vending",
+        "resourceGroupName": "rg-avm-managed-identities",
+        "manageEntraGroups": true
+      },
+      "modules": [
+        "avm/ptn/lz/sub-vending"
+      ]
+    },
+    {
       "name": "privileged-role-assignment-tests",
       "entraGroups": ["avm-test-management-group-iam-admins"],
       "modules": [

@@ -92,7 +92,7 @@ Listing does not resolve tools or credentials. An absent tier is
 ## Syntax
 
 ```powershell
-Invoke-AvmTestE2e [[-Path] <string>] [-Ecosystem <string>] [-AllowPathFallback] [-Example <string[]>] [-List] [-MaxRetry <int>] [-Recurse] [-SubscriptionId <string>] [-TenantId <string>] [-ManagementGroupId <string>] [-Location <string>] [-ResourceLocation <string>] [-ResourceGroupPrefix <string>] [-TokenFile <string>] [-Tokens <IDictionary>] [-ParameterFile <string>] [-Parameters <IDictionary>] [-UseCiInputs] [-TestSubscriptionIds <string>] [-SubscriptionSelectionSeed <int>] [-SubscriptionJobIndex <int>] [-Phase <string>] [-CleanupStatePath <string>] [-KeepResources] [-RequireResourceIsolation] [-DeploymentRetryLimit <int>] [-ValidationRetryLimit <int>] [-SkipModuleVersionCheck] [-WhatIf] [-Confirm] [<CommonParameters>]
+Invoke-AvmTestE2e [[-Path] <string>] [-Ecosystem <string>] [-AllowPathFallback] [-Example <string[]>] [-List] [-MaxRetry <int>] [-Recurse] [-SubscriptionId <string>] [-TenantId <string>] [-ManagementGroupId <string>] [-SubscriptionCleanupManagementGroupId <string>] [-Location <string>] [-ResourceLocation <string>] [-ResourceGroupPrefix <string>] [-TokenFile <string>] [-Tokens <IDictionary>] [-ParameterFile <string>] [-Parameters <IDictionary>] [-UseCiInputs] [-TestSubscriptionIds <string>] [-SubscriptionSelectionSeed <int>] [-SubscriptionJobIndex <int>] [-Phase <string>] [-CleanupStatePath <string>] [-KeepResources] [-RequireResourceIsolation] [-DeploymentRetryLimit <int>] [-ValidationRetryLimit <int>] [-SkipModuleVersionCheck] [-WhatIf] [-Confirm] [<CommonParameters>]
 ```
 
 ## Parameters
@@ -357,6 +357,21 @@ Skip the advisory module-version check.
 | Required | false |
 | Position | named |
 | Default value | False |
+| Accept pipeline input | false |
+| Accept wildcard characters | false |
+
+### -SubscriptionCleanupManagementGroupId
+
+Bicep-only: explicit isolated management group for subscription-alias
+cleanup. It is persisted before deployment and cannot be supplied to
+Complete, which uses the recorded target.
+
+| Property | Value |
+| --- | --- |
+| Type | `String` |
+| Required | false |
+| Position | named |
+| Default value |  |
 | Accept pipeline input | false |
 | Accept wildcard characters | false |
 
