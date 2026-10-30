@@ -155,6 +155,7 @@ Describe 'Independent CI workflows' {
         $jobs.lint['runs-on'] | Should -BeExactly 'ubuntu-latest'
         $jobs.integration['timeout-minutes'] | Should -Be 30
         $native = $jobs['native-qualification']
+        $native['timeout-minutes'] | Should -Be 30
         $native.strategy.matrix.Contains('fixture') | Should -BeFalse
         $native.Contains('environment') | Should -BeFalse
         $native.env.ARM_USE_OIDC | Should -BeExactly 'false'

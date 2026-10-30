@@ -313,7 +313,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 30 || 15 }}
+    timeout-minutes: 30
     env:
       GITHUB_TOKEN: ${{ github.token }}
       ARM_USE_OIDC: 'false'
