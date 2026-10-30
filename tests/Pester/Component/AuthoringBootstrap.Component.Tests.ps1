@@ -66,6 +66,7 @@ Describe 'Repository authoring ref resolution' -Tag 'Component' {
             New-Item -ItemType Directory -Path $env:RUNNER_TEMP -Force | Out-Null
             $global:AvmBootstrapSaveAttempts = 0
             Mock Get-PSResourceRepository { [pscustomobject]@{ Name = 'UserFeed'; Priority = 10; Uri = 'https://example.invalid/gallery' } }
+            Mock Register-PSResourceRepository {}
             Mock Find-PSResource { [pscustomobject]@{ Version = [version]'0.0.0' } }
             Mock Save-PSResource {
                 $global:AvmBootstrapSaveAttempts++
@@ -89,7 +90,7 @@ Describe 'Repository authoring ref resolution' -Tag 'Component' {
         It 'retains package manager bootstrap retries before trying configured repositories' {
             function Install-Module {
                 [CmdletBinding()]
-                param([string] $Name, [string] $Scope, [switch] $Force, [switch] $AllowClobber)
+                param([string] $Name, [version] $MinimumVersion, [string] $Scope, [switch] $Force, [switch] $AllowClobber)
                 throw 'Package manager installation must be mocked.'
             }
             $global:AvmBootstrapManagerAttempts = 0
@@ -148,6 +149,65 @@ Describe 'Repository authoring ref resolution' -Tag 'Component' {
             Should -Invoke Save-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'Backup' -and $Version -eq '0.0.0' }
         }
 
+        It 'registers MAR when no configured repository uses its URI' {
+            & $script:prepare | Out-Null
+
+            Should -Invoke Register-PSResourceRepository -Exactly 1 -ParameterFilter {
+                $Name -eq 'MAR' -and $Uri -eq 'https://mcr.microsoft.com/' -and
+                $ApiVersion -eq 'ContainerRegistry' -and $Trusted
+            }
+        }
+
+        It 'does not overwrite an existing MAR repository with an arbitrary name' {
+            Mock Get-PSResourceRepository {
+                [pscustomobject]@{ Name = 'ExistingRegistry'; Priority = 10; Uri = 'https://mcr.microsoft.com/' }
+                [pscustomobject]@{ Name = 'UserFeed'; Priority = 20; Uri = 'https://example.invalid/gallery' }
+            }
+
+            & $script:prepare | Out-Null
+
+            Should -Invoke Register-PSResourceRepository -Exactly 0
+        }
+
+        It 'selects the newest release from every configured repository' {
+            Mock Get-PSResourceRepository {
+                [pscustomobject]@{ Name = 'First'; Priority = 10; Uri = 'https://example.invalid/first' }
+                [pscustomobject]@{ Name = 'Newest'; Priority = 20; Uri = 'https://example.invalid/newest' }
+            }
+            Mock Find-PSResource {
+                if ($Repository -eq 'First') { [pscustomobject]@{ Version = [version]'0.0.0' } }
+                if ($Repository -eq 'Newest') { [pscustomobject]@{ Version = [version]'0.1.0' } }
+            }
+            Mock Save-PSResource {
+                $destination = Join-Path $Path 'Avm.Authoring'
+                Copy-Item -LiteralPath (Join-Path $script:root 'src' 'Avm.Authoring') -Destination $destination -Recurse
+                $manifest = Join-Path $destination 'Avm.Authoring.psd1'
+                $content = Get-Content -LiteralPath $manifest -Raw
+                $content = $content -replace "(?m)^(\s*ModuleVersion\s*=\s*)'[^']+'", "`$1'0.1.0'"
+                Set-Content -LiteralPath $manifest -Value $content -NoNewline -Encoding utf8
+            }
+
+            & $script:prepare | Out-Null
+
+            Should -Invoke Save-PSResource -Exactly 1 -ParameterFilter {
+                $Repository -eq 'Newest' -and $Version -eq '0.1.0'
+            }
+        }
+
+        It 'falls back after MAR reports no package' {
+            Mock Get-PSResourceRepository {
+                [pscustomobject]@{ Name = 'MAR'; Priority = 10; Uri = 'https://mcr.microsoft.com/' }
+                [pscustomobject]@{ Name = 'UserFeed'; Priority = 20; Uri = 'https://example.invalid/gallery' }
+            }
+            Mock Find-PSResource {
+                if ($Repository -eq 'UserFeed') { [pscustomobject]@{ Version = [version]'0.0.0' } }
+            }
+
+            & $script:prepare | Out-Null
+
+            Should -Invoke Save-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'UserFeed' }
+        }
+
         It 'keeps the selected concrete version when falling through download repositories' {
             Mock Get-PSResourceRepository {
                 [pscustomobject]@{ Name = 'Preferred'; Priority = 10 }
@@ -159,6 +219,7 @@ Describe 'Repository authoring ref resolution' -Tag 'Component' {
             }
             & $script:prepare | Out-Null
             Should -Invoke Find-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'Preferred' }
+            Should -Invoke Find-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'Backup' }
             Should -Invoke Save-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'Backup' -and $Version -eq '0.0.0' }
         }
 

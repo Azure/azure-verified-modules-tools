@@ -3144,8 +3144,10 @@ including workflow and repository-management tests.
 - Module version checks, self-upgrades, build prerequisites, and workflow
   dependency installations use the user's configured PowerShell repositories,
   not a required repository name or URL. PSResourceGet repositories are tried
-  by ascending priority, then name. Dependency operations stop at the first
-  successful result.
+  by ascending priority, then name. Dependencies other than unpinned
+  `Avm.Authoring` stop at the first successful result. Workflow installation
+  of an exact `Avm.Authoring` version also stops at the first successful
+  repository.
   Bootstrap PowerShellGet uses its configured repository enumeration order.
   Missing packages and exhausted repository failures fall through to the next
   repository; no configured repositories or failure of every repository is an
@@ -3163,7 +3165,10 @@ including workflow and repository-management tests.
   repositories, in that order, using the exact selected version and verifying
   the installed version before reporting success. Equal-version ties follow the
   user's configured order, including for MAR; no repository name or URI gets
-  special priority. Do not register repositories or change priorities automatically.
+  special priority. Workflows register `https://mcr.microsoft.com/` as a
+  trusted `ContainerRegistry` repository only when no existing repository has
+  that URI. This preserves existing arbitrary repository names and every
+  configured priority.
   The MAR artifact is `mcr.microsoft.com/psresource/avm.authoring`, with the same
   `Avm.Authoring` module identity and version as other feeds. PSResourceGet adds
   the `psresource/` prefix; find and update commands still use `Avm.Authoring`.
@@ -3171,8 +3176,13 @@ including workflow and repository-management tests.
   name using `Register-PSResourceRepository -Name MAR -Uri https://mcr.microsoft.com -ApiVersion ContainerRegistry`;
   newer PSResourceGet versions also provide `-MicrosoftArtifactRegistry`.
   The publication pipeline is separate from repository selection.
-- Normal commands compare the running module against the latest release from
-  all usable configured repositories and stop with upgrade guidance when outdated. `avm version`
+- Workflow installation without an explicit `Avm.Authoring` version discovers
+  every configured repository, selects the highest stable version, and installs
+  that exact version only from repositories reporting it in configured
+  priority/name order. It may fall back only to another source reporting that
+  same version, never a lower version. Normal commands compare the running
+  module against the latest release from all usable configured repositories and
+  stop with upgrade guidance when outdated. `avm version`
   and `Get-AvmVersion` instead return the running version with an update warning.
   `avm upgrade` is the sole CLI self-update command and bypasses the guard so it
   can install the newer version.

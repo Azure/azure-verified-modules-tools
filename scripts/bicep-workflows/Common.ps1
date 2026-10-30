@@ -114,6 +114,87 @@ function Write-AvmWorkflowOutput {
     [IO.File]::AppendAllText($FilePath, "$Name=$Value`n", [Text.UTF8Encoding]::new($false))
 }
 
+function Get-AvmWorkflowPowerShellRepository {
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param()
+
+    $marUri = 'https://mcr.microsoft.com'
+    $repositories = @(Get-PSResourceRepository -ErrorAction Stop)
+    $hasMar = @($repositories | Where-Object {
+            $uriProperty = $_.PSObject.Properties['Uri']
+            $uri = if ($null -eq $uriProperty) { '' } else { ([string]$uriProperty.Value).TrimEnd('/') }
+            $uri -ieq $marUri
+        }).Count -gt 0
+    if (-not $hasMar) {
+        Register-PSResourceRepository -Name MAR -Uri "$marUri/" -ApiVersion ContainerRegistry -Trusted -ErrorAction Stop
+        $repositories = @(Get-PSResourceRepository -ErrorAction Stop)
+    }
+    $repositories = @($repositories | Sort-Object Priority, Name)
+    if ($repositories.Count -eq 0) {
+        throw [InvalidOperationException]::new('No PowerShell repositories are configured.')
+    }
+    return $repositories
+}
+
+function Find-AvmWorkflowLatestModuleRelease {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [object[]] $Repository
+    )
+
+    $candidates = [Collections.Generic.List[object]]::new()
+    $lastFailure = $null
+    foreach ($source in $Repository) {
+        try {
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+                try {
+                    $resources = @(Find-PSResource -Name $Name -Repository $source.Name -ErrorAction Stop)
+                    foreach ($resource in $resources) {
+                        [version] $version = $null
+                        if ([version]::TryParse([string]$resource.Version, [ref]$version)) {
+                            $candidates.Add([pscustomobject]@{
+                                    Version    = $version
+                                    Repository = $source.Name
+                                })
+                        }
+                    }
+                    break
+                }
+                catch {
+                    if ($attempt -eq 3 -or $_.Exception.ToString() -notmatch
+                        '(?i)(timed? out|connection (reset|refused)|temporary failure|temporarily unavailable|\b429\b|\b50[234]\b|no route to host|name or service not known)') {
+                        throw
+                    }
+                    Write-Warning "Finding $Name failed transiently (attempt $attempt of 3); retrying."
+                    Start-Sleep -Seconds (5 * [math]::Pow(2, $attempt - 1))
+                }
+            }
+        }
+        catch {
+            $lastFailure = $_
+            Write-Verbose "PowerShell repository '$($source.Name)' could not find $Name; trying the next configured repository."
+        }
+    }
+    if ($candidates.Count -eq 0) {
+        if ($null -ne $lastFailure) { throw $lastFailure }
+        throw [InvalidOperationException]::new("No stable $Name package was found in the configured PowerShell repositories.")
+    }
+
+    $selected = $null
+    foreach ($candidate in $candidates) {
+        if ($null -eq $selected -or $candidate.Version -gt $selected.Version) {
+            $selected = $candidate
+        }
+    }
+    return [pscustomobject]@{
+        Version      = $selected.Version
+        Repositories = @($candidates | Where-Object Version -EQ $selected.Version | ForEach-Object Repository)
+    }
+}
+
 function Install-AvmWorkflowModule {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -134,11 +215,21 @@ function Install-AvmWorkflowModule {
     $target = if ($hasVersion) { "$Name $Version" } else { "$Name latest stable" }
     if (-not $PSCmdlet.ShouldProcess($target, 'Install workflow dependency from configured PowerShell repositories')) { return }
     Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
-    $repositories = @(Get-PSResourceRepository -ErrorAction Stop | Sort-Object Priority, Name)
-    if ($repositories.Count -eq 0) {
-        throw [InvalidOperationException]::new('No PowerShell repositories are configured.')
+    $repositories = @(Get-AvmWorkflowPowerShellRepository)
+    if ($hasVersion) {
+        $selectedVersion = $Version
+        $sourceRepositories = $repositories
     }
-    foreach ($repository in $repositories) {
+    else {
+        $release = Find-AvmWorkflowLatestModuleRelease -Name $Name -Repository $repositories
+        $selectedVersion = $release.Version
+        $sourceRepositories = @(
+            foreach ($repository in $repositories) {
+                if ($repository.Name -in $release.Repositories) { $repository }
+            }
+        )
+    }
+    foreach ($repository in $sourceRepositories) {
         try {
             for ($attempt = 1; $attempt -le 3; $attempt++) {
                 $installed = @(Get-Module -ListAvailable -Name $Name | Where-Object {
@@ -155,7 +246,7 @@ function Install-AvmWorkflowModule {
                         Quiet           = $true
                         ErrorAction     = 'Stop'
                     }
-                    if ($hasVersion) { $parameters['Version'] = $Version.ToString() }
+                    $parameters['Version'] = $selectedVersion.ToString()
                     Install-PSResource @parameters
                     $installed = @(Get-Module -ListAvailable -Name $Name | Where-Object {
                             -not $hasVersion -or ($Minimum -and $_.Version -ge $Version) -or $_.Version -eq $Version

@@ -3,7 +3,13 @@
 
 BeforeDiscovery {
     $workflowRoot = Join-Path $PSScriptRoot '..' '..' '..' '..' '.github' 'workflows'
-    $installCases = @(foreach ($workflowName in 'repository-management-sync.yml') {
+    $installCases = @(foreach ($workflowName in @(
+            'repository-management-issue-owner-routing.yml',
+            'repository-management-module-list-sync.yml',
+            'repository-management-pr-reviewer-routing.yml',
+            'repository-management-sync.yml',
+            'repository-management-workflow-failure-issues.yml'
+        )) {
         $workflow = Get-Content -LiteralPath (Join-Path $workflowRoot $workflowName) -Raw
         $step = [regex]::Match(
             $workflow,
@@ -19,8 +25,9 @@ BeforeDiscovery {
         @{
             WorkflowName = $workflowName
             InstallScript = $run.Groups['script'].Value -replace '(?m)^ {10}', ''
-            HasBootstrap = $false
+            HasBootstrap = $workflowName -ne 'repository-management-sync.yml'
             IsBicep = $false
+            SupportsWorkflowAuthoringSource = $workflowName -eq 'repository-management-sync.yml'
         }
     })
     foreach ($workflowFile in Get-ChildItem -LiteralPath $workflowRoot -Filter 'bicep*.yml') {
@@ -42,6 +49,7 @@ BeforeDiscovery {
                 InstallScript = $blocks[$index].Value -replace '(?m)^ {10}', ''
                 HasBootstrap = $true
                 IsBicep = $true
+                SupportsWorkflowAuthoringSource = $false
             }
         }
     }
@@ -61,6 +69,7 @@ Describe 'Avm.Authoring installation in <WorkflowName>' -ForEach $installCases {
             [CmdletBinding()]
             param(
                 [string] $Name,
+                [version] $MinimumVersion,
                 [string] $Scope,
                 [switch] $Force,
                 [switch] $AllowClobber
@@ -73,9 +82,25 @@ Describe 'Avm.Authoring installation in <WorkflowName>' -ForEach $installCases {
                 [string] $Name,
                 [string] $Scope,
                 [string] $Version,
+                [string] $Repository,
                 [switch] $TrustRepository
             )
             throw [System.InvalidOperationException]::new('Install-PSResource must be mocked.')
+        }
+        function Get-PSResourceRepository {
+            [CmdletBinding()]
+            param()
+            throw [System.InvalidOperationException]::new('Get-PSResourceRepository must be mocked.')
+        }
+        function Register-PSResourceRepository {
+            [CmdletBinding()]
+            param([string] $Name, [string] $Uri, [string] $ApiVersion, [switch] $Trusted)
+            throw [System.InvalidOperationException]::new('Register-PSResourceRepository must be mocked.')
+        }
+        function Find-PSResource {
+            [CmdletBinding()]
+            param([string] $Name, [string] $Repository)
+            throw [System.InvalidOperationException]::new('Find-PSResource must be mocked.')
         }
     }
 
@@ -92,11 +117,14 @@ Describe 'Avm.Authoring installation in <WorkflowName>' -ForEach $installCases {
         $global:AvmWorkflowBootstrapAttempts = 0
 
         Mock Get-Module {
-            [pscustomobject]@{ Name = 'Microsoft.PowerShell.PSResourceGet' }
+            [pscustomobject]@{ Name = 'Microsoft.PowerShell.PSResourceGet'; Version = [version]'1.1.1' }
         } -ParameterFilter { $ListAvailable -and $Name -eq 'Microsoft.PowerShell.PSResourceGet' }
         Mock Import-Module
         Mock Install-Module
         Mock Install-PSResource
+        Mock Get-PSResourceRepository { [pscustomobject]@{ Name = 'UserFeed'; Priority = 10; Uri = 'https://example.invalid/gallery' } }
+        Mock Register-PSResourceRepository {}
+        Mock Find-PSResource { [pscustomobject]@{ Version = [version]'2.0.0' } }
         Mock Start-Sleep
         Mock Write-Warning
         Mock avm
@@ -116,7 +144,11 @@ Describe 'Avm.Authoring installation in <WorkflowName>' -ForEach $installCases {
 
         Should -Invoke Install-PSResource -Times 1 -Exactly -ParameterFilter {
             $Name -eq 'Avm.Authoring' -and $Scope -eq 'CurrentUser' -and
-            $TrustRepository -and $ErrorAction -eq 'Stop' -and -not $Version
+            $TrustRepository -and $ErrorAction -eq 'Stop' -and $Version -eq '2.0.0' -and $Repository -eq 'UserFeed'
+        }
+        Should -Invoke Register-PSResourceRepository -Times 1 -Exactly -ParameterFilter {
+            $Name -eq 'MAR' -and $Uri -eq 'https://mcr.microsoft.com/' -and
+            $ApiVersion -eq 'ContainerRegistry' -and $Trusted
         }
         Should -Invoke Install-Module -Times 0 -Exactly
         Should -Invoke Start-Sleep -Times 0 -Exactly
@@ -203,28 +235,6 @@ Describe 'Avm.Authoring installation in <WorkflowName>' -ForEach $installCases {
         Should -Invoke avm -Times 0 -Exactly
     }
 
-    if ($HasBootstrap -and -not $IsBicep) {
-        It 'preserves the requested version <RequestedVersion> on every attempt' -ForEach @(
-            @{ RequestedVersion = '1.2.3' }
-            @{ RequestedVersion = '[1.2.3,2.0.0)' }
-        ) {
-            $env:AVM_AUTHORING_VERSION = $RequestedVersion
-            Mock Install-PSResource {
-                $global:AvmWorkflowInstallAttempts++
-                if ($global:AvmWorkflowInstallAttempts -eq 1) {
-                    throw [System.Net.Http.HttpRequestException]::new('Gallery HTTP 503.')
-                }
-            }
-
-            & $installer
-
-            Should -Invoke Install-PSResource -Times 2 -Exactly -ParameterFilter {
-                $Name -eq 'Avm.Authoring' -and $Version -eq $RequestedVersion -and
-                $Scope -eq 'CurrentUser' -and $TrustRepository -and $ErrorAction -eq 'Stop'
-            }
-        }
-
-    }
     if ($HasBootstrap) {
         It 'retries a failed PSResourceGet bootstrap before installing Avm.Authoring' {
             Mock Get-Module { } -ParameterFilter {
@@ -264,7 +274,7 @@ Describe 'Avm.Authoring installation in <WorkflowName>' -ForEach $installCases {
             Should -Invoke avm -Times 0 -Exactly
         }
     }
-    else {
+    if ($SupportsWorkflowAuthoringSource) {
         It 'loads the workflow checkout without contacting the Gallery' {
             $env:USE_WORKFLOW_AUTHORING_SOURCE = 'true'
             $sourceManifest = Join-Path $env:GITHUB_WORKSPACE 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'

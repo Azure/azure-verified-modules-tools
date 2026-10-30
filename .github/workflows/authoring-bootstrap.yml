@@ -124,8 +124,10 @@ jobs:
           $moduleRoot = Join-Path $packageRoot 'Avm.Authoring'
           New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
           if ($env:SOURCE -ceq 'repo') {
-            if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
-              Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+            if (-not @(Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet |
+                Where-Object { $_.Version -ge [version]'1.1.1' }).Count) {
+              Install-Module -Name Microsoft.PowerShell.PSResourceGet -MinimumVersion 1.1.1 `
+                -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
             }
             Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
             if (-not (Get-Module -ListAvailable -Name InvokeBuild | Where-Object { $_.Version -ge [version]'5.11.0' })) {
@@ -160,8 +162,10 @@ jobs:
             $release = $null
             for ($resourceAttempt = 1; $resourceAttempt -le 3; $resourceAttempt++) {
               try {
-                if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
-                  Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+                if (-not @(Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet |
+                    Where-Object { $_.Version -ge [version]'1.1.1' }).Count) {
+                  Install-Module -Name Microsoft.PowerShell.PSResourceGet -MinimumVersion 1.1.1 `
+                    -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
                 }
                 Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
                 break
@@ -173,22 +177,79 @@ jobs:
                 Start-Sleep -Seconds $delay
               }
             }
-            $repositories = @(Get-PSResourceRepository -ErrorAction Stop | Sort-Object Priority, Name)
+            $marUri = 'https://mcr.microsoft.com'
+            $repositories = @(Get-PSResourceRepository -ErrorAction Stop)
+            if (@($repositories | Where-Object {
+                  $uriProperty = $_.PSObject.Properties['Uri']
+                  $uri = if ($null -eq $uriProperty) { '' } else { ([string]$uriProperty.Value).TrimEnd('/') }
+                  $uri -ieq $marUri
+                }).Count -eq 0) {
+              Register-PSResourceRepository -Name MAR -Uri "$marUri/" -ApiVersion ContainerRegistry -Trusted -ErrorAction Stop
+              $repositories = @(Get-PSResourceRepository -ErrorAction Stop)
+            }
+            $repositories = @($repositories | Sort-Object Priority, Name)
             if ($repositories.Count -eq 0) { throw [InvalidOperationException]::new('No PowerShell repositories are configured.') }
-            $saved = $false
+            $releases = [Collections.Generic.List[object]]::new()
+            $lastFailure = $null
             foreach ($repository in $repositories) {
               try {
                 $find.Repository = $repository.Name
                 for ($attempt = 1; $attempt -le 3; $attempt++) {
                   try {
-                    if ($null -eq $release) {
-                      $found = @(Find-PSResource @find | Sort-Object Version -Descending | Select-Object -First 1)
-                      if ($found.Count -ne 1) { throw [InvalidOperationException]::new('No matching Gallery release was found.') }
-                      $release = $found[0]
+                    $found = @(Find-PSResource @find)
+                    if ($found.Count -eq 0) {
+                      throw [InvalidOperationException]::new('No matching Gallery release was found.')
                     }
-                    if (-not [string]::IsNullOrEmpty($env:REF) -and $release.Version.ToString() -cne $env:REF) {
-                      throw [InvalidOperationException]::new('The Gallery release does not match the requested exact version.')
+                    if ($selection -cne '') {
+                      $candidate = $found | Sort-Object Version -Descending | Select-Object -First 1
+                      if (-not [string]::IsNullOrEmpty($env:REF) -and $candidate.Version.ToString() -cne $env:REF) {
+                        throw [InvalidOperationException]::new('The Gallery release does not match the requested exact version.')
+                      }
+                      $releases.Add([pscustomobject]@{ Version = $candidate.Version; Repository = $repository.Name })
+                      break
                     }
+                    foreach ($candidate in $found) {
+                      [version] $version = $null
+                      if ([version]::TryParse([string]$candidate.Version, [ref]$version)) {
+                        $releases.Add([pscustomobject]@{ Version = $version; Repository = $repository.Name })
+                      }
+                    }
+                    break
+                  }
+                  catch {
+                    if ($attempt -eq 3) { throw }
+                    $delay = 5 * [math]::Pow(2, $attempt - 1)
+                    Write-Warning "Avm.Authoring discovery failed on attempt $attempt of 3: $($_.Exception.Message). Retrying in $delay seconds."
+                    Start-Sleep -Seconds $delay
+                  }
+                }
+                if ($selection -cne '') { break }
+              }
+              catch {
+                $lastFailure = $_
+                Write-Verbose "PowerShell repository '$($repository.Name)' could not find Avm.Authoring; trying the next configured repository."
+              }
+            }
+            if ($releases.Count -eq 0) {
+              if ($null -ne $lastFailure) { throw $lastFailure }
+              throw [InvalidOperationException]::new('No stable Avm.Authoring package was found in the configured PowerShell repositories.')
+            }
+            $release = $null
+            foreach ($candidate in $releases) {
+              if ($null -eq $release -or $candidate.Version -gt $release.Version) { $release = $candidate }
+            }
+            $sourceRepositories = @(
+              foreach ($repository in $repositories) {
+                if ($repository.Name -in @($releases | Where-Object Version -EQ $release.Version | ForEach-Object Repository)) {
+                  $repository
+                }
+              }
+            )
+            $saved = $false
+            foreach ($repository in $sourceRepositories) {
+              try {
+                for ($attempt = 1; $attempt -le 3; $attempt++) {
+                  try {
                     $savePath = Join-Path $env:RUNNER_TEMP "avm-gallery-$([guid]::NewGuid().ToString('N'))"
                     New-Item -ItemType Directory -Path $savePath -Force | Out-Null
                     Save-PSResource -Name Avm.Authoring -Version $release.Version.ToString() -Repository $repository.Name `
