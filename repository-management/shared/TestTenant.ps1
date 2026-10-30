@@ -221,7 +221,21 @@ function Resolve-AvmSubscriptionVendingIdentity {
     $expectedResourceId = "/subscriptions/$($settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID'])/resourceGroups/$($identity['resourceGroupName'])/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$($identity['name'])"
     $resourceId = $Values[$resourceIdName]
     if ($resourceId -isnot [string] -or $resourceId -ine $expectedResourceId) {
-        throw [System.ArgumentException]::new("$resourceIdName must exactly bind the configured bootstrap identity.")
+        $binding = [regex]::Match(
+            [string]$resourceId,
+            '^/subscriptions/(?<subscription>[0-9A-Fa-f-]{36})/resourceGroups/(?<resourceGroup>[^/]+)/providers/Microsoft\.ManagedIdentity/userAssignedIdentities/(?<name>[^/]+)$',
+            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )
+        $resourceIdPresent = -not [string]::IsNullOrWhiteSpace([string]$resourceId)
+        $subscriptionMatches = $binding.Success -and $binding.Groups['subscription'].Value -ceq $settings['TEST_BAMI_ADMIN_SUBSCRIPTION_ID']
+        $resourceGroupMatches = $binding.Success -and $binding.Groups['resourceGroup'].Value -ceq $identity['resourceGroupName']
+        $nameMatches = $binding.Success -and $binding.Groups['name'].Value -ceq $identity['name']
+        throw [System.ArgumentException]::new(
+            ('{0} must exactly bind the configured bootstrap identity ' +
+                '(resource ID present={1}; resource ID format valid={2}; subscription matches={3}; ' +
+                'resource group matches={4}; name matches={5}).') -f
+            @($resourceIdName, $resourceIdPresent, $binding.Success, $subscriptionMatches, $resourceGroupMatches, $nameMatches)
+        )
     }
 
     $result = [ordered]@{
