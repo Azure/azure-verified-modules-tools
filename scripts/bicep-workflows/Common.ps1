@@ -119,17 +119,7 @@ function Get-AvmWorkflowPowerShellRepository {
     [OutputType([object[]])]
     param()
 
-    $marUri = 'https://mcr.microsoft.com'
     $repositories = @(Get-PSResourceRepository -ErrorAction Stop)
-    $hasMar = @($repositories | Where-Object {
-            $uriProperty = $_.PSObject.Properties['Uri']
-            $uri = if ($null -eq $uriProperty) { '' } else { ([string]$uriProperty.Value).TrimEnd('/') }
-            $uri -ieq $marUri
-        }).Count -gt 0
-    if (-not $hasMar) {
-        Register-PSResourceRepository -Name MAR -Uri "$marUri/" -ApiVersion ContainerRegistry -Trusted -ErrorAction Stop
-        $repositories = @(Get-PSResourceRepository -ErrorAction Stop)
-    }
     $repositories = @($repositories | Sort-Object Priority, Name)
     if ($repositories.Count -eq 0) {
         throw [InvalidOperationException]::new('No PowerShell repositories are configured.')
@@ -214,6 +204,25 @@ function Install-AvmWorkflowModule {
     if ($hasVersion -and $installed.Count -gt 0) { return $installed[0] }
     $target = if ($hasVersion) { "$Name $Version" } else { "$Name latest stable" }
     if (-not $PSCmdlet.ShouldProcess($target, 'Install workflow dependency from configured PowerShell repositories')) { return }
+    if ($Name -ceq 'Avm.Authoring') {
+        $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' '..'))
+        $installer = Join-Path $repositoryRoot '.github' 'actions' 'install-avm-authoring' 'Install-AvmAuthoring.ps1'
+        if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
+            throw [IO.FileNotFoundException]::new('The shared Avm.Authoring workflow installer is missing.', $installer)
+        }
+        $parameters = @{}
+        if ($hasVersion) {
+            $parameters.Version = $Version
+        }
+        $release = & $installer @parameters
+        $installed = @(Get-Module -ListAvailable -Name $Name |
+                Where-Object { $_.Version -eq $release.Version } |
+                Sort-Object Version -Descending)
+        if ($installed.Count -gt 0) {
+            return $installed[0]
+        }
+        throw [InvalidOperationException]::new("Installation did not provide $target.")
+    }
     Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
     $repositories = @(Get-AvmWorkflowPowerShellRepository)
     if ($hasVersion) {

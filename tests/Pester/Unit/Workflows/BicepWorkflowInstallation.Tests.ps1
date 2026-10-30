@@ -297,26 +297,6 @@ Describe 'Bicep workflow package installation' {
         Should -Invoke Install-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'UserFeed' }
     }
 
-    It 'registers MAR once when its endpoint is absent' {
-        $repositories = @(Get-AvmWorkflowPowerShellRepository)
-
-        $repositories.Name | Should -Be @('UserFeed')
-        Should -Invoke Register-PSResourceRepository -Exactly 1 -ParameterFilter {
-            $Name -eq 'MAR' -and $Uri -eq 'https://mcr.microsoft.com/' -and
-            $ApiVersion -eq 'ContainerRegistry' -and $Trusted
-        }
-    }
-
-    It 'preserves an existing MAR registration with an arbitrary name' {
-        Mock Get-PSResourceRepository {
-            [pscustomobject]@{ Name = 'CorporateArtifactRegistry'; Priority = 10; Uri = 'https://mcr.microsoft.com/' }
-            [pscustomobject]@{ Name = 'UserFeed'; Priority = 20; Uri = 'https://example.invalid/gallery' }
-        }
-
-        (Get-AvmWorkflowPowerShellRepository).Name | Should -Be @('CorporateArtifactRegistry', 'UserFeed')
-        Should -Invoke Register-PSResourceRepository -Exactly 0
-    }
-
     It 'selects the newest release across configured repositories rather than the first' {
         Mock Get-PSResourceRepository {
             [pscustomobject]@{ Name = 'Preferred'; Priority = 10; Uri = 'https://example.invalid/preferred' }

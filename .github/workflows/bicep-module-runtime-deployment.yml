@@ -59,6 +59,10 @@ jobs:
           $manifest = Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1'
           if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { throw 'Prepared Avm.Authoring manifest is missing.' }
           "AVM_AUTHORING_MODULE=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Install Avm.Authoring
+        if: >-
+          !fromJSON(inputs.testCase).E2eIgnore && env.AVM_AUTHORING_MODULE == 'Avm.Authoring'
+        uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
       - name: Initialize deployment context
         id: context
         if: ${{ !fromJSON(inputs.testCase).E2eIgnore }}
@@ -74,71 +78,6 @@ jobs:
           TOKEN_NAMEPREFIX: ${{ secrets.TOKEN_NAMEPREFIX }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if ($env:AVM_AUTHORING_MODULE -eq 'Avm.Authoring') {
-          $maxAttempts = 3
-          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-            try {
-              if (-not @(Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet |
-                  Where-Object { $_.Version -ge [version]'1.1.1' }).Count) {
-                Install-Module -Name Microsoft.PowerShell.PSResourceGet -MinimumVersion 1.1.1 `
-                  -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
-              }
-              Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
-              $repositories = @(Get-PSResourceRepository -ErrorAction Stop)
-              if (@($repositories | Where-Object { ([string]$_.Uri).TrimEnd('/') -ieq 'https://mcr.microsoft.com' }).Count -eq 0) {
-                Register-PSResourceRepository -Name MAR -Uri 'https://mcr.microsoft.com/' -ApiVersion ContainerRegistry -Trusted -ErrorAction Stop
-                $repositories = @(Get-PSResourceRepository -ErrorAction Stop)
-              }
-              $repositories = @($repositories | Sort-Object Priority, Name)
-              if ($repositories.Count -eq 0) { throw [InvalidOperationException]::new('No PowerShell repositories are configured.') }
-              $releases = [Collections.Generic.List[object]]::new()
-              $lookupFailure = $null
-              foreach ($repository in $repositories) {
-                try {
-                  foreach ($candidate in @(Find-PSResource -Name Avm.Authoring -Repository $repository.Name -ErrorAction Stop)) {
-                    [version] $version = $null
-                    if ([version]::TryParse([string]$candidate.Version, [ref]$version)) {
-                      $releases.Add([pscustomobject]@{ Version = $version; Repository = $repository.Name })
-                    }
-                  }
-                }
-                catch {
-                  $lookupFailure = $_
-                  Write-Verbose "PowerShell repository '$($repository.Name)' could not find Avm.Authoring; trying the next configured repository."
-                }
-              }
-              if ($releases.Count -eq 0) {
-                if ($null -ne $lookupFailure) { throw $lookupFailure }
-                throw [InvalidOperationException]::new('No stable Avm.Authoring package was found in the configured PowerShell repositories.')
-              }
-              $release = $null
-              foreach ($candidate in $releases) {
-                if ($null -eq $release -or $candidate.Version -gt $release.Version) { $release = $candidate }
-              }
-              $installed = $false
-              foreach ($repository in $repositories) {
-                if ($repository.Name -notin @($releases | Where-Object Version -EQ $release.Version | ForEach-Object Repository)) { continue }
-                try {
-                  Install-PSResource -Name Avm.Authoring -Version $release.Version.ToString() -Repository $repository.Name -Scope CurrentUser -TrustRepository -ErrorAction Stop
-                  $installed = $true
-                  break
-                }
-                catch {
-                  $lastFailure = $_
-                  Write-Verbose "PowerShell repository '$($repository.Name)' could not install Avm.Authoring $($release.Version); trying the next configured repository."
-                }
-              }
-              if (-not $installed) { throw $lastFailure }
-              break
-            }
-            catch {
-              if ($attempt -eq $maxAttempts) { throw }
-              $delaySeconds = 5 * [math]::Pow(2, $attempt - 1)
-              Write-Warning "Avm.Authoring installation failed on attempt $attempt of ${maxAttempts}: $($_.Exception.Message). Retrying in $delaySeconds seconds."
-              Start-Sleep -Seconds $delaySeconds
-            }
-          }
-          }
           Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
           if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
             for ($attempt = 1; $attempt -le 3; $attempt++) {
