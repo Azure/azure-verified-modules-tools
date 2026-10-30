@@ -3141,6 +3141,12 @@ including workflow and repository-management tests.
 
 ## 20. Release and versioning
 
+- Reuse existing implementations or extract shared logic rather than duplicate
+  behavior across module code, scripts, workflows, and tests whenever practical.
+  Necessary differences at security, trust, source, or execution boundaries may
+  use thin boundary-specific adapters, but they must delegate common behavior to
+  the shared implementation instead of copying it. Do not introduce an
+  abstraction when it would obscure a genuinely distinct contract.
 - Module version checks, self-upgrades, build prerequisites, and workflow
   dependency installations use the user's configured PowerShell repositories,
   not a required repository name or URL. PSResourceGet repositories are tried
