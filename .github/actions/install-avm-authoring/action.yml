@@ -4,6 +4,9 @@ inputs:
   version:
     description: Optional exact Avm.Authoring version.
     required: false
+  version-constraint:
+    description: Optional PowerShell version constraint when selecting a Gallery package.
+    required: false
   operation:
     description: Install the module or save it to a package directory.
     required: false
@@ -23,6 +26,7 @@ runs:
       shell: pwsh
       env:
         AVM_AUTHORING_VERSION: ${{ inputs.version }}
+        AVM_AUTHORING_VERSION_CONSTRAINT: ${{ inputs.version-constraint }}
         AVM_AUTHORING_OPERATION: ${{ inputs.operation }}
         AVM_AUTHORING_DESTINATION: ${{ inputs.destination }}
       run: |
@@ -32,6 +36,9 @@ runs:
         }
         if (-not [string]::IsNullOrWhiteSpace($env:AVM_AUTHORING_VERSION)) {
           $parameters.Version = [version]$env:AVM_AUTHORING_VERSION
+        }
+        if (-not [string]::IsNullOrWhiteSpace($env:AVM_AUTHORING_VERSION_CONSTRAINT)) {
+          $parameters.VersionConstraint = $env:AVM_AUTHORING_VERSION_CONSTRAINT
         }
         if (-not [string]::IsNullOrWhiteSpace($env:AVM_AUTHORING_DESTINATION)) {
           $parameters.DestinationPath = $env:AVM_AUTHORING_DESTINATION

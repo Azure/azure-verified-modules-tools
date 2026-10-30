@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [version] $Version,
+    [string] $VersionConstraint,
     [ValidateSet('Install', 'Save')]
     [string] $Operation = 'Install',
     [string] $DestinationPath
@@ -10,6 +11,9 @@ $ErrorActionPreference = 'Stop'
 
 if ($Operation -eq 'Save' -and [string]::IsNullOrWhiteSpace($DestinationPath)) {
     throw [ArgumentException]::new('A destination path is required when saving Avm.Authoring.')
+}
+if ($PSBoundParameters.ContainsKey('Version') -and $PSBoundParameters.ContainsKey('VersionConstraint')) {
+    throw [ArgumentException]::new('Specify an exact version or a version constraint, not both.')
 }
 
 function Invoke-AvmAuthoringAttempt {
@@ -82,10 +86,12 @@ function Find-AvmAuthoringRelease {
     param(
         [Parameter(Mandatory)]
         [object[]] $Repository,
-        [version] $RequestedVersion
+        [version] $RequestedVersion,
+        [string] $RequestedVersionConstraint
     )
 
     $hasRequestedVersion = $PSBoundParameters.ContainsKey('RequestedVersion')
+    $hasRequestedVersionConstraint = $PSBoundParameters.ContainsKey('RequestedVersionConstraint')
     $releases = [Collections.Generic.List[object]]::new()
     $lastFailure = $null
     foreach ($source in $Repository) {
@@ -98,6 +104,9 @@ function Find-AvmAuthoringRelease {
                 }
                 if ($hasRequestedVersion) {
                     $parameters.Version = $RequestedVersion.ToString()
+                }
+                elseif ($hasRequestedVersionConstraint) {
+                    $parameters.Version = $RequestedVersionConstraint
                 }
                 @(Find-PSResource @parameters)
             }
@@ -124,6 +133,9 @@ function Find-AvmAuthoringRelease {
         }
         $description = if ($hasRequestedVersion) {
             "Avm.Authoring $RequestedVersion"
+        }
+        elseif ($hasRequestedVersionConstraint) {
+            "an Avm.Authoring package matching $RequestedVersionConstraint"
         }
         else {
             'a stable Avm.Authoring package'
@@ -163,6 +175,7 @@ function Invoke-AvmAuthoringOperation {
 Initialize-AvmAuthoringPSResourceGet
 $repositories = @(Get-AvmAuthoringRepository)
 $hasVersion = $PSBoundParameters.ContainsKey('Version')
+$hasVersionConstraint = $PSBoundParameters.ContainsKey('VersionConstraint')
 
 if ($hasVersion) {
     $lastFailure = $null
@@ -191,7 +204,13 @@ if ($hasVersion) {
     throw [InvalidOperationException]::new("No Avm.Authoring $Version package was found in the configured PowerShell repositories.")
 }
 
-$releases = @(Find-AvmAuthoringRelease -Repository $repositories)
+$findParameters = @{
+    Repository = $repositories
+}
+if ($hasVersionConstraint) {
+    $findParameters.RequestedVersionConstraint = $VersionConstraint
+}
+$releases = @(Find-AvmAuthoringRelease @findParameters)
 $selectedVersion = @($releases | Sort-Object Version -Descending | Select-Object -First 1).Version
 $sourceRepositories = @(
     foreach ($repository in $repositories) {
