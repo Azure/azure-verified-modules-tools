@@ -231,7 +231,7 @@ jobs:
           $artifact = "avm-authoring-$([guid]::NewGuid().ToString('N'))"
           "artifact=$artifact" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
       - name: Upload prepared module
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.prepare.outputs.artifact }}
           path: ${{ runner.temp }}/avm-package/Avm.Authoring
