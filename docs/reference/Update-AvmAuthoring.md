@@ -4,14 +4,20 @@
 
 ## Synopsis
 
-Update Avm.Authoring to the latest PowerShell Gallery version.
+Update Avm.Authoring using the configured PowerShell repositories.
 
 ## Description
 
-Queries the PowerShell Gallery for the latest published version. If the
+Queries every configured PowerShell repository and selects the highest
+published version. When repositories have the same highest version,
+uses configured priority order, then repository name. MAR hosts the
+module at mcr.microsoft.com/psresource/avm.authoring; PSResourceGet handles
+that registry prefix while the module name remains Avm.Authoring. If the
 running module is outdated, safely invokes Update-PSResource for the
 CurrentUser scope. This command bypasses stale-version enforcement so
-an outdated module can update itself.
+an outdated module can update itself. Update attempts use the configured
+repositories that reported that exact version in the same order until
+one succeeds. No repository receives special priority by name or URI.
 
 Routed by the dispatcher: 'avm upgrade'.
 

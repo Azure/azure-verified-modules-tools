@@ -104,6 +104,13 @@ Describe 'Component: runtime prerequisites' -Tag Component {
             param($Fixture)
             $script:runtimeFixture = $Fixture
             Mock Test-AvmModuleVersion
+            Mock Get-PSResourceRepository {
+                [pscustomobject]@{ Name = 'FixtureFeed'; Priority = 10; Uri = [uri]'https://example.invalid/v3/index.json' }
+            }
+            Mock Save-PSResource {
+                $uri = "https://www.powershellgallery.com/api/v2/package/$Name/$Version"
+                Invoke-WebRequest -Uri $uri -OutFile (Join-Path $Path "$Name.$Version.nupkg")
+            }
             Mock Invoke-WebRequest {
                 param($Uri, $OutFile)
                 if (-not $script:runtimeFixture.Packages.ContainsKey([string]$Uri)) {
@@ -145,9 +152,79 @@ Describe 'Component: runtime prerequisites' -Tag Component {
         $env:PSModulePath | Should -BeExactly $before
     }
 
+    It 'downloads the original pinned package through configured repositories in priority order' {
+        InModuleScope Avm.Authoring -Parameters @{ F = $script:fixture } {
+            param($F)
+            Mock Get-PSResourceRepository {
+                [pscustomobject]@{ Name = 'Backup'; Priority = 20; Uri = [uri]'https://proxy.example.invalid/v3/index.json' }
+                [pscustomobject]@{ Name = 'Preferred'; Priority = 10; Uri = [uri]'https://primary.example.invalid/api/v2' }
+            }
+            Mock Save-PSResource { throw [IO.FileNotFoundException]::new('Package not found') } -ParameterFilter { $Repository -eq 'Preferred' }
+            $result = Install-AvmTool -Name AvmFixtureDependency -PinsPath $F.PinsPath -Path $F.Root
+            $metadata = Get-Content (Join-Path (Split-Path $result.Path) '.meta.json') -Raw | ConvertFrom-Json
+            $metadata.url | Should -BeExactly 'https://proxy.example.invalid/v3/index.json'
+            $metadata.sha256 | Should -BeExactly $F.Dependency.Sha256
+            $metadata.checksumVerified | Should -BeTrue
+            Should -Invoke Save-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'Preferred' }
+            Should -Invoke Save-PSResource -Exactly 1 -ParameterFilter {
+                $Repository -eq 'Backup' -and $Name -eq 'AvmFixtureDependency' -and $Version -eq '1.0.0' -and
+                $AsNupkg -and $SkipDependencyCheck
+            }
+            @(Get-ChildItem -LiteralPath $env:AVM_HOME -Directory -Filter 'repository-*' -Recurse).Count | Should -Be 0
+        }
+    }
+
+    It 'fails closed on a proxy checksum mismatch without trying another repository or replacing a verified cache' {
+        InModuleScope Avm.Authoring -Parameters @{ F = $script:fixture } {
+            param($F)
+            $installed = Install-AvmTool -Name AvmFixtureDependency -PinsPath $F.PinsPath -Path $F.Root
+            $originalHash = (Get-FileHash -LiteralPath $installed.Path).Hash
+            Mock Get-PSResourceRepository {
+                [pscustomobject]@{ Name = 'Altered'; Priority = 10; Uri = [uri]'https://altered.example.invalid/v3/index.json' }
+                [pscustomobject]@{ Name = 'Backup'; Priority = 20; Uri = [uri]'https://backup.example.invalid/v3/index.json' }
+            }
+            Mock Save-PSResource {
+                [IO.File]::WriteAllText((Join-Path $Path "$Name.$Version.nupkg"), 'repackaged content')
+            } -ParameterFilter { $Repository -eq 'Altered' }
+            { Install-AvmTool -Name AvmFixtureDependency -PinsPath $F.PinsPath -Path $F.Root -Force } |
+                Should -Throw '*SHA256 mismatch*'
+            Should -Invoke Save-PSResource -Exactly 0 -ParameterFilter { $Repository -eq 'Backup' }
+            (Get-FileHash -LiteralPath $installed.Path).Hash | Should -BeExactly $originalHash
+            (Install-AvmTool -Name AvmFixtureDependency -PinsPath $F.PinsPath -Path $F.Root).Action | Should -BeExactly 'cache-hit'
+            @(Get-ChildItem -LiteralPath $env:AVM_HOME -File -Filter '*.nupkg' -Recurse).Count | Should -Be 0
+        }
+    }
+
+    It 'rejects insecure configured feeds before downloading a pinned module' {
+        InModuleScope Avm.Authoring -Parameters @{ F = $script:fixture } {
+            param($F)
+            Mock Get-PSResourceRepository {
+                [pscustomobject]@{ Name = 'Insecure'; Priority = 10; Uri = [uri]'http://example.invalid/api/v2' }
+            }
+            { Install-AvmTool -Name AvmFixtureDependency -PinsPath $F.PinsPath -Path $F.Root } |
+                Should -Throw '*must use HTTPS*'
+            Should -Invoke Save-PSResource -Exactly 0
+        }
+    }
+
+    It 'retains explicit mirror downloads without consulting configured repositories' {
+        $env:AVM_MIRROR = 'https://mirror.example.invalid'
+        $script:fixture.Packages['https://mirror.example.invalid/api/v2/package/AvmFixtureDependency/1.0.0'] = $script:fixture.Dependency.Archive
+        InModuleScope Avm.Authoring -Parameters @{ F = $script:fixture } {
+            param($F)
+            (Install-AvmTool -Name AvmFixtureDependency -PinsPath $F.PinsPath -Path $F.Root).Action | Should -BeExactly 'installed'
+            Should -Invoke Get-PSResourceRepository -Exactly 0
+            Should -Invoke Save-PSResource -Exactly 0
+            Should -Invoke Invoke-WebRequest -Exactly 1 -ParameterFilter { $Uri -like 'https://mirror.example.invalid/*' }
+        }
+    }
+
     It 'retries a locally detected corrupt module archive once in a clean staging directory' {
         InModuleScope Avm.Authoring -Parameters @{ F = $script:fixture } {
             param($F)
+            Mock Get-PSResourceRepository {
+                [pscustomobject]@{ Name = 'LocalFeed'; Priority = 10; Uri = [uri]::new($script:runtimeFixture.Assets) }
+            }
             $script:expandModuleArchive = (Get-Command Expand-AvmToolArchive).ScriptBlock
             $script:archiveStages = [Collections.Generic.List[string]]::new()
             Mock Expand-AvmToolArchive {

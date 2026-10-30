@@ -4,6 +4,7 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 $script:AvmLatestModuleVersion = $null
+$script:AvmLatestModuleRelease = $null
 $script:AvmModuleVersionCheckCompleted = $false
 $script:AvmModuleVersionSkipWarningWritten = $false
 $script:AvmNestedCommandDepth = 0

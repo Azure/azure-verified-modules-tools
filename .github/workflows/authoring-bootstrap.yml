@@ -129,11 +129,21 @@ jobs:
             }
             Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
             if (-not (Get-Module -ListAvailable -Name InvokeBuild | Where-Object { $_.Version -ge [version]'5.11.0' })) {
-              $repository = Get-PSResourceRepository -Name PSGallery -ErrorAction Stop
-              if ([string]$repository.Uri -cne 'https://www.powershellgallery.com/api/v2') {
-                throw [InvalidOperationException]::new('PSGallery must use the official HTTPS repository.')
+              $repositories = @(Get-PSResourceRepository -ErrorAction Stop | Sort-Object Priority, Name)
+              if ($repositories.Count -eq 0) { throw [InvalidOperationException]::new('No PowerShell repositories are configured.') }
+              $installed = $false
+              foreach ($repository in $repositories) {
+                try {
+                  Install-PSResource -Name InvokeBuild -Version '[5.11.0,)' -Repository $repository.Name -Scope CurrentUser -TrustRepository -ErrorAction Stop
+                  $installed = $true
+                  break
+                }
+                catch {
+                  $lastFailure = $_
+                  Write-Verbose "PowerShell repository '$($repository.Name)' could not install InvokeBuild; trying the next configured repository."
+                }
               }
-              Install-PSResource -Name InvokeBuild -Version '[5.11.0,)' -Repository PSGallery -Scope CurrentUser -TrustRepository -ErrorAction Stop
+              if (-not $installed) { throw $lastFailure }
             }
             $source = Join-Path $env:GITHUB_WORKSPACE 'authoring-source'
             & (Join-Path $source 'build.ps1') build
@@ -145,40 +155,62 @@ jobs:
           }
           else {
             $selection = if (-not [string]::IsNullOrEmpty($env:REF)) { $env:REF } else { [string]$env:LEGACY_VERSION }
-            $find = @{ Name = 'Avm.Authoring'; Repository = 'PSGallery'; ErrorAction = 'Stop' }
+            $find = @{ Name = 'Avm.Authoring'; ErrorAction = 'Stop' }
             if ($selection -cne '') { $find.Version = $selection }
             $release = $null
-            for ($attempt = 1; $attempt -le 3; $attempt++) {
+            for ($resourceAttempt = 1; $resourceAttempt -le 3; $resourceAttempt++) {
               try {
                 if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
                   Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
                 }
                 Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
-                $repository = Get-PSResourceRepository -Name PSGallery -ErrorAction Stop
-                if ([string]$repository.Uri -cne 'https://www.powershellgallery.com/api/v2') {
-                  throw [InvalidOperationException]::new('PSGallery must use the official HTTPS repository.')
-                }
-                if ($null -eq $release) {
-                  $found = @(Find-PSResource @find | Sort-Object Version -Descending | Select-Object -First 1)
-                  if ($found.Count -ne 1) { throw [InvalidOperationException]::new('No matching Gallery release was found.') }
-                  $release = $found[0]
-                }
-                if (-not [string]::IsNullOrEmpty($env:REF) -and $release.Version.ToString() -cne $env:REF) {
-                  throw [InvalidOperationException]::new('The Gallery release does not match the requested exact version.')
-                }
-                $savePath = Join-Path $env:RUNNER_TEMP "avm-gallery-$([guid]::NewGuid().ToString('N'))"
-                New-Item -ItemType Directory -Path $savePath -Force | Out-Null
-                Save-PSResource -Name Avm.Authoring -Version $release.Version.ToString() -Repository PSGallery `
-                  -Path $savePath -TrustRepository -ErrorAction Stop
                 break
               }
               catch {
-                if ($attempt -eq 3) { throw }
-                $delay = 5 * [math]::Pow(2, $attempt - 1)
-                Write-Warning "Avm.Authoring installation failed on attempt $attempt of 3: $($_.Exception.Message). Retrying in $delay seconds."
+                if ($resourceAttempt -eq 3) { throw }
+                $delay = 5 * [math]::Pow(2, $resourceAttempt - 1)
+                Write-Warning "PSResourceGet preparation failed on attempt $resourceAttempt of 3: $($_.Exception.Message). Retrying in $delay seconds."
                 Start-Sleep -Seconds $delay
               }
             }
+            $repositories = @(Get-PSResourceRepository -ErrorAction Stop | Sort-Object Priority, Name)
+            if ($repositories.Count -eq 0) { throw [InvalidOperationException]::new('No PowerShell repositories are configured.') }
+            $saved = $false
+            foreach ($repository in $repositories) {
+              try {
+                $find.Repository = $repository.Name
+                for ($attempt = 1; $attempt -le 3; $attempt++) {
+                  try {
+                    if ($null -eq $release) {
+                      $found = @(Find-PSResource @find | Sort-Object Version -Descending | Select-Object -First 1)
+                      if ($found.Count -ne 1) { throw [InvalidOperationException]::new('No matching Gallery release was found.') }
+                      $release = $found[0]
+                    }
+                    if (-not [string]::IsNullOrEmpty($env:REF) -and $release.Version.ToString() -cne $env:REF) {
+                      throw [InvalidOperationException]::new('The Gallery release does not match the requested exact version.')
+                    }
+                    $savePath = Join-Path $env:RUNNER_TEMP "avm-gallery-$([guid]::NewGuid().ToString('N'))"
+                    New-Item -ItemType Directory -Path $savePath -Force | Out-Null
+                    Save-PSResource -Name Avm.Authoring -Version $release.Version.ToString() -Repository $repository.Name `
+                      -Path $savePath -TrustRepository -ErrorAction Stop
+                    break
+                  }
+                  catch {
+                    if ($attempt -eq 3) { throw }
+                    $delay = 5 * [math]::Pow(2, $attempt - 1)
+                    Write-Warning "Avm.Authoring installation failed on attempt $attempt of 3: $($_.Exception.Message). Retrying in $delay seconds."
+                    Start-Sleep -Seconds $delay
+                  }
+                }
+                $saved = $true
+                break
+              }
+              catch {
+                $lastFailure = $_
+                Write-Verbose "PowerShell repository '$($repository.Name)' could not prepare Avm.Authoring; trying the next configured repository."
+              }
+            }
+            if (-not $saved) { throw $lastFailure }
             $manifests = @(Get-ChildItem -LiteralPath $savePath -Filter 'Avm.Authoring.psd1' -Recurse -File)
             if ($manifests.Count -ne 1) {
               throw [InvalidOperationException]::new('Gallery download must contain exactly one Avm.Authoring manifest.')

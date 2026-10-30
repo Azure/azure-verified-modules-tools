@@ -1,13 +1,19 @@
 function Update-AvmAuthoring {
     <#
     .SYNOPSIS
-        Update Avm.Authoring to the latest PowerShell Gallery version.
+        Update Avm.Authoring using the configured PowerShell repositories.
 
     .DESCRIPTION
-        Queries the PowerShell Gallery for the latest published version. If the
+        Queries every configured PowerShell repository and selects the highest
+        published version. When repositories have the same highest version,
+        uses configured priority order, then repository name. MAR hosts the
+        module at mcr.microsoft.com/psresource/avm.authoring; PSResourceGet handles
+        that registry prefix while the module name remains Avm.Authoring. If the
         running module is outdated, safely invokes Update-PSResource for the
         CurrentUser scope. This command bypasses stale-version enforcement so
-        an outdated module can update itself.
+        an outdated module can update itself. Update attempts use the configured
+        repositories that reported that exact version in the same order until
+        one succeeds. No repository receives special priority by name or URI.
 
         Routed by the dispatcher: 'avm upgrade'.
 
@@ -28,11 +34,12 @@ function Update-AvmAuthoring {
     $ErrorActionPreference = 'Stop'
 
     try {
-        $latestVersion = Get-AvmLatestModuleVersion
+        $release = Get-AvmLatestModuleVersion -IncludeRepository
+        $latestVersion = $release.Version
     }
     catch {
         throw [AvmToolException]::new(
-            "Unable to determine the latest Avm.Authoring version from PowerShell Gallery. Verify PSGallery connectivity and try 'avm upgrade' again. $($_.Exception.Message)",
+            "Unable to determine the latest Avm.Authoring version from the configured PowerShell repositories. Verify repository configuration and connectivity and try 'avm upgrade' again. $($_.Exception.Message)",
             $_.Exception)
     }
 
@@ -72,26 +79,32 @@ function Update-AvmAuthoring {
         $updateParameters = @{
             Name        = 'Avm.Authoring'
             Scope       = 'CurrentUser'
-            Repository  = 'PSGallery'
             Version     = $latestVersion.ToString()
             Confirm     = $false
             PassThru    = $true
             ErrorAction = 'Stop'
         }
         $updateState = @{ Attempt = 0 }
-        $null = Invoke-AvmRetry -RetryActivity 'Avm.Authoring update' -RetryAction {
-            $updateState.Attempt++
-            # A lost response may hide a completed install; check before trying again.
-            if ($updateState.Attempt -gt 1 -and
-                $null -ne (Get-InstalledPSResource -Name 'Avm.Authoring' -Version $latestVersion.ToString() -Scope CurrentUser -ErrorAction SilentlyContinue)) {
-                return
+        $null = Invoke-AvmPSRepositoryOperation -Repository $release.Repositories -Action {
+            param($RepositoryName)
+            $updateParameters.Repository = $RepositoryName
+            Invoke-AvmRetry -RetryActivity 'Avm.Authoring update' -RetryAction {
+                $updateState.Attempt++
+                # A lost response may hide a completed install; check before trying again.
+                if ($updateState.Attempt -gt 1 -and
+                    $null -ne (Get-InstalledPSResource -Name 'Avm.Authoring' -Version $latestVersion.ToString() -Scope CurrentUser -ErrorAction SilentlyContinue)) {
+                    return
+                }
+                $null = Update-PSResource @updateParameters
+                if ($null -eq (Get-InstalledPSResource -Name 'Avm.Authoring' -Version $latestVersion.ToString() -Scope CurrentUser -ErrorAction SilentlyContinue)) {
+                    throw [InvalidOperationException]::new("Repository '$RepositoryName' did not provide Avm.Authoring $latestVersion.")
+                }
             }
-            $null = Update-PSResource @updateParameters
         }
     }
     catch {
         throw [AvmToolException]::new(
-            "Failed to update Avm.Authoring from $currentVersion to $latestVersion. Verify PSGallery connectivity and CurrentUser module-path permissions, then run 'Update-PSResource -Name Avm.Authoring -Scope CurrentUser' directly. $($_.Exception.Message)",
+            "Failed to update Avm.Authoring from $currentVersion to $latestVersion. Verify configured PowerShell repository connectivity and CurrentUser module-path permissions, then run 'Update-PSResource -Name Avm.Authoring -Scope CurrentUser' directly. $($_.Exception.Message)",
             $_.Exception)
     }
 

@@ -127,53 +127,58 @@ function Install-AvmWorkflowModule {
         throw [ArgumentException]::new('A minimum workflow dependency version requires an explicit version.')
     }
 
-    for ($attempt = 1; $attempt -le 3; $attempt++) {
-        $installed = @(Get-Module -ListAvailable -Name $Name | Where-Object {
-                -not $hasVersion -or ($Minimum -and $_.Version -ge $Version) -or $_.Version -eq $Version
-            } | Sort-Object Version -Descending)
-        if ($hasVersion -and $installed.Count -gt 0) { return $installed[0] }
-        $target = if ($hasVersion) { "$Name $Version" } else { "$Name latest stable" }
-        if (-not $PSCmdlet.ShouldProcess($target, 'Install workflow dependency from PSGallery')) {
-            return
-        }
-        try {
-            Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
-            $repository = Get-PSResourceRepository -Name PSGallery -ErrorAction Stop
-            if ([string]$repository.Uri -cne 'https://www.powershellgallery.com/api/v2') {
-                throw [InvalidOperationException]::new('PSGallery must use the official HTTPS repository.')
-            }
-            $parameters = @{
-                Name            = $Name
-                Repository      = 'PSGallery'
-                Scope           = 'CurrentUser'
-                TrustRepository = $true
-                Quiet           = $true
-                ErrorAction     = 'Stop'
-            }
-            if ($hasVersion) { $parameters['Version'] = $Version.ToString() }
-            Install-PSResource @parameters
-            $installed = @(Get-Module -ListAvailable -Name $Name | Where-Object {
-                    -not $hasVersion -or ($Minimum -and $_.Version -ge $Version) -or $_.Version -eq $Version
-                } | Sort-Object Version -Descending)
-            if ($installed.Count -gt 0) { return $installed[0] }
-            throw [InvalidOperationException]::new("Installation did not provide $target.")
-        }
-        catch {
-            if ($attempt -eq 3 -or $_.Exception.ToString() -notmatch
-                '(?i)(timed? out|connection (reset|refused)|temporary failure|temporarily unavailable|\b429\b|\b50[234]\b|no route to host|name or service not known)') {
-                throw
-            }
-            Write-Warning "Installing $Name failed transiently (attempt $attempt of 3); checking installed state before retry."
-            Start-Sleep -Seconds (5 * [math]::Pow(2, $attempt - 1))
-        }
-    }
     $installed = @(Get-Module -ListAvailable -Name $Name | Where-Object {
             -not $hasVersion -or ($Minimum -and $_.Version -ge $Version) -or $_.Version -eq $Version
         } | Sort-Object Version -Descending)
-    if ($installed.Count -eq 0) {
-        throw [InvalidOperationException]::new("Installation did not provide $target.")
+    if ($hasVersion -and $installed.Count -gt 0) { return $installed[0] }
+    $target = if ($hasVersion) { "$Name $Version" } else { "$Name latest stable" }
+    if (-not $PSCmdlet.ShouldProcess($target, 'Install workflow dependency from configured PowerShell repositories')) { return }
+    Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
+    $repositories = @(Get-PSResourceRepository -ErrorAction Stop | Sort-Object Priority, Name)
+    if ($repositories.Count -eq 0) {
+        throw [InvalidOperationException]::new('No PowerShell repositories are configured.')
     }
-    return $installed[0]
+    foreach ($repository in $repositories) {
+        try {
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+                $installed = @(Get-Module -ListAvailable -Name $Name | Where-Object {
+                        -not $hasVersion -or ($Minimum -and $_.Version -ge $Version) -or $_.Version -eq $Version
+                    } | Sort-Object Version -Descending)
+                if ($hasVersion -and $installed.Count -gt 0) { return $installed[0] }
+                $target = if ($hasVersion) { "$Name $Version" } else { "$Name latest stable" }
+                try {
+                    $parameters = @{
+                        Name            = $Name
+                        Repository      = $repository.Name
+                        Scope           = 'CurrentUser'
+                        TrustRepository = $true
+                        Quiet           = $true
+                        ErrorAction     = 'Stop'
+                    }
+                    if ($hasVersion) { $parameters['Version'] = $Version.ToString() }
+                    Install-PSResource @parameters
+                    $installed = @(Get-Module -ListAvailable -Name $Name | Where-Object {
+                            -not $hasVersion -or ($Minimum -and $_.Version -ge $Version) -or $_.Version -eq $Version
+                        } | Sort-Object Version -Descending)
+                    if ($installed.Count -gt 0) { return $installed[0] }
+                    throw [InvalidOperationException]::new("Installation did not provide $target.")
+                }
+                catch {
+                    if ($attempt -eq 3 -or $_.Exception.ToString() -notmatch
+                        '(?i)(timed? out|connection (reset|refused)|temporary failure|temporarily unavailable|\b429\b|\b50[234]\b|no route to host|name or service not known)') {
+                        throw
+                    }
+                    Write-Warning "Installing $Name failed transiently (attempt $attempt of 3); checking installed state before retry."
+                    Start-Sleep -Seconds (5 * [math]::Pow(2, $attempt - 1))
+                }
+            }
+        }
+        catch {
+            $lastFailure = $_
+            Write-Verbose "PowerShell repository '$($repository.Name)' could not install $target; trying the next configured repository."
+        }
+    }
+    throw $lastFailure
 }
 
 function Import-AvmWorkflowPackage {

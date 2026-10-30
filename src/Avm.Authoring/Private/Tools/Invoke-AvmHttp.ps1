@@ -4,7 +4,9 @@ function Invoke-AvmHttp {
         Download a URL to a local file, verifying SHA256 atomically.
 
     .DESCRIPTION
-        The only download primitive used by the tool resolver. Pins TLS 1.2+,
+        Shared download and verification primitive used by the tool resolver.
+        Repository module downloads pass their original saved package through
+        the file:// verification path before extraction. Pins TLS 1.2+,
         honours $env:AVM_OFFLINE=1 (refuses any HTTP), and rewrites the host
         when $env:AVM_MIRROR is set. Always writes to '<Destination>.partial'
         first, verifies SHA256, and only then renames to the final path.
