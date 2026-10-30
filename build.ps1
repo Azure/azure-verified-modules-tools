@@ -8,7 +8,7 @@
     task graph at build/avm.build.ps1.
 
 .PARAMETER TestGroup
-    Select All, Authoring, or RepositoryManagement unit and component tests.
+    Select All, Authoring, RepositoryManagement, or Workflows unit and component tests.
     All is the default, preserving the complete local pre-commit gate.
 
 .EXAMPLE
@@ -40,7 +40,7 @@ param(
 
     [string[]] $TestName = @(),
 
-    [ValidateSet('All', 'Authoring', 'RepositoryManagement')]
+    [ValidateSet('All', 'Authoring', 'RepositoryManagement', 'Workflows')]
     [string] $TestGroup = 'All',
 
     [ValidateSet('All', 'Bicep', 'Terraform')]

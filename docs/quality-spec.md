@@ -3053,7 +3053,7 @@ status aggregation.
 | --- | --- | --- |
 | `Authoring: CI` | `ci-authoring.yml` | Lint once on Ubuntu; authoring unit and component tests on Ubuntu, Windows and macOS; the Ubuntu unit leg enforces the 70% coverage floor. |
 | `Authoring: Package qualification` | `ci-package-qualification.yml` | Cold/offline runtime dependencies, release downloads, checksums and ruleset attestation on all three operating systems when package/pin/bootstrap dependencies or packaged Bicep policy selectors change. |
-| `Workflows: CI` | `ci-workflows.yml` | Workflow definitions, embedded installation behavior and CI contract tests on Ubuntu only. |
+| `Workflows: CI` | `ci-workflows.yml` | Workflow definitions, embedded installation behavior, bootstrap component behavior and CI contract tests on Ubuntu only. |
 | `Repos: CI` | `repository-management-config-test.yml` | Repository-management unit/component tests, configuration checks and mocked Terraform validation on Ubuntu only. |
 
 Authoring pull-request/manual runs retain both Terraform fixtures per OS and
@@ -3071,9 +3071,13 @@ pull-request/manual runs; it is not a nightly store for redundant matrices.
 Existing integration environment approval and job-specific permissions remain
 in place. Workflow and repository-management CI need no Azure credentials.
 
-The static YAML filters include each area's source, tests, fixtures and
-relevant workflow files. Authoring excludes repository-management and workflow
-test directories, plus the dedicated repository component/fixture files.
+The static YAML filters route module implementation, generated reference and
+its concrete build/runtime dependencies to Authoring; workflow/action files,
+workflow tests and bootstrap component tests to Workflows; and
+repository-management code, configuration and tests to Repos. Authoring
+excludes repository-management and workflow test inventories, including the
+bootstrap component suites, plus the dedicated repository component/fixture
+files. Workflow-only changes must not start the Authoring matrix.
 Repository-management tests include the `BicepModuleIdentities`,
 `BicepTestTenantSync`, `ModuleCatalog`, `Repository` and `TerraformCodeowners`
 component filename families and the shared `TerraformInitUpgrade.Tests.ps1`
@@ -3095,11 +3099,13 @@ Native path-filter limits and skip behavior apply. Do not require a
 path-filtered workflow for every change; branch-protection configuration is
 not modified by these workflows.
 
-The build entry point's `-TestGroup Authoring` and
+The build entry point's `-TestGroup Authoring`, `-TestGroup Workflows` and
 `-TestGroup RepositoryManagement` select test files only, not changed paths.
-Serial, sharded and coverage runs use the same inventories. The default `All`
-and full local `pre-commit` gate still run every unit/component group,
-including workflow and repository-management tests.
+The Workflows inventory includes workflow unit tests, the build-prerequisite
+unit test and bootstrap component suites. Serial, sharded and coverage runs use
+the same Authoring and RepositoryManagement inventories. The default `All` and
+full local `pre-commit` gate still run every unit/component group, including
+workflow and repository-management tests.
 
 ---
 
