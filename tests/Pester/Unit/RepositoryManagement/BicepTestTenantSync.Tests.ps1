@@ -1383,6 +1383,9 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
             $script:retirementJob | Should -Match "ARM_BACKEND_${field}:"
         }
         $script:retirementJob | Should -Not -Match 'ARM_(?!BACKEND_)'
+        foreach ($reference in [regex]::Matches($script:retirementJob, '(?m)^\s+uses: ([^@\s]+)@([^\s]+)')) {
+            $reference.Groups[2].Value | Should -Match '^[0-9a-f]{40}$'
+        }
         $script:retirementJob | Should -Not -Match 'actions/create-github-app-token|gh secret|state rm(?! -dry-run)|-Apply'
     }
 
