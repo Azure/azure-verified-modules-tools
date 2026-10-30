@@ -1,0 +1,47 @@
+name: Install Avm.Authoring
+description: Install or save a stable Avm.Authoring package from configured PowerShell repositories.
+inputs:
+  version:
+    description: Optional exact Avm.Authoring version.
+    required: false
+  version-constraint:
+    description: Optional PowerShell version constraint when selecting a Gallery package.
+    required: false
+  operation:
+    description: Install the module or save it to a package directory.
+    required: false
+    default: Install
+  destination:
+    description: Destination directory required when operation is Save.
+    required: false
+outputs:
+  version:
+    description: The installed or saved Avm.Authoring version.
+    value: ${{ steps.install.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - name: Install package
+      id: install
+      shell: pwsh
+      env:
+        AVM_AUTHORING_VERSION: ${{ inputs.version }}
+        AVM_AUTHORING_VERSION_CONSTRAINT: ${{ inputs.version-constraint }}
+        AVM_AUTHORING_OPERATION: ${{ inputs.operation }}
+        AVM_AUTHORING_DESTINATION: ${{ inputs.destination }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $parameters = @{
+          Operation = $env:AVM_AUTHORING_OPERATION
+        }
+        if (-not [string]::IsNullOrWhiteSpace($env:AVM_AUTHORING_VERSION)) {
+          $parameters.Version = [version]$env:AVM_AUTHORING_VERSION
+        }
+        if (-not [string]::IsNullOrWhiteSpace($env:AVM_AUTHORING_VERSION_CONSTRAINT)) {
+          $parameters.VersionConstraint = $env:AVM_AUTHORING_VERSION_CONSTRAINT
+        }
+        if (-not [string]::IsNullOrWhiteSpace($env:AVM_AUTHORING_DESTINATION)) {
+          $parameters.DestinationPath = $env:AVM_AUTHORING_DESTINATION
+        }
+        $result = & (Join-Path $env:GITHUB_ACTION_PATH 'Install-AvmAuthoring.ps1') @parameters
+        "version=$($result.Version)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8

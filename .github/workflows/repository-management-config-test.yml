@@ -27,7 +27,6 @@ on:
       - '.github/workflows/repository-management-*.yml'
       - '.github/workflows/module-metadata-sync.yml'
       - '.github/workflows/terraform-module.yml'
-      - '.github/actions/**'
       - '.gitattributes'
       - '.gitignore'
   pull_request:
@@ -55,7 +54,6 @@ on:
       - '.github/workflows/repository-management-*.yml'
       - '.github/workflows/module-metadata-sync.yml'
       - '.github/workflows/terraform-module.yml'
-      - '.github/actions/**'
       - '.gitattributes'
       - '.gitignore'
   workflow_dispatch:

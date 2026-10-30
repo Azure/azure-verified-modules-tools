@@ -13,7 +13,7 @@
                     By default this tier shards across up to 6 pwsh child
                     processes. Set AVM_UNIT_SHARD_COUNT to override.
       coverage    - Run unit and component tests with coverage; fails below the spec §18 floor.
-      test-workflows - Run workflow-definition unit tests.
+      test-workflows - Run workflow-definition and bootstrap tests.
       component   - Run Pester tests under tests/Pester/Component/ (real FS + real subprocess, stub binaries, no network).
                     By default this tier shards across up to 6 pwsh child
                     processes. Set AVM_COMPONENT_SHARD_COUNT to override.
@@ -39,7 +39,7 @@
     an artifact and publish their own test reports.
     Locally this is just a file write under the gitignored out/ tree.
 
-    TestGroup selects All (the local default), Authoring, or RepositoryManagement
+    TestGroup selects All (the local default), Authoring, RepositoryManagement, or Workflows
     for unit and component tasks, including the unit coverage task. Workflow
     tests run separately in CI. The local pre-commit task still runs every group.
 
@@ -54,7 +54,7 @@ param(
 
     [string[]] $TestName = @(),
 
-    [ValidateSet('All', 'Authoring', 'RepositoryManagement')]
+    [ValidateSet('All', 'Authoring', 'RepositoryManagement', 'Workflows')]
     [string] $TestGroup = 'All',
 
     [ValidateSet('All', 'Bicep', 'Terraform')]
@@ -72,7 +72,6 @@ $script:repoRoot     = Split-Path -Parent $PSScriptRoot
 $script:moduleRoot   = Join-Path $script:repoRoot 'src' 'Avm.Authoring'
 $script:manifestPath = Join-Path $script:moduleRoot 'Avm.Authoring.psd1'
 $script:testsRoot    = Join-Path $script:repoRoot 'tests' 'Pester'
-$script:workflowUnitTestsRoot = Join-Path $script:testsRoot 'Unit' 'Workflows'
 $script:settingsPath = Join-Path $script:moduleRoot 'Resources' 'PSScriptAnalyzerSettings.psd1'
 $script:outRoot      = Join-Path $script:repoRoot 'out'
 $script:cmdletDocsGenerator = Join-Path $script:repoRoot 'scripts' 'Generate-AvmCmdletDocumentation.ps1'
@@ -332,7 +331,7 @@ function script:Get-AvmScopedTestFile {
     param(
         [Parameter(Mandatory)] [string] $Path,
         [Parameter(Mandatory)] [ValidateSet('Unit', 'Component')] [string] $Tier,
-        [ValidateSet('All', 'Authoring', 'RepositoryManagement')] [string] $Group = 'All'
+        [ValidateSet('All', 'Authoring', 'RepositoryManagement', 'Workflows')] [string] $Group = 'All'
     )
 
     $files = @(Get-ChildItem -LiteralPath $Path -Filter '*.Tests.ps1' -File -Recurse |
@@ -342,10 +341,19 @@ function script:Get-AvmScopedTestFile {
                 $relative -clike 'RepositoryManagement/*' :
                 $relative -cmatch '^(BicepModuleIdentities|BicepTestTenantSync|ModuleCatalog|Repository|TerraformCodeowners)[^/]*\.Tests\.ps1$'
             $sharedTest = $Tier -eq 'Unit' -and $relative -ceq 'Module/TerraformInitUpgrade.Tests.ps1'
-            $workflowTest = $Tier -eq 'Unit' -and $relative -clike 'Workflows/*'
-            $Group -eq 'All' -or $sharedTest -or
+            $workflowTest = ($Tier -eq 'Unit' -and (
+                    $relative -clike 'Workflows/*' -or
+                    $relative -ceq 'Scripts/Install-AvmBuildPrerequisites.Tests.ps1'
+                )) -or
+                ($Tier -eq 'Component' -and $relative -cin @(
+                    'AuthoringBootstrap.Component.Tests.ps1',
+                    'BicepWorkflowBootstrap.Component.Tests.ps1'
+                ))
+            $Group -eq 'All' -or
+                ($sharedTest -and $Group -in @('Authoring', 'RepositoryManagement')) -or
                 ($Group -eq 'RepositoryManagement' -and $repositoryTest) -or
-                ($Group -eq 'Authoring' -and -not $repositoryTest -and -not $workflowTest)
+                ($Group -eq 'Authoring' -and -not $repositoryTest -and -not $workflowTest) -or
+                ($Group -eq 'Workflows' -and $workflowTest)
         } | Sort-Object -Property FullName)
     if ($files.Count -eq 0) {
         throw [System.IO.InvalidDataException]::new("No $Tier test files found for group '$Group' in '$Path'.")
@@ -574,20 +582,18 @@ task coverage {
 task 'test-workflows' {
     script:Import-AvmBuildPester
 
-    if (-not (Test-Path -LiteralPath $script:workflowUnitTestsRoot)) {
-        Write-Build Yellow "  no workflow unit tests found at $script:workflowUnitTestsRoot"
-        return
-    }
+    $unitFiles = @(Get-AvmScopedTestFile -Path (Join-Path $script:testsRoot 'Unit') -Tier Unit -Group Workflows)
+    $componentFiles = @(Get-AvmScopedTestFile -Path (Join-Path $script:testsRoot 'Component') -Tier Component -Group Workflows)
 
     $config = New-PesterConfiguration
-    $config.Run.Path                = $script:workflowUnitTestsRoot
+    $config.Run.Path                = @($unitFiles.FullName + $componentFiles.FullName)
     $config.Run.PassThru            = $true
     $config.Run.Exit                = $false
     $config.Output.Verbosity        = 'Detailed'
     $config.TestResult.Enabled      = $true
     $config.TestResult.OutputFormat = 'NUnitXml'
     $config.TestResult.OutputPath   = script:Get-AvmTestResultPath -Tier 'workflow-unit'
-    $config.Filter.ExcludeTag       = @('Integration', 'Component')
+    $config.Filter.ExcludeTag       = @('Integration')
 
     $result = script:Invoke-AvmPester -Configuration $config
     if ($result.FailedCount -gt 0) {

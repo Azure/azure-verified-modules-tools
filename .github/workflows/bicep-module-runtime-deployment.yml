@@ -59,6 +59,10 @@ jobs:
           $manifest = Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1'
           if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { throw 'Prepared Avm.Authoring manifest is missing.' }
           "AVM_AUTHORING_MODULE=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Install Avm.Authoring
+        if: >-
+          !fromJSON(inputs.testCase).E2eIgnore && env.AVM_AUTHORING_MODULE == 'Avm.Authoring'
+        uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
       - name: Initialize deployment context
         id: context
         if: ${{ !fromJSON(inputs.testCase).E2eIgnore }}
@@ -74,25 +78,6 @@ jobs:
           TOKEN_NAMEPREFIX: ${{ secrets.TOKEN_NAMEPREFIX }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if ($env:AVM_AUTHORING_MODULE -eq 'Avm.Authoring') {
-          $maxAttempts = 3
-          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-            try {
-              if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
-                Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
-              }
-              Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
-              Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
-              break
-            }
-            catch {
-              if ($attempt -eq $maxAttempts) { throw }
-              $delaySeconds = 5 * [math]::Pow(2, $attempt - 1)
-              Write-Warning "Avm.Authoring installation failed on attempt $attempt of ${maxAttempts}: $($_.Exception.Message). Retrying in $delaySeconds seconds."
-              Start-Sleep -Seconds $delaySeconds
-            }
-          }
-          }
           Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
           if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
             for ($attempt = 1; $attempt -le 3; $attempt++) {

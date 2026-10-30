@@ -23,6 +23,22 @@ BeforeAll {
         $text = Get-Content -LiteralPath (Join-Path $script:repoRoot '.github' 'workflows' $workflowFile) -Raw
         $script:definitions[$workflowFile] = ConvertFrom-Yaml -Yaml $text
     }
+    $script:testWorkflowPathSelection = {
+        param(
+            [Parameter(Mandatory)] [string[]] $Patterns,
+            [Parameter(Mandatory)] [string] $Path
+        )
+
+        $selected = $false
+        foreach ($pattern in $Patterns) {
+            $excluded = $pattern.StartsWith('!')
+            $candidate = if ($excluded) { $pattern.Substring(1) } else { $pattern }
+            if ($Path -clike $candidate) {
+                $selected = -not $excluded
+            }
+        }
+        $selected
+    }
 }
 
 AfterAll {
@@ -54,12 +70,16 @@ Describe 'Independent CI workflows' {
 
     It 'includes source, tests and shared dependencies in the static filters for <File>' -ForEach @(
         @{ File = 'ci-authoring.yml'; Required = @(
-            'src/Avm.Authoring/**', 'build/**', 'build.ps1', 'scripts/**', 'tests/**', 'docs/reference/**',
+            'src/Avm.Authoring/**', 'build/**', 'build.ps1', 'scripts/Generate-AvmCmdletDocumentation.ps1',
+            'tests/**', 'docs/reference/**',
             'repository-management/shared/TestTenant.ps1', 'repository-management/shared/GroupSettings.ps1',
-            '.github/workflows/ci-authoring.yml', '.github/workflows/release.yml'
+            '.gitattributes', '.gitignore'
         ) }
         @{ File = 'ci-workflows.yml'; Required = @(
             '.github/workflows/**', '.github/dependabot.yml', 'tests/Pester/Unit/Workflows/**',
+            'tests/Pester/Unit/Scripts/Install-AvmBuildPrerequisites.Tests.ps1',
+            'tests/Pester/Component/AuthoringBootstrap.Component.Tests.ps1',
+            'tests/Pester/Component/BicepWorkflowBootstrap.Component.Tests.ps1',
             'tests/Pester/Import-AvmTestModule.ps1', 'build/**', 'build.ps1',
             'scripts/Install-AvmBuildPrerequisites.ps1', 'scripts/Import-AvmNetworkRetry.ps1',
             'scripts/bicep-workflows/**', 'repository-management/shared/TestTenant.ps1',
@@ -79,11 +99,11 @@ Describe 'Independent CI workflows' {
             'tests/Pester/Import-AvmTestModule.ps1', 'tests/fixtures/TestTenant.ps1', 'tests/fixtures/BicepIdentities.ps1',
             'tests/fixtures/repository-candidate-process.ps1',
             '.github/workflows/repository-management-*.yml', '.github/workflows/module-metadata-sync.yml',
-            '.github/workflows/terraform-module.yml'
+            '.github/workflows/terraform-module.yml', '.gitattributes', '.gitignore'
         ) }
     ) {
         $paths = $script:definitions[$File]['on'].push.paths
-        foreach ($pattern in @($Required) + @('.github/actions/**', '.gitattributes', '.gitignore')) {
+        foreach ($pattern in $Required) {
             $paths | Should -Contain $pattern
         }
         $paths | Should -Not -Contain '**'
@@ -92,10 +112,47 @@ Describe 'Independent CI workflows' {
         $paths | Should -Not -Contain 'docs/quality-spec.md'
     }
 
+    It 'routes module, workflow and repository changes to their owned CI suites' {
+        $routes = @(
+            @{ Name = 'Authoring'; File = 'ci-authoring.yml' }
+            @{ Name = 'Workflows'; File = 'ci-workflows.yml' }
+            @{ Name = 'Repos'; File = 'repository-management-config-test.yml' }
+        )
+        $testCases = @(
+            @{ Path = 'src/Avm.Authoring/Public/Invoke-Avm.ps1'; Expected = @('Authoring', 'Repos') }
+            @{ Path = '.github/actions/install-avm-authoring/Install-AvmAuthoring.ps1'; Expected = @('Workflows') }
+            @{ Path = '.github/workflows/ci-authoring.yml'; Expected = @('Workflows') }
+            @{ Path = 'scripts/bicep-workflows/Common.ps1'; Expected = @('Workflows') }
+            @{ Path = 'tests/Pester/Component/AuthoringBootstrap.Component.Tests.ps1'; Expected = @('Workflows') }
+            @{ Path = 'tests/Pester/Unit/Scripts/Install-AvmBuildPrerequisites.Tests.ps1'; Expected = @('Workflows') }
+            @{ Path = 'tests/Pester/Unit/Private/Config/Get-AvmConfig.Tests.ps1'; Expected = @('Authoring') }
+            @{ Path = 'build/avm.build.ps1'; Expected = @('Authoring', 'Workflows', 'Repos') }
+            @{ Path = 'docs/reference/Invoke-Avm.md'; Expected = @('Authoring') }
+            @{ Path = 'repository-management/repository-sync/scripts/Test-RepositoryConfig.ps1'; Expected = @('Repos') }
+        )
+
+        foreach ($testCase in $testCases) {
+            foreach ($eventName in @('push', 'pull_request')) {
+                $selected = @(
+                    foreach ($route in $routes) {
+                        $patterns = $script:definitions[$route.File]['on'][$eventName].paths
+                        if (& $script:testWorkflowPathSelection -Patterns $patterns -Path $testCase.Path) {
+                            $route.Name
+                        }
+                    }
+                )
+                $selected | Should -Be $testCase.Expected
+            }
+        }
+    }
+
     It 'excludes unrelated test groups from authoring after its positive tests filter' {
         $paths = $script:definitions['ci-authoring.yml']['on'].push.paths
         foreach ($excluded in @(
             'tests/Pester/Unit/RepositoryManagement/**', 'tests/Pester/Unit/Workflows/**',
+            'tests/Pester/Unit/Scripts/Install-AvmBuildPrerequisites.Tests.ps1',
+            'tests/Pester/Component/AuthoringBootstrap.Component.Tests.ps1',
+            'tests/Pester/Component/BicepWorkflowBootstrap.Component.Tests.ps1',
             'tests/Pester/Component/BicepModuleIdentities*.Tests.ps1', 'tests/Pester/Component/BicepTestTenantSync*.Tests.ps1',
             'tests/Pester/Component/ModuleCatalog*.Tests.ps1', 'tests/Pester/Component/Repository*.Tests.ps1',
             'tests/Pester/Component/TerraformCodeowners*.Tests.ps1', 'tests/Pester/Helpers/ModuleCatalogFixture.ps1',
@@ -105,6 +162,10 @@ Describe 'Independent CI workflows' {
             $paths.IndexOf("!$excluded") | Should -BeGreaterThan $paths.IndexOf('tests/**')
         }
         $paths | Should -Not -Contain 'repository-management/**'
+        $paths | Should -Not -Contain 'scripts/**'
+        $paths | Should -Not -Contain '.github/actions/**'
+        $paths | Should -Not -Contain '.github/workflows/ci-authoring.yml'
+        $paths | Should -Not -Contain '.github/workflows/release.yml'
         @($paths | Where-Object { $_ -like 'repository-management/*' } | Sort-Object) |
             Should -Be @('repository-management/shared/GroupSettings.ps1', 'repository-management/shared/TestTenant.ps1')
         $paths | Should -Not -Contain 'infra/**'
@@ -155,6 +216,7 @@ Describe 'Independent CI workflows' {
         $jobs.lint['runs-on'] | Should -BeExactly 'ubuntu-latest'
         $jobs.integration['timeout-minutes'] | Should -Be 30
         $native = $jobs['native-qualification']
+        $native['timeout-minutes'] | Should -Be 30
         $native.strategy.matrix.Contains('fixture') | Should -BeFalse
         $native.Contains('environment') | Should -BeFalse
         $native.env.ARM_USE_OIDC | Should -BeExactly 'false'
@@ -291,7 +353,7 @@ Describe 'CI test inventory selection' {
         $all = @(Get-AvmScopedTestFile -Path $path -Tier Unit)
         $authoring = @(Get-AvmScopedTestFile -Path $path -Tier Unit -Group Authoring)
         $repositories = @(Get-AvmScopedTestFile -Path $path -Tier Unit -Group RepositoryManagement)
-        $workflows = @(Get-ChildItem -LiteralPath (Join-Path $path 'Workflows') -Filter '*.Tests.ps1' -File -Recurse)
+        $workflows = @(Get-AvmScopedTestFile -Path $path -Tier Unit -Group Workflows)
         $all.Count | Should -BeGreaterThan 0
         @($authoring | Where-Object { $_.FullName -in $repositories.FullName }).Name |
             Should -Be @('TerraformInitUpgrade.Tests.ps1')
@@ -301,15 +363,18 @@ Describe 'CI test inventory selection' {
         $repositories.Name | Should -Contain 'WorkflowFailureIssues.Tests.ps1'
         $authoring.Name | Should -Contain 'ScriptAnalyzerRetry.Tests.ps1'
         $authoring.Name | Should -Contain 'Invoke-AvmProcess.Tests.ps1'
+        $workflows.Name | Should -Contain 'Install-AvmBuildPrerequisites.Tests.ps1'
     }
 
-    It 'partitions all component files including catalog, identity and lock recovery tests without overlap' {
+    It 'partitions all component files including workflow bootstrap tests without overlap' {
         $path = Join-Path $script:repoRoot 'tests' 'Pester' 'Component'
         $all = @(Get-AvmScopedTestFile -Path $path -Tier Component)
         $authoring = @(Get-AvmScopedTestFile -Path $path -Tier Component -Group Authoring)
         $repositories = @(Get-AvmScopedTestFile -Path $path -Tier Component -Group RepositoryManagement)
+        $workflows = @(Get-AvmScopedTestFile -Path $path -Tier Component -Group Workflows)
         @($authoring | Where-Object { $_.FullName -in $repositories.FullName }) | Should -HaveCount 0
-        @(Compare-Object $all.FullName @($authoring.FullName + $repositories.FullName)) | Should -HaveCount 0
+        @($authoring + $repositories | Where-Object { $_.FullName -in $workflows.FullName }) | Should -HaveCount 0
+        @(Compare-Object $all.FullName @($authoring.FullName + $repositories.FullName + $workflows.FullName)) | Should -HaveCount 0
         foreach ($name in @('BicepModuleIdentities.Component.Tests.ps1', 'BicepTestTenantSync.Component.Tests.ps1',
             'ModuleCatalog.Collection.Tests.ps1', 'RepositorySyncTerraform.Component.Tests.ps1',
             'RepositorySyncStateLock.Component.Tests.ps1', 'TerraformCodeowners.Component.Tests.ps1')) {
@@ -317,6 +382,7 @@ Describe 'CI test inventory selection' {
             $authoring.Name | Should -Not -Contain $name
         }
         $authoring.Name | Should -Contain 'TerraformRepositoryInitialization.Component.Tests.ps1'
+        $workflows.Name | Should -Be @('AuthoringBootstrap.Component.Tests.ps1', 'BicepWorkflowBootstrap.Component.Tests.ps1')
     }
 
     It 'includes newly added files by test group without depending on test titles' {
@@ -330,6 +396,8 @@ Describe 'CI test inventory selection' {
         @(Get-AvmScopedTestFile -Path $root -Tier Unit -Group Authoring).Directory.Name | Should -Be @('Public')
         @(Get-AvmScopedTestFile -Path $root -Tier Unit -Group RepositoryManagement).Directory.Name |
             Should -Be @('RepositoryManagement')
+        @(Get-AvmScopedTestFile -Path $root -Tier Unit -Group Workflows).Directory.Name |
+            Should -Be @('Workflows')
     }
 
     It 'fails rather than succeeding with an empty selected inventory' {
@@ -346,6 +414,8 @@ Describe 'CI test inventory selection' {
         $build | Should -Match '\[string\] \$TestGroup = ''All'''
         $build | Should -Match '\$config.Run.Path\s+= @\(\$unitFiles.FullName\)'
         $build | Should -Match '\$config.Run.Path\s+= @\(\$componentFiles.FullName\)'
+        $build | Should -Match 'Get-AvmScopedTestFile -Path \(Join-Path \$script:testsRoot ''Unit''\) -Tier Unit -Group Workflows'
+        $build | Should -Match 'Get-AvmScopedTestFile -Path \(Join-Path \$script:testsRoot ''Component''\) -Tier Component -Group Workflows'
         $build | Should -Match 'Invoke-AvmPesterShardedTier -Tier ''unit'' -File \$unitFiles'
         $build | Should -Match '(?s)Invoke-AvmPesterShardedTier\s+`?\s+-Tier ''component''\s+`?\s+-File \$componentFiles'
         ([regex]::Matches($build, 'Get-AvmScopedTestFile -Path \$unitPath -Tier Unit -Group \$TestGroup')).Count |

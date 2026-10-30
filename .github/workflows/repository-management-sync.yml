@@ -100,6 +100,9 @@ jobs:
           terraform_version: latest
           terraform_wrapper: false
 
+      - name: Install Avm.Authoring
+        if: env.USE_WORKFLOW_AUTHORING_SOURCE != 'true'
+        uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
       - name: Load Avm.Authoring
         shell: pwsh
         run: |
@@ -108,21 +111,6 @@ jobs:
             $moduleToLoad = Join-Path $env:GITHUB_WORKSPACE 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
           }
           else {
-            $maxAttempts = 3
-            for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-              try {
-                Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
-                break
-              }
-              catch {
-                if ($attempt -eq $maxAttempts) {
-                  throw
-                }
-                $delaySeconds = 5 * [math]::Pow(2, $attempt - 1)
-                Write-Warning "Avm.Authoring installation failed on attempt $attempt of ${maxAttempts}: $($_.Exception.Message). Retrying in $delaySeconds seconds."
-                Start-Sleep -Seconds $delaySeconds
-              }
-            }
             $moduleToLoad = 'Avm.Authoring'
           }
           Import-Module -Name $moduleToLoad -Force -ErrorAction Stop
@@ -386,7 +374,7 @@ jobs:
           "AVM_HOME=$avmHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "TF_PLUGIN_CACHE_DIR=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Install candidate authoring release
+      - name: Select candidate authoring release
         shell: pwsh
         env:
           CANDIDATE_DIRECTORY: ${{ runner.temp }}/avm-sync-candidates/${{ matrix.repoName }}
@@ -395,19 +383,15 @@ jobs:
           $candidate = Get-Content -LiteralPath (Join-Path $env:CANDIDATE_DIRECTORY 'candidate.json') -Raw |
             ConvertFrom-Json -AsHashtable
           if ($candidate.hasChanges -and $candidate.authoringSource -eq 'gallery') {
-            $maxAttempts = 3
-            for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-              try {
-                Install-PSResource -Name Avm.Authoring -Version $candidate.authoringVersion `
-                  -Scope CurrentUser -TrustRepository -ErrorAction Stop
-                break
-              }
-              catch {
-                if ($attempt -eq $maxAttempts) { throw }
-                Start-Sleep -Seconds (5 * [math]::Pow(2, $attempt - 1))
-              }
-            }
+            "AVM_CANDIDATE_AUTHORING_VERSION=$($candidate.authoringVersion)" |
+              Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           }
+
+      - name: Install candidate authoring release
+        if: env.AVM_CANDIDATE_AUTHORING_VERSION != ''
+        uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
+        with:
+          version: ${{ env.AVM_CANDIDATE_AUTHORING_VERSION }}
 
       - name: Validate repository candidate
         id: validate-candidate

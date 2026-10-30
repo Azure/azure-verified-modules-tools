@@ -1,323 +1,215 @@
 #Requires -Version 7.4
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.5.0' }
 
-BeforeDiscovery {
-    $workflowRoot = Join-Path $PSScriptRoot '..' '..' '..' '..' '.github' 'workflows'
-    $installCases = @(foreach ($workflowName in 'repository-management-sync.yml') {
-        $workflow = Get-Content -LiteralPath (Join-Path $workflowRoot $workflowName) -Raw
-        $step = [regex]::Match(
-            $workflow,
-            '(?ms)^      - name: [^\r\n]*(?:Install|Load) Avm\.Authoring[^\r\n]*\r?\n(?<body>.*?)(?=^      - |\z)'
-        )
-        $run = [regex]::Match(
-            $step.Groups['body'].Value,
-            '(?ms)^        run: (?:&install-avm-authoring )?\|\r?\n(?<script>.*)\z'
-        )
-        if (-not $run.Success) {
-            throw [System.InvalidOperationException]::new("Could not find the installer in $workflowName.")
-        }
-        @{
-            WorkflowName = $workflowName
-            InstallScript = $run.Groups['script'].Value -replace '(?m)^ {10}', ''
-            HasBootstrap = $false
-            IsBicep = $false
-        }
-    })
-    foreach ($workflowFile in Get-ChildItem -LiteralPath $workflowRoot -Filter 'bicep*.yml') {
-        $workflow = Get-Content -LiteralPath $workflowFile.FullName -Raw
-        $installCount = [regex]::Matches($workflow, 'Install-PSResource -Name Avm\.Authoring').Count
-        $blocks = @([regex]::Matches(
-            $workflow,
-            '(?ms)^          if \(\$env:AVM_AUTHORING_MODULE -eq ''Avm\.Authoring''\) \{\r?\n.*?^          Import-Module \$env:AVM_AUTHORING_MODULE -ErrorAction Stop\r?$'
-        )) + @([regex]::Matches(
-            $workflow,
-            '(?ms)^          \$maxAttempts = 3\r?\n.*?^          Import-Module Avm\.Authoring -ErrorAction Stop\r?$'
-        ))
-        if ($blocks.Count -ne $installCount) {
-            throw [System.InvalidOperationException]::new("Could not isolate every installer in $($workflowFile.Name).")
-        }
-        for ($index = 0; $index -lt $blocks.Count; $index++) {
-            $installCases += @{
-                WorkflowName = "$($workflowFile.Name) [$($index + 1)]"
-                InstallScript = $blocks[$index].Value -replace '(?m)^ {10}', ''
-                HasBootstrap = $true
-                IsBicep = $true
-            }
-        }
+BeforeAll {
+    $script:installer = Join-Path $PSScriptRoot '..' '..' '..' '..' '.github' 'actions' 'install-avm-authoring' 'Install-AvmAuthoring.ps1'
+
+    function Install-Module {
+        [CmdletBinding()]
+        param([string] $Name, [version] $MinimumVersion, [string] $Scope, [switch] $Force, [switch] $AllowClobber)
+        throw 'Install-Module must be mocked.'
+    }
+
+    function Install-PSResource {
+        [CmdletBinding()]
+        param([string] $Name, [string] $Version, [string] $Repository, [string] $Scope, [switch] $TrustRepository)
+        throw 'Install-PSResource must be mocked.'
+    }
+
+    function Save-PSResource {
+        [CmdletBinding()]
+        param([string] $Name, [string] $Version, [string] $Repository, [string] $Path, [switch] $TrustRepository)
+        throw 'Save-PSResource must be mocked.'
+    }
+
+    function Get-PSResourceRepository {
+        [CmdletBinding()]
+        param()
+        throw 'Get-PSResourceRepository must be mocked.'
+    }
+
+    function Register-PSResourceRepository {
+        [CmdletBinding()]
+        param([string] $Name, [string] $Uri, [string] $ApiVersion, [switch] $Trusted)
+        throw 'Register-PSResourceRepository must be mocked.'
+    }
+
+    function Find-PSResource {
+        [CmdletBinding()]
+        param([string] $Name, [string] $Repository, [string] $Version)
+        throw 'Find-PSResource must be mocked.'
     }
 }
 
-Describe 'Avm.Authoring installation in <WorkflowName>' -ForEach $installCases {
-    BeforeAll {
-        $installer = [scriptblock]::Create($InstallScript)
-        function avm {
-            throw [System.InvalidOperationException]::new('avm must be mocked.')
-        }
-        function Invoke-AvmPreCommit {
-            param([string] $RepoId)
-            throw [System.InvalidOperationException]::new('Invoke-AvmPreCommit must not run.')
-        }
-        function Install-Module {
-            [CmdletBinding()]
-            param(
-                [string] $Name,
-                [string] $Scope,
-                [switch] $Force,
-                [switch] $AllowClobber
-            )
-            throw [System.InvalidOperationException]::new('Install-Module must be mocked.')
-        }
-        function Install-PSResource {
-            [CmdletBinding()]
-            param(
-                [string] $Name,
-                [string] $Scope,
-                [string] $Version,
-                [switch] $TrustRepository
-            )
-            throw [System.InvalidOperationException]::new('Install-PSResource must be mocked.')
-        }
-    }
-
+Describe 'Shared Avm.Authoring workflow installer' {
     BeforeEach {
-        $previousEnvironment = @{}
-        foreach ($name in @('AVM_AUTHORING_VERSION', 'AVM_AUTHORING_MODULE', 'USE_WORKFLOW_AUTHORING_SOURCE', 'GITHUB_WORKSPACE')) {
-            $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
-        }
-        $env:AVM_AUTHORING_VERSION = $null
-        $env:AVM_AUTHORING_MODULE = 'Avm.Authoring'
-        $env:USE_WORKFLOW_AUTHORING_SOURCE = 'false'
-        $env:GITHUB_WORKSPACE = Join-Path $TestDrive 'repository'
-        $global:AvmWorkflowInstallAttempts = 0
-        $global:AvmWorkflowBootstrapAttempts = 0
-
+        $global:AvmAuthoringInstallAttempts = [Collections.Generic.List[string]]::new()
+        $global:AvmAuthoringFindAttempts = [Collections.Generic.List[string]]::new()
+        $global:AvmAuthoringBootstrapAttempts = 0
         Mock Get-Module {
-            [pscustomobject]@{ Name = 'Microsoft.PowerShell.PSResourceGet' }
+            [pscustomobject]@{ Name = 'Microsoft.PowerShell.PSResourceGet'; Version = [version]'1.1.1' }
         } -ParameterFilter { $ListAvailable -and $Name -eq 'Microsoft.PowerShell.PSResourceGet' }
-        Mock Import-Module
-        Mock Install-Module
-        Mock Install-PSResource
-        Mock Start-Sleep
-        Mock Write-Warning
-        Mock avm
-    }
-
-    AfterEach {
-        foreach ($name in $previousEnvironment.Keys) {
-            $value = $previousEnvironment[$name]
-            if ($null -eq $value) { $value = [NullString]::Value }
-            [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+        Mock Import-Module {}
+        Mock Install-Module {}
+        Mock Get-PSResourceRepository {
+            [pscustomobject]@{ Name = 'UserFeed'; Priority = 10; Uri = 'https://example.invalid/gallery' }
         }
-        Remove-Variable -Name AvmWorkflowInstallAttempts, AvmWorkflowBootstrapAttempts -Scope Global
-    }
-
-    It 'installs the latest version once without sleeping when successful' {
-        & $installer
-
-        Should -Invoke Install-PSResource -Times 1 -Exactly -ParameterFilter {
-            $Name -eq 'Avm.Authoring' -and $Scope -eq 'CurrentUser' -and
-            $TrustRepository -and $ErrorAction -eq 'Stop' -and -not $Version
+        Mock Register-PSResourceRepository {}
+        Mock Find-PSResource {
+            $global:AvmAuthoringFindAttempts.Add($Repository)
+            [pscustomobject]@{ Version = [version]'2.0.0' }
         }
-        Should -Invoke Install-Module -Times 0 -Exactly
-        Should -Invoke Start-Sleep -Times 0 -Exactly
-        Should -Invoke Write-Warning -Times 0 -Exactly
-        Should -Invoke Import-Module -Times 1 -Exactly -ParameterFilter { $Name -eq 'Avm.Authoring' }
+        Mock Install-PSResource { $global:AvmAuthoringInstallAttempts.Add("$Repository/$Version") }
+        Mock Save-PSResource { $global:AvmAuthoringInstallAttempts.Add("$Repository/$Version") }
+        Mock Start-Sleep {}
+        Mock Write-Warning {}
     }
 
-    It 'recovers from the reported Gallery HTTP 504 and logs the retry' {
+    It 'registers MAR once when its endpoint is absent' {
+        & $script:installer | Should -Not -BeNullOrEmpty
+
+        Should -Invoke Register-PSResourceRepository -Exactly 1 -ParameterFilter {
+            $Name -eq 'MAR' -and $Uri -eq 'https://mcr.microsoft.com/' -and
+            $ApiVersion -eq 'ContainerRegistry' -and $Trusted
+        }
+    }
+
+    It 'preserves an existing MAR registration under an arbitrary name' {
+        Mock Get-PSResourceRepository {
+            [pscustomobject]@{ Name = 'CorporateArtifactRegistry'; Priority = 10; Uri = 'https://mcr.microsoft.com/' }
+            [pscustomobject]@{ Name = 'UserFeed'; Priority = 20; Uri = 'https://example.invalid/gallery' }
+        }
+
+        & $script:installer | Should -Not -BeNullOrEmpty
+
+        Should -Invoke Register-PSResourceRepository -Exactly 0
+    }
+
+    It 'selects the newest stable release across all configured repositories' {
+        Mock Get-PSResourceRepository {
+            [pscustomobject]@{ Name = 'Preferred'; Priority = 10; Uri = 'https://example.invalid/preferred' }
+            [pscustomobject]@{ Name = 'Newest'; Priority = 20; Uri = 'https://example.invalid/newest' }
+        }
+        Mock Find-PSResource {
+            $global:AvmAuthoringFindAttempts.Add($Repository)
+            if ($Repository -eq 'Preferred') { [pscustomobject]@{ Version = [version]'1.0.0' } }
+            if ($Repository -eq 'Newest') { [pscustomobject]@{ Version = [version]'2.0.0' } }
+        }
+
+        (& $script:installer).Version | Should -Be ([version]'2.0.0')
+        $global:AvmAuthoringInstallAttempts.ToArray() | Should -Be @('Newest/2.0.0')
+    }
+
+    It 'falls back when MAR does not contain Avm.Authoring' {
+        Mock Get-PSResourceRepository {
+            [pscustomobject]@{ Name = 'MAR'; Priority = 10; Uri = 'https://mcr.microsoft.com/' }
+            [pscustomobject]@{ Name = 'UserFeed'; Priority = 20; Uri = 'https://example.invalid/gallery' }
+        }
+        Mock Find-PSResource {
+            $global:AvmAuthoringFindAttempts.Add($Repository)
+            if ($Repository -eq 'UserFeed') { [pscustomobject]@{ Version = [version]'2.0.0' } }
+        }
+
+        (& $script:installer).Repository | Should -Be 'UserFeed'
+        $global:AvmAuthoringInstallAttempts.ToArray() | Should -Be @('UserFeed/2.0.0')
+    }
+
+    It 'uses configured priority and name order when feeds publish the same newest release' {
+        Mock Get-PSResourceRepository {
+            [pscustomobject]@{ Name = 'Zulu'; Priority = 10; Uri = 'https://example.invalid/zulu' }
+            [pscustomobject]@{ Name = 'Alpha'; Priority = 10; Uri = 'https://example.invalid/alpha' }
+        }
+
+        (& $script:installer).Repository | Should -Be 'Alpha'
+        $global:AvmAuthoringInstallAttempts.ToArray() | Should -Be @('Alpha/2.0.0')
+    }
+
+    It 'falls back only to a source serving the selected version' {
+        Mock Get-PSResourceRepository {
+            [pscustomobject]@{ Name = 'Preferred'; Priority = 10; Uri = 'https://example.invalid/preferred' }
+            [pscustomobject]@{ Name = 'Older'; Priority = 20; Uri = 'https://example.invalid/older' }
+            [pscustomobject]@{ Name = 'Backup'; Priority = 30; Uri = 'https://example.invalid/backup' }
+        }
+        Mock Find-PSResource {
+            if ($Repository -eq 'Older') { [pscustomobject]@{ Version = [version]'1.0.0' } }
+            else { [pscustomobject]@{ Version = [version]'2.0.0' } }
+        }
         Mock Install-PSResource {
-            $global:AvmWorkflowInstallAttempts++
-            if ($global:AvmWorkflowInstallAttempts -eq 1) {
-                throw [System.Net.Http.HttpRequestException]::new(
-                    'Response status code does not indicate success: 504 (Gateway Time-out).')
-            }
+            $global:AvmAuthoringInstallAttempts.Add("$Repository/$Version")
+            if ($Repository -eq 'Preferred') { throw 'Package unavailable.' }
         }
 
-        & $installer
-
-        Should -Invoke Install-PSResource -Times 2 -Exactly
-        Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter { $Seconds -eq 5 }
-        Should -Invoke Write-Warning -Times 1 -Exactly -ParameterFilter {
-            $Message -like '*attempt 1 of 3*504*Retrying in 5 seconds*'
-        }
-        Should -Invoke Import-Module -Times 1 -Exactly -ParameterFilter { $Name -eq 'Avm.Authoring' }
+        (& $script:installer).Repository | Should -Be 'Backup'
+        $global:AvmAuthoringInstallAttempts.ToArray() | Should -Be @(
+            'Preferred/2.0.0', 'Preferred/2.0.0', 'Preferred/2.0.0', 'Backup/2.0.0'
+        )
     }
 
-    It 'retries non-terminating installation errors instead of continuing without the module' {
-        Mock Install-PSResource {
-            $global:AvmWorkflowInstallAttempts++
-            if ($global:AvmWorkflowInstallAttempts -eq 1) {
-                Write-Error 'The Gallery download failed.'
-            }
-        }
+    It 'surfaces an installation failure after the shared retry budget is exhausted' {
+        Mock Install-PSResource { throw 'Synthetic PowerShell Gallery HTTP 403 (Forbidden)' }
 
-        & $installer
+        { & $script:installer } | Should -Throw '*PowerShell Gallery HTTP 403 (Forbidden)*'
 
-        Should -Invoke Install-PSResource -Times 2 -Exactly
-        Should -Invoke Start-Sleep -Times 1 -Exactly
-        Should -Invoke Import-Module -Times 1 -Exactly -ParameterFilter { $Name -eq 'Avm.Authoring' }
+        Should -Invoke Install-PSResource -Exactly 3
+        Should -Invoke Start-Sleep -Exactly 2
+        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 5 }
+        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 10 }
     }
 
-    It 'allows the final attempt to succeed with increasing delays' {
-        Mock Install-PSResource {
-            $global:AvmWorkflowInstallAttempts++
-            if ($global:AvmWorkflowInstallAttempts -lt 3) {
-                throw [System.Net.Http.HttpRequestException]::new('Gallery connection reset.')
-            }
+    It 'stops exact-version discovery and installation at the first successful source' {
+        Mock Get-PSResourceRepository {
+            [pscustomobject]@{ Name = 'Preferred'; Priority = 10; Uri = 'https://example.invalid/preferred' }
+            [pscustomobject]@{ Name = 'Backup'; Priority = 20; Uri = 'https://example.invalid/backup' }
+        }
+        Mock Find-PSResource {
+            $global:AvmAuthoringFindAttempts.Add($Repository)
+            [pscustomobject]@{ Version = [version]'1.2.3' }
         }
 
-        & $installer
-
-        Should -Invoke Install-PSResource -Times 3 -Exactly
-        Should -Invoke Start-Sleep -Times 2 -Exactly
-        Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter { $Seconds -eq 5 }
-        Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter { $Seconds -eq 10 }
-        Should -Invoke Import-Module -Times 1 -Exactly -ParameterFilter { $Name -eq 'Avm.Authoring' }
+        (& $script:installer -Version 1.2.3).Repository | Should -Be 'Preferred'
+        $global:AvmAuthoringFindAttempts.ToArray() | Should -Be @('Preferred')
+        $global:AvmAuthoringInstallAttempts.ToArray() | Should -Be @('Preferred/1.2.3')
     }
 
-    It 'rethrows the last error after three failures without importing or running Avm.Authoring' {
-        Mock Install-PSResource {
-            throw [System.Net.Http.HttpRequestException]::new('Gallery HTTP 504.')
+    It 'uses a Gallery version constraint while selecting the concrete release' {
+        Mock Find-PSResource {
+            $global:AvmAuthoringFindAttempts.Add($Repository)
+            [pscustomobject]@{ Version = [version]'1.2.3' }
         }
 
-        { & $installer } | Should -Throw '*Gallery HTTP 504*'
+        (& $script:installer -VersionConstraint '[1.0.0,2.0.0)').Version | Should -Be ([version]'1.2.3')
 
-        Should -Invoke Install-PSResource -Times 3 -Exactly
-        Should -Invoke Start-Sleep -Times 2 -Exactly
-        Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter { $Seconds -eq 5 }
-        Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter { $Seconds -eq 10 }
-        Should -Invoke Write-Warning -Times 2 -Exactly
-        Should -Invoke Import-Module -Times 0 -Exactly -ParameterFilter { $Name -eq 'Avm.Authoring' }
-        Should -Invoke avm -Times 0 -Exactly
+        Should -Invoke Find-PSResource -Exactly 1 -ParameterFilter {
+            $Repository -eq 'UserFeed' -and $Version -eq '[1.0.0,2.0.0)'
+        }
+        $global:AvmAuthoringInstallAttempts.ToArray() | Should -Be @('UserFeed/1.2.3')
     }
 
-    It 'does not repeat a successful installation when importing Avm.Authoring fails' {
-        Mock Import-Module {
-            throw [System.InvalidOperationException]::new('Avm.Authoring import failed.')
-        } -ParameterFilter { $Name -eq 'Avm.Authoring' }
+    It 'retries PSResourceGet bootstrap failures before installing' {
+        Mock Get-Module {} -ParameterFilter { $ListAvailable -and $Name -eq 'Microsoft.PowerShell.PSResourceGet' }
+        Mock Install-Module {
+            $global:AvmAuthoringBootstrapAttempts++
+            if ($global:AvmAuthoringBootstrapAttempts -eq 1) { throw 'Package manager unavailable.' }
+        }
 
-        { & $installer } | Should -Throw '*Avm.Authoring import failed*'
+        & $script:installer | Should -Not -BeNullOrEmpty
 
-        Should -Invoke Install-PSResource -Times 1 -Exactly
-        Should -Invoke Start-Sleep -Times 0 -Exactly
-        Should -Invoke avm -Times 0 -Exactly
+        Should -Invoke Install-Module -Exactly 2 -ParameterFilter {
+            $Name -eq 'Microsoft.PowerShell.PSResourceGet' -and $MinimumVersion -eq [version]'1.1.1' -and
+            $Scope -eq 'CurrentUser' -and $Force -and $AllowClobber
+        }
+        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 5 }
     }
 
-    if ($HasBootstrap -and -not $IsBicep) {
-        It 'preserves the requested version <RequestedVersion> on every attempt' -ForEach @(
-            @{ RequestedVersion = '1.2.3' }
-            @{ RequestedVersion = '[1.2.3,2.0.0)' }
-        ) {
-            $env:AVM_AUTHORING_VERSION = $RequestedVersion
-            Mock Install-PSResource {
-                $global:AvmWorkflowInstallAttempts++
-                if ($global:AvmWorkflowInstallAttempts -eq 1) {
-                    throw [System.Net.Http.HttpRequestException]::new('Gallery HTTP 503.')
-                }
-            }
+    It 'saves the selected package for the signed bootstrap artifact' {
+        $destination = Join-Path $TestDrive 'package'
 
-            & $installer
+        (& $script:installer -Operation Save -DestinationPath $destination).DestinationPath | Should -Be $destination
 
-            Should -Invoke Install-PSResource -Times 2 -Exactly -ParameterFilter {
-                $Name -eq 'Avm.Authoring' -and $Version -eq $RequestedVersion -and
-                $Scope -eq 'CurrentUser' -and $TrustRepository -and $ErrorAction -eq 'Stop'
-            }
+        Should -Invoke Save-PSResource -Exactly 1 -ParameterFilter {
+            $Name -eq 'Avm.Authoring' -and $Version -eq '2.0.0' -and $Repository -eq 'UserFeed' -and
+            $Path -eq $destination -and $TrustRepository
         }
-
-    }
-    if ($HasBootstrap) {
-        It 'retries a failed PSResourceGet bootstrap before installing Avm.Authoring' {
-            Mock Get-Module { } -ParameterFilter {
-                $ListAvailable -and $Name -eq 'Microsoft.PowerShell.PSResourceGet'
-            }
-            Mock Install-Module {
-                $global:AvmWorkflowBootstrapAttempts++
-                if ($global:AvmWorkflowBootstrapAttempts -eq 1) {
-                    throw [System.Net.Http.HttpRequestException]::new('PSResourceGet download failed.')
-                }
-            }
-
-            & $installer
-
-            Should -Invoke Install-Module -Times 2 -Exactly -ParameterFilter {
-                $Name -eq 'Microsoft.PowerShell.PSResourceGet' -and $Scope -eq 'CurrentUser' -and
-                $Force -and $AllowClobber -and $ErrorAction -eq 'Stop'
-            }
-            Should -Invoke Install-PSResource -Times 1 -Exactly
-            Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter { $Seconds -eq 5 }
-        }
-
-        It 'stops after three bootstrap failures without attempting to install Avm.Authoring' {
-            Mock Get-Module { } -ParameterFilter {
-                $ListAvailable -and $Name -eq 'Microsoft.PowerShell.PSResourceGet'
-            }
-            Mock Install-Module {
-                throw [System.Net.Http.HttpRequestException]::new('PSResourceGet download failed.')
-            }
-
-            { & $installer } | Should -Throw '*PSResourceGet download failed*'
-
-            Should -Invoke Install-Module -Times 3 -Exactly
-            Should -Invoke Install-PSResource -Times 0 -Exactly
-            Should -Invoke Start-Sleep -Times 2 -Exactly
-            Should -Invoke Import-Module -Times 0 -Exactly
-            Should -Invoke avm -Times 0 -Exactly
-        }
-    }
-    else {
-        It 'loads the workflow checkout without contacting the Gallery' {
-            $env:USE_WORKFLOW_AUTHORING_SOURCE = 'true'
-            $sourceManifest = Join-Path $env:GITHUB_WORKSPACE 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
-            Mock Install-PSResource {
-                throw [System.Net.Http.HttpRequestException]::new('Gallery HTTP 403 (Forbidden).')
-            }
-
-            & $installer
-
-            Should -Invoke Install-PSResource -Times 0 -Exactly
-            Should -Invoke Install-Module -Times 0 -Exactly
-            Should -Invoke Start-Sleep -Times 0 -Exactly
-            Should -Invoke Write-Warning -Times 0 -Exactly
-            Should -Invoke Import-Module -Times 1 -Exactly -ParameterFilter {
-                $Name -eq $sourceManifest -and $Force -and $ErrorAction -eq 'Stop'
-            }
-        }
-
-        It 'reports a missing checkout module without falling back to the Gallery' {
-            $env:USE_WORKFLOW_AUTHORING_SOURCE = 'true'
-            $sourceManifest = Join-Path $env:GITHUB_WORKSPACE 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
-            Mock Import-Module {
-                throw [System.IO.FileNotFoundException]::new('Checkout module is missing.')
-            } -ParameterFilter { $Name -eq $sourceManifest }
-
-            { & $installer } | Should -Throw '*Checkout module is missing*'
-
-            Should -Invoke Install-PSResource -Times 0 -Exactly
-            Should -Invoke Start-Sleep -Times 0 -Exactly
-            Should -Invoke Import-Module -Times 1 -Exactly -ParameterFilter { $Name -eq $sourceManifest }
-        }
-
-        It 'rejects an incompatible checkout without falling back to a release' {
-            $env:USE_WORKFLOW_AUTHORING_SOURCE = 'true'
-            Mock Get-Command {
-                [pscustomobject]@{ Parameters = @{} }
-            } -ParameterFilter { $Name -eq 'Invoke-AvmPreCommit' }
-
-            { & $installer } | Should -Throw '*does not support repository sync options*'
-
-            Should -Invoke Install-PSResource -Times 0 -Exactly
-            Should -Invoke Start-Sleep -Times 0 -Exactly
-        }
-
-        It 'still rejects an incompatible release without retrying the successful installation' {
-            Mock Get-Command {
-                [pscustomobject]@{ Parameters = @{} }
-            } -ParameterFilter { $Name -eq 'Invoke-AvmPreCommit' }
-
-            { & $installer } | Should -Throw '*does not support repository sync options*'
-
-            Should -Invoke Install-PSResource -Times 1 -Exactly
-            Should -Invoke Start-Sleep -Times 0 -Exactly
-        }
+        Should -Invoke Install-PSResource -Exactly 0
     }
 }

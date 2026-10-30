@@ -14,6 +14,16 @@ BeforeAll {
         param([string] $Name)
         throw 'Repository lookup must be mocked.'
     }
+    function Register-PSResourceRepository {
+        [CmdletBinding()]
+        param([string] $Name, [string] $Uri, [string] $ApiVersion, [switch] $Trusted)
+        throw 'Repository registration must be mocked.'
+    }
+    function Find-PSResource {
+        [CmdletBinding()]
+        param([string] $Name, [string] $Repository)
+        throw 'Package lookup must be mocked.'
+    }
     function Install-AvmTool {
         [CmdletBinding(SupportsShouldProcess)]
         param([string[]] $Name, [string] $Path, [switch] $SkipModuleVersionCheck)
@@ -229,6 +239,8 @@ Describe 'Bicep workflow package installation' {
         } -ParameterFilter { $Name -eq 'FixturePackage' -and $ListAvailable }
         Mock Import-Module {}
         Mock Get-PSResourceRepository { [pscustomobject]@{ Name = 'UserFeed'; Priority = 10; Uri = 'https://example.invalid/gallery' } }
+        Mock Register-PSResourceRepository {}
+        Mock Find-PSResource { [pscustomobject]@{ Version = [version]'2.0.0' } }
         Mock Install-PSResource {
             $script:installedVersion = if ([string]::IsNullOrEmpty($Version)) { [version]'2.0.0' } else { [version]$Version }
         }
@@ -246,7 +258,7 @@ Describe 'Bicep workflow package installation' {
         $script:installedVersion = [version]'1.2.3'
         (Install-AvmWorkflowModule -Name FixturePackage -Confirm:$false).Version | Should -Be ([version]'2.0.0')
         Should -Invoke Install-PSResource -Exactly 1 -ParameterFilter {
-            $Name -eq 'FixturePackage' -and -not $PSBoundParameters.ContainsKey('Version')
+            $Name -eq 'FixturePackage' -and $Version -eq '2.0.0'
         }
     }
 
@@ -285,6 +297,70 @@ Describe 'Bicep workflow package installation' {
         Should -Invoke Install-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'UserFeed' }
     }
 
+    It 'selects the newest release across configured repositories rather than the first' {
+        Mock Get-PSResourceRepository {
+            [pscustomobject]@{ Name = 'Preferred'; Priority = 10; Uri = 'https://example.invalid/preferred' }
+            [pscustomobject]@{ Name = 'Newest'; Priority = 20; Uri = 'https://example.invalid/newest' }
+        }
+        Mock Find-PSResource {
+            if ($Repository -eq 'Preferred') { [pscustomobject]@{ Version = [version]'1.0.0' } }
+            if ($Repository -eq 'Newest') { [pscustomobject]@{ Version = [version]'2.0.0' } }
+        }
+
+        (Install-AvmWorkflowModule -Name FixturePackage -Confirm:$false).Version | Should -Be ([version]'2.0.0')
+        Should -Invoke Install-PSResource -Exactly 1 -ParameterFilter {
+            $Repository -eq 'Newest' -and $Version -eq '2.0.0'
+        }
+    }
+
+    It 'falls back when MAR has no Avm.Authoring package' {
+        Mock Get-PSResourceRepository {
+            [pscustomobject]@{ Name = 'MAR'; Priority = 10; Uri = 'https://mcr.microsoft.com/' }
+            [pscustomobject]@{ Name = 'UserFeed'; Priority = 20; Uri = 'https://example.invalid/gallery' }
+        }
+        Mock Find-PSResource {
+            if ($Repository -eq 'UserFeed') { [pscustomobject]@{ Version = [version]'2.0.0' } }
+        }
+
+        (Install-AvmWorkflowModule -Name FixturePackage -Confirm:$false).Version | Should -Be ([version]'2.0.0')
+        Should -Invoke Install-PSResource -Exactly 1 -ParameterFilter {
+            $Repository -eq 'UserFeed' -and $Version -eq '2.0.0'
+        }
+    }
+
+    It 'uses configured priority and name order when feeds publish the same newest release' {
+        Mock Get-PSResourceRepository {
+            [pscustomobject]@{ Name = 'Zulu'; Priority = 10; Uri = 'https://example.invalid/zulu' }
+            [pscustomobject]@{ Name = 'Alpha'; Priority = 10; Uri = 'https://example.invalid/alpha' }
+        }
+        Mock Find-PSResource { [pscustomobject]@{ Version = [version]'2.0.0' } }
+        $script:repositoryAttemptOrder = [Collections.Generic.List[string]]::new()
+        Mock Install-PSResource {
+            $script:repositoryAttemptOrder.Add($Repository)
+            $script:installedVersion = [version]$Version
+        }
+
+        Install-AvmWorkflowModule -Name FixturePackage -Confirm:$false | Out-Null
+        $script:repositoryAttemptOrder.ToArray() | Should -Be @('Alpha')
+    }
+
+    It 'falls back to a same-version source when the selected source fails' {
+        Mock Get-PSResourceRepository {
+            [pscustomobject]@{ Name = 'Preferred'; Priority = 10; Uri = 'https://example.invalid/preferred' }
+            [pscustomobject]@{ Name = 'Backup'; Priority = 20; Uri = 'https://example.invalid/backup' }
+        }
+        Mock Find-PSResource { [pscustomobject]@{ Version = [version]'2.0.0' } }
+        $script:repositoryAttemptOrder = [Collections.Generic.List[string]]::new()
+        Mock Install-PSResource {
+            $script:repositoryAttemptOrder.Add($Repository)
+            if ($Repository -eq 'Preferred') { throw [InvalidOperationException]::new('Package not found') }
+            $script:installedVersion = [version]$Version
+        }
+
+        (Install-AvmWorkflowModule -Name FixturePackage -Confirm:$false).Version | Should -Be ([version]'2.0.0')
+        $script:repositoryAttemptOrder.ToArray() | Should -Be @('Preferred', 'Backup')
+    }
+
     It 'tries the next repository after a package is unavailable' {
         Mock Get-PSResourceRepository {
             [pscustomobject]@{ Name = 'Backup'; Priority = 20 }
@@ -298,6 +374,22 @@ Describe 'Bicep workflow package installation' {
         }
         (Install-AvmWorkflowModule -Name FixturePackage -Version 1.2.3 -Confirm:$false).Version | Should -Be ([version]'1.2.3')
         $script:repositoryAttemptOrder.ToArray() | Should -Be @('Preferred', 'Backup')
+    }
+
+    It 'stops exact-version installation after the first successful configured source' {
+        Mock Get-PSResourceRepository {
+            [pscustomobject]@{ Name = 'Preferred'; Priority = 10; Uri = 'https://example.invalid/preferred' }
+            [pscustomobject]@{ Name = 'Backup'; Priority = 20; Uri = 'https://example.invalid/backup' }
+        }
+        $script:repositoryAttemptOrder = [Collections.Generic.List[string]]::new()
+        Mock Install-PSResource {
+            $script:repositoryAttemptOrder.Add($Repository)
+            $script:installedVersion = [version]$Version
+        }
+
+        Install-AvmWorkflowModule -Name FixturePackage -Version 1.2.3 -Confirm:$false | Out-Null
+        $script:repositoryAttemptOrder.ToArray() | Should -Be @('Preferred')
+        Should -Invoke Find-PSResource -Exactly 0
     }
 
     It 'fails explicitly when no repositories are configured' {

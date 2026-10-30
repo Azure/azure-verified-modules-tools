@@ -109,6 +109,15 @@ jobs:
           ref: ${{ steps.repository.outputs.sha }}
           path: authoring-source
           persist-credentials: false
+      - name: Save Gallery module
+        id: gallery
+        if: inputs.authoringSource == 'gallery'
+        uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
+        with:
+          operation: Save
+          destination: ${{ runner.temp }}/avm-gallery
+          version: ${{ inputs.authoringRef }}
+          version-constraint: ${{ inputs.legacyVersion }}
       - name: Prepare module
         id: prepare
         shell: pwsh
@@ -116,6 +125,7 @@ jobs:
           SOURCE: ${{ inputs.authoringSource }}
           REF: ${{ inputs.authoringRef }}
           LEGACY_VERSION: ${{ inputs.legacyVersion }}
+          GALLERY_VERSION: ${{ steps.gallery.outputs.version }}
           RESOLVED_REF: ${{ steps.repository.outputs.ref }}
           RESOLVED_SHA: ${{ steps.repository.outputs.sha }}
         run: |
@@ -123,9 +133,12 @@ jobs:
           $packageRoot = Join-Path $env:RUNNER_TEMP 'avm-package'
           $moduleRoot = Join-Path $packageRoot 'Avm.Authoring'
           New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+          $selection = if (-not [string]::IsNullOrEmpty($env:REF)) { $env:REF } else { [string]$env:LEGACY_VERSION }
           if ($env:SOURCE -ceq 'repo') {
-            if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
-              Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+            if (-not @(Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet |
+                Where-Object { $_.Version -ge [version]'1.1.1' }).Count) {
+              Install-Module -Name Microsoft.PowerShell.PSResourceGet -MinimumVersion 1.1.1 `
+                -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
             }
             Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
             if (-not (Get-Module -ListAvailable -Name InvokeBuild | Where-Object { $_.Version -ge [version]'5.11.0' })) {
@@ -154,68 +167,13 @@ jobs:
             Copy-Item -LiteralPath $built -Destination $moduleRoot -Recurse
           }
           else {
-            $selection = if (-not [string]::IsNullOrEmpty($env:REF)) { $env:REF } else { [string]$env:LEGACY_VERSION }
-            $find = @{ Name = 'Avm.Authoring'; ErrorAction = 'Stop' }
-            if ($selection -cne '') { $find.Version = $selection }
-            $release = $null
-            for ($resourceAttempt = 1; $resourceAttempt -le 3; $resourceAttempt++) {
-              try {
-                if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
-                  Install-Module -Name Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
-                }
-                Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
-                break
-              }
-              catch {
-                if ($resourceAttempt -eq 3) { throw }
-                $delay = 5 * [math]::Pow(2, $resourceAttempt - 1)
-                Write-Warning "PSResourceGet preparation failed on attempt $resourceAttempt of 3: $($_.Exception.Message). Retrying in $delay seconds."
-                Start-Sleep -Seconds $delay
-              }
-            }
-            $repositories = @(Get-PSResourceRepository -ErrorAction Stop | Sort-Object Priority, Name)
-            if ($repositories.Count -eq 0) { throw [InvalidOperationException]::new('No PowerShell repositories are configured.') }
-            $saved = $false
-            foreach ($repository in $repositories) {
-              try {
-                $find.Repository = $repository.Name
-                for ($attempt = 1; $attempt -le 3; $attempt++) {
-                  try {
-                    if ($null -eq $release) {
-                      $found = @(Find-PSResource @find | Sort-Object Version -Descending | Select-Object -First 1)
-                      if ($found.Count -ne 1) { throw [InvalidOperationException]::new('No matching Gallery release was found.') }
-                      $release = $found[0]
-                    }
-                    if (-not [string]::IsNullOrEmpty($env:REF) -and $release.Version.ToString() -cne $env:REF) {
-                      throw [InvalidOperationException]::new('The Gallery release does not match the requested exact version.')
-                    }
-                    $savePath = Join-Path $env:RUNNER_TEMP "avm-gallery-$([guid]::NewGuid().ToString('N'))"
-                    New-Item -ItemType Directory -Path $savePath -Force | Out-Null
-                    Save-PSResource -Name Avm.Authoring -Version $release.Version.ToString() -Repository $repository.Name `
-                      -Path $savePath -TrustRepository -ErrorAction Stop
-                    break
-                  }
-                  catch {
-                    if ($attempt -eq 3) { throw }
-                    $delay = 5 * [math]::Pow(2, $attempt - 1)
-                    Write-Warning "Avm.Authoring installation failed on attempt $attempt of 3: $($_.Exception.Message). Retrying in $delay seconds."
-                    Start-Sleep -Seconds $delay
-                  }
-                }
-                $saved = $true
-                break
-              }
-              catch {
-                $lastFailure = $_
-                Write-Verbose "PowerShell repository '$($repository.Name)' could not prepare Avm.Authoring; trying the next configured repository."
-              }
-            }
-            if (-not $saved) { throw $lastFailure }
+            $savePath = Join-Path $env:RUNNER_TEMP 'avm-gallery'
             $manifests = @(Get-ChildItem -LiteralPath $savePath -Filter 'Avm.Authoring.psd1' -Recurse -File)
             if ($manifests.Count -ne 1) {
               throw [InvalidOperationException]::new('Gallery download must contain exactly one Avm.Authoring manifest.')
             }
             Copy-Item -LiteralPath $manifests[0].Directory.FullName -Destination $moduleRoot -Recurse
+            $release = [pscustomobject]@{ Version = [version]$env:GALLERY_VERSION }
           }
           $manifest = Join-Path $moduleRoot 'Avm.Authoring.psd1'
           $module = Import-Module -Name $manifest -PassThru -ErrorAction Stop

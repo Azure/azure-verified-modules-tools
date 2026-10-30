@@ -3053,7 +3053,7 @@ status aggregation.
 | --- | --- | --- |
 | `Authoring: CI` | `ci-authoring.yml` | Lint once on Ubuntu; authoring unit and component tests on Ubuntu, Windows and macOS; the Ubuntu unit leg enforces the 70% coverage floor. |
 | `Authoring: Package qualification` | `ci-package-qualification.yml` | Cold/offline runtime dependencies, release downloads, checksums and ruleset attestation on all three operating systems when package/pin/bootstrap dependencies or packaged Bicep policy selectors change. |
-| `Workflows: CI` | `ci-workflows.yml` | Workflow definitions, embedded installation behavior and CI contract tests on Ubuntu only. |
+| `Workflows: CI` | `ci-workflows.yml` | Workflow definitions, embedded installation behavior, bootstrap component behavior and CI contract tests on Ubuntu only. |
 | `Repos: CI` | `repository-management-config-test.yml` | Repository-management unit/component tests, configuration checks and mocked Terraform validation on Ubuntu only. |
 
 Authoring pull-request/manual runs retain both Terraform fixtures per OS and
@@ -3071,9 +3071,13 @@ pull-request/manual runs; it is not a nightly store for redundant matrices.
 Existing integration environment approval and job-specific permissions remain
 in place. Workflow and repository-management CI need no Azure credentials.
 
-The static YAML filters include each area's source, tests, fixtures and
-relevant workflow files. Authoring excludes repository-management and workflow
-test directories, plus the dedicated repository component/fixture files.
+The static YAML filters route module implementation, generated reference and
+its concrete build/runtime dependencies to Authoring; workflow/action files,
+workflow tests and bootstrap component tests to Workflows; and
+repository-management code, configuration and tests to Repos. Authoring
+excludes repository-management and workflow test inventories, including the
+bootstrap component suites, plus the dedicated repository component/fixture
+files. Workflow-only changes must not start the Authoring matrix.
 Repository-management tests include the `BicepModuleIdentities`,
 `BicepTestTenantSync`, `ModuleCatalog`, `Repository` and `TerraformCodeowners`
 component filename families and the shared `TerraformInitUpgrade.Tests.ps1`
@@ -3095,11 +3099,13 @@ Native path-filter limits and skip behavior apply. Do not require a
 path-filtered workflow for every change; branch-protection configuration is
 not modified by these workflows.
 
-The build entry point's `-TestGroup Authoring` and
+The build entry point's `-TestGroup Authoring`, `-TestGroup Workflows` and
 `-TestGroup RepositoryManagement` select test files only, not changed paths.
-Serial, sharded and coverage runs use the same inventories. The default `All`
-and full local `pre-commit` gate still run every unit/component group,
-including workflow and repository-management tests.
+The Workflows inventory includes workflow unit tests, the build-prerequisite
+unit test and bootstrap component suites. Serial, sharded and coverage runs use
+the same Authoring and RepositoryManagement inventories. The default `All` and
+full local `pre-commit` gate still run every unit/component group, including
+workflow and repository-management tests.
 
 ---
 
@@ -3141,11 +3147,19 @@ including workflow and repository-management tests.
 
 ## 20. Release and versioning
 
+- Reuse existing implementations or extract shared logic rather than duplicate
+  behavior across module code, scripts, workflows, and tests whenever practical.
+  Necessary differences at security, trust, source, or execution boundaries may
+  use thin boundary-specific adapters, but they must delegate common behavior to
+  the shared implementation instead of copying it. Do not introduce an
+  abstraction when it would obscure a genuinely distinct contract.
 - Module version checks, self-upgrades, build prerequisites, and workflow
   dependency installations use the user's configured PowerShell repositories,
   not a required repository name or URL. PSResourceGet repositories are tried
-  by ascending priority, then name. Dependency operations stop at the first
-  successful result.
+  by ascending priority, then name. Dependencies other than unpinned
+  `Avm.Authoring` stop at the first successful result. Workflow installation
+  of an exact `Avm.Authoring` version also stops at the first successful
+  repository.
   Bootstrap PowerShellGet uses its configured repository enumeration order.
   Missing packages and exhausted repository failures fall through to the next
   repository; no configured repositories or failure of every repository is an
@@ -3163,7 +3177,10 @@ including workflow and repository-management tests.
   repositories, in that order, using the exact selected version and verifying
   the installed version before reporting success. Equal-version ties follow the
   user's configured order, including for MAR; no repository name or URI gets
-  special priority. Do not register repositories or change priorities automatically.
+  special priority. Workflows register `https://mcr.microsoft.com/` as a
+  trusted `ContainerRegistry` repository only when no existing repository has
+  that URI. This preserves existing arbitrary repository names and every
+  configured priority.
   The MAR artifact is `mcr.microsoft.com/psresource/avm.authoring`, with the same
   `Avm.Authoring` module identity and version as other feeds. PSResourceGet adds
   the `psresource/` prefix; find and update commands still use `Avm.Authoring`.
@@ -3171,8 +3188,13 @@ including workflow and repository-management tests.
   name using `Register-PSResourceRepository -Name MAR -Uri https://mcr.microsoft.com -ApiVersion ContainerRegistry`;
   newer PSResourceGet versions also provide `-MicrosoftArtifactRegistry`.
   The publication pipeline is separate from repository selection.
-- Normal commands compare the running module against the latest release from
-  all usable configured repositories and stop with upgrade guidance when outdated. `avm version`
+- Workflow installation without an explicit `Avm.Authoring` version discovers
+  every configured repository, selects the highest stable version, and installs
+  that exact version only from repositories reporting it in configured
+  priority/name order. It may fall back only to another source reporting that
+  same version, never a lower version. Normal commands compare the running
+  module against the latest release from all usable configured repositories and
+  stop with upgrade guidance when outdated. `avm version`
   and `Get-AvmVersion` instead return the running version with an update warning.
   `avm upgrade` is the sole CLI self-update command and bypasses the guard so it
   can install the newer version.

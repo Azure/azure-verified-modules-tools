@@ -51,24 +51,10 @@ jobs:
           persist-credentials: false
 
       - name: Install Avm.Authoring
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $maxAttempts = 3
-          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-            try {
-              Install-PSResource -Name Avm.Authoring -Scope CurrentUser -TrustRepository -ErrorAction Stop
-              break
-            }
-            catch {
-              if ($attempt -eq $maxAttempts) {
-                throw
-              }
-              $delaySeconds = 5 * [math]::Pow(2, $attempt - 1)
-              Write-Warning "Avm.Authoring installation failed on attempt $attempt of ${maxAttempts}: $($_.Exception.Message). Retrying in $delaySeconds seconds."
-              Start-Sleep -Seconds $delaySeconds
-            }
-          }
-          Import-Module Avm.Authoring
+        uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
+      - name: Load Avm.Authoring
+        shell: pwsh
+        run: Import-Module Avm.Authoring
 
       - name: Create read-only repository discovery token
         id: discovery-token

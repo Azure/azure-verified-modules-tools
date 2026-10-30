@@ -33,21 +33,13 @@ Describe 'Repository sync project prerequisites' -Tag Component {
         [Environment]::SetEnvironmentVariable('USE_WORKFLOW_AUTHORING_SOURCE', $value, 'Process')
     }
 
-    It 'preserves the original installer failure after its existing three attempts' {
-        Mock Install-PSResource { throw 'Synthetic PowerShell Gallery HTTP 403 (Forbidden)' }
-        Mock Start-Sleep {}
+    It 'loads the installed module without retrying an installer owned by the shared action' {
         Mock Import-Module {} -ParameterFilter { $Name -eq 'Avm.Authoring' }
-        $records = [System.Collections.Generic.List[object]]::new()
-        { & $script:stepCode['Load Avm.Authoring'] 3>&1 | ForEach-Object { $records.Add($_) } } |
-            Should -Throw '*PowerShell Gallery HTTP 403 (Forbidden)*'
-        Should -Invoke Install-PSResource -Exactly 3
-        Should -Invoke Start-Sleep -Exactly 2
-        Should -Invoke Import-Module -Exactly 0 -ParameterFilter { $Name -eq 'Avm.Authoring' }
-        @($records) | Should -HaveCount 2
-        foreach ($record in $records) {
-            $record | Should -BeOfType ([System.Management.Automation.WarningRecord])
-            $record.Message | Should -Match 'HTTP 403'
-        }
+
+        & $script:stepCode['Load Avm.Authoring']
+
+        Should -Invoke Import-Module -Exactly 1 -ParameterFilter { $Name -eq 'Avm.Authoring' }
+        $script:steps['Load Avm.Authoring'] | Should -Not -Match 'Install-PSResource|Start-Sleep'
         $script:steps['Load Avm.Authoring'] | Should -Not -Match 'continue-on-error'
         $script:steps['Create GitHub App token'] | Should -Not -Match 'continue-on-error|(?m)^        if:'
     }

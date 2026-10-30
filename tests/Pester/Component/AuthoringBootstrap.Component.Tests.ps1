@@ -54,18 +54,23 @@ Describe 'Repository authoring ref resolution' -Tag 'Component' {
     Describe 'Authoring module preparation' {
         BeforeEach {
             $script:saved = @{}
-            foreach ($name in @('SOURCE', 'REF', 'LEGACY_VERSION', 'RESOLVED_REF', 'RESOLVED_SHA', 'RUNNER_TEMP', 'GITHUB_WORKSPACE', 'GITHUB_OUTPUT')) {
+            foreach ($name in @('SOURCE', 'REF', 'LEGACY_VERSION', 'GALLERY_VERSION', 'RESOLVED_REF', 'RESOLVED_SHA', 'RUNNER_TEMP', 'GITHUB_WORKSPACE', 'GITHUB_OUTPUT')) {
                 $script:saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
             }
             $env:SOURCE = 'gallery'
             $env:REF = ''
             $env:LEGACY_VERSION = ''
+            $env:GALLERY_VERSION = '0.0.0'
             $env:RUNNER_TEMP = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
             $env:GITHUB_WORKSPACE = $env:RUNNER_TEMP
             $env:GITHUB_OUTPUT = Join-Path $env:RUNNER_TEMP 'output'
             New-Item -ItemType Directory -Path $env:RUNNER_TEMP -Force | Out-Null
+            New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'avm-gallery') -Force | Out-Null
+            Copy-Item -LiteralPath (Join-Path $script:root 'src' 'Avm.Authoring') `
+                -Destination (Join-Path $env:RUNNER_TEMP 'avm-gallery' 'Avm.Authoring') -Recurse
             $global:AvmBootstrapSaveAttempts = 0
             Mock Get-PSResourceRepository { [pscustomobject]@{ Name = 'UserFeed'; Priority = 10; Uri = 'https://example.invalid/gallery' } }
+            Mock Register-PSResourceRepository {}
             Mock Find-PSResource { [pscustomobject]@{ Version = [version]'0.0.0' } }
             Mock Save-PSResource {
                 $global:AvmBootstrapSaveAttempts++
@@ -86,104 +91,12 @@ Describe 'Repository authoring ref resolution' -Tag 'Component' {
             Remove-Variable AvmBootstrapManagerAttempts -Scope Global -ErrorAction SilentlyContinue
         }
 
-        It 'retains package manager bootstrap retries before trying configured repositories' {
-            function Install-Module {
-                [CmdletBinding()]
-                param([string] $Name, [string] $Scope, [switch] $Force, [switch] $AllowClobber)
-                throw 'Package manager installation must be mocked.'
-            }
-            $global:AvmBootstrapManagerAttempts = 0
-            Mock Get-Module {} -ParameterFilter { $ListAvailable -and $Name -eq 'Microsoft.PowerShell.PSResourceGet' }
-            Mock Install-Module {
-                $global:AvmBootstrapManagerAttempts++
-                if ($global:AvmBootstrapManagerAttempts -eq 1) { throw [Net.Http.HttpRequestException]::new('HTTP 503') }
-            }
-            & $script:prepare | Out-Null
-            Should -Invoke Install-Module -Exactly 2
-            Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 5 }
-            Should -Invoke Save-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'UserFeed' }
+        It 'imports the Gallery package prepared by the shared installer action' {
+          & $script:prepare | Out-Null
+          $moduleRoot = Join-Path $env:RUNNER_TEMP 'avm-package' 'Avm.Authoring'
+          @(Get-Module Avm.Authoring | Where-Object ModuleBase -EQ $moduleRoot).Count | Should -Be 1
+          Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | Should -Match '^artifact=avm-authoring-[0-9a-f]{32}'
         }
-
-        It 'resolves latest Gallery once and imports the exact saved module' {
-            & $script:prepare | Out-Null
-            Should -Invoke Find-PSResource -Exactly 1 -ParameterFilter { $Name -eq 'Avm.Authoring' -and -not $Version }
-            Should -Invoke Save-PSResource -Exactly 1 -ParameterFilter { $Name -eq 'Avm.Authoring' -and $Version -eq '0.0.0' }
-            $moduleRoot = Join-Path $env:RUNNER_TEMP 'avm-package' 'Avm.Authoring'
-            @(Get-Module Avm.Authoring | Where-Object ModuleBase -EQ $moduleRoot).Count | Should -Be 1
-            Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | Should -Match '^artifact=avm-authoring-[0-9a-f]{32}'
-        }
-
-        It 'uses the exact requested Gallery version and keeps it across download retries' {
-            $env:REF = '0.0.0'
-            Mock Save-PSResource {
-                $global:AvmBootstrapSaveAttempts++
-                if ($global:AvmBootstrapSaveAttempts -eq 1) { throw [Net.Http.HttpRequestException]::new('HTTP 503') }
-                Copy-Item -LiteralPath (Join-Path $script:root 'src' 'Avm.Authoring') -Destination (Join-Path $Path 'Avm.Authoring') -Recurse
-            }
-            $output = & $script:prepare 6>&1 | Out-String
-            Should -Invoke Find-PSResource -Exactly 1 -ParameterFilter { $Version -eq '0.0.0' }
-            Should -Invoke Save-PSResource -Exactly 2 -ParameterFilter { $Version -eq '0.0.0' }
-            Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 5 }
-            $output | Should -Match 'source gallery, version 0\.0\.0, ref 0\.0\.0'
-        }
-
-        It 'preserves an existing Gallery version range when selecting the concrete version' {
-            $env:LEGACY_VERSION = '[0.0.0,1.0.0)'
-            & $script:prepare | Out-Null
-            Should -Invoke Find-PSResource -Exactly 1 -ParameterFilter { $Version -eq '[0.0.0,1.0.0)' }
-            Should -Invoke Save-PSResource -Exactly 1 -ParameterFilter { $Version -eq '0.0.0' }
-        }
-
-        It 'falls through configured repositories when no matching release is found' {
-            Mock Get-PSResourceRepository {
-                [pscustomobject]@{ Name = 'Backup'; Priority = 20 }
-                [pscustomobject]@{ Name = 'Preferred'; Priority = 10 }
-            }
-            Mock Find-PSResource {
-                if ($Repository -eq 'Backup') { [pscustomobject]@{ Version = [version]'0.0.0' } }
-            }
-            & $script:prepare | Out-Null
-            Should -Invoke Find-PSResource -Exactly 3 -ParameterFilter { $Repository -eq 'Preferred' }
-            Should -Invoke Find-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'Backup' }
-            Should -Invoke Save-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'Backup' -and $Version -eq '0.0.0' }
-        }
-
-        It 'keeps the selected concrete version when falling through download repositories' {
-            Mock Get-PSResourceRepository {
-                [pscustomobject]@{ Name = 'Preferred'; Priority = 10 }
-                [pscustomobject]@{ Name = 'Backup'; Priority = 20 }
-            }
-            Mock Save-PSResource {
-                if ($Repository -eq 'Preferred') { throw [Net.Http.HttpRequestException]::new('HTTP 503') }
-                Copy-Item -LiteralPath (Join-Path $script:root 'src' 'Avm.Authoring') -Destination (Join-Path $Path 'Avm.Authoring') -Recurse
-            }
-            & $script:prepare | Out-Null
-            Should -Invoke Find-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'Preferred' }
-            Should -Invoke Save-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'Backup' -and $Version -eq '0.0.0' }
-        }
-
-        It 'fails after a Gallery download failure without publishing or trying a repository build' {
-            Mock Save-PSResource { throw [Net.Http.HttpRequestException]::new('download failed') }
-            { & $script:prepare } | Should -Throw '*download failed*'
-            Should -Invoke Find-PSResource -Exactly 1
-            Should -Invoke Save-PSResource -Exactly 3
-            Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
-        }
-
-        It 'rejects a downloaded module whose version does not match the selected release' {
-            Mock Find-PSResource { [pscustomobject]@{ Version = [version]'0.35.0' } }
-            { & $script:prepare } | Should -Throw '*does not match the selected release*'
-            Should -Invoke Save-PSResource -Exactly 1 -ParameterFilter { $Version -eq '0.35.0' }
-            Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
-        }
-
-        It 'rejects a Gallery lookup that returns a different exact version' {
-            $env:REF = '0.35.0'
-            { & $script:prepare } | Should -Throw '*does not match the requested exact version*'
-            Should -Invoke Save-PSResource -Exactly 0
-            Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
-        }
-
         It 'fails closed when the repository build cannot start' {
             $env:SOURCE = 'repo'
             { & $script:prepare } | Should -Throw
