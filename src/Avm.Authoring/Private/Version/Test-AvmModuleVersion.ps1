@@ -24,7 +24,7 @@ function Test-AvmModuleVersion {
 
     if ($SkipModuleVersionCheck) {
         if (-not $SuppressSkipWarning -and -not $script:AvmModuleVersionSkipWarningWritten) {
-            Write-Warning 'The Avm.Authoring PowerShell Gallery version check was skipped. The current command may run with an outdated module.'
+            Write-Warning 'The Avm.Authoring PowerShell repository version check was skipped. The current command may run with an outdated module.'
             $script:AvmModuleVersionSkipWarningWritten = $true
         }
         return
@@ -39,16 +39,16 @@ function Test-AvmModuleVersion {
             $failure.Message
         }
         elseif ($failure -is [System.Net.Http.HttpRequestException]) {
-            'The Gallery request failed.'
+            'The repository request failed.'
         }
         elseif ($failure -is [System.TimeoutException] -or
             $failure -is [System.Threading.Tasks.TaskCanceledException]) {
-            'The Gallery request timed out.'
+            'The repository request timed out.'
         }
         else {
-            'The Gallery lookup failed unexpectedly.'
+            'The repository lookup failed unexpectedly.'
         }
-        Write-Warning "Unable to check PowerShell Gallery for the latest Avm.Authoring version. Continuing with the installed module. $detail"
+        Write-Warning "Unable to check configured PowerShell repositories for the latest Avm.Authoring version. Continuing with the installed module. $detail"
         return
     }
 
@@ -56,12 +56,12 @@ function Test-AvmModuleVersion {
         Sort-Object Version -Descending |
         Select-Object -First 1
     if (-not $currentModule) {
-        Write-Warning 'Unable to determine the running Avm.Authoring version. Continuing without enforcing the PowerShell Gallery version.'
+        Write-Warning 'Unable to determine the running Avm.Authoring version. Continuing without enforcing the repository version.'
         return
     }
 
     Write-AvmLog (
-        'module version check: comparing running version {0} with latest PowerShell Gallery version {1}' -f
+        'module version check: comparing running version {0} with latest configured repository version {1}' -f
         $currentModule.Version,
         $latestVersion) -Level Verbose
 

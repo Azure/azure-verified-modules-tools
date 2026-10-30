@@ -41,11 +41,11 @@ $module = Import-Module $Manifest -PassThru
     }
 }
 if ($Mode -eq 'install') {
-        function Get-PSResourceRepository { param($Name) [pscustomobject]@{ Uri = 'https://www.powershellgallery.com/api/v2' } }
+        function Get-PSResourceRepository { param($Name) [pscustomobject]@{ Name = 'UserFeed'; Priority = 10 } }
         function Install-PSResource {
             [CmdletBinding()]
             param($Name, $Version, $Repository, $Scope, [switch]$TrustRepository, [switch]$Quiet)
-            if ($Repository -cne 'PSGallery' -or $Scope -cne 'CurrentUser') { throw 'Incorrect installation scope.' }
+            if ($Repository -cne 'UserFeed' -or $Scope -cne 'CurrentUser') { throw 'Incorrect installation scope.' }
             $command = if ($Name -ceq 'Az.Accounts') { 'Get-AzContext' } else { 'Disable-AzSubscription' }
             $directory = Join-Path $Modules $Name $Version
             $null = New-Item -ItemType Directory -Path $directory -Force

@@ -19,17 +19,21 @@ $ErrorActionPreference = 'Stop'
 
 if (-not (Get-Module -ListAvailable -Name 'Microsoft.PowerShell.PSResourceGet')) {
     if ($PSCmdlet.ShouldProcess('Microsoft.PowerShell.PSResourceGet', 'Install build prerequisite')) {
-        $null = Invoke-AvmRetry `
-            -RetryActivity 'Installing Microsoft.PowerShell.PSResourceGet' `
-            -RetryMaxAttempts $MaxAttempts `
-            -RetryInitialDelaySeconds $InitialDelaySeconds `
-            -RetryAction {
+        $null = Invoke-AvmPSRepositoryOperation -Legacy -Action {
+            param($RepositoryName)
+            Invoke-AvmRetry `
+                -RetryActivity 'Installing Microsoft.PowerShell.PSResourceGet' `
+                -RetryMaxAttempts $MaxAttempts `
+                -RetryInitialDelaySeconds $InitialDelaySeconds `
+                -RetryAction {
                 Install-Module `
                     -Name 'Microsoft.PowerShell.PSResourceGet' `
+                    -Repository $RepositoryName `
                     -Scope CurrentUser `
                     -Force `
                     -AllowClobber
             }
+        }
     }
 }
 
@@ -83,6 +87,10 @@ foreach ($package in $packages) {
         if ($isExactPin) {
             $retryParameters.RetryOnPermanentFailure = $retryOnGalleryNotFound
         }
-        $null = Invoke-AvmRetry @retryParameters
+        $null = Invoke-AvmPSRepositoryOperation -Action {
+            param($RepositoryName)
+            $package.Repository = $RepositoryName
+            Invoke-AvmRetry @retryParameters
+        }
     }
 }

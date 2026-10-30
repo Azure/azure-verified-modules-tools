@@ -107,6 +107,7 @@ function Install-AvmToolFromPins {
         $url = $url.Replace('{ext}', $extToken)
         Write-AvmLog ("install: source = {0}" -f $url) -Level Verbose | Out-Null
         $expectedSha256 = if ($overridden) { $null } else { $Tool.sha256[$Platform] }
+        $useRepositoryDownload = $isModule -and -not $url.StartsWith('file://') -and [string]::IsNullOrWhiteSpace($env:AVM_MIRROR)
         Write-AvmLog ("install: archive = {0}; expected sha256 = {1}" -f $resolvedArchive, ($expectedSha256 ?? 'disabled by tool-version-overrides.json')) -Level Verbose | Out-Null
 
         $stagingRoot = Join-Path $toolDir '.staging'
@@ -124,7 +125,15 @@ function Install-AvmToolFromPins {
                 $download = @{ Url = $url; Destination = $archivePath }
                 if (-not $overridden) { $download.ExpectedSha256 = $expectedSha256 }
                 else { $download.UnverifiedToolVersionOverride = $true }
-                Invoke-AvmHttp @download | Out-Null
+                if ($useRepositoryDownload) {
+                    $moduleDownload = @{ Name = $Tool.name; Version = $Tool.version; Destination = $archivePath }
+                    if ($overridden) { $moduleDownload.UnverifiedToolVersionOverride = $true }
+                    else { $moduleDownload.ExpectedSha256 = $expectedSha256 }
+                    $url = Save-AvmPowerShellModuleArchive @moduleDownload
+                }
+                else {
+                    Invoke-AvmHttp @download | Out-Null
+                }
                 try {
                     if ($isModule -and $resolvedArchive -eq 'zip') {
                         Assert-AvmPowerShellModuleArchive -Path $archivePath -Name $Tool.name -Version $Tool.version

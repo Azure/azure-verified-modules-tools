@@ -110,7 +110,7 @@ Describe 'Bicep runtime dependency bootstrap behavior' {
                 [pscustomobject]@{ Version = $global:AvmRuntimeDependencyFixture[$key] }
             }
         } -ParameterFilter { $ListAvailable }
-        Mock Get-PSResourceRepository { [pscustomobject]@{ Uri = 'https://www.powershellgallery.com/api/v2' } }
+        Mock Get-PSResourceRepository { [pscustomobject]@{ Name = 'UserFeed'; Priority = 10; Uri = 'https://example.invalid/gallery' } }
         Mock Install-PSResource { $global:AvmRuntimeDependencyFixture[$Name] = [version]$Version }
         Mock Start-Sleep {}
         Mock Write-Warning {}
@@ -126,7 +126,7 @@ Describe 'Bicep runtime dependency bootstrap behavior' {
         $global:AvmRuntimeDependencyFixture['Az.Accounts'] = [version]'6.0.0'
         & $script:dependencyBootstrap
         Should -Invoke Install-PSResource -Exactly 1 -ParameterFilter {
-            $Name -ceq 'Az.Subscription' -and $Version -ceq '0.12.0' -and $Scope -ceq 'CurrentUser' -and $Repository -ceq 'PSGallery'
+            $Name -ceq 'Az.Subscription' -and $Version -ceq '0.12.0' -and $Scope -ceq 'CurrentUser' -and $Repository -ceq 'UserFeed'
         }
     }
 
@@ -158,9 +158,27 @@ Describe 'Bicep runtime dependency bootstrap behavior' {
         Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 5 }
     }
 
-    It 'rejects a nonofficial gallery before installing' {
-        Mock Get-PSResourceRepository { [pscustomobject]@{ Uri = 'https://example.invalid' } }
-        { & $script:dependencyBootstrap } | Should -Throw '*official HTTPS*'
+    It 'tries configured repositories in priority order when a dependency is missing' {
+        Mock Get-PSResourceRepository {
+            [pscustomobject]@{ Name = 'Backup'; Priority = 20 }
+            [pscustomobject]@{ Name = 'Preferred'; Priority = 10 }
+        }
+        $script:repositoryAttemptOrder = [Collections.Generic.List[string]]::new()
+        Mock Install-PSResource {
+            $script:repositoryAttemptOrder.Add("$Name/$Repository")
+            if ($Repository -eq 'Preferred') { throw [InvalidOperationException]::new('Package not found') }
+            $global:AvmRuntimeDependencyFixture[$Name] = [version]$Version
+        }
+        & $script:dependencyBootstrap
+        $script:repositoryAttemptOrder.ToArray() | Should -Be @(
+            'Az.Accounts/Preferred', 'Az.Accounts/Backup',
+            'Az.Subscription/Preferred', 'Az.Subscription/Backup'
+        )
+    }
+
+    It 'fails explicitly without configured repositories' {
+        Mock Get-PSResourceRepository {}
+        { & $script:dependencyBootstrap } | Should -Throw '*No PowerShell repositories are configured*'
         Should -Invoke Install-PSResource -Exactly 0
     }
 

@@ -11,6 +11,12 @@ Describe 'Get-AvmVersion' {
         Remove-Module -Name 'Avm.Authoring' -Force -ErrorAction SilentlyContinue
     }
 
+    BeforeEach {
+        InModuleScope 'Avm.Authoring' {
+            Mock Get-PSResourceRepository { [pscustomobject]@{ Name = 'UserFeed'; Priority = 10 } }
+        }
+    }
+
     It 'returns a single pscustomobject' {
         $result = Get-AvmVersion
         $result | Should -BeOfType [pscustomobject]
@@ -139,6 +145,12 @@ Describe 'Get-AvmVersion' {
 }
 
 Describe 'avm version (dispatcher)' {
+    BeforeEach {
+        InModuleScope 'Avm.Authoring' {
+            Mock Get-PSResourceRepository { [pscustomobject]@{ Name = 'UserFeed'; Priority = 10 } }
+        }
+    }
+
     BeforeAll {
         $script:repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..')
         $script:moduleRoot = Join-Path $script:repoRoot 'src' 'Avm.Authoring'
@@ -223,7 +235,7 @@ Describe 'avm version (dispatcher)' {
                 $result.Count | Should -Be 1
                 $result[0].Version | Should -BeExactly (Get-Module Avm.Authoring).Version.ToString()
                 $warnings.Count | Should -Be 1
-                [string]$warnings[0] | Should -Match 'The Gallery request failed'
+                [string]$warnings[0] | Should -Match 'The repository request failed'
                 # One lookup, retried once within the advisory budget.
                 Should -Invoke Find-PSResource -Times 2 -Exactly
             }

@@ -11,6 +11,7 @@ Describe 'Install-AvmBuildPrerequisites.ps1' {
             [pscustomobject]@{ Name = 'Microsoft.PowerShell.PSResourceGet' }
         } -ParameterFilter { $ListAvailable }
         Mock Import-Module
+        Mock Get-PSResourceRepository { [pscustomobject]@{ Name = 'UserFeed'; Priority = 10 } }
         Mock Get-InstalledPSResource
         Mock Install-PSResource
         Mock Start-Sleep
@@ -22,6 +23,7 @@ Describe 'Install-AvmBuildPrerequisites.ps1' {
         Remove-Variable -Name AvmPrereqInstallAttempts -Scope Global -ErrorAction SilentlyContinue
         Remove-Variable -Name AvmPrereqInstallCalls -Scope Global -ErrorAction SilentlyContinue
         Remove-Variable -Name AvmPrereqLastException -Scope Global -ErrorAction SilentlyContinue
+        Remove-Variable -Name AvmPrereqRepositoryOrder -Scope Global -ErrorAction SilentlyContinue
     }
 
     It 'retries a transient Gallery network failure and installs every prerequisite' {
@@ -32,6 +34,7 @@ Describe 'Install-AvmBuildPrerequisites.ps1' {
                 throw [System.Net.Http.HttpRequestException]::new(
                     'No route to host (www.powershellgallery.com:443)')
             }
+
         }
 
         & $script:scriptPath `
@@ -58,14 +61,32 @@ Describe 'Install-AvmBuildPrerequisites.ps1' {
         }
     }
 
+    It 'falls through configured repositories for each build prerequisite' {
+        Mock Get-PSResourceRepository {
+            [pscustomobject]@{ Name = 'Backup'; Priority = 20 }
+            [pscustomobject]@{ Name = 'Preferred'; Priority = 10 }
+        }
+        $global:AvmPrereqRepositoryOrder = [Collections.Generic.List[string]]::new()
+        Mock Install-PSResource {
+            $global:AvmPrereqRepositoryOrder.Add("$Name/$Repository")
+            if ($Repository -eq 'Preferred') { throw [InvalidOperationException]::new('Package not found') }
+        }
+        & $script:scriptPath -Confirm:$false
+        $global:AvmPrereqRepositoryOrder.ToArray() | Should -Be @(
+            'InvokeBuild/Preferred', 'InvokeBuild/Backup',
+            'Pester/Preferred', 'Pester/Backup',
+            'powershell-yaml/Preferred', 'powershell-yaml/Backup'
+        )
+    }
+
     It 'retries an exact Gallery <FailureStage> 404 with the same pin' -TestCases @(
         @{
             FailureStage = 'lookup'
-            RequestUri = 'https://www.powershellgallery.com/api/v2/FindPackagesById()?%24filter=Id+eq+%27Pester%27+and+NormalizedVersion+eq+%275.7.1%27'
+            RequestUri   = 'https://www.powershellgallery.com/api/v2/FindPackagesById()?%24filter=Id+eq+%27Pester%27+and+NormalizedVersion+eq+%275.7.1%27'
         }
         @{
             FailureStage = 'download'
-            RequestUri = 'https://www.powershellgallery.com/api/v2/package/Pester/5.7.1'
+            RequestUri   = 'https://www.powershellgallery.com/api/v2/package/Pester/5.7.1'
         }
     ) {
         param($FailureStage, $RequestUri)

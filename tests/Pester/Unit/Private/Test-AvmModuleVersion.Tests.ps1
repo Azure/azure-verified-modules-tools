@@ -21,7 +21,9 @@ Describe 'Test-AvmModuleVersion' {
 
     BeforeEach {
         InModuleScope 'Avm.Authoring' {
+            Mock Get-PSResourceRepository { [pscustomobject]@{ Name = 'UserFeed'; Priority = 10 } }
             $script:AvmLatestModuleVersion = $null
+            $script:AvmLatestModuleRelease = $null
             $script:AvmModuleVersionCheckCompleted = $false
             $script:AvmModuleVersionSkipWarningWritten = $false
         }
@@ -42,7 +44,7 @@ Describe 'Test-AvmModuleVersion' {
 
             Should -Invoke Find-PSResource -Times 1 -Exactly -ParameterFilter {
                 $Name -eq 'Avm.Authoring' -and
-                $Repository -eq 'PSGallery' -and
+                $Repository -eq 'UserFeed' -and
                 $ErrorAction -eq 'Stop'
             }
         }
@@ -135,8 +137,8 @@ Describe 'Test-AvmModuleVersion' {
 
             $warnings.Count | Should -Be 1
             Should -Invoke Find-PSResource -Exactly 2
-            [string]$warnings[0] | Should -Match 'Unable to check PowerShell Gallery'
-            [string]$warnings[0] | Should -Match 'The Gallery request failed'
+            [string]$warnings[0] | Should -Match 'Unable to check configured PowerShell repositories'
+            [string]$warnings[0] | Should -Match 'The repository request failed'
             [string]$warnings[0] | Should -Not -Match 'private diagnostic'
         }
     }
@@ -178,6 +180,153 @@ Describe 'Test-AvmModuleVersion' {
             $warnings.Count | Should -Be 1
             [string]$warnings[0] | Should -Match 'version check was skipped'
             Should -Invoke Find-PSResource -Times 0 -Exactly
+        }
+    }
+
+    It 'uses configured priority order and falls through <Failure> without requiring PSGallery' -ForEach @(
+        @{ Failure = 'empty response' }
+        @{ Failure = 'wrong package' }
+        @{ Failure = 'invalid version' }
+        @{ Failure = 'unreachable repository' }
+    ) {
+        InModuleScope 'Avm.Authoring' -Parameters @{ Failure = $Failure } {
+            param($Failure)
+            Mock Get-PSResourceRepository {
+                [pscustomobject]@{ Name = 'Backup'; Priority = 20 }
+                [pscustomobject]@{ Name = 'Preferred'; Priority = 10 }
+                [pscustomobject]@{ Name = 'Unused'; Priority = 30 }
+            }
+            $script:repositoryAttemptOrder = [Collections.Generic.List[string]]::new()
+            Mock Find-PSResource {
+                $script:repositoryAttemptOrder.Add($Repository)
+                if ($Repository -eq 'Preferred') {
+                    switch ($Failure) {
+                        'empty response' { return }
+                        'wrong package' { return [pscustomobject]@{ Name = 'Other'; Version = '99.0.0' } }
+                        'invalid version' { return [pscustomobject]@{ Name = 'Avm.Authoring'; Version = 'bad' } }
+                        'unreachable repository' { throw [InvalidOperationException]::new('Unavailable') }
+                    }
+                }
+                [pscustomobject]@{ Name = 'Avm.Authoring'; Version = '2.0.0' }
+            }
+
+            Get-AvmLatestModuleVersion | Should -Be ([version]'2.0.0')
+            Get-AvmLatestModuleVersion | Should -Be ([version]'2.0.0')
+            $script:repositoryAttemptOrder.ToArray() | Should -Be @('Preferred', 'Backup', 'Unused')
+        }
+    }
+
+    It 'selects a newer release from a lower-priority repository' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Get-PSResourceRepository {
+                [pscustomobject]@{ Name = 'Preferred'; Priority = 10 }
+                [pscustomobject]@{ Name = 'Backup'; Priority = 20 }
+            }
+            Mock Find-PSResource {
+                [pscustomobject]@{
+                    Name = 'Avm.Authoring'
+                    Version = if ($Repository -eq 'Preferred') { '1.0.0' } else { '2.0.0' }
+                }
+            }
+            $release = Get-AvmLatestModuleVersion -IncludeRepository
+            $release.Version | Should -Be ([version]'2.0.0')
+            $release.Repositories | Should -Be @('Backup')
+            Should -Invoke Find-PSResource -Exactly 2
+        }
+    }
+
+    It 'queries MAR and other feeds with the unchanged module name and caches all latest-version sources' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Get-PSResourceRepository {
+                [pscustomobject]@{ Name = 'CompanyFeed'; Priority = 1; Uri = 'https://packages.example.test/' }
+                [pscustomobject]@{ Name = 'OfficialPackages'; Priority = 99; Uri = 'https://mcr.microsoft.com/' }
+            }
+            Mock Find-PSResource {
+                [pscustomobject]@{ Name = 'Avm.Authoring'; Version = '2.0.0' }
+            }
+            $release = Get-AvmLatestModuleVersion -IncludeRepository
+            $release.Version | Should -Be ([version]'2.0.0')
+            $release.Repositories | Should -Be @('CompanyFeed', 'OfficialPackages')
+            Get-AvmLatestModuleVersion | Should -Be ([version]'2.0.0')
+            (Get-AvmLatestModuleVersion -IncludeRepository).Repositories | Should -Be @('CompanyFeed', 'OfficialPackages')
+            Should -Invoke Find-PSResource -Exactly 1 -ParameterFilter {
+                $Name -eq 'Avm.Authoring' -and $Repository -eq 'OfficialPackages'
+            }
+            Should -Invoke Find-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'CompanyFeed' }
+        }
+    }
+
+    It 'falls back to configured feeds when MAR is <Failure>' -ForEach @(
+        @{ Failure = 'not yet published' }
+        @{ Failure = 'unavailable' }
+    ) {
+        InModuleScope 'Avm.Authoring' -Parameters @{ Failure = $Failure } {
+            param($Failure)
+            Mock Get-PSResourceRepository {
+                [pscustomobject]@{ Name = 'CompanyFeed'; Priority = 1; Uri = 'https://packages.example.test/' }
+                [pscustomobject]@{ Name = 'OfficialPackages'; Priority = 99; Uri = 'https://mcr.microsoft.com/' }
+            }
+            $calls = [Collections.Generic.List[string]]::new()
+            Mock Find-PSResource {
+                $calls.Add($Repository)
+                if ($Repository -eq 'OfficialPackages') {
+                    if ($Failure -eq 'unavailable') { throw [InvalidOperationException]::new('Unavailable') }
+                    return
+                }
+                [pscustomobject]@{ Name = 'Avm.Authoring'; Version = '2.0.0' }
+            }
+            Get-AvmLatestModuleVersion | Should -Be ([version]'2.0.0')
+            $calls.ToArray() | Should -Be @('CompanyFeed', 'OfficialPackages')
+        }
+    }
+
+    It 'refreshes the selected version and its repositories together' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Get-PSResourceRepository {
+                [pscustomobject]@{ Name = 'First'; Priority = 1 }
+                [pscustomobject]@{ Name = 'Second'; Priority = 2 }
+            }
+            $state = @{ Refreshed = $false }
+            Mock Find-PSResource {
+                [pscustomobject]@{
+                    Name = 'Avm.Authoring'
+                    Version = if ($state.Refreshed -and $Repository -eq 'Second') { '3.0.0' } else { '2.0.0' }
+                }
+            }
+            (Get-AvmLatestModuleVersion -IncludeRepository).Repositories | Should -Be @('First', 'Second')
+            $state.Refreshed = $true
+            $release = Get-AvmLatestModuleVersion -Refresh -IncludeRepository
+            $release.Version | Should -Be ([version]'3.0.0')
+            $release.Repositories | Should -Be @('Second')
+            Get-AvmLatestModuleVersion | Should -Be ([version]'3.0.0')
+            Should -Invoke Find-PSResource -Exactly 4
+        }
+    }
+
+    It 'retains a valid latest release when a later repository fails' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Get-PSResourceRepository {
+                [pscustomobject]@{ Name = 'First'; Priority = 1 }
+                [pscustomobject]@{ Name = 'Broken'; Priority = 2 }
+            }
+            Mock Find-PSResource {
+                if ($Repository -eq 'Broken') { throw [InvalidOperationException]::new('Unavailable') }
+                [pscustomobject]@{ Name = 'Avm.Authoring'; Version = '3.0.0' }
+            }
+            $release = Get-AvmLatestModuleVersion -IncludeRepository
+            $release.Version | Should -Be ([version]'3.0.0')
+            $release.Repositories | Should -Be @('First')
+        }
+    }
+
+    It 'warns when no repositories are configured without caching a successful check' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Get-PSResourceRepository {}
+            Mock Find-PSResource
+            $warnings = @(Test-AvmModuleVersion 3>&1)
+            $warnings.Count | Should -Be 1
+            $script:AvmModuleVersionCheckCompleted | Should -BeFalse
+            Should -Invoke Find-PSResource -Exactly 0
         }
     }
 

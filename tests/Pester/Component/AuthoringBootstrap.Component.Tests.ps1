@@ -65,7 +65,7 @@ Describe 'Repository authoring ref resolution' -Tag 'Component' {
             $env:GITHUB_OUTPUT = Join-Path $env:RUNNER_TEMP 'output'
             New-Item -ItemType Directory -Path $env:RUNNER_TEMP -Force | Out-Null
             $global:AvmBootstrapSaveAttempts = 0
-            Mock Get-PSResourceRepository { [pscustomobject]@{ Uri = 'https://www.powershellgallery.com/api/v2' } }
+            Mock Get-PSResourceRepository { [pscustomobject]@{ Name = 'UserFeed'; Priority = 10; Uri = 'https://example.invalid/gallery' } }
             Mock Find-PSResource { [pscustomobject]@{ Version = [version]'0.0.0' } }
             Mock Save-PSResource {
                 $global:AvmBootstrapSaveAttempts++
@@ -83,6 +83,25 @@ Describe 'Repository authoring ref resolution' -Tag 'Component' {
                 [Environment]::SetEnvironmentVariable($name, $value, 'Process')
             }
             Remove-Variable AvmBootstrapSaveAttempts -Scope Global
+            Remove-Variable AvmBootstrapManagerAttempts -Scope Global -ErrorAction SilentlyContinue
+        }
+
+        It 'retains package manager bootstrap retries before trying configured repositories' {
+            function Install-Module {
+                [CmdletBinding()]
+                param([string] $Name, [string] $Scope, [switch] $Force, [switch] $AllowClobber)
+                throw 'Package manager installation must be mocked.'
+            }
+            $global:AvmBootstrapManagerAttempts = 0
+            Mock Get-Module {} -ParameterFilter { $ListAvailable -and $Name -eq 'Microsoft.PowerShell.PSResourceGet' }
+            Mock Install-Module {
+                $global:AvmBootstrapManagerAttempts++
+                if ($global:AvmBootstrapManagerAttempts -eq 1) { throw [Net.Http.HttpRequestException]::new('HTTP 503') }
+            }
+            & $script:prepare | Out-Null
+            Should -Invoke Install-Module -Exactly 2
+            Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 5 }
+            Should -Invoke Save-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'UserFeed' }
         }
 
         It 'resolves latest Gallery once and imports the exact saved module' {
@@ -113,6 +132,34 @@ Describe 'Repository authoring ref resolution' -Tag 'Component' {
             & $script:prepare | Out-Null
             Should -Invoke Find-PSResource -Exactly 1 -ParameterFilter { $Version -eq '[0.0.0,1.0.0)' }
             Should -Invoke Save-PSResource -Exactly 1 -ParameterFilter { $Version -eq '0.0.0' }
+        }
+
+        It 'falls through configured repositories when no matching release is found' {
+            Mock Get-PSResourceRepository {
+                [pscustomobject]@{ Name = 'Backup'; Priority = 20 }
+                [pscustomobject]@{ Name = 'Preferred'; Priority = 10 }
+            }
+            Mock Find-PSResource {
+                if ($Repository -eq 'Backup') { [pscustomobject]@{ Version = [version]'0.0.0' } }
+            }
+            & $script:prepare | Out-Null
+            Should -Invoke Find-PSResource -Exactly 3 -ParameterFilter { $Repository -eq 'Preferred' }
+            Should -Invoke Find-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'Backup' }
+            Should -Invoke Save-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'Backup' -and $Version -eq '0.0.0' }
+        }
+
+        It 'keeps the selected concrete version when falling through download repositories' {
+            Mock Get-PSResourceRepository {
+                [pscustomobject]@{ Name = 'Preferred'; Priority = 10 }
+                [pscustomobject]@{ Name = 'Backup'; Priority = 20 }
+            }
+            Mock Save-PSResource {
+                if ($Repository -eq 'Preferred') { throw [Net.Http.HttpRequestException]::new('HTTP 503') }
+                Copy-Item -LiteralPath (Join-Path $script:root 'src' 'Avm.Authoring') -Destination (Join-Path $Path 'Avm.Authoring') -Recurse
+            }
+            & $script:prepare | Out-Null
+            Should -Invoke Find-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'Preferred' }
+            Should -Invoke Save-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'Backup' -and $Version -eq '0.0.0' }
         }
 
         It 'fails after a Gallery download failure without publishing or trying a repository build' {

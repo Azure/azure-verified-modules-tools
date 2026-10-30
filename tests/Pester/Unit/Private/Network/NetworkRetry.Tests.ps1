@@ -14,6 +14,7 @@ Describe 'Shared network retry' {
         $script:savedOverride = $env:AVM_NETWORK_RETRY_MAX_ATTEMPTS
         Remove-Item Env:AVM_NETWORK_RETRY_MAX_ATTEMPTS -ErrorAction SilentlyContinue
         InModuleScope 'Avm.Authoring' {
+            Mock Get-PSResourceRepository { [pscustomobject]@{ Name = 'UserFeed'; Priority = 10 } }
             Mock Wait-AvmRetryDelay
             Mock Write-Warning
             Mock Write-Verbose

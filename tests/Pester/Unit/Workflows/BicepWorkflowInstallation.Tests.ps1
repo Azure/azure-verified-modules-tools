@@ -228,7 +228,7 @@ Describe 'Bicep workflow package installation' {
             }
         } -ParameterFilter { $Name -eq 'FixturePackage' -and $ListAvailable }
         Mock Import-Module {}
-        Mock Get-PSResourceRepository { [pscustomobject]@{ Uri = 'https://www.powershellgallery.com/api/v2' } }
+        Mock Get-PSResourceRepository { [pscustomobject]@{ Name = 'UserFeed'; Priority = 10; Uri = 'https://example.invalid/gallery' } }
         Mock Install-PSResource {
             $script:installedVersion = if ([string]::IsNullOrEmpty($Version)) { [version]'2.0.0' } else { [version]$Version }
         }
@@ -280,9 +280,30 @@ Describe 'Bicep workflow package installation' {
         Should -Invoke Start-Sleep -Exactly 0
     }
 
-    It 'rejects an overridden gallery endpoint' {
-        Mock Get-PSResourceRepository { [pscustomobject]@{ Uri = 'https://example.invalid/gallery' } }
-        { Install-AvmWorkflowModule -Name FixturePackage -Version 1.2.3 -Confirm:$false } | Should -Throw '*official HTTPS*'
+    It 'accepts a user-configured repository name and endpoint' {
+        (Install-AvmWorkflowModule -Name FixturePackage -Version 1.2.3 -Confirm:$false).Version | Should -Be ([version]'1.2.3')
+        Should -Invoke Install-PSResource -Exactly 1 -ParameterFilter { $Repository -eq 'UserFeed' }
+    }
+
+    It 'tries the next repository after a package is unavailable' {
+        Mock Get-PSResourceRepository {
+            [pscustomobject]@{ Name = 'Backup'; Priority = 20 }
+            [pscustomobject]@{ Name = 'Preferred'; Priority = 10 }
+        }
+        $script:repositoryAttemptOrder = [Collections.Generic.List[string]]::new()
+        Mock Install-PSResource {
+            $script:repositoryAttemptOrder.Add($Repository)
+            if ($Repository -eq 'Preferred') { throw [InvalidOperationException]::new('Package not found') }
+            $script:installedVersion = [version]$Version
+        }
+        (Install-AvmWorkflowModule -Name FixturePackage -Version 1.2.3 -Confirm:$false).Version | Should -Be ([version]'1.2.3')
+        $script:repositoryAttemptOrder.ToArray() | Should -Be @('Preferred', 'Backup')
+    }
+
+    It 'fails explicitly when no repositories are configured' {
+        Mock Get-PSResourceRepository {}
+        { Install-AvmWorkflowModule -Name FixturePackage -Version 1.2.3 -Confirm:$false } |
+            Should -Throw '*No PowerShell repositories are configured*'
         Should -Invoke Install-PSResource -Exactly 0
     }
 

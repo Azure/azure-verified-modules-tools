@@ -1522,7 +1522,7 @@ modules implicitly. The native dependency floors follow the Az 15.5.0
 bundle, plus Az.Subscription 0.12.0, which is distributed separately.
 `Get-AvmBicepAzureDependency` exposes that same dependency inventory without
 installing or importing modules. Workflow setup installs missing individual
-dependencies at those floors from the official PSGallery in CurrentUser scope,
+dependencies at those floors from configured PowerShell repositories in CurrentUser scope,
 reuses compatible modules and honors offline mode. Deployment tests run in a
 fresh session; the read-only preflight still checks every dependency and command.
 Check the actual command provenance and parameter names or aliases.
@@ -2335,9 +2335,19 @@ Schema enforced by `Test-AvmPins`:
 - All URLs are `https://`. A non-`https://` URL fails the schema check.
 - The `{os}` placeholder resolves to `windows`, `linux`, or `darwin`. The `{arch}` placeholder resolves to `amd64` or `arm64`.
 - The `entrypoint` value is always lowercase. On Windows the resolver appends `.exe` only when computing the final path.
-- `powerShellModules` contains exact stable versions, Gallery package SHA256s,
+- `powerShellModules` contains exact stable versions, original package SHA256s,
   and optional `dependencies` naming other pinned modules. The shared resolver
-  downloads their official Gallery ZIPs and uses `<Name>.psd1` as the entrypoint.
+  downloads the original `.nupkg` from configured PowerShell repositories in
+  priority order using PSResourceGet, without installing or expanding it first.
+  Configured sources must use HTTPS or local file URIs; repository credentials
+  remain owned by PSResourceGet. Save only the requested package, not unpinned
+  dependencies. Verify the raw package hash through the shared downloader before
+  extraction, then use `<Name>.psd1` as the entrypoint. A checksum mismatch fails
+  closed without trying another repository. Byte-preserving proxies work with
+  the original package hashes; repackaged artifacts do not. Retain the shared
+  offline, TLS, retry, cache-lock, staging and archive-recovery controls.
+  An explicit `AVM_MIRROR` retains precedence and the existing canonical-URL
+  rewrite behavior; local `file://` fixtures also retain their existing path.
   Pester must be at least 5.5.0. Required module dependencies must match the
   configured names, versions and resolved paths before use.
   Select exactly one exact-name module from `Import-Module -PassThru` output;
@@ -3131,14 +3141,44 @@ including workflow and repository-management tests.
 
 ## 20. Release and versioning
 
-- Normal commands compare the running module against the latest PowerShell
-  Gallery release and stop with upgrade guidance when outdated. `avm version`
+- Module version checks, self-upgrades, build prerequisites, and workflow
+  dependency installations use the user's configured PowerShell repositories,
+  not a required repository name or URL. PSResourceGet repositories are tried
+  by ascending priority, then name. Dependency operations stop at the first
+  successful result.
+  Bootstrap PowerShellGet uses its configured repository enumeration order.
+  Missing packages and exhausted repository failures fall through to the next
+  repository; no configured repositories or failure of every repository is an
+  explicit error. Preserve per-repository retry budgets, exact selected versions,
+  offline behavior, installed-module reuse and WhatIf controls. This does not
+  change publishing destinations or binary download sources. Pinned PowerShell
+  module downloads use configured feeds while retaining checksum verification
+  and the explicit mirror behavior in section 10.
+- Module version checks query every configured repository and select the highest
+  valid published version across successful responses. Missing, invalid or
+  unavailable packages do not prevent querying the remaining repositories.
+  If every repository fails, surface the lookup failure. Cache the selected
+  version together with every repository reporting that version in configured
+  priority/name order; refresh invalidates both. Self-upgrades try only those
+  repositories, in that order, using the exact selected version and verifying
+  the installed version before reporting success. Equal-version ties follow the
+  user's configured order, including for MAR; no repository name or URI gets
+  special priority. Do not register repositories or change priorities automatically.
+  The MAR artifact is `mcr.microsoft.com/psresource/avm.authoring`, with the same
+  `Avm.Authoring` module identity and version as other feeds. PSResourceGet adds
+  the `psresource/` prefix; find and update commands still use `Avm.Authoring`.
+  MAR consumption requires PSResourceGet 1.1.1 or later. Register it with any
+  name using `Register-PSResourceRepository -Name MAR -Uri https://mcr.microsoft.com -ApiVersion ContainerRegistry`;
+  newer PSResourceGet versions also provide `-MicrosoftArtifactRegistry`.
+  The publication pipeline is separate from repository selection.
+- Normal commands compare the running module against the latest release from
+  all usable configured repositories and stop with upgrade guidance when outdated. `avm version`
   and `Get-AvmVersion` instead return the running version with an update warning.
   `avm upgrade` is the sole CLI self-update command and bypasses the guard so it
   can install the newer version.
   `-SkipModuleVersionCheck` is an explicit opt-out for automation and source
   checkouts. Composed commands forward it to module context resolution and
-  nested steps; Gallery lookup failures warn and allow the command to continue.
+  nested steps; repository lookup failures warn and allow the command to continue.
 - SemVer 2.0.0. Pre-release labels: `-preview.N`, `-rc.N`.
 - One stable minor per quarter. Preview tags weekly off `main`.
 - Breaking changes only at minor bumps **before** `1.0.0`, only at major bumps after.
