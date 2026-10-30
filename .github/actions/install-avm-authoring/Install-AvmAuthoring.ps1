@@ -8,6 +8,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$installOperation = $Operation
 
 if ($Operation -eq 'Save' -and [string]::IsNullOrWhiteSpace($DestinationPath)) {
     throw [ArgumentException]::new('A destination path is required when saving Avm.Authoring.')
@@ -154,7 +155,7 @@ function Invoke-AvmAuthoringOperation {
         [version] $SelectedVersion
     )
 
-    Invoke-AvmAuthoringAttempt -Description "Avm.Authoring $Operation from '$Repository'" -Operation {
+    Invoke-AvmAuthoringAttempt -Description "Avm.Authoring $installOperation from '$Repository'" -Operation {
         $parameters = @{
             Name            = 'Avm.Authoring'
             Version         = $SelectedVersion.ToString()
@@ -162,7 +163,7 @@ function Invoke-AvmAuthoringOperation {
             TrustRepository = $true
             ErrorAction     = 'Stop'
         }
-        if ($Operation -eq 'Install') {
+        if ($installOperation -eq 'Install') {
             Install-PSResource @parameters -Scope CurrentUser
         }
         else {
@@ -195,7 +196,7 @@ if ($hasVersion) {
         }
         catch {
             $lastFailure = $_
-            Write-Verbose "PowerShell repository '$($repository.Name)' could not $($Operation.ToLowerInvariant()) Avm.Authoring $Version; trying the next configured repository."
+            Write-Verbose "PowerShell repository '$($repository.Name)' could not $($installOperation.ToLowerInvariant()) Avm.Authoring $Version; trying the next configured repository."
         }
     }
     if ($null -ne $lastFailure) {
@@ -232,7 +233,7 @@ foreach ($repository in $sourceRepositories) {
     }
     catch {
         $lastFailure = $_
-        Write-Verbose "PowerShell repository '$($repository.Name)' could not $($Operation.ToLowerInvariant()) Avm.Authoring $selectedVersion; trying the next configured repository."
+        Write-Verbose "PowerShell repository '$($repository.Name)' could not $($installOperation.ToLowerInvariant()) Avm.Authoring $selectedVersion; trying the next configured repository."
     }
 }
 
