@@ -321,6 +321,162 @@ Describe 'Bicep identity saved-plan ownership guard' {
         $script:guard = @{ Plan = $script:plan; Settings = $script:settings; Modules = $script:modules; Context = $script:context }
     }
 
+    Describe 'Bicep subscription-vending state retirement preparation' {
+        BeforeEach {
+            $script:stateSecret = 'synthetic-historical-identity-must-not-be-disclosed'
+            $script:bootstrap = @{
+                resource_id = 'synthetic-bootstrap-resource'
+                client_id = '10000000-0000-4000-8000-000000000006'
+                principal_id = '10000000-0000-4000-0000-000000000007'
+            }
+            $script:state = @{
+                lineage = '10000000-0000-4000-8000-000000000001'
+                serial = [long]42
+                resources = @(
+                    @{
+                        module = 'module.bicep["avm/ptn/lz/sub-vending"]'
+                        mode = 'managed'
+                        type = 'azapi_resource'
+                        name = 'identity'
+                        provider = 'provider["registry.terraform.io/azure/azapi"]'
+                        instances = @(
+                            @{
+                                attributes = @{
+                                    id = $script:stateSecret
+                                    output = @{
+                                        properties = @{
+                                            clientId = '10000000-0000-4000-8000-000000000016'
+                                            principalId = '10000000-0000-4000-8000-000000000017'
+                                        }
+                                    }
+                                }
+                            }
+                        )
+                    }
+                )
+            }
+        }
+
+        It 'identifies exactly one unindexed historical identity without returning its values' {
+            $entry = Get-AvmBicepSubscriptionVendingStateRetirementEntry -State $script:state -BootstrapIdentity $script:bootstrap
+
+            $entry.Address | Should -BeExactly 'module.bicep["avm/ptn/lz/sub-vending"].azapi_resource.identity'
+            $entry.Lineage | Should -BeExactly '10000000-0000-4000-8000-000000000001'
+            $entry.Serial | Should -Be 42
+            $entry.ResourceIdDifferent | Should -BeTrue
+            $entry.ClientIdDifferent | Should -BeTrue
+            $entry.PrincipalIdDifferent | Should -BeTrue
+            ($entry | ConvertTo-Json -Compress) | Should -Not -Match $script:stateSecret
+        }
+
+        It 'rejects ambiguous, indexed, or bootstrap-bound retirement candidates: <Case>' -ForEach @(
+            @{
+                Case = 'multiple instances'
+                Edit = { param($state, $bootstrap) $state.resources[0].instances += $state.resources[0].instances[0].Clone() }
+            }
+            @{
+                Case = 'indexed instance'
+                Edit = { param($state, $bootstrap) $state.resources[0].instances[0].index_key = 0 }
+            }
+            @{
+                Case = 'shared resource binding'
+                Edit = { param($state, $bootstrap) $bootstrap.resource_id = $state.resources[0].instances[0].attributes.id }
+            }
+        ) {
+            & $Edit $script:state $script:bootstrap
+
+            { Get-AvmBicepSubscriptionVendingStateRetirementEntry -State $script:state -BootstrapIdentity $script:bootstrap } |
+                Should -Throw
+        }
+
+        It 'privately reads state then dry-runs only the exact discovered removal' {
+            $backend = @{
+                TenantId = '20000000-0000-4000-8000-000000000001'
+                SubscriptionId = '20000000-0000-4000-8000-000000000002'
+                ClientId = '20000000-0000-4000-8000-000000000003'
+                StorageAccountName = 'fixturestatestore'
+                ContainerName = 'tfstate'
+            }
+            Mock Get-AvmBamiSettings { @{} }
+            Mock Resolve-AvmBicepModuleExistingIdentities {
+                @{ 'avm/ptn/lz/sub-vending' = @{ name = 'bootstrap' } }
+            }
+            Mock Resolve-AvmSubscriptionVendingIdentity { $script:bootstrap }
+            Mock Get-RepositorySyncTerraformEnvironment { @{} }
+            Mock Invoke-TerraformInit {}
+            Mock Invoke-RepositorySyncProcess {
+                param($Command, $Arguments)
+                $body = if ($Command -ceq 'terraform') {
+                    $script:state
+                }
+                elseif ($Arguments -contains 'service-properties') {
+                    @{
+                        versioningEnabled = $true
+                        deleteRetentionEnabled = $true
+                        deleteRetentionDays = [long]7
+                        allowPermanentDelete = $false
+                    }
+                }
+                else {
+                    @{ versionId = '2026-10-30T14:19:27.7550000Z' }
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ConvertTo-Json -InputObject $body -Depth 20 -Compress; StdErr = '' }
+            }
+            Mock Invoke-RepositorySyncTerraform {}
+
+            $result = Invoke-AvmBicepSubscriptionVendingStateRetirementPreparation `
+                -TerraformRoot $TestDrive -Backend $backend -Values @{} -Configuration @{}
+
+            $result.Status | Should -BeExactly 'Prepared'
+            $result.Address | Should -BeExactly 'module.bicep["avm/ptn/lz/sub-vending"].azapi_resource.identity'
+            $result.StateVersioningEnabled | Should -BeTrue
+            $result.StateDeleteRetentionDays | Should -Be 7
+            $result.PreRetirementVersionId | Should -BeExactly '2026-10-30T14:19:27.7550000Z'
+            ($result | ConvertTo-Json -Compress) | Should -Not -Match $script:stateSecret
+            Should -Invoke Invoke-RepositorySyncProcess -Exactly 2 -ParameterFilter {
+                $Command -ceq 'az'
+            }
+            Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter {
+                $Command -ceq 'terraform' -and (@($Arguments) -join '|') -ceq 'state|pull'
+            }
+            Should -Invoke Invoke-RepositorySyncTerraform -Exactly 1 -ParameterFilter {
+                $Quiet -and (@($Arguments) -join '|') -ceq (
+                    'state|rm|-dry-run|-lock=true|-lock-timeout=5m|' +
+                    'module.bicep["avm/ptn/lz/sub-vending"].azapi_resource.identity'
+                )
+            }
+        }
+
+        It 'rejects incomplete backend recovery evidence: <Case>' -ForEach @(
+            @{
+                Case = 'insufficient deletion retention'
+                Policy = @{ versioningEnabled = $true; deleteRetentionEnabled = $true; deleteRetentionDays = [long]6; allowPermanentDelete = $false }
+                Version = @{ versionId = '2026-10-30T14:19:27.7550000Z' }
+                Calls = 1
+            }
+            @{
+                Case = 'missing pre-retirement version'
+                Policy = @{ versioningEnabled = $true; deleteRetentionEnabled = $true; deleteRetentionDays = [long]7; allowPermanentDelete = $false }
+                Version = @{}
+                Calls = 2
+            }
+        ) {
+            $backend = @{
+                SubscriptionId = '20000000-0000-4000-8000-000000000002'
+                StorageAccountName = 'fixturestatestore'
+                ContainerName = 'tfstate'
+            }
+            Mock Invoke-RepositorySyncProcess {
+                param($Arguments)
+                $body = if ((@($Arguments) -join ' ') -match 'service-properties') { $Policy } else { $Version }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ConvertTo-Json -InputObject $body -Depth 20 -Compress; StdErr = '' }
+            }
+
+            { Get-AvmBicepStateRecoveryPolicy -Backend $backend -Environment @{} } | Should -Throw
+            Should -Invoke Invoke-RepositorySyncProcess -Exactly $Calls
+        }
+    }
+
     It 'accepts both existing identities and new identities with explicitly unknown outputs' -ForEach @($true, $false) {
         $script:guard.Plan = New-AvmTestBicepIdentityPlan -KnownClient:$_
         { Assert-AvmBicepIdentityPlan @script:guard } | Should -Not -Throw

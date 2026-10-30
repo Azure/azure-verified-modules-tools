@@ -49,6 +49,196 @@ function Test-AvmBicepDedicatedIdentityStateMove {
         (ConvertTo-Json -InputObject $change['after'] -Depth 100 -Compress)
 }
 
+function Get-AvmBicepSubscriptionVendingStateRetirementEntry {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $State,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $BootstrapIdentity
+    )
+
+    $moduleAddress = 'module.bicep["avm/ptn/lz/sub-vending"]'
+    if ($State['lineage'] -isnot [string] -or -not [guid]::TryParse($State['lineage'], [ref]([guid]::Empty)) -or
+        $State['serial'] -isnot [long] -or $State['serial'] -lt 0 -or
+        $State['resources'] -isnot [System.Collections.IList] -or
+        $BootstrapIdentity['resource_id'] -isnot [string] -or
+        $BootstrapIdentity['client_id'] -isnot [string] -or
+        $BootstrapIdentity['principal_id'] -isnot [string]) {
+        throw [System.IO.InvalidDataException]::new('State retirement requires complete, typed state and bootstrap identity evidence.')
+    }
+
+    $resources = @($State['resources'] | Where-Object {
+            $_ -is [System.Collections.IDictionary] -and
+            $_['module'] -ceq $moduleAddress -and
+            $_['mode'] -ceq 'managed' -and
+            $_['type'] -ceq 'azapi_resource' -and
+            $_['name'] -ceq 'identity' -and
+            $_['provider'] -ceq 'provider["registry.terraform.io/azure/azapi"]'
+        })
+    if ($resources.Count -ne 1 -or $resources[0]['instances'] -isnot [System.Collections.IList] -or
+        $resources[0]['instances'].Count -ne 1) {
+        throw [System.InvalidOperationException]::new('State retirement requires exactly one historical dedicated identity state entry.')
+    }
+
+    $instance = $resources[0]['instances'][0]
+    if ($instance -isnot [System.Collections.IDictionary] -or
+        ($instance.Contains('index_key') -and $null -ne $instance['index_key']) -or
+        $instance['attributes'] -isnot [System.Collections.IDictionary]) {
+        throw [System.InvalidOperationException]::new('State retirement requires the unindexed historical dedicated identity entry.')
+    }
+    $attributes = $instance['attributes']
+    if ($attributes['id'] -isnot [string] -or $attributes['output'] -isnot [System.Collections.IDictionary] -or
+        $attributes['output']['properties'] -isnot [System.Collections.IDictionary]) {
+        throw [System.IO.InvalidDataException]::new('State retirement requires complete historical dedicated identity attributes.')
+    }
+    $properties = $attributes['output']['properties']
+    if ($properties['clientId'] -isnot [string] -or $properties['principalId'] -isnot [string]) {
+        throw [System.IO.InvalidDataException]::new('State retirement requires complete historical dedicated identity bindings.')
+    }
+
+    $resourceIdDifferent = $attributes['id'] -ine $BootstrapIdentity['resource_id']
+    $clientIdDifferent = $properties['clientId'] -ine $BootstrapIdentity['client_id']
+    $principalIdDifferent = $properties['principalId'] -ine $BootstrapIdentity['principal_id']
+    if (-not ($resourceIdDifferent -and $clientIdDifferent -and $principalIdDifferent)) {
+        throw [System.InvalidOperationException]::new('State retirement requires a historical dedicated identity distinct from the bootstrap shared identity.')
+    }
+
+    return [pscustomobject]@{
+        Address = "$moduleAddress.azapi_resource.identity"
+        Lineage = $State['lineage']
+        Serial = $State['serial']
+        ResourceIdDifferent = $resourceIdDifferent
+        ClientIdDifferent = $clientIdDifferent
+        PrincipalIdDifferent = $principalIdDifferent
+    }
+}
+
+function Get-AvmBicepStateRecoveryPolicy {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)] [object] $Backend,
+        [Parameter(Mandatory)] [hashtable] $Environment
+    )
+
+    $result = Invoke-RepositorySyncProcess -Command az -Arguments @(
+        'storage', 'blob', 'service-properties', 'show',
+        '--account-name', $Backend.StorageAccountName,
+        '--auth-mode', 'login',
+        '--subscription', $Backend.SubscriptionId,
+        '--only-show-errors', '--output', 'json',
+        '--query', '{versioningEnabled:isVersioningEnabled,deleteRetentionEnabled:deleteRetentionPolicy.enabled,deleteRetentionDays:deleteRetentionPolicy.days,allowPermanentDelete:deleteRetentionPolicy.allowPermanentDelete}'
+    ) -EnvVars $Environment -TimeoutSec 60
+    if ($result.ExitCode -ne 0) {
+        throw [System.InvalidOperationException]::new('State retirement could not verify the backend recovery policy.')
+    }
+    try {
+        $policy = ConvertFrom-Json -InputObject $result.StdOut -AsHashtable -Depth 10 -ErrorAction Stop
+    }
+    catch {
+        throw [System.IO.InvalidDataException]::new('State retirement received invalid backend recovery policy evidence.')
+    }
+    if ($policy -isnot [System.Collections.IDictionary] -or
+        $policy['versioningEnabled'] -ne $true -or
+        $policy['deleteRetentionEnabled'] -ne $true -or
+        $policy['deleteRetentionDays'] -isnot [long] -or
+        $policy['deleteRetentionDays'] -lt 7 -or
+        $policy['allowPermanentDelete'] -ne $false) {
+        throw [System.InvalidOperationException]::new('State retirement requires enabled blob versioning and protected deletion retention of at least seven days.')
+    }
+    $version = Invoke-RepositorySyncProcess -Command az -Arguments @(
+        'storage', 'blob', 'show',
+        '--account-name', $Backend.StorageAccountName,
+        '--container-name', $Backend.ContainerName,
+        '--name', 'bicep-module-identities.tfstate',
+        '--auth-mode', 'login',
+        '--subscription', $Backend.SubscriptionId,
+        '--only-show-errors', '--output', 'json',
+        '--query', '{versionId:versionId}'
+    ) -EnvVars $Environment -TimeoutSec 60
+    if ($version.ExitCode -ne 0) {
+        throw [System.InvalidOperationException]::new('State retirement could not identify the pre-retirement recoverable state version.')
+    }
+    $versionDocument = $null
+    try {
+        $versionDocument = [System.Text.Json.JsonDocument]::Parse($version.StdOut)
+        $versionProperty = $versionDocument.RootElement.GetProperty('versionId')
+        $versionId = $versionProperty.GetString()
+    }
+    catch {
+        throw [System.IO.InvalidDataException]::new('State retirement received invalid pre-retirement version evidence.')
+    }
+    finally {
+        if ($null -ne $versionDocument) {
+            $versionDocument.Dispose()
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($versionId)) {
+        throw [System.InvalidOperationException]::new('State retirement requires an explicit pre-retirement recoverable state version.')
+    }
+    return [pscustomobject]@{
+        VersioningEnabled = $true
+        DeleteRetentionDays = $policy['deleteRetentionDays']
+        PreRetirementVersionId = $versionId
+    }
+}
+
+function Invoke-AvmBicepSubscriptionVendingStateRetirementPreparation {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)] [string] $TerraformRoot,
+        [Parameter(Mandatory)] [hashtable] $Backend,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Values,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Configuration
+    )
+
+    $settings = Get-AvmBamiSettings -Values $Values
+    $state = Resolve-RepositorySyncStateConfiguration -Backend $Backend
+    $existingIdentities = Resolve-AvmBicepModuleExistingIdentities `
+        -ModulePaths @('avm/ptn/lz/sub-vending') -Configuration $Configuration
+    if ($existingIdentities.Count -ne 1 -or -not $existingIdentities.Contains('avm/ptn/lz/sub-vending')) {
+        throw [System.InvalidOperationException]::new('State retirement requires the canonical subscription-vending bootstrap selector.')
+    }
+    $bootstrap = Resolve-AvmSubscriptionVendingIdentity -ExistingIdentity $existingIdentities['avm/ptn/lz/sub-vending'] `
+        -Values $settings
+    $environment = Get-RepositorySyncTerraformEnvironment -Root $TerraformRoot -Settings $settings
+    $recoveryPolicy = Get-AvmBicepStateRecoveryPolicy -Backend $state -Environment $environment
+    Invoke-TerraformInit -terraformModulePath $TerraformRoot -repositoryCreationModeEnabled $false `
+        -repoId 'bicep-module-identities' -stateStorageAccountName $state.StorageAccountName `
+        -stateContainerName $state.ContainerName -stateTenantId $state.TenantId `
+        -stateSubscriptionId $state.SubscriptionId -stateClientId $state.ClientId -environment $environment | Out-Null
+
+    $pulled = Invoke-RepositorySyncProcess -Command terraform -Arguments @('state', 'pull') `
+        -WorkingDirectory $TerraformRoot -EnvVars $environment -TimeoutSec 300
+    if ($pulled.ExitCode -ne 0) {
+        throw [System.InvalidOperationException]::new('State retirement could not read the selected Terraform state; raw state is private.')
+    }
+    try {
+        $rawState = ConvertFrom-Json -InputObject $pulled.StdOut -AsHashtable -Depth 100 -ErrorAction Stop
+    }
+    catch {
+        throw [System.IO.InvalidDataException]::new('State retirement received invalid Terraform state; raw state is private.')
+    }
+    $entry = Get-AvmBicepSubscriptionVendingStateRetirementEntry -State $rawState -BootstrapIdentity $bootstrap
+
+    Invoke-RepositorySyncTerraform -Root $TerraformRoot -Environment $environment -Quiet -Arguments @(
+        'state', 'rm', '-dry-run', '-lock=true', '-lock-timeout=5m', $entry.Address
+    )
+    return [pscustomobject]@{
+        Status = 'Prepared'
+        Address = $entry.Address
+        Lineage = $entry.Lineage
+        Serial = $entry.Serial
+        ResourceIdDifferent = $entry.ResourceIdDifferent
+        ClientIdDifferent = $entry.ClientIdDifferent
+        PrincipalIdDifferent = $entry.PrincipalIdDifferent
+        StateVersioningEnabled = $recoveryPolicy.VersioningEnabled
+        StateDeleteRetentionDays = $recoveryPolicy.DeleteRetentionDays
+        PreRetirementVersionId = $recoveryPolicy.PreRetirementVersionId
+    }
+}
+
 function Assert-AvmBicepIdentityPlan {
     [CmdletBinding()]
     param(

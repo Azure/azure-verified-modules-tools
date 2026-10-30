@@ -146,6 +146,45 @@ before merge. Source changes do not authorize a live apply or publication.
 Coordinate the first approved reconciliation with active test runs because
 identity replacement changes client IDs and invalidates the old federation.
 
+### Subscription-vending state retirement preparation
+
+The shared subscription-vending selector replaces a historical dedicated
+identity. The manual-only `prepare_subscription_vending_state_retirement`
+workflow input is the sole supported preparation route. It reuses the Bicep
+sync workflow's `bicep-sync` concurrency group and state-only OIDC backend
+configuration, privately reads the current state, requires exactly one
+unindexed historical `azapi_resource.identity` entry, proves in memory that
+its resource, client and principal bindings all differ from the bootstrap
+identity, and runs only Terraform's exact `state rm -dry-run`.
+
+Dispatch preparation with `plan_only=true` and
+`prepare_subscription_vending_state_retirement=true` on the reviewed branch.
+It emits only the exact state address, lineage, serial and boolean comparison
+results, plus the verified state-versioning and deletion-retention settings and
+the current recoverable blob version ID. It neither writes state nor creates a
+backup. Do not copy raw state to logs, artifacts or GitHub uploads.
+
+An actual state removal is deliberately not implemented by this workflow.
+Before separately approving one exact `terraform state rm`, review the
+preparation receipt. The repository state backend's versioned blob creates a
+recoverable prior version of `bicep-module-identities.tfstate` when Terraform
+writes the retirement; the receipt's pre-retirement version ID is the recovery
+target, and the state-only backend identity reads it from the existing
+container. Preparation uses only Blob data-plane reads and requires versioning,
+protected deletion, and at least seven days of retention. Do not use
+Terraform's runner-local `-backup` output or upload raw state.
+
+Blob Data Contributor does not authorize storage-account management-plane
+policy reads. The preparation route therefore cannot establish an account
+lifecycle-policy guarantee. Before an actual retirement, a separately
+authorized read-only storage-policy verification must confirm that no lifecycle
+rule expires the recorded version before the reviewed follow-up plan. Stop if
+that verification is unavailable or inconsistent.
+
+The exact address must come from the preparation receipt, not from a Terraform
+plan's moved address. Review the full follow-up plan after retirement before
+making any Azure, federation or group-edge change.
+
 ## Registry authentication and separate cutover
 
 Registry and Tools use `include_claim_keys` in this order:
