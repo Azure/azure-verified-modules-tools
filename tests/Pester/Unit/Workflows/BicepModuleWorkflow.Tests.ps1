@@ -263,7 +263,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         }
     }
 
-    It 'retains direct-call Gallery fallback and runtime capabilities' {
+    It 'uses the shared pinned installer and retains runtime capabilities' {
         $runtimeNames = @(
             'bicep-module-runtime', 'bicep-module-runtime-deployment',
             'bicep-module-runtime-e2e', 'bicep-module-runtime-release',
@@ -273,7 +273,17 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         foreach ($workflow in $runtimeNames | ForEach-Object { $script:workflows[$_] }) {
             $text = $workflow | ConvertTo-Json -Depth 100
             $text | Should -Not -Match '\.avm-tools|\.avm-entrypoint|tools-ref|github\.workflow_sha'
-            $text | Should -Match 'Install-PSResource -Name Avm\.Authoring'
+            $installers = @(
+                foreach ($job in $workflow.jobs.Values) {
+                    if (-not $job.Contains('steps')) { continue }
+                    $job.steps | Where-Object { $_.name -eq 'Install Avm.Authoring' }
+                }
+            )
+            $installers.Count | Should -BeGreaterThan 0
+            foreach ($installer in $installers) {
+                $installer.uses | Should -Match '^Azure/azure-verified-modules-tools/\.github/actions/install-avm-authoring@[0-9a-f]{40}$'
+            }
+            $text | Should -Not -Match 'Install-PSResource -Name Avm\.Authoring'
             $text | Should -Match 'AvmCapabilities'
         }
         $release = $script:workflows['bicep-module-runtime-release'].jobs.release

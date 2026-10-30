@@ -145,6 +145,17 @@ Describe 'Shared Avm.Authoring workflow installer' {
         )
     }
 
+    It 'surfaces an installation failure after the shared retry budget is exhausted' {
+        Mock Install-PSResource { throw 'Synthetic PowerShell Gallery HTTP 403 (Forbidden)' }
+
+        { & $script:installer } | Should -Throw '*PowerShell Gallery HTTP 403 (Forbidden)*'
+
+        Should -Invoke Install-PSResource -Exactly 3
+        Should -Invoke Start-Sleep -Exactly 2
+        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 5 }
+        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 10 }
+    }
+
     It 'stops exact-version discovery and installation at the first successful source' {
         Mock Get-PSResourceRepository {
             [pscustomobject]@{ Name = 'Preferred'; Priority = 10; Uri = 'https://example.invalid/preferred' }
