@@ -389,7 +389,7 @@ Describe 'Bicep identity saved-plan ownership guard' {
                 Should -Throw
         }
 
-        It 'privately reads state then dry-runs only the exact discovered removal' {
+        It 'carries complete bootstrap evidence through preparation before dry-running the exact discovered removal' {
             $backend = @{
                 TenantId = '20000000-0000-4000-8000-000000000001'
                 SubscriptionId = '20000000-0000-4000-8000-000000000002'
@@ -397,11 +397,30 @@ Describe 'Bicep identity saved-plan ownership guard' {
                 StorageAccountName = 'fixturestatestore'
                 ContainerName = 'tfstate'
             }
-            Mock Get-AvmBamiSettings { @{} }
+            $values = New-AvmTestBamiSettings
+            $values.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID =
+                '/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-avm-managed-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-subscription-vending'
+            $values.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID = '10000000-0000-4000-8000-000000000006'
+            $values.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID = '10000000-0000-4000-0000-000000000007'
+            $values.TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID = 'avm-subscription-vending'
+            $values.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE =
+                '/providers/Microsoft.Billing/billingAccounts/account/billingProfiles/profile/invoiceSections/section'
             Mock Resolve-AvmBicepModuleExistingIdentities {
                 @{ 'avm/ptn/lz/sub-vending' = @{ name = 'bootstrap' } }
             }
-            Mock Resolve-AvmSubscriptionVendingIdentity { $script:bootstrap }
+            Mock Resolve-AvmSubscriptionVendingIdentity {
+                param($Values)
+                foreach ($name in @(
+                        'TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID',
+                        'TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID',
+                        'TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID',
+                        'TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID',
+                        'TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE'
+                    )) {
+                    $Values[$name] | Should -BeExactly $values[$name]
+                }
+                $script:bootstrap
+            }
             Mock Get-RepositorySyncTerraformEnvironment { @{} }
             Mock Invoke-TerraformInit {}
             Mock Invoke-RepositorySyncProcess {
@@ -425,7 +444,7 @@ Describe 'Bicep identity saved-plan ownership guard' {
             Mock Invoke-RepositorySyncTerraform {}
 
             $result = Invoke-AvmBicepSubscriptionVendingStateRetirementPreparation `
-                -TerraformRoot $TestDrive -Backend $backend -Values @{} -Configuration @{}
+                -TerraformRoot $TestDrive -Backend $backend -Values $values -Configuration @{}
 
             $result.Status | Should -BeExactly 'Prepared'
             $result.Address | Should -BeExactly 'module.bicep["avm/ptn/lz/sub-vending"].azapi_resource.identity'

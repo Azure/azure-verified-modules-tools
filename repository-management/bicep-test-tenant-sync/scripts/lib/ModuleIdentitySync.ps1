@@ -201,7 +201,7 @@ function Invoke-AvmBicepSubscriptionVendingStateRetirementPreparation {
         throw [System.InvalidOperationException]::new('State retirement requires the canonical subscription-vending bootstrap selector.')
     }
     $bootstrap = Resolve-AvmSubscriptionVendingIdentity -ExistingIdentity $existingIdentities['avm/ptn/lz/sub-vending'] `
-        -Values $settings
+        -Values $Values
     $environment = Get-RepositorySyncTerraformEnvironment -Root $TerraformRoot -Settings $settings
     $recoveryPolicy = Get-AvmBicepStateRecoveryPolicy -Backend $state -Environment $environment
     Invoke-TerraformInit -terraformModulePath $TerraformRoot -repositoryCreationModeEnabled $false `
