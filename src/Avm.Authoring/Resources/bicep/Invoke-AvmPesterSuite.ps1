@@ -84,7 +84,15 @@ if ($inputData.TestName.Count -gt 0) {
     $configuration.Filter.FullName = [string[]]$inputData.TestName
 }
 
-$result = & $pester.ExportedCommands['Invoke-Pester'] -Configuration $configuration
+$result = if ($inputData.Mode -ceq 'Unit') {
+    & {
+        Set-StrictMode -Off
+        & $pester.ExportedCommands['Invoke-Pester'] -Configuration $configuration
+    }
+}
+else {
+    & $pester.ExportedCommands['Invoke-Pester'] -Configuration $configuration
+}
 $issues = [System.Collections.Generic.List[object]]::new()
 
 foreach ($test in @($result.Tests)) {
