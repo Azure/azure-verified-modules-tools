@@ -49,7 +49,11 @@ AfterAll {
 }
 
 Describe 'Component: Bicep authored unit Pester semantics' -Tag Component {
-    It 'matches direct Pester while preserving authored strictness and non-passing results' {
+    It 'matches direct Pester for <Mode> while preserving authored strictness and non-passing results' -ForEach @(
+        @{ Mode = 'Unit' }
+        @{ Mode = 'unit' }
+        @{ Mode = 'UNIT' }
+    ) {
         $suite = Join-Path $TestDrive 'authored-unit.Tests.ps1'
         $directRunner = Join-Path $TestDrive 'direct-pester.ps1'
         Set-Content -LiteralPath $suite -Encoding utf8NoBOM -Value @'
@@ -97,16 +101,16 @@ $result = Invoke-Pester -Configuration $configuration
 } | ConvertTo-Json -Compress
 '@
         $results = InModuleScope 'Avm.Authoring' -Parameters @{
-            Suite = $suite; DirectRunner = $directRunner; Root = $TestDrive
+            Suite = $suite; DirectRunner = $directRunner; Root = $TestDrive; Mode = $Mode
         } {
-            param($Suite, $DirectRunner, $Root)
+            param($Suite, $DirectRunner, $Root, $Mode)
             $pester = Import-AvmPowerShellModule -Name Pester -ModuleRoot $Root
             $direct = Invoke-AvmProcess -FilePath ([System.Environment]::ProcessPath) `
                 -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $DirectRunner, $Suite,
                     (Join-Path $pester.ModuleBase 'Pester.psd1')) -WorkingDirectory $Root
             @{
                 Direct = $direct.StdOut | ConvertFrom-Json -AsHashtable
-                Unit = Invoke-AvmBicepPesterSuite -Mode Unit -Files @($Suite) `
+                Unit = Invoke-AvmBicepPesterSuite -Mode $Mode -Files @($Suite) `
                     -WorkingDirectory $Root -EnvVars @{} -TimeoutSec 30
             }
         }

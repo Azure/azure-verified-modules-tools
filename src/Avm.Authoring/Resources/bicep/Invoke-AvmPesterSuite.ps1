@@ -84,7 +84,7 @@ if ($inputData.TestName.Count -gt 0) {
     $configuration.Filter.FullName = [string[]]$inputData.TestName
 }
 
-$result = if ($inputData.Mode -ceq 'Unit') {
+$result = if ($inputData.Mode -eq 'Unit') {
     & {
         Set-StrictMode -Off
         & $pester.ExportedCommands['Invoke-Pester'] -Configuration $configuration
