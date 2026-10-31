@@ -20,6 +20,109 @@ AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
+Describe 'Bicep REST response validation diagnostics' {
+    It 'reports only a recognized code and named GUID headers for HTTP <Status>' -ForEach @(
+        @{ Status = 403 }, @{ Status = 429 }, @{ Status = 500 }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Status = $Status } {
+            param($Status)
+            $http = [System.Net.Http.HttpResponseMessage]::new()
+            $null = $http.Headers.TryAddWithoutValidation('x-ms-request-id', '11111111-2222-3333-4444-555555555555')
+            $null = $http.Headers.TryAddWithoutValidation('x-ms-correlation-request-id', 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+            $null = $http.Headers.TryAddWithoutValidation('Authorization', 'Bearer header-secret')
+            $response = @{
+                StatusCode = [System.Net.HttpStatusCode]$Status
+                Content = '{"error":{"code":"AuthorizationFailed","message":"body-secret"}}'
+                Headers = $http.Headers
+            }
+            $failure = $null
+            try { ConvertFrom-AvmBicepRestResponse -Response $response -Activity 'Read cleanup operation page' }
+            catch { $failure = $_ }
+            $failure.Exception | Should -BeOfType ([AvmProcessException])
+            $failure.Exception.Message | Should -Match "status=HTTP $Status"
+            $failure.Exception.Message | Should -Match 'response=object.*content=string.*code=AuthorizationFailed'
+            $failure.Exception.Message | Should -Match 'x-ms-request-id=11111111-2222-3333-4444-555555555555'
+            $failure.Exception.Message | Should -Match 'x-ms-correlation-request-id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+            $failure.Exception.Message | Should -Not -Match 'body-secret|header-secret|Bearer|Authorization:'
+            $http.Dispose()
+        }
+    }
+
+    It 'keeps invalid response and status shapes explicit without converting their values: <Shape>' -ForEach @(
+        @{ Shape = 'null response'; Response = $null; Expected = 'response=null; status=missing; content=missing' }
+        @{ Shape = 'array response'; Response = @(1, 2); Expected = 'response=array; status=missing; content=missing' }
+        @{ Shape = 'string status'; Response = @{ StatusCode = 'secret-status'; Content = '{}' }; Expected = 'status=string' }
+        @{ Shape = 'array status'; Response = @{ StatusCode = @(403); Content = '{}' }; Expected = 'status=array' }
+        @{ Shape = 'boolean status'; Response = @{ StatusCode = $true; Content = '{}' }; Expected = 'status=other' }
+        @{ Shape = 'out-of-range status'; Response = @{ StatusCode = 9999; Content = '{}' }; Expected = 'status=out-of-range integer' }
+        @{ Shape = 'array content'; Response = @{ StatusCode = 200; Content = @('secret-content') }; Expected = 'content=array' }
+        @{ Shape = 'object content'; Response = @{ StatusCode = 200; Content = @{ secret = 'secret-content' } }; Expected = 'content=object' }
+        @{ Shape = 'scalar content'; Response = @{ StatusCode = 200; Content = $true }; Expected = 'content=scalar' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Response = $Response; Expected = $Expected } {
+            param($Response, $Expected)
+            $failure = $null
+            try { ConvertFrom-AvmBicepRestResponse -Response $Response -Activity 'Read cleanup operation page' }
+            catch { $failure = $_ }
+            $failure.Exception | Should -BeOfType ([AvmProcessException])
+            $failure.Exception.Message | Should -BeLike "*$Expected*"
+            $failure.Exception.Message | Should -Not -Match 'secret|9999'
+        }
+    }
+
+    It 'omits malformed or untrusted code and header values: <Case>' -ForEach @(
+        @{ Case = 'unrecognized identifier'; Body = '{"error":{"code":"secretTokenValue"}}'; Header = 'secretTokenValue' }
+        @{ Case = 'message as code'; Body = '{"error":{"code":"secret text\ninjected"}}'; Header = "11111111-2222-3333-4444-555555555555`nsecret" }
+        @{ Case = 'duplicate code'; Body = '{"error":{"code":"AuthorizationFailed","Code":"secret"}}'; Header = @('11111111-2222-3333-4444-555555555555', 'secret') }
+        @{ Case = 'object code'; Body = '{"error":{"code":{"value":"secret"}}}'; Header = @{ value = 'secret' } }
+        @{ Case = 'invalid JSON'; Body = '{"error":"secret"'; Header = 'secret' }
+        @{ Case = 'oversized body'; Body = ('secret' * 11000); Header = 'secret' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Body = $Body; Header = $Header } {
+            param($Body, $Header)
+            $response = @{
+                StatusCode = 403
+                Content = $Body
+                Headers = @{ 'x-ms-request-id' = $Header; 'other-header' = 'secret-other' }
+            }
+            $failure = $null
+            try { ConvertFrom-AvmBicepRestResponse -Response $response -Activity 'Read cleanup operation page' }
+            catch { $failure = $_ }
+            $failure.Exception | Should -BeOfType ([AvmProcessException])
+            $failure.Exception.Message | Should -Match 'status=HTTP 403'
+            $failure.Exception.Message | Should -Not -Match 'secret|AuthorizationFailed|x-ms-request-id='
+        }
+    }
+
+    It 'does not change accepted responses or JSON failure categories' {
+        InModuleScope Avm.Authoring {
+            (ConvertFrom-AvmBicepRestResponse -Response @{ StatusCode = 200; Content = '{"value":[]}' } `
+                -Activity 'Read' -AllowedStatus @(200, 404))['value'].Count | Should -Be 0
+            (ConvertFrom-AvmBicepRestResponse -Response @{
+                    StatusCode = [System.Net.HttpStatusCode]::NotFound
+                    Content = '{"error":{"code":"DeploymentNotFound"}}'
+                } -Activity 'Read' -AllowedStatus @(200, 404))['error']['code'] | Should -BeExactly 'DeploymentNotFound'
+            { ConvertFrom-AvmBicepRestResponse -Response @{ StatusCode = 200; Content = '{"secret"' } -Activity 'Read' } |
+                Should -Throw '*returned invalid JSON*'
+            { ConvertFrom-AvmBicepRestResponse -Response @{ StatusCode = 200; Content = '[]' } -Activity 'Read' } |
+                Should -Throw '*returned invalid JSON*'
+        }
+    }
+
+    It 'retains the original failure category when an optional header cannot be read' {
+        InModuleScope Avm.Authoring {
+            $response = [pscustomobject]@{ StatusCode = 403; Content = '{}' }
+            $response | Add-Member -MemberType ScriptProperty -Name Headers -Value { throw 'header-secret' }
+            $failure = $null
+            try { ConvertFrom-AvmBicepRestResponse -Response $response -Activity 'Read cleanup operation page' }
+            catch { $failure = $_ }
+            $failure.Exception | Should -BeOfType ([AvmProcessException])
+            $failure.Exception.Message | Should -Match 'invalid response or HTTP status.*status=HTTP 403'
+            $failure.Exception.Message | Should -Not -Match 'header-secret'
+        }
+    }
+}
+
 Describe 'Bicep relocation regional classification' {
     BeforeEach {
         InModuleScope Avm.Authoring {
