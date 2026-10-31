@@ -1214,6 +1214,7 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
         $script:identitiesJob = [regex]::Match($script:workflow, '(?ms)^  sync-module-identities:\n.*?(?=^  [a-z][a-z-]+:\n|\z)').Value
         $script:retirementJob = [regex]::Match($script:workflow, '(?ms)^  prepare-subscription-vending-state-retirement:\n.*\z').Value
         $script:entry = Get-Content -LiteralPath (Join-Path $script:syncScripts 'Invoke-BicepTestTenantSync.ps1') -Raw
+        $script:retirementEntry = Get-Content -LiteralPath (Join-Path $script:syncScripts 'Invoke-BicepModuleIdentityStateRetirement.ps1') -Raw
     }
 
     It 'reuses the sync workflow for identities and variables without restoring CODEOWNERS publication' {
@@ -1348,6 +1349,31 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
         $script:entry | Should -Not -Match 'Get-ChildItem\s+Env:|GetEnvironmentVariables|Get-Content\s+Env:'
     }
 
+    It 'passes the complete bootstrap bundle directly to the retirement execution step' {
+        $step = [regex]::Match(
+            $script:retirementJob,
+            '(?ms)^      - name: Prepare exact state retirement\n.*?(?=^      - |\z)'
+        ).Value
+        $step | Should -Not -BeNullOrEmpty
+        $names = @([regex]::Matches($step, '(?m)^          (TEST_BAMI_[A-Z_]+): \$\{\{ vars\.\1 \}\}$') |
+            ForEach-Object { $_.Groups[1].Value })
+        $expected = @(
+            (New-BicepSyncTestBundle).Keys
+            'TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID'
+            'TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID'
+            'TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID'
+            'TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID'
+            'TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE'
+        )
+        @($names | Sort-Object) | Should -Be @($expected | Sort-Object)
+        $script:retirementJob | Should -Not -Match '(?m)^      TEST_BAMI_[A-Z_]+:'
+        foreach ($name in $names) {
+            $script:retirementEntry | Should -Match ([regex]::Escape("$name = `$env:$name"))
+        }
+        $step | Should -Not -Match 'secrets\.TEST_|toJSON\(vars\)|toJSON\(secrets\)'
+        $script:retirementEntry | Should -Not -Match 'Get-ChildItem\s+Env:|GetEnvironmentVariables|Get-Content\s+Env:'
+    }
+
     It 'selects plan or apply through environment data rather than interpolating dispatch input into code' {
         $run = [regex]::Match($script:variablesJob, '(?s)        run: \|\n(.*)$').Groups[1].Value
         $run | Should -Not -BeNullOrEmpty
@@ -1414,6 +1440,7 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
     It 'keeps the new scripts parseable and LF UTF-8 without BOM' {
         foreach ($path in @(
             (Join-Path $script:syncScripts 'Invoke-BicepTestTenantSync.ps1'),
+            (Join-Path $script:syncScripts 'Invoke-BicepModuleIdentityStateRetirement.ps1'),
             (Join-Path $script:syncScripts 'lib' 'GitHubVariables.ps1'),
             (Join-Path $script:syncScripts 'lib' 'TestTenantSync.ps1'),
             (Join-Path $script:root 'repository-management' 'shared' 'TestTenant.ps1'),
