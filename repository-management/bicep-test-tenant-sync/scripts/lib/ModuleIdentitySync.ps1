@@ -113,97 +113,102 @@ function Get-AvmBicepSubscriptionVendingStateRetirementEntry {
     }
 }
 
-function Get-AvmBicepStateRecoveryReadFailureMessage {
-    [OutputType([string])]
-    param(
-        [Parameter(Mandatory)] [string] $Message,
-        [Parameter(Mandatory)] [ValidateSet('storage-account-read', 'blob-service-properties-read', 'state-version-read')] [string] $Operation,
-        [Parameter(Mandatory)] [object] $Result
-    )
-
-    $diagnosticText = @([string]$Result.StdErr, [string]$Result.StdOut) -join "`n"
-    $statusMatch = [regex]::Match($diagnosticText, '(?i)\b(?:HTTP|status(?:\s+code)?)\s*[:=]?\s*(?<status>[1-5][0-9]{2})\b')
-    $errorCodePatterns = @(
-        '(?i)\bx-ms-error-code\s*[:=]\s*(?<code>[A-Za-z][A-Za-z0-9.-]{0,127})',
-        '(?i)"code"\s*:\s*"(?<code>[A-Za-z][A-Za-z0-9.-]{0,127})"',
-        '(?i)ERROR:\s*\((?<code>[A-Za-z][A-Za-z0-9.-]{0,127})\)'
-    )
-    $errorCodeMatch = $null
-    foreach ($pattern in $errorCodePatterns) {
-        $candidate = [regex]::Match($diagnosticText, $pattern)
-        if ($candidate.Success) {
-            $errorCodeMatch = $candidate
-            break
-        }
-    }
-
-    $details = @("operation=$Operation")
-    if ($statusMatch.Success) {
-        $details += "status=$($statusMatch.Groups['status'].Value)"
-    }
-    if ($null -ne $errorCodeMatch) {
-        $details += "error-code=$($errorCodeMatch.Groups['code'].Value)"
-    }
-    return "$($Message.TrimEnd('.')) ($($details -join '; '))."
-}
-
 function Get-AvmBicepStateRecoveryPolicy {
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)] [object] $Backend,
-        [Parameter(Mandatory)] [hashtable] $Environment
+        [Parameter(Mandatory)] [hashtable] $Environment,
+        [Parameter(Mandatory)] [string] $ReceiptPath
     )
 
-    $resourceGroupResult = Invoke-RepositorySyncProcess -Command az -Arguments @(
-        'storage', 'account', 'show',
-        '--name', $Backend.StorageAccountName,
-        '--subscription', $Backend.SubscriptionId,
-        '--only-show-errors', '--output', 'tsv',
-        '--query', 'resourceGroup'
-    ) -EnvVars $Environment -TimeoutSec 60
-    $resourceGroup = if ($resourceGroupResult.StdOut -is [string]) { $resourceGroupResult.StdOut.Trim() } else { '' }
-    if ($resourceGroupResult.ExitCode -ne 0 -or
-        $resourceGroup -cnotmatch '^[a-zA-Z0-9_().-]{1,90}$' -or
-        $resourceGroup.EndsWith('.')) {
-        throw [System.InvalidOperationException]::new(
-            (Get-AvmBicepStateRecoveryReadFailureMessage `
-                -Message 'State retirement could not identify the backend storage resource group.' `
-                -Operation 'storage-account-read' `
-                -Result $resourceGroupResult)
-        )
+    $receiptItem = Get-Item -LiteralPath $ReceiptPath -ErrorAction Stop
+    if ($receiptItem.PSIsContainer -or $receiptItem.Length -gt 4096) {
+        throw [System.IO.InvalidDataException]::new('State retirement recovery-policy receipt is invalid.')
     }
-
-    $result = Invoke-RepositorySyncProcess -Command az -Arguments @(
-        'storage', 'account', 'blob-service-properties', 'show',
-        '--account-name', $Backend.StorageAccountName,
-        '--resource-group', $resourceGroup,
-        '--subscription', $Backend.SubscriptionId,
-        '--only-show-errors', '--output', 'json',
-        '--query', '{versioningEnabled:isVersioningEnabled,deleteRetentionEnabled:deleteRetentionPolicy.enabled,deleteRetentionDays:deleteRetentionPolicy.days,allowPermanentDelete:deleteRetentionPolicy.allowPermanentDelete}'
-    ) -EnvVars $Environment -TimeoutSec 60
-    if ($result.ExitCode -ne 0) {
-        throw [System.InvalidOperationException]::new(
-            (Get-AvmBicepStateRecoveryReadFailureMessage `
-                -Message 'State retirement could not verify the backend recovery policy.' `
-                -Operation 'blob-service-properties-read' `
-                -Result $result)
-        )
-    }
+    $receipt = [ordered]@{}
+    $receiptDocument = $null
     try {
-        $policy = ConvertFrom-Json -InputObject $result.StdOut -AsHashtable -Depth 10 -ErrorAction Stop
+        $receiptDocument = [System.Text.Json.JsonDocument]::Parse(
+            (Get-Content -LiteralPath $receiptItem.FullName -Raw -ErrorAction Stop)
+        )
+        if ($receiptDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+            throw [System.IO.InvalidDataException]::new('Receipt must be an object.')
+        }
+        foreach ($property in $receiptDocument.RootElement.EnumerateObject()) {
+            if ($receipt.Contains($property.Name)) {
+                throw [System.IO.InvalidDataException]::new('Receipt contains duplicate properties.')
+            }
+            $receipt[$property.Name] = switch ($property.Value.ValueKind) {
+                ([System.Text.Json.JsonValueKind]::String) { $property.Value.GetString(); break }
+                ([System.Text.Json.JsonValueKind]::Number) {
+                    $number = [long]0
+                    if (-not $property.Value.TryGetInt64([ref]$number)) {
+                        throw [System.IO.InvalidDataException]::new('Receipt contains an invalid numeric value.')
+                    }
+                    $number
+                    break
+                }
+                ([System.Text.Json.JsonValueKind]::True) { $true; break }
+                ([System.Text.Json.JsonValueKind]::False) { $false; break }
+                default { throw [System.IO.InvalidDataException]::new('Receipt contains an unsupported value.') }
+            }
+        }
     }
     catch {
-        throw [System.IO.InvalidDataException]::new('State retirement received invalid backend recovery policy evidence.')
+        throw [System.IO.InvalidDataException]::new('State retirement recovery-policy receipt is invalid.')
     }
-    if ($policy -isnot [System.Collections.IDictionary] -or
-        $policy['versioningEnabled'] -ne $true -or
-        $policy['deleteRetentionEnabled'] -ne $true -or
-        $policy['deleteRetentionDays'] -isnot [long] -or
-        $policy['deleteRetentionDays'] -lt 7 -or
-        $policy['allowPermanentDelete'] -ne $false) {
-        throw [System.InvalidOperationException]::new('State retirement requires enabled blob versioning and protected deletion retention of at least seven days.')
+    finally {
+        if ($null -ne $receiptDocument) {
+            $receiptDocument.Dispose()
+        }
     }
+
+    $required = @(
+        'schemaVersion', 'observedAtUtc', 'expiresAtUtc', 'tenantId', 'subscriptionId',
+        'storageAccountName', 'resourceGroupName', 'containerName', 'stateKey',
+        'versioningEnabled', 'deleteRetentionEnabled', 'deleteRetentionDays',
+        'allowPermanentDelete', 'lifecycleManagementPolicyErrorCode'
+    )
+    if ($receipt -isnot [System.Collections.IDictionary] -or
+        @($required | Where-Object { -not $receipt.Contains($_) }).Count -gt 0 -or
+        @($receipt.Keys | Where-Object { $_ -notin $required }).Count -gt 0) {
+        throw [System.IO.InvalidDataException]::new('State retirement recovery-policy receipt is incomplete.')
+    }
+
+    $format = 'O'
+    $observedAt = [datetime]::MinValue
+    $expiresAt = [datetime]::MinValue
+    if ($receipt['schemaVersion'] -ne 1 -or
+        $receipt['observedAtUtc'] -isnot [string] -or
+        -not $receipt['observedAtUtc'].EndsWith('Z', [StringComparison]::Ordinal) -or
+        -not ([datetime]::TryParseExact($receipt['observedAtUtc'], $format, [cultureinfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::AdjustToUniversal, [ref]$observedAt)) -or
+        $receipt['expiresAtUtc'] -isnot [string] -or
+        -not $receipt['expiresAtUtc'].EndsWith('Z', [StringComparison]::Ordinal) -or
+        -not ([datetime]::TryParseExact($receipt['expiresAtUtc'], $format, [cultureinfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::AdjustToUniversal, [ref]$expiresAt)) -or
+        $receipt['tenantId'] -cne $Backend.TenantId -or
+        $receipt['subscriptionId'] -cne $Backend.SubscriptionId -or
+        $receipt['storageAccountName'] -cne $Backend.StorageAccountName -or
+        $receipt['containerName'] -cne $Backend.ContainerName -or
+        $receipt['resourceGroupName'] -isnot [string] -or
+        $receipt['resourceGroupName'] -cnotmatch '^[a-zA-Z0-9_().-]{1,90}$' -or
+        $receipt['resourceGroupName'].EndsWith('.') -or
+        $receipt['stateKey'] -cne 'bicep-module-identities.tfstate' -or
+        $receipt['versioningEnabled'] -ne $true -or
+        $receipt['deleteRetentionEnabled'] -ne $true -or
+        $receipt['deleteRetentionDays'] -isnot [long] -or
+        $receipt['deleteRetentionDays'] -lt 7 -or
+        $receipt['allowPermanentDelete'] -ne $false -or
+        $receipt['lifecycleManagementPolicyErrorCode'] -cne 'ManagementPolicyNotFound' -or
+        $observedAt -gt [datetime]::UtcNow.AddMinutes(5) -or
+        $expiresAt -le [datetime]::UtcNow -or
+        $expiresAt -le $observedAt -or
+        ($expiresAt - $observedAt) -gt [timespan]::FromMinutes(30)) {
+        throw [System.InvalidOperationException]::new('State retirement recovery-policy receipt is stale, mismatched, or unsafe.')
+    }
+
     $version = Invoke-RepositorySyncProcess -Command az -Arguments @(
         'storage', 'blob', 'show',
         '--account-name', $Backend.StorageAccountName,
@@ -241,7 +246,7 @@ function Get-AvmBicepStateRecoveryPolicy {
     }
     return [pscustomobject]@{
         VersioningEnabled = $true
-        DeleteRetentionDays = $policy['deleteRetentionDays']
+        DeleteRetentionDays = $receipt['deleteRetentionDays']
         PreRetirementVersionId = $versionId
     }
 }
@@ -253,7 +258,8 @@ function Invoke-AvmBicepSubscriptionVendingStateRetirementPreparation {
         [Parameter(Mandatory)] [string] $TerraformRoot,
         [Parameter(Mandatory)] [hashtable] $Backend,
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Values,
-        [Parameter(Mandatory)] [System.Collections.IDictionary] $Configuration
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Configuration,
+        [Parameter(Mandatory)] [string] $RecoveryReceiptPath
     )
 
     $settings = Get-AvmBamiSettings -Values $Values
@@ -266,7 +272,8 @@ function Invoke-AvmBicepSubscriptionVendingStateRetirementPreparation {
     $bootstrap = Resolve-AvmSubscriptionVendingIdentity -ExistingIdentity $existingIdentities['avm/ptn/lz/sub-vending'] `
         -Values $Values
     $environment = Get-RepositorySyncTerraformEnvironment -Root $TerraformRoot -Settings $settings
-    $recoveryPolicy = Get-AvmBicepStateRecoveryPolicy -Backend $state -Environment $environment
+    $recoveryPolicy = Get-AvmBicepStateRecoveryPolicy -Backend $state -Environment $environment `
+        -ReceiptPath $RecoveryReceiptPath
     Invoke-TerraformInit -terraformModulePath $TerraformRoot -repositoryCreationModeEnabled $false `
         -repoId 'bicep-module-identities' -stateStorageAccountName $state.StorageAccountName `
         -stateContainerName $state.ContainerName -stateTenantId $state.TenantId `

@@ -1371,6 +1371,7 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
             $script:retirementEntry | Should -Match ([regex]::Escape("$name = `$env:$name"))
         }
         $step | Should -Not -Match 'secrets\.TEST_|toJSON\(vars\)|toJSON\(secrets\)'
+        $step | Should -Match '\-RecoveryReceiptPath \(Join-Path \$env:GITHUB_WORKSPACE .+state-recovery-receipt\.json'
         $script:retirementEntry | Should -Not -Match 'Get-ChildItem\s+Env:|GetEnvironmentVariables|Get-Content\s+Env:'
     }
 
@@ -1441,6 +1442,7 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
         foreach ($path in @(
             (Join-Path $script:syncScripts 'Invoke-BicepTestTenantSync.ps1'),
             (Join-Path $script:syncScripts 'Invoke-BicepModuleIdentityStateRetirement.ps1'),
+            (Join-Path $script:syncScripts 'New-BicepModuleIdentityStateRecoveryReceipt.ps1'),
             (Join-Path $script:syncScripts 'lib' 'GitHubVariables.ps1'),
             (Join-Path $script:syncScripts 'lib' 'TestTenantSync.ps1'),
             (Join-Path $script:root 'repository-management' 'shared' 'TestTenant.ps1'),

@@ -2,7 +2,8 @@
 
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [Parameter(Mandatory)] [string] $TerraformRoot
+    [Parameter(Mandatory)] [string] $TerraformRoot,
+    [Parameter(Mandatory)] [string] $RecoveryReceiptPath
 )
 
 Set-StrictMode -Version 3.0
@@ -53,5 +54,6 @@ $configuration = ConvertFrom-AvmTestTenantJson -Json (
     Get-Content -LiteralPath (Join-Path $repositoryRoot 'repository-management' 'bicep-config' 'config.json') -Raw -ErrorAction Stop
 )
 Invoke-AvmBicepSubscriptionVendingStateRetirementPreparation -TerraformRoot $TerraformRoot `
-    -Values $values -Backend $backend -Configuration $configuration | ConvertTo-Json -Compress
+    -Values $values -Backend $backend -Configuration $configuration -RecoveryReceiptPath $RecoveryReceiptPath |
+    ConvertTo-Json -Compress
 $global:LASTEXITCODE = 0

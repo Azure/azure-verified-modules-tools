@@ -238,4 +238,5 @@ jobs:
           ARM_BACKEND_STORAGE_CONTAINER_NAME: ${{ vars.ARM_BACKEND_STORAGE_CONTAINER_NAME }}
         run: |
           & (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'Invoke-BicepModuleIdentityStateRetirement.ps1') `
-            -TerraformRoot (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'terraform')
+            -TerraformRoot (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'terraform') `
+            -RecoveryReceiptPath (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'state-recovery-receipt.json')

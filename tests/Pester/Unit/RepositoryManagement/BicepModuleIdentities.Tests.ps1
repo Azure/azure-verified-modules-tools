@@ -324,6 +324,36 @@ Describe 'Bicep identity saved-plan ownership guard' {
     Describe 'Bicep subscription-vending state retirement preparation' {
         BeforeEach {
             $script:stateSecret = 'synthetic-historical-identity-must-not-be-disclosed'
+            $script:recoveryBackend = @{
+                TenantId = '20000000-0000-4000-8000-000000000001'
+                SubscriptionId = '20000000-0000-4000-8000-000000000002'
+                ClientId = '20000000-0000-4000-8000-000000000003'
+                StorageAccountName = 'fixturestatestore'
+                ContainerName = 'tfstate'
+            }
+            $observedAt = [datetime]::UtcNow
+            $script:recoveryReceipt = [ordered]@{
+                schemaVersion = 1
+                observedAtUtc = $observedAt.ToString('O', [cultureinfo]::InvariantCulture)
+                expiresAtUtc = $observedAt.AddMinutes(15).ToString('O', [cultureinfo]::InvariantCulture)
+                tenantId = $script:recoveryBackend.TenantId
+                subscriptionId = $script:recoveryBackend.SubscriptionId
+                storageAccountName = $script:recoveryBackend.StorageAccountName
+                resourceGroupName = 'rg-fixture-state'
+                containerName = $script:recoveryBackend.ContainerName
+                stateKey = 'bicep-module-identities.tfstate'
+                versioningEnabled = $true
+                deleteRetentionEnabled = $true
+                deleteRetentionDays = [long]7
+                allowPermanentDelete = $false
+                lifecycleManagementPolicyErrorCode = 'ManagementPolicyNotFound'
+            }
+            $script:recoveryReceiptPath = Join-Path $TestDrive 'state-recovery-receipt.json'
+            [IO.File]::WriteAllText(
+                $script:recoveryReceiptPath,
+                (ConvertTo-Json -InputObject $script:recoveryReceipt -Depth 5) + "`n",
+                [Text.UTF8Encoding]::new($false)
+            )
             $script:bootstrap = @{
                 resource_id = 'synthetic-bootstrap-resource'
                 client_id = '10000000-0000-4000-8000-000000000006'
@@ -390,13 +420,6 @@ Describe 'Bicep identity saved-plan ownership guard' {
         }
 
         It 'carries complete bootstrap evidence through preparation before dry-running the exact discovered removal' {
-            $backend = @{
-                TenantId = '20000000-0000-4000-8000-000000000001'
-                SubscriptionId = '20000000-0000-4000-8000-000000000002'
-                ClientId = '20000000-0000-4000-8000-000000000003'
-                StorageAccountName = 'fixturestatestore'
-                ContainerName = 'tfstate'
-            }
             $values = New-AvmTestBamiSettings
             $values.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID =
                 '/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-avm-managed-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-subscription-vending'
@@ -428,20 +451,6 @@ Describe 'Bicep identity saved-plan ownership guard' {
                 $body = if ($Command -ceq 'terraform') {
                     $script:state
                 }
-                elseif (($Arguments -join '|') -ceq (
-                        'storage|account|show|--name|fixturestatestore|--subscription|' +
-                        '20000000-0000-4000-8000-000000000002|--only-show-errors|--output|tsv|--query|resourceGroup'
-                    )) {
-                    'rg-fixture-state'
-                }
-                elseif ($Arguments -contains 'blob-service-properties') {
-                    @{
-                        versioningEnabled = $true
-                        deleteRetentionEnabled = $true
-                        deleteRetentionDays = [long]7
-                        allowPermanentDelete = $false
-                    }
-                }
                 else {
                     @{ versionId = '2026-10-30T14:19:27.7550000Z' }
                 }
@@ -453,7 +462,8 @@ Describe 'Bicep identity saved-plan ownership guard' {
             Mock Invoke-RepositorySyncTerraform {}
 
             $result = Invoke-AvmBicepSubscriptionVendingStateRetirementPreparation `
-                -TerraformRoot $TestDrive -Backend $backend -Values $values -Configuration @{}
+                -TerraformRoot $TestDrive -Backend $script:recoveryBackend -Values $values -Configuration @{} `
+                -RecoveryReceiptPath $script:recoveryReceiptPath
 
             $result.Status | Should -BeExactly 'Prepared'
             $result.Address | Should -BeExactly 'module.bicep["avm/ptn/lz/sub-vending"].azapi_resource.identity'
@@ -461,22 +471,14 @@ Describe 'Bicep identity saved-plan ownership guard' {
             $result.StateDeleteRetentionDays | Should -Be 7
             $result.PreRetirementVersionId | Should -BeExactly '2026-10-30T14:19:27.7550000Z'
             ($result | ConvertTo-Json -Compress) | Should -Not -Match $script:stateSecret
-            Should -Invoke Invoke-RepositorySyncProcess -Exactly 3 -ParameterFilter {
+            Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter {
                 $Command -ceq 'az'
             }
             Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter {
                 $Command -ceq 'az' -and (@($Arguments) -join '|') -ceq (
-                    'storage|account|show|--name|fixturestatestore|--subscription|' +
-                    '20000000-0000-4000-8000-000000000002|--only-show-errors|--output|tsv|--query|resourceGroup'
-                )
-            }
-            Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter {
-                $Command -ceq 'az' -and (@($Arguments) -join '|') -ceq (
-                    'storage|account|blob-service-properties|show|--account-name|fixturestatestore|' +
-                    '--resource-group|rg-fixture-state|--subscription|20000000-0000-4000-8000-000000000002|' +
-                    '--only-show-errors|--output|json|--query|' +
-                    '{versioningEnabled:isVersioningEnabled,deleteRetentionEnabled:deleteRetentionPolicy.enabled,' +
-                    'deleteRetentionDays:deleteRetentionPolicy.days,allowPermanentDelete:deleteRetentionPolicy.allowPermanentDelete}'
+                    'storage|blob|show|--account-name|fixturestatestore|--container-name|tfstate|' +
+                    '--name|bicep-module-identities.tfstate|--auth-mode|login|--subscription|' +
+                    '20000000-0000-4000-8000-000000000002|--only-show-errors|--output|json|--query|{versionId:versionId}'
                 )
             }
             Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter {
@@ -490,86 +492,56 @@ Describe 'Bicep identity saved-plan ownership guard' {
             }
         }
 
-        It 'rejects incomplete backend recovery evidence: <Case>' -ForEach @(
+        It 'rejects absent, stale, mismatched, or unsafe recovery-policy receipts before data-plane work: <Case>' -ForEach @(
             @{
-                Case = 'insufficient deletion retention'
-                Policy = @{ versioningEnabled = $true; deleteRetentionEnabled = $true; deleteRetentionDays = [long]6; allowPermanentDelete = $false }
-                Version = @{ versionId = '2026-10-30T14:19:27.7550000Z' }
-                Calls = 2
+                Case = 'absent'
+                Edit = {
+                    Remove-Item -LiteralPath $script:recoveryReceiptPath -Force
+                }
             }
             @{
-                Case = 'missing pre-retirement version'
-                Policy = @{ versioningEnabled = $true; deleteRetentionEnabled = $true; deleteRetentionDays = [long]7; allowPermanentDelete = $false }
-                Version = @{}
-                Calls = 3
+                Case = 'stale'
+                Edit = {
+                    $script:recoveryReceipt.observedAtUtc = [datetime]::UtcNow.AddMinutes(-31).ToString('O', [cultureinfo]::InvariantCulture)
+                    $script:recoveryReceipt.expiresAtUtc = [datetime]::UtcNow.AddMinutes(-1).ToString('O', [cultureinfo]::InvariantCulture)
+                }
+            }
+            @{
+                Case = 'subscription mismatch'
+                Edit = {
+                    $script:recoveryReceipt.subscriptionId = '30000000-0000-4000-8000-000000000002'
+                }
+            }
+            @{
+                Case = 'unsafe deletion policy'
+                Edit = {
+                    $script:recoveryReceipt.allowPermanentDelete = $true
+                }
+            }
+            @{
+                Case = 'lifecycle policy present'
+                Edit = {
+                    $script:recoveryReceipt.lifecycleManagementPolicyErrorCode = 'UnexpectedPolicyResult'
+                }
             }
         ) {
-            $backend = @{
-                SubscriptionId = '20000000-0000-4000-8000-000000000002'
-                StorageAccountName = 'fixturestatestore'
-                ContainerName = 'tfstate'
+            & $Edit
+            if (Test-Path -LiteralPath $script:recoveryReceiptPath) {
+                [IO.File]::WriteAllText(
+                    $script:recoveryReceiptPath,
+                    (ConvertTo-Json -InputObject $script:recoveryReceipt -Depth 5) + "`n",
+                    [Text.UTF8Encoding]::new($false)
+                )
             }
             Mock Invoke-RepositorySyncProcess {
-                param($Arguments)
-                $body = if ((@($Arguments) -join ' ') -match 'storage account show') {
-                    'rg-fixture-state'
-                }
-                elseif ((@($Arguments) -join ' ') -match 'blob-service-properties') {
-                    $Policy
-                }
-                else {
-                    $Version
-                }
-                $standardOutput = if ($body -is [string]) { $body } else {
-                    ConvertTo-Json -InputObject $body -Depth 20 -Compress
-                }
-                [pscustomobject]@{ ExitCode = 0; StdOut = $standardOutput; StdErr = '' }
+                throw 'Data-plane work must not start for an invalid receipt.'
             }
 
-            { Get-AvmBicepStateRecoveryPolicy -Backend $backend -Environment @{} } | Should -Throw
-            Should -Invoke Invoke-RepositorySyncProcess -Exactly $Calls
-        }
-
-        It 'fails before recovery-property reads when the backend account resource group cannot be identified' {
-            $backend = @{
-                SubscriptionId = '20000000-0000-4000-8000-000000000002'
-                StorageAccountName = 'fixturestatestore'
-                ContainerName = 'tfstate'
-            }
-            Mock Invoke-RepositorySyncProcess {
-                [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'private detail' }
-            }
-
-            { Get-AvmBicepStateRecoveryPolicy -Backend $backend -Environment @{} } |
-                Should -Throw '*could not identify the backend storage resource group*'
-            Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter {
-                $Command -ceq 'az' -and (@($Arguments) -join '|') -match '^storage\|account\|show\|'
-            }
-        }
-
-        It 'reports only safe Azure error metadata when backend account discovery fails' {
-            $backend = @{
-                SubscriptionId = '20000000-0000-4000-8000-000000000002'
-                StorageAccountName = 'fixturestatestore'
-                ContainerName = 'tfstate'
-            }
-            $secret = 'synthetic-backend-resource-id'
-            Mock Invoke-RepositorySyncProcess {
-                [pscustomobject]@{
-                    ExitCode = 1
-                    StdOut = ''
-                    StdErr = "ERROR: (AuthorizationFailed) HTTP 403 for $secret"
-                }
-            }
-
-            $error = { Get-AvmBicepStateRecoveryPolicy -Backend $backend -Environment @{} } |
-                Should -Throw -PassThru
-            $error.Exception.Message | Should -BeExactly (
-                'State retirement could not identify the backend storage resource group ' +
-                '(operation=storage-account-read; status=403; error-code=AuthorizationFailed).'
-            )
-            $error.Exception.Message | Should -Not -Match $secret
-            Should -Invoke Invoke-RepositorySyncProcess -Exactly 1
+            {
+                Get-AvmBicepStateRecoveryPolicy -Backend $script:recoveryBackend -Environment @{} `
+                    -ReceiptPath $script:recoveryReceiptPath
+            } | Should -Throw
+            Should -Invoke Invoke-RepositorySyncProcess -Exactly 0
         }
     }
 
