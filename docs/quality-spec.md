@@ -1729,6 +1729,10 @@ Existing suites must run completely: skipped, filtered, inconclusive, empty
 or setup-failed suites are not passes. An absent suite is `not-present`.
 Module-owned unit Pester remains isolated under `avm test unit`; static
 authoring checks remain under `avm pr-check`, without deployments.
+Authored Unit suites run with ordinary direct-Pester strict-mode semantics
+instead of inheriting the runner's strict mode; an authored strict-mode setting
+still applies. Runner error handling and E2E and convention strictness are
+unchanged.
 
 `-Phase All` is the normal lifecycle. `Deploy` retains resources and state;
 a caller can renew its sign-ins before `Complete`, which never compiles or

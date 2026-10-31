@@ -48,6 +48,90 @@ AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
+Describe 'Component: Bicep authored unit Pester semantics' -Tag Component {
+    It 'matches direct Pester for <Mode> while preserving authored strictness and non-passing results' -ForEach @(
+        @{ Mode = 'Unit' }
+        @{ Mode = 'unit' }
+        @{ Mode = 'UNIT' }
+    ) {
+        $suite = Join-Path $TestDrive 'authored-unit.Tests.ps1'
+        $directRunner = Join-Path $TestDrive 'direct-pester.ps1'
+        Set-Content -LiteralPath $suite -Encoding utf8NoBOM -Value @'
+Describe 'authored unit behavior' {
+    It 'filters optional dictionary properties' {
+        $subnets = @(@{ name = 'private-endpoints' }, @{ name = 'gateway'; delegation = 'value' })
+        @($subnets | Where-Object delegation -CEQ 'value').Count | Should -Be 1
+    }
+    It 'reads a property from an empty array' {
+        $before = @()
+        $after = @(@{ digest = 'sha256:1' })
+        $created = @($after | Where-Object { $_.digest -cnotin @($before.digest) })
+        $created.Count | Should -Be 1
+    }
+    It 'honors strict mode selected by the author' {
+        Set-StrictMode -Version 3.0
+        $before = @()
+        $before.digest
+    }
+    It 'surfaces an authored nonterminating error' {
+        Write-Error 'authored failure'
+    }
+    It 'surfaces a skip' -Skip {}
+    It 'surfaces an inconclusive result' {
+        Set-ItResult -Inconclusive -Because 'not established'
+    }
+}
+'@
+        Set-Content -LiteralPath $directRunner -Encoding utf8NoBOM -Value @'
+param([string] $Suite, [string] $PesterPath)
+$ErrorActionPreference = 'Stop'
+Import-Module -Name $PesterPath -ErrorAction Stop
+$configuration = New-PesterConfiguration
+$configuration.Run.Path = @($Suite)
+$configuration.Run.PassThru = $true
+$configuration.Output.Verbosity = 'None'
+$result = Invoke-Pester -Configuration $configuration
+@{
+    Version = [string]$result.Version
+    Total = $result.TotalCount
+    Passed = $result.PassedCount
+    Failed = $result.FailedCount
+    Skipped = $result.SkippedCount
+    Inconclusive = $result.InconclusiveCount
+} | ConvertTo-Json -Compress
+'@
+        $results = InModuleScope 'Avm.Authoring' -Parameters @{
+            Suite = $suite; DirectRunner = $directRunner; Root = $TestDrive; Mode = $Mode
+        } {
+            param($Suite, $DirectRunner, $Root, $Mode)
+            $pester = Import-AvmPowerShellModule -Name Pester -ModuleRoot $Root
+            $direct = Invoke-AvmProcess -FilePath ([System.Environment]::ProcessPath) `
+                -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $DirectRunner, $Suite,
+                    (Join-Path $pester.ModuleBase 'Pester.psd1')) -WorkingDirectory $Root
+            @{
+                Direct = $direct.StdOut | ConvertFrom-Json -AsHashtable
+                Unit = Invoke-AvmBicepPesterSuite -Mode $Mode -Files @($Suite) `
+                    -WorkingDirectory $Root -EnvVars @{} -TimeoutSec 30
+            }
+        }
+        $results.Direct.Version | Should -Be '5.7.1'
+        $results.Direct.Total | Should -Be 6
+        $results.Direct.Passed | Should -Be 2
+        $results.Direct.Failed | Should -Be 2
+        $results.Direct.Skipped | Should -Be 1
+        $results.Direct.Inconclusive | Should -Be 1
+        foreach ($name in @('Version', 'Total', 'Passed', 'Failed', 'Skipped', 'Inconclusive')) {
+            $results.Unit[$name] | Should -Be $results.Direct[$name]
+        }
+        $results.Unit.Issues.Count | Should -Be 4
+        @($results.Unit.Issues | Where-Object Code -eq 'avm.bicep.pester-failed').Count | Should -Be 2
+        $results.Unit.Issues.Code | Should -Contain 'avm.bicep.pester-skipped'
+        $results.Unit.Issues.Code | Should -Contain 'avm.bicep.pester-inconclusive'
+        ($results.Unit.Issues.Message -join "`n") | Should -Match 'authored failure'
+        ($results.Unit.Issues.Message -join "`n") | Should -Match "property 'digest'"
+    }
+}
+
 Describe 'Component: Bicep post-deployment Pester data contract' -Tag Component {
     BeforeEach {
         $script:caseDirectory = Join-Path $TestDrive ('bicep assertions ' + [guid]::NewGuid().ToString('N'))
@@ -137,5 +221,29 @@ throw [System.Exception]::new('Authored suite failed to load.')
         $summary.Passed | Should -Be 0
         $summary.Issues.Code | Should -Contain 'avm.bicep.pester-setup-failed'
         $summary.Issues.Message | Should -Match 'Authored suite failed to load'
+    }
+
+    It 'retains strict mode for post-deployment assertions' {
+        Set-Content -LiteralPath $script:testPath -Encoding utf8NoBOM -Value @'
+param($TestInputData)
+Describe 'deployed example' {
+    It 'fails on a missing property under runner strict mode' {
+        $before = @()
+        $before.digest
+    }
+}
+'@
+        $summary = InModuleScope 'Avm.Authoring' -Parameters @{
+            Suite = $script:testPath; Dir = $script:caseDirectory
+        } {
+            param($Suite, $Dir)
+            Invoke-AvmBicepPesterSuite -Mode E2e -Files @($Suite) `
+                -TestInputData @{} -WorkingDirectory $Dir -TimeoutSec 30
+        }
+
+        $summary.Total | Should -Be 1
+        $summary.Failed | Should -Be 1
+        $summary.Issues.Code | Should -Contain 'avm.bicep.pester-failed'
+        $summary.Issues.Message | Should -Match "property 'digest'"
     }
 }
