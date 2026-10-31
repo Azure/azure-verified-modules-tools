@@ -170,9 +170,12 @@ preparation receipt. The repository state backend's versioned blob creates a
 recoverable prior version of `bicep-module-identities.tfstate` when Terraform
 writes the retirement; the receipt's pre-retirement version ID is the recovery
 target, and the state-only backend identity reads it from the existing
-container. Preparation uses only Blob data-plane reads and requires versioning,
-protected deletion, and at least seven days of retention. Do not use
-Terraform's runner-local `-backup` output or upload raw state.
+container. Preparation reads the current blob version through the Blob
+data-plane and verifies versioning and protected deletion through the exact
+backend storage account's management-plane Blob-service properties. It fails
+closed if that management-plane read is unavailable or does not show at least
+seven days of retention. Do not use Terraform's runner-local `-backup` output
+or upload raw state.
 
 Blob Data Contributor does not authorize storage-account management-plane
 policy reads. The preparation route therefore cannot establish an account

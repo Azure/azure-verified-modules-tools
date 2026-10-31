@@ -428,7 +428,13 @@ Describe 'Bicep identity saved-plan ownership guard' {
                 $body = if ($Command -ceq 'terraform') {
                     $script:state
                 }
-                elseif ($Arguments -contains 'service-properties') {
+                elseif (($Arguments -join '|') -ceq (
+                        'storage|account|show|--name|fixturestatestore|--subscription|' +
+                        '20000000-0000-4000-8000-000000000002|--only-show-errors|--output|tsv|--query|resourceGroup'
+                    )) {
+                    'rg-fixture-state'
+                }
+                elseif ($Arguments -contains 'blob-service-properties') {
                     @{
                         versioningEnabled = $true
                         deleteRetentionEnabled = $true
@@ -439,7 +445,10 @@ Describe 'Bicep identity saved-plan ownership guard' {
                 else {
                     @{ versionId = '2026-10-30T14:19:27.7550000Z' }
                 }
-                [pscustomobject]@{ ExitCode = 0; StdOut = ConvertTo-Json -InputObject $body -Depth 20 -Compress; StdErr = '' }
+                $standardOutput = if ($body -is [string]) { $body } else {
+                    ConvertTo-Json -InputObject $body -Depth 20 -Compress
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = $standardOutput; StdErr = '' }
             }
             Mock Invoke-RepositorySyncTerraform {}
 
@@ -452,8 +461,23 @@ Describe 'Bicep identity saved-plan ownership guard' {
             $result.StateDeleteRetentionDays | Should -Be 7
             $result.PreRetirementVersionId | Should -BeExactly '2026-10-30T14:19:27.7550000Z'
             ($result | ConvertTo-Json -Compress) | Should -Not -Match $script:stateSecret
-            Should -Invoke Invoke-RepositorySyncProcess -Exactly 2 -ParameterFilter {
+            Should -Invoke Invoke-RepositorySyncProcess -Exactly 3 -ParameterFilter {
                 $Command -ceq 'az'
+            }
+            Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter {
+                $Command -ceq 'az' -and (@($Arguments) -join '|') -ceq (
+                    'storage|account|show|--name|fixturestatestore|--subscription|' +
+                    '20000000-0000-4000-8000-000000000002|--only-show-errors|--output|tsv|--query|resourceGroup'
+                )
+            }
+            Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter {
+                $Command -ceq 'az' -and (@($Arguments) -join '|') -ceq (
+                    'storage|account|blob-service-properties|show|--account-name|fixturestatestore|' +
+                    '--resource-group|rg-fixture-state|--subscription|20000000-0000-4000-8000-000000000002|' +
+                    '--only-show-errors|--output|json|--query|' +
+                    '{versioningEnabled:isVersioningEnabled,deleteRetentionEnabled:deleteRetentionPolicy.enabled,' +
+                    'deleteRetentionDays:deleteRetentionPolicy.days,allowPermanentDelete:deleteRetentionPolicy.allowPermanentDelete}'
+                )
             }
             Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter {
                 $Command -ceq 'terraform' -and (@($Arguments) -join '|') -ceq 'state|pull'
@@ -471,13 +495,13 @@ Describe 'Bicep identity saved-plan ownership guard' {
                 Case = 'insufficient deletion retention'
                 Policy = @{ versioningEnabled = $true; deleteRetentionEnabled = $true; deleteRetentionDays = [long]6; allowPermanentDelete = $false }
                 Version = @{ versionId = '2026-10-30T14:19:27.7550000Z' }
-                Calls = 1
+                Calls = 2
             }
             @{
                 Case = 'missing pre-retirement version'
                 Policy = @{ versioningEnabled = $true; deleteRetentionEnabled = $true; deleteRetentionDays = [long]7; allowPermanentDelete = $false }
                 Version = @{}
-                Calls = 2
+                Calls = 3
             }
         ) {
             $backend = @{
@@ -487,12 +511,40 @@ Describe 'Bicep identity saved-plan ownership guard' {
             }
             Mock Invoke-RepositorySyncProcess {
                 param($Arguments)
-                $body = if ((@($Arguments) -join ' ') -match 'service-properties') { $Policy } else { $Version }
-                [pscustomobject]@{ ExitCode = 0; StdOut = ConvertTo-Json -InputObject $body -Depth 20 -Compress; StdErr = '' }
+                $body = if ((@($Arguments) -join ' ') -match 'storage account show') {
+                    'rg-fixture-state'
+                }
+                elseif ((@($Arguments) -join ' ') -match 'blob-service-properties') {
+                    $Policy
+                }
+                else {
+                    $Version
+                }
+                $standardOutput = if ($body -is [string]) { $body } else {
+                    ConvertTo-Json -InputObject $body -Depth 20 -Compress
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = $standardOutput; StdErr = '' }
             }
 
             { Get-AvmBicepStateRecoveryPolicy -Backend $backend -Environment @{} } | Should -Throw
             Should -Invoke Invoke-RepositorySyncProcess -Exactly $Calls
+        }
+
+        It 'fails before recovery-property reads when the backend account resource group cannot be identified' {
+            $backend = @{
+                SubscriptionId = '20000000-0000-4000-8000-000000000002'
+                StorageAccountName = 'fixturestatestore'
+                ContainerName = 'tfstate'
+            }
+            Mock Invoke-RepositorySyncProcess {
+                [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'private detail' }
+            }
+
+            { Get-AvmBicepStateRecoveryPolicy -Backend $backend -Environment @{} } |
+                Should -Throw '*could not identify the backend storage resource group*'
+            Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter {
+                $Command -ceq 'az' -and (@($Arguments) -join '|') -match '^storage\|account\|show\|'
+            }
         }
     }
 

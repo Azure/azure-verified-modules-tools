@@ -121,10 +121,24 @@ function Get-AvmBicepStateRecoveryPolicy {
         [Parameter(Mandatory)] [hashtable] $Environment
     )
 
+    $resourceGroupResult = Invoke-RepositorySyncProcess -Command az -Arguments @(
+        'storage', 'account', 'show',
+        '--name', $Backend.StorageAccountName,
+        '--subscription', $Backend.SubscriptionId,
+        '--only-show-errors', '--output', 'tsv',
+        '--query', 'resourceGroup'
+    ) -EnvVars $Environment -TimeoutSec 60
+    $resourceGroup = if ($resourceGroupResult.StdOut -is [string]) { $resourceGroupResult.StdOut.Trim() } else { '' }
+    if ($resourceGroupResult.ExitCode -ne 0 -or
+        $resourceGroup -cnotmatch '^[a-zA-Z0-9_().-]{1,90}$' -or
+        $resourceGroup.EndsWith('.')) {
+        throw [System.InvalidOperationException]::new('State retirement could not identify the backend storage resource group.')
+    }
+
     $result = Invoke-RepositorySyncProcess -Command az -Arguments @(
-        'storage', 'blob', 'service-properties', 'show',
+        'storage', 'account', 'blob-service-properties', 'show',
         '--account-name', $Backend.StorageAccountName,
-        '--auth-mode', 'login',
+        '--resource-group', $resourceGroup,
         '--subscription', $Backend.SubscriptionId,
         '--only-show-errors', '--output', 'json',
         '--query', '{versioningEnabled:isVersioningEnabled,deleteRetentionEnabled:deleteRetentionPolicy.enabled,deleteRetentionDays:deleteRetentionPolicy.days,allowPermanentDelete:deleteRetentionPolicy.allowPermanentDelete}'
