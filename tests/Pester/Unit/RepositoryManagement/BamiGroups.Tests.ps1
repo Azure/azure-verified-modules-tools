@@ -70,8 +70,9 @@ Describe 'Configured repository Entra memberships' {
         }
     }
 
-    It 'binds only subscription vending to the complete bootstrap-owned identity evidence' {
+    It 'binds only subscription vending to the selector-owned identity rather than the dedicated identity group' {
         $settings = New-AvmTestBamiSettings
+        $settings.TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME = 'rg-avm-test-managed-identities'
         $settings.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID =
             '/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-avm-managed-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-subscription-vending'
         $settings.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID = '10000000-0000-4000-8000-000000000006'
@@ -93,6 +94,8 @@ Describe 'Configured repository Entra memberships' {
 
         $resolved = Resolve-AvmSubscriptionVendingIdentity -ExistingIdentity $vending.ExistingIdentity -Values $settings
         $resolved.resource_id | Should -BeExactly $settings.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID
+        $resolved.resource_group_name | Should -BeExactly 'rg-avm-managed-identities'
+        $resolved.resource_group_name | Should -Not -BeExactly $settings.TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME
         $resolved.management_group_id | Should -BeExactly 'avm-subscription-vending'
         $resolved.billing_scope | Should -BeExactly $settings.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE
 
@@ -101,5 +104,34 @@ Describe 'Configured repository Entra memberships' {
         $settings.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE = '/providers/Microsoft.Billing/billingAccounts/account'
         { Resolve-AvmSubscriptionVendingIdentity -ExistingIdentity $vending.ExistingIdentity -Values $settings } |
             Should -Throw '*invoice-section*'
+    }
+
+    It 'reports only boolean bootstrap-binding diagnostics for a mismatched published resource ID' {
+        $settings = New-AvmTestBamiSettings
+        $settings.TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME = 'rg-avm-test-managed-identities'
+        $syntheticResourceId =
+            '/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-synthetic-secret/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-subscription-vending'
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID = $syntheticResourceId
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID = '10000000-0000-4000-0000-000000000006'
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID = '10000000-0000-4000-0000-000000000007'
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID = 'avm-subscription-vending'
+        $settings.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE =
+            '/providers/Microsoft.Billing/billingAccounts/account/billingProfiles/profile/invoiceSections/section'
+        $vending = Resolve-RepositorySettings -repositoryConfig $script:config -repoId 'avm-ptn-alz-sub-vending'
+
+        $message = $null
+        try {
+            $null = Resolve-AvmSubscriptionVendingIdentity -ExistingIdentity $vending.ExistingIdentity -Values $settings
+        }
+        catch {
+            $message = $_.Exception.Message
+        }
+
+        $message | Should -Match 'resource ID present=True'
+        $message | Should -Match 'resource ID format valid=True'
+        $message | Should -Match 'subscription matches=True'
+        $message | Should -Match 'resource group matches=False'
+        $message | Should -Match 'name matches=True'
+        $message | Should -Not -Match ([regex]::Escape($syntheticResourceId))
     }
 }

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "observedAtUtc": "2026-10-31T11:31:53.4068342Z",
+  "expiresAtUtc": "2026-10-31T11:46:53.4068342Z",
+  "tenantId": "70a036f6-8e4d-4615-bad6-149c02e7720d",
+  "subscriptionId": "c7fedf3b-cbde-4f68-8c81-7a0313adfc21",
+  "storageAccountName": "stavmstate92172623a0c0c6",
+  "resourceGroupName": "rg-avm-repository-sync-state-tme",
+  "containerName": "tfstate",
+  "stateKey": "bicep-module-identities.tfstate",
+  "versioningEnabled": true,
+  "deleteRetentionEnabled": true,
+  "deleteRetentionDays": 7,
+  "allowPermanentDelete": false,
+  "lifecycleManagementPolicyErrorCode": "ManagementPolicyNotFound"
+}

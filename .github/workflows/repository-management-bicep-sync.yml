@@ -10,6 +10,10 @@ on:
         description: Plan identity and variable changes without applying
         type: boolean
         default: true
+      prepare_subscription_vending_state_retirement:
+        description: Read and dry-run the exact subscription-vending ownership retirement
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -29,7 +33,8 @@ jobs:
           github.event_name == 'workflow_dispatch' &&
           startsWith(github.ref, 'refs/heads/')
         )
-      )
+      ) &&
+      !(github.event_name == 'workflow_dispatch' && inputs.prepare_subscription_vending_state_retirement)
     runs-on: ubuntu-latest
     environment: avm
     timeout-minutes: 20
@@ -90,7 +95,8 @@ jobs:
           github.event_name == 'workflow_dispatch' &&
           startsWith(github.ref, 'refs/heads/')
         )
-      )
+      ) &&
+      !(github.event_name == 'workflow_dispatch' && inputs.prepare_subscription_vending_state_retirement)
     runs-on: ubuntu-latest
     environment: avm
     timeout-minutes: 90
@@ -174,3 +180,63 @@ jobs:
           & (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'Invoke-BicepTestTenantSync.ps1') `
             -IdentityMigrationPath (Join-Path $env:RUNNER_TEMP 'bicep-module-identity-renames.json') `
             -ModuleClientIdPath (Join-Path $env:RUNNER_TEMP 'bicep-module-client-ids.json') -Apply
+
+  prepare-subscription-vending-state-retirement:
+    name: Prepare subscription-vending state retirement
+    if: >-
+      github.repository == 'Azure/azure-verified-modules-tools' &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.prepare_subscription_vending_state_retirement &&
+      inputs.plan_only &&
+      startsWith(github.ref, 'refs/heads/')
+    runs-on: ubuntu-latest
+    environment: avm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout immutable tools revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Sign in with the state backend identity
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        with:
+          tenant-id: ${{ vars.ARM_BACKEND_TENANT_ID }}
+          subscription-id: ${{ vars.ARM_BACKEND_SUBSCRIPTION_ID }}
+          client-id: ${{ vars.ARM_BACKEND_CLIENT_ID }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: latest
+          terraform_wrapper: false
+
+      - name: Prepare exact state retirement
+        shell: pwsh
+        env:
+          TEST_BAMI_TENANT_ID: ${{ vars.TEST_BAMI_TENANT_ID }}
+          TEST_BAMI_CONTROLLER_CLIENT_ID: ${{ vars.TEST_BAMI_CONTROLLER_CLIENT_ID }}
+          TEST_BAMI_ADMIN_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_ADMIN_SUBSCRIPTION_ID }}
+          TEST_BAMI_SUBSCRIPTION_IDS: ${{ vars.TEST_BAMI_SUBSCRIPTION_IDS }}
+          TEST_BAMI_MANAGEMENT_GROUP_ID: ${{ vars.TEST_BAMI_MANAGEMENT_GROUP_ID }}
+          TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME: ${{ vars.TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME }}
+          TEST_BAMI_BICEP_CLIENT_ID: ${{ vars.TEST_BAMI_BICEP_CLIENT_ID }}
+          TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID: ${{ vars.TEST_BAMI_PERSISTENT_SUBSCRIPTION_ID }}
+          TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID: ${{ vars.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID }}
+          TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID: ${{ vars.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID }}
+          TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID: ${{ vars.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID }}
+          TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID: ${{ vars.TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID }}
+          TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE: ${{ vars.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE }}
+          ARM_BACKEND_TENANT_ID: ${{ vars.ARM_BACKEND_TENANT_ID }}
+          ARM_BACKEND_SUBSCRIPTION_ID: ${{ vars.ARM_BACKEND_SUBSCRIPTION_ID }}
+          ARM_BACKEND_CLIENT_ID: ${{ vars.ARM_BACKEND_CLIENT_ID }}
+          ARM_BACKEND_STORAGE_ACCOUNT_NAME: ${{ vars.ARM_BACKEND_STORAGE_ACCOUNT_NAME }}
+          ARM_BACKEND_STORAGE_CONTAINER_NAME: ${{ vars.ARM_BACKEND_STORAGE_CONTAINER_NAME }}
+        run: |
+          & (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'Invoke-BicepModuleIdentityStateRetirement.ps1') `
+            -TerraformRoot (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'terraform') `
+            -RecoveryReceiptPath (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'state-recovery-receipt.json')

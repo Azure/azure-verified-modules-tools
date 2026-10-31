@@ -18,6 +18,297 @@ function Resolve-AvmBicepIdentitySyncContext {
     }
 }
 
+function Test-AvmBicepDedicatedIdentityStateMove {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Resource,
+        [Parameter(Mandatory)] [string] $ModuleAddress,
+        [Parameter(Mandatory)] [string] $ModulePath,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $ExistingIdentities
+    )
+
+    $change = $Resource['change']
+    if ($ExistingIdentities.Contains($ModulePath) -or
+        $Resource['mode'] -cne 'managed' -or
+        $Resource['type'] -cne 'azapi_resource' -or
+        $Resource['provider_name'] -cne 'registry.terraform.io/azure/azapi' -or
+        $Resource['address'] -cne "$ModuleAddress.azapi_resource.identity[0]" -or
+        $Resource['previous_address'] -cne "$ModuleAddress.azapi_resource.identity" -or
+        $change -isnot [System.Collections.IDictionary] -or
+        $change['actions'] -isnot [System.Collections.IList] -or
+        $change['actions'].Count -ne 1 -or
+        $change['actions'][0] -cne 'no-op' -or
+        $null -ne $change['importing'] -or
+        $change['before'] -isnot [System.Collections.IDictionary] -or
+        $change['after'] -isnot [System.Collections.IDictionary]) {
+        return $false
+    }
+
+    return (ConvertTo-Json -InputObject $change['before'] -Depth 100 -Compress) -ceq
+        (ConvertTo-Json -InputObject $change['after'] -Depth 100 -Compress)
+}
+
+function Get-AvmBicepSubscriptionVendingStateRetirementEntry {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $State,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $BootstrapIdentity
+    )
+
+    $moduleAddress = 'module.bicep["avm/ptn/lz/sub-vending"]'
+    if ($State['lineage'] -isnot [string] -or -not [guid]::TryParse($State['lineage'], [ref]([guid]::Empty)) -or
+        $State['serial'] -isnot [long] -or $State['serial'] -lt 0 -or
+        $State['resources'] -isnot [System.Collections.IList] -or
+        $BootstrapIdentity['resource_id'] -isnot [string] -or
+        $BootstrapIdentity['client_id'] -isnot [string] -or
+        $BootstrapIdentity['principal_id'] -isnot [string]) {
+        throw [System.IO.InvalidDataException]::new('State retirement requires complete, typed state and bootstrap identity evidence.')
+    }
+
+    $resources = @($State['resources'] | Where-Object {
+            $_ -is [System.Collections.IDictionary] -and
+            $_['module'] -ceq $moduleAddress -and
+            $_['mode'] -ceq 'managed' -and
+            $_['type'] -ceq 'azapi_resource' -and
+            $_['name'] -ceq 'identity' -and
+            $_['provider'] -ceq 'provider["registry.terraform.io/azure/azapi"]'
+        })
+    if ($resources.Count -ne 1 -or $resources[0]['instances'] -isnot [System.Collections.IList] -or
+        $resources[0]['instances'].Count -ne 1) {
+        throw [System.InvalidOperationException]::new('State retirement requires exactly one historical dedicated identity state entry.')
+    }
+
+    $instance = $resources[0]['instances'][0]
+    if ($instance -isnot [System.Collections.IDictionary] -or
+        ($instance.Contains('index_key') -and $null -ne $instance['index_key']) -or
+        $instance['attributes'] -isnot [System.Collections.IDictionary]) {
+        throw [System.InvalidOperationException]::new('State retirement requires the unindexed historical dedicated identity entry.')
+    }
+    $attributes = $instance['attributes']
+    if ($attributes['id'] -isnot [string] -or $attributes['output'] -isnot [System.Collections.IDictionary] -or
+        $attributes['output']['properties'] -isnot [System.Collections.IDictionary]) {
+        throw [System.IO.InvalidDataException]::new('State retirement requires complete historical dedicated identity attributes.')
+    }
+    $properties = $attributes['output']['properties']
+    if ($properties['clientId'] -isnot [string] -or $properties['principalId'] -isnot [string]) {
+        throw [System.IO.InvalidDataException]::new('State retirement requires complete historical dedicated identity bindings.')
+    }
+
+    $resourceIdDifferent = $attributes['id'] -ine $BootstrapIdentity['resource_id']
+    $clientIdDifferent = $properties['clientId'] -ine $BootstrapIdentity['client_id']
+    $principalIdDifferent = $properties['principalId'] -ine $BootstrapIdentity['principal_id']
+    if (-not ($resourceIdDifferent -and $clientIdDifferent -and $principalIdDifferent)) {
+        throw [System.InvalidOperationException]::new('State retirement requires a historical dedicated identity distinct from the bootstrap shared identity.')
+    }
+
+    return [pscustomobject]@{
+        Address = "$moduleAddress.azapi_resource.identity"
+        Lineage = $State['lineage']
+        Serial = $State['serial']
+        ResourceIdDifferent = $resourceIdDifferent
+        ClientIdDifferent = $clientIdDifferent
+        PrincipalIdDifferent = $principalIdDifferent
+    }
+}
+
+function Get-AvmBicepStateRecoveryPolicy {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)] [object] $Backend,
+        [Parameter(Mandatory)] [hashtable] $Environment,
+        [Parameter(Mandatory)] [string] $ReceiptPath
+    )
+
+    $receiptItem = Get-Item -LiteralPath $ReceiptPath -ErrorAction Stop
+    if ($receiptItem.PSIsContainer -or $receiptItem.Length -gt 4096) {
+        throw [System.IO.InvalidDataException]::new('State retirement recovery-policy receipt is invalid.')
+    }
+    $receipt = [ordered]@{}
+    $receiptDocument = $null
+    try {
+        $receiptDocument = [System.Text.Json.JsonDocument]::Parse(
+            (Get-Content -LiteralPath $receiptItem.FullName -Raw -ErrorAction Stop)
+        )
+        if ($receiptDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+            throw [System.IO.InvalidDataException]::new('Receipt must be an object.')
+        }
+        foreach ($property in $receiptDocument.RootElement.EnumerateObject()) {
+            if ($receipt.Contains($property.Name)) {
+                throw [System.IO.InvalidDataException]::new('Receipt contains duplicate properties.')
+            }
+            $receipt[$property.Name] = switch ($property.Value.ValueKind) {
+                ([System.Text.Json.JsonValueKind]::String) { $property.Value.GetString(); break }
+                ([System.Text.Json.JsonValueKind]::Number) {
+                    $number = [long]0
+                    if (-not $property.Value.TryGetInt64([ref]$number)) {
+                        throw [System.IO.InvalidDataException]::new('Receipt contains an invalid numeric value.')
+                    }
+                    $number
+                    break
+                }
+                ([System.Text.Json.JsonValueKind]::True) { $true; break }
+                ([System.Text.Json.JsonValueKind]::False) { $false; break }
+                default { throw [System.IO.InvalidDataException]::new('Receipt contains an unsupported value.') }
+            }
+        }
+    }
+    catch {
+        throw [System.IO.InvalidDataException]::new('State retirement recovery-policy receipt is invalid.')
+    }
+    finally {
+        if ($null -ne $receiptDocument) {
+            $receiptDocument.Dispose()
+        }
+    }
+
+    $required = @(
+        'schemaVersion', 'observedAtUtc', 'expiresAtUtc', 'tenantId', 'subscriptionId',
+        'storageAccountName', 'resourceGroupName', 'containerName', 'stateKey',
+        'versioningEnabled', 'deleteRetentionEnabled', 'deleteRetentionDays',
+        'allowPermanentDelete', 'lifecycleManagementPolicyErrorCode'
+    )
+    if ($receipt -isnot [System.Collections.IDictionary] -or
+        @($required | Where-Object { -not $receipt.Contains($_) }).Count -gt 0 -or
+        @($receipt.Keys | Where-Object { $_ -notin $required }).Count -gt 0) {
+        throw [System.IO.InvalidDataException]::new('State retirement recovery-policy receipt is incomplete.')
+    }
+
+    $format = 'O'
+    $observedAt = [datetime]::MinValue
+    $expiresAt = [datetime]::MinValue
+    if ($receipt['schemaVersion'] -ne 1 -or
+        $receipt['observedAtUtc'] -isnot [string] -or
+        -not $receipt['observedAtUtc'].EndsWith('Z', [StringComparison]::Ordinal) -or
+        -not ([datetime]::TryParseExact($receipt['observedAtUtc'], $format, [cultureinfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::AdjustToUniversal, [ref]$observedAt)) -or
+        $receipt['expiresAtUtc'] -isnot [string] -or
+        -not $receipt['expiresAtUtc'].EndsWith('Z', [StringComparison]::Ordinal) -or
+        -not ([datetime]::TryParseExact($receipt['expiresAtUtc'], $format, [cultureinfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::AdjustToUniversal, [ref]$expiresAt)) -or
+        $receipt['tenantId'] -cne $Backend.TenantId -or
+        $receipt['subscriptionId'] -cne $Backend.SubscriptionId -or
+        $receipt['storageAccountName'] -cne $Backend.StorageAccountName -or
+        $receipt['containerName'] -cne $Backend.ContainerName -or
+        $receipt['resourceGroupName'] -isnot [string] -or
+        $receipt['resourceGroupName'] -cnotmatch '^[a-zA-Z0-9_().-]{1,90}$' -or
+        $receipt['resourceGroupName'].EndsWith('.') -or
+        $receipt['stateKey'] -cne 'bicep-module-identities.tfstate' -or
+        $receipt['versioningEnabled'] -ne $true -or
+        $receipt['deleteRetentionEnabled'] -ne $true -or
+        $receipt['deleteRetentionDays'] -isnot [long] -or
+        $receipt['deleteRetentionDays'] -lt 7 -or
+        $receipt['allowPermanentDelete'] -ne $false -or
+        $receipt['lifecycleManagementPolicyErrorCode'] -cne 'ManagementPolicyNotFound' -or
+        $observedAt -gt [datetime]::UtcNow.AddMinutes(5) -or
+        $expiresAt -le [datetime]::UtcNow -or
+        $expiresAt -le $observedAt -or
+        ($expiresAt - $observedAt) -gt [timespan]::FromMinutes(30)) {
+        throw [System.InvalidOperationException]::new('State retirement recovery-policy receipt is stale, mismatched, or unsafe.')
+    }
+
+    $version = Invoke-RepositorySyncProcess -Command az -Arguments @(
+        'storage', 'blob', 'show',
+        '--account-name', $Backend.StorageAccountName,
+        '--container-name', $Backend.ContainerName,
+        '--name', 'bicep-module-identities.tfstate',
+        '--auth-mode', 'login',
+        '--subscription', $Backend.SubscriptionId,
+        '--only-show-errors', '--output', 'json',
+        '--query', '{versionId:versionId}'
+    ) -EnvVars $Environment -TimeoutSec 60
+    if ($version.ExitCode -ne 0) {
+        throw [System.InvalidOperationException]::new(
+            (Get-AvmBicepStateRecoveryReadFailureMessage `
+                -Message 'State retirement could not identify the pre-retirement recoverable state version.' `
+                -Operation 'state-version-read' `
+                -Result $version)
+        )
+    }
+    $versionDocument = $null
+    try {
+        $versionDocument = [System.Text.Json.JsonDocument]::Parse($version.StdOut)
+        $versionProperty = $versionDocument.RootElement.GetProperty('versionId')
+        $versionId = $versionProperty.GetString()
+    }
+    catch {
+        throw [System.IO.InvalidDataException]::new('State retirement received invalid pre-retirement version evidence.')
+    }
+    finally {
+        if ($null -ne $versionDocument) {
+            $versionDocument.Dispose()
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($versionId)) {
+        throw [System.InvalidOperationException]::new('State retirement requires an explicit pre-retirement recoverable state version.')
+    }
+    return [pscustomobject]@{
+        VersioningEnabled = $true
+        DeleteRetentionDays = $receipt['deleteRetentionDays']
+        PreRetirementVersionId = $versionId
+    }
+}
+
+function Invoke-AvmBicepSubscriptionVendingStateRetirementPreparation {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)] [string] $TerraformRoot,
+        [Parameter(Mandatory)] [hashtable] $Backend,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Values,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Configuration,
+        [Parameter(Mandatory)] [string] $RecoveryReceiptPath
+    )
+
+    $settings = Get-AvmBamiSettings -Values $Values
+    $state = Resolve-RepositorySyncStateConfiguration -Backend $Backend
+    $existingIdentities = Resolve-AvmBicepModuleExistingIdentities `
+        -ModulePaths @('avm/ptn/lz/sub-vending') -Configuration $Configuration
+    if ($existingIdentities.Count -ne 1 -or -not $existingIdentities.Contains('avm/ptn/lz/sub-vending')) {
+        throw [System.InvalidOperationException]::new('State retirement requires the canonical subscription-vending bootstrap selector.')
+    }
+    $bootstrap = Resolve-AvmSubscriptionVendingIdentity -ExistingIdentity $existingIdentities['avm/ptn/lz/sub-vending'] `
+        -Values $Values
+    $environment = Get-RepositorySyncTerraformEnvironment -Root $TerraformRoot -Settings $settings
+    $recoveryPolicy = Get-AvmBicepStateRecoveryPolicy -Backend $state -Environment $environment `
+        -ReceiptPath $RecoveryReceiptPath
+    Invoke-TerraformInit -terraformModulePath $TerraformRoot -repositoryCreationModeEnabled $false `
+        -repoId 'bicep-module-identities' -stateStorageAccountName $state.StorageAccountName `
+        -stateContainerName $state.ContainerName -stateTenantId $state.TenantId `
+        -stateSubscriptionId $state.SubscriptionId -stateClientId $state.ClientId -environment $environment | Out-Null
+
+    $pulled = Invoke-RepositorySyncProcess -Command terraform -Arguments @('state', 'pull') `
+        -WorkingDirectory $TerraformRoot -EnvVars $environment -TimeoutSec 300
+    if ($pulled.ExitCode -ne 0) {
+        throw [System.InvalidOperationException]::new('State retirement could not read the selected Terraform state; raw state is private.')
+    }
+    try {
+        $rawState = ConvertFrom-Json -InputObject $pulled.StdOut -AsHashtable -Depth 100 -ErrorAction Stop
+    }
+    catch {
+        throw [System.IO.InvalidDataException]::new('State retirement received invalid Terraform state; raw state is private.')
+    }
+    $entry = Get-AvmBicepSubscriptionVendingStateRetirementEntry -State $rawState -BootstrapIdentity $bootstrap
+
+    Invoke-RepositorySyncTerraform -Root $TerraformRoot -Environment $environment -Quiet -Arguments @(
+        'state', 'rm', '-dry-run', '-lock=true', '-lock-timeout=5m', $entry.Address
+    )
+    return [pscustomobject]@{
+        Status = 'Prepared'
+        Address = $entry.Address
+        Lineage = $entry.Lineage
+        Serial = $entry.Serial
+        ResourceIdDifferent = $entry.ResourceIdDifferent
+        ClientIdDifferent = $entry.ClientIdDifferent
+        PrincipalIdDifferent = $entry.PrincipalIdDifferent
+        StateVersioningEnabled = $recoveryPolicy.VersioningEnabled
+        StateDeleteRetentionDays = $recoveryPolicy.DeleteRetentionDays
+        PreRetirementVersionId = $recoveryPolicy.PreRetirementVersionId
+    }
+}
+
 function Assert-AvmBicepIdentityPlan {
     [CmdletBinding()]
     param(
@@ -38,6 +329,9 @@ function Assert-AvmBicepIdentityPlan {
     }
     $resources = @(Get-AvmTerraformPlannedResource -Module $Plan['planned_values']['root_module'])
     $moduleAddresses = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $approvedStateMoveAddresses = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $rejectedPlanResources = [System.Collections.Generic.List[object]]::new()
+    $rejectionSignatures = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $identityNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($path in $Modules.Keys) {
         Assert-AvmBicepModulePath -Path $path
@@ -51,11 +345,13 @@ function Assert-AvmBicepIdentityPlan {
         if ($resource -isnot [System.Collections.IDictionary] -or $resource['address'] -isnot [string]) {
             throw [System.InvalidOperationException]::new('Bicep plan resources must have explicit addresses.')
         }
-        $match = [regex]::Match($resource['address'], '^(module\.bicep\["[^"]+"\])\.(.+)$')
+        $match = [regex]::Match($resource['address'], '^(module\.bicep\["([^"]+)"\])\.(.+)$')
         if (-not $match.Success -or -not $moduleAddresses.Contains($match.Groups[1].Value)) {
             throw [System.InvalidOperationException]::new('Bicep plan contains a foreign or removed module; identity retirement requires a separate change.')
         }
-        $suffix = $match.Groups[2].Value
+        $moduleAddress = $match.Groups[1].Value
+        $modulePath = $match.Groups[2].Value
+        $suffix = $match.Groups[3].Value
         $expectedProvider = $null
         if ($resource['mode'] -ceq 'managed' -and $resource['type'] -ceq 'azapi_resource' -and
             $suffix -cin @(
@@ -81,8 +377,13 @@ function Assert-AvmBicepIdentityPlan {
                 ($resource['type'] -ceq 'azuread_group' -and $suffix -cmatch '^data\.azuread_group\.test_permissions\["(?:[^"\\]|\\.)+"\]$'))) {
             $expectedProvider = 'registry.terraform.io/hashicorp/azuread'
         }
+        $approvedStateMove = Test-AvmBicepDedicatedIdentityStateMove -Resource $resource `
+            -ModuleAddress $moduleAddress -ModulePath $modulePath -ExistingIdentities $ExistingIdentities
+        if ($approvedStateMove) {
+            $null = $approvedStateMoveAddresses.Add($resource['address'])
+        }
         if (-not $expectedProvider -or $resource['provider_name'] -cne $expectedProvider -or
-            ($resource.Contains('previous_address') -and $resource['previous_address'] -cne $resource['address']) -or
+            (($resource.Contains('previous_address') -and $resource['previous_address'] -cne $resource['address']) -and -not $approvedStateMove) -or
             ($resource.Contains('change') -and $null -ne $resource['change']['importing'])) {
             $address = if ($resource['address'] -is [string]) { $resource['address'] } else { '<invalid>' }
             $mode = if ($resource['mode'] -is [string]) { $resource['mode'] } else { '<invalid>' }
@@ -95,12 +396,43 @@ function Assert-AvmBicepIdentityPlan {
             else {
                 '<invalid>'
             }
-            Write-Information (
-                "Bicep plan rejection [unexpected-resource]: address=$address; mode=$mode; type=$type; " +
-                "provider_name=$providerName; actions=$actions."
-            ) -InformationAction Continue
-            throw [System.InvalidOperationException]::new('Bicep plans may only manage dedicated identities, exact federation and individual group edges with their expected providers.')
+            $rejectionCategory = if (-not $expectedProvider) {
+                'unexpected-resource'
+            }
+            elseif ($resource['provider_name'] -cne $expectedProvider) {
+                'unexpected-provider'
+            }
+            elseif ($resource.Contains('previous_address') -and $resource['previous_address'] -cne $resource['address']) {
+                'state-address-move'
+            }
+            else {
+                'import-operation'
+            }
+            $rejection = [pscustomobject]@{
+                Category = $rejectionCategory
+                Address = $address
+                Mode = $mode
+                Type = $type
+                ProviderName = $providerName
+                Actions = $actions
+            }
+            $signature = [string]::Join("`0", @(
+                    $rejection.Category, $rejection.Address, $rejection.Mode, $rejection.Type,
+                    $rejection.ProviderName, $rejection.Actions
+                ))
+            if ($rejectionSignatures.Add($signature)) {
+                $rejectedPlanResources.Add($rejection)
+            }
         }
+    }
+    foreach ($rejection in $rejectedPlanResources) {
+        Write-Information (
+            "Bicep plan rejection [$($rejection.Category)]: address=$($rejection.Address); mode=$($rejection.Mode); " +
+            "type=$($rejection.Type); provider_name=$($rejection.ProviderName); actions=$($rejection.Actions)."
+        ) -InformationAction Continue
+    }
+    if ($rejectedPlanResources.Count -gt 0) {
+        throw [System.InvalidOperationException]::new('Bicep plans may only manage dedicated identities, exact federation and individual group edges with their expected providers.')
     }
     $clients = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $principals = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -108,9 +440,22 @@ function Assert-AvmBicepIdentityPlan {
     foreach ($path in $Modules.Keys) {
         $address = "module.bicep[`"$path`"]"
         $prefix = "$address."
+        $resourceChanges = foreach ($change in @($Plan['resource_changes'] | Where-Object { $_['address'].StartsWith($prefix, [StringComparison]::Ordinal) })) {
+            if (-not $approvedStateMoveAddresses.Contains($change['address'])) {
+                $change
+                continue
+            }
+            $normalizedChange = [ordered]@{}
+            foreach ($key in $change.Keys) {
+                if ($key -cne 'previous_address') {
+                    $normalizedChange[$key] = $change[$key]
+                }
+            }
+            $normalizedChange
+        }
         $slice = @{
             errored = $false
-            resource_changes = @($Plan['resource_changes'] | Where-Object { $_['address'].StartsWith($prefix, [StringComparison]::Ordinal) })
+            resource_changes = @($resourceChanges)
             planned_values = @{ root_module = @{ resources = @($resources | Where-Object { $_['address'].StartsWith($prefix, [StringComparison]::Ordinal) }) } }
             prior_state = $Plan['prior_state']
         }

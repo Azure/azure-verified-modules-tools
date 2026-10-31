@@ -321,6 +321,230 @@ Describe 'Bicep identity saved-plan ownership guard' {
         $script:guard = @{ Plan = $script:plan; Settings = $script:settings; Modules = $script:modules; Context = $script:context }
     }
 
+    Describe 'Bicep subscription-vending state retirement preparation' {
+        BeforeEach {
+            $script:stateSecret = 'synthetic-historical-identity-must-not-be-disclosed'
+            $script:recoveryBackend = @{
+                TenantId = '20000000-0000-4000-8000-000000000001'
+                SubscriptionId = '20000000-0000-4000-8000-000000000002'
+                ClientId = '20000000-0000-4000-8000-000000000003'
+                StorageAccountName = 'fixturestatestore'
+                ContainerName = 'tfstate'
+            }
+            $observedAt = [datetime]::UtcNow
+            $script:recoveryReceipt = [ordered]@{
+                schemaVersion = 1
+                observedAtUtc = $observedAt.ToString('O', [cultureinfo]::InvariantCulture)
+                expiresAtUtc = $observedAt.AddMinutes(15).ToString('O', [cultureinfo]::InvariantCulture)
+                tenantId = $script:recoveryBackend.TenantId
+                subscriptionId = $script:recoveryBackend.SubscriptionId
+                storageAccountName = $script:recoveryBackend.StorageAccountName
+                resourceGroupName = 'rg-fixture-state'
+                containerName = $script:recoveryBackend.ContainerName
+                stateKey = 'bicep-module-identities.tfstate'
+                versioningEnabled = $true
+                deleteRetentionEnabled = $true
+                deleteRetentionDays = [long]7
+                allowPermanentDelete = $false
+                lifecycleManagementPolicyErrorCode = 'ManagementPolicyNotFound'
+            }
+            $script:recoveryReceiptPath = Join-Path $TestDrive 'state-recovery-receipt.json'
+            [IO.File]::WriteAllText(
+                $script:recoveryReceiptPath,
+                (ConvertTo-Json -InputObject $script:recoveryReceipt -Depth 5) + "`n",
+                [Text.UTF8Encoding]::new($false)
+            )
+            $script:bootstrap = @{
+                resource_id = 'synthetic-bootstrap-resource'
+                client_id = '10000000-0000-4000-8000-000000000006'
+                principal_id = '10000000-0000-4000-0000-000000000007'
+            }
+            $script:state = @{
+                lineage = '10000000-0000-4000-8000-000000000001'
+                serial = [long]42
+                resources = @(
+                    @{
+                        module = 'module.bicep["avm/ptn/lz/sub-vending"]'
+                        mode = 'managed'
+                        type = 'azapi_resource'
+                        name = 'identity'
+                        provider = 'provider["registry.terraform.io/azure/azapi"]'
+                        instances = @(
+                            @{
+                                attributes = @{
+                                    id = $script:stateSecret
+                                    output = @{
+                                        properties = @{
+                                            clientId = '10000000-0000-4000-8000-000000000016'
+                                            principalId = '10000000-0000-4000-8000-000000000017'
+                                        }
+                                    }
+                                }
+                            }
+                        )
+                    }
+                )
+            }
+        }
+
+        It 'identifies exactly one unindexed historical identity without returning its values' {
+            $entry = Get-AvmBicepSubscriptionVendingStateRetirementEntry -State $script:state -BootstrapIdentity $script:bootstrap
+
+            $entry.Address | Should -BeExactly 'module.bicep["avm/ptn/lz/sub-vending"].azapi_resource.identity'
+            $entry.Lineage | Should -BeExactly '10000000-0000-4000-8000-000000000001'
+            $entry.Serial | Should -Be 42
+            $entry.ResourceIdDifferent | Should -BeTrue
+            $entry.ClientIdDifferent | Should -BeTrue
+            $entry.PrincipalIdDifferent | Should -BeTrue
+            ($entry | ConvertTo-Json -Compress) | Should -Not -Match $script:stateSecret
+        }
+
+        It 'rejects ambiguous, indexed, or bootstrap-bound retirement candidates: <Case>' -ForEach @(
+            @{
+                Case = 'multiple instances'
+                Edit = { param($state, $bootstrap) $state.resources[0].instances += $state.resources[0].instances[0].Clone() }
+            }
+            @{
+                Case = 'indexed instance'
+                Edit = { param($state, $bootstrap) $state.resources[0].instances[0].index_key = 0 }
+            }
+            @{
+                Case = 'shared resource binding'
+                Edit = { param($state, $bootstrap) $bootstrap.resource_id = $state.resources[0].instances[0].attributes.id }
+            }
+        ) {
+            & $Edit $script:state $script:bootstrap
+
+            { Get-AvmBicepSubscriptionVendingStateRetirementEntry -State $script:state -BootstrapIdentity $script:bootstrap } |
+                Should -Throw
+        }
+
+        It 'carries complete bootstrap evidence through preparation before dry-running the exact discovered removal' {
+            $values = New-AvmTestBamiSettings
+            $values.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID =
+                '/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-avm-managed-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-subscription-vending'
+            $values.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID = '10000000-0000-4000-8000-000000000006'
+            $values.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID = '10000000-0000-4000-0000-000000000007'
+            $values.TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID = 'avm-subscription-vending'
+            $values.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE =
+                '/providers/Microsoft.Billing/billingAccounts/account/billingProfiles/profile/invoiceSections/section'
+            Mock Resolve-AvmBicepModuleExistingIdentities {
+                @{ 'avm/ptn/lz/sub-vending' = @{ name = 'bootstrap' } }
+            }
+            Mock Resolve-AvmSubscriptionVendingIdentity {
+                param($Values)
+                foreach ($name in @(
+                        'TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_RESOURCE_ID',
+                        'TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_CLIENT_ID',
+                        'TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID',
+                        'TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID',
+                        'TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE'
+                    )) {
+                    $Values[$name] | Should -BeExactly $values[$name]
+                }
+                $script:bootstrap
+            }
+            Mock Get-RepositorySyncTerraformEnvironment { @{} }
+            Mock Invoke-TerraformInit {}
+            Mock Invoke-RepositorySyncProcess {
+                param($Command, $Arguments)
+                $body = if ($Command -ceq 'terraform') {
+                    $script:state
+                }
+                else {
+                    @{ versionId = '2026-10-30T14:19:27.7550000Z' }
+                }
+                $standardOutput = if ($body -is [string]) { $body } else {
+                    ConvertTo-Json -InputObject $body -Depth 20 -Compress
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = $standardOutput; StdErr = '' }
+            }
+            Mock Invoke-RepositorySyncTerraform {}
+
+            $result = Invoke-AvmBicepSubscriptionVendingStateRetirementPreparation `
+                -TerraformRoot $TestDrive -Backend $script:recoveryBackend -Values $values -Configuration @{} `
+                -RecoveryReceiptPath $script:recoveryReceiptPath
+
+            $result.Status | Should -BeExactly 'Prepared'
+            $result.Address | Should -BeExactly 'module.bicep["avm/ptn/lz/sub-vending"].azapi_resource.identity'
+            $result.StateVersioningEnabled | Should -BeTrue
+            $result.StateDeleteRetentionDays | Should -Be 7
+            $result.PreRetirementVersionId | Should -BeExactly '2026-10-30T14:19:27.7550000Z'
+            ($result | ConvertTo-Json -Compress) | Should -Not -Match $script:stateSecret
+            Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter {
+                $Command -ceq 'az'
+            }
+            Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter {
+                $Command -ceq 'az' -and (@($Arguments) -join '|') -ceq (
+                    'storage|blob|show|--account-name|fixturestatestore|--container-name|tfstate|' +
+                    '--name|bicep-module-identities.tfstate|--auth-mode|login|--subscription|' +
+                    '20000000-0000-4000-8000-000000000002|--only-show-errors|--output|json|--query|{versionId:versionId}'
+                )
+            }
+            Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter {
+                $Command -ceq 'terraform' -and (@($Arguments) -join '|') -ceq 'state|pull'
+            }
+            Should -Invoke Invoke-RepositorySyncTerraform -Exactly 1 -ParameterFilter {
+                $Quiet -and (@($Arguments) -join '|') -ceq (
+                    'state|rm|-dry-run|-lock=true|-lock-timeout=5m|' +
+                    'module.bicep["avm/ptn/lz/sub-vending"].azapi_resource.identity'
+                )
+            }
+        }
+
+        It 'rejects absent, stale, mismatched, or unsafe recovery-policy receipts before data-plane work: <Case>' -ForEach @(
+            @{
+                Case = 'absent'
+                Edit = {
+                    Remove-Item -LiteralPath $script:recoveryReceiptPath -Force
+                }
+            }
+            @{
+                Case = 'stale'
+                Edit = {
+                    $script:recoveryReceipt.observedAtUtc = [datetime]::UtcNow.AddMinutes(-31).ToString('O', [cultureinfo]::InvariantCulture)
+                    $script:recoveryReceipt.expiresAtUtc = [datetime]::UtcNow.AddMinutes(-1).ToString('O', [cultureinfo]::InvariantCulture)
+                }
+            }
+            @{
+                Case = 'subscription mismatch'
+                Edit = {
+                    $script:recoveryReceipt.subscriptionId = '30000000-0000-4000-8000-000000000002'
+                }
+            }
+            @{
+                Case = 'unsafe deletion policy'
+                Edit = {
+                    $script:recoveryReceipt.allowPermanentDelete = $true
+                }
+            }
+            @{
+                Case = 'lifecycle policy present'
+                Edit = {
+                    $script:recoveryReceipt.lifecycleManagementPolicyErrorCode = 'UnexpectedPolicyResult'
+                }
+            }
+        ) {
+            & $Edit
+            if (Test-Path -LiteralPath $script:recoveryReceiptPath) {
+                [IO.File]::WriteAllText(
+                    $script:recoveryReceiptPath,
+                    (ConvertTo-Json -InputObject $script:recoveryReceipt -Depth 5) + "`n",
+                    [Text.UTF8Encoding]::new($false)
+                )
+            }
+            Mock Invoke-RepositorySyncProcess {
+                throw 'Data-plane work must not start for an invalid receipt.'
+            }
+
+            {
+                Get-AvmBicepStateRecoveryPolicy -Backend $script:recoveryBackend -Environment @{} `
+                    -ReceiptPath $script:recoveryReceiptPath
+            } | Should -Throw
+            Should -Invoke Invoke-RepositorySyncProcess -Exactly 0
+        }
+    }
+
     It 'accepts both existing identities and new identities with explicitly unknown outputs' -ForEach @($true, $false) {
         $script:guard.Plan = New-AvmTestBicepIdentityPlan -KnownClient:$_
         { Assert-AvmBicepIdentityPlan @script:guard } | Should -Not -Throw
@@ -466,7 +690,6 @@ Describe 'Bicep identity saved-plan ownership guard' {
         @{ Case = 'foreign existing state'; Edit = { param($p) $p.resource_changes[0].change.before.id = '/shared/identity' } }
         @{ Case = 'foreign provider'; Edit = { param($p) $p.resource_changes[0].provider_name = 'registry.terraform.io/example/azapi' } }
         @{ Case = 'import'; Edit = { param($p) $p.resource_changes[0].change.importing = @{ id = '/foreign/identity' } } }
-        @{ Case = 'state move'; Edit = { param($p) $p.resource_changes[0].previous_address = 'module.shared.azapi_resource.identity' } }
         @{ Case = 'unrestricted federation'; Edit = { param($p) $p.planned_values.root_module.child_modules[0].resources[-2].values.body.properties.subject = 'repo:Azure/bicep-registry-modules:environment:avm-validation' } }
         @{ Case = 'another caller'; Edit = { param($p) $p.planned_values.root_module.child_modules[0].resources[-2].values.body.properties.subject = $p.planned_values.root_module.child_modules[1].resources[-2].values.body.properties.subject } }
         @{ Case = 'wrong Graph tenant'; Edit = { param($p) $p.prior_state.values.root_module.child_modules[0].resources[1].values.tenant_id = '90000000-0000-4000-8000-000000000001' } }
@@ -517,6 +740,62 @@ Describe 'Bicep identity saved-plan ownership guard' {
         ($captured | Out-String) | Should -Not -Match $secret
     }
 
+    It 'reports every rejected resource in plan order without disclosing raw values' {
+        $previousAddress = 'synthetic-previous-address-must-not-be-disclosed'
+        $secret = 'synthetic-secret-must-not-be-disclosed'
+        $identity = $script:plan.resource_changes[0]
+        $identity.previous_address = $previousAddress
+        $script:plan.resource_changes += @(
+            @{
+                address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.identity_role_assignment'
+                mode = 'managed'
+                type = 'azapi_resource'
+                provider_name = 'registry.terraform.io/azure/azapi'
+                change = @{ actions = @('create'); after = @{ secret = $secret } }
+            }
+            @{
+                address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.unapproved_user_assigned_identity'
+                mode = 'managed'
+                type = 'azapi_resource'
+                provider_name = 'registry.terraform.io/azure/azapi'
+                change = @{ actions = @('delete'); before = @{ secret = $secret } }
+            }
+        )
+
+        $captured = & {
+            try {
+                Assert-AvmBicepIdentityPlan @script:guard
+            }
+            catch {
+                $_
+            }
+        } 6>&1
+
+        $diagnostics = @($captured | Where-Object {
+                $_ -is [System.Management.Automation.InformationRecord] -and
+                ([string]$_.MessageData).StartsWith('Bicep plan rejection [', [System.StringComparison]::Ordinal)
+            } | ForEach-Object MessageData)
+        $diagnostics | Should -HaveCount 3
+        $diagnostics[0] | Should -BeExactly (
+            'Bicep plan rejection [state-address-move]: ' +
+            'address=module.bicep["avm/res/fabric/capacity"].azapi_resource.identity[0]; ' +
+            'mode=managed; type=azapi_resource; provider_name=registry.terraform.io/azure/azapi; actions=no-op.'
+        )
+        $diagnostics[1] | Should -BeExactly (
+            'Bicep plan rejection [unexpected-resource]: ' +
+            'address=module.bicep["avm/res/fabric/capacity"].azapi_resource.identity_role_assignment; ' +
+            'mode=managed; type=azapi_resource; provider_name=registry.terraform.io/azure/azapi; actions=create.'
+        )
+        $diagnostics[2] | Should -BeExactly (
+            'Bicep plan rejection [unexpected-resource]: ' +
+            'address=module.bicep["avm/res/fabric/capacity"].azapi_resource.unapproved_user_assigned_identity; ' +
+            'mode=managed; type=azapi_resource; provider_name=registry.terraform.io/azure/azapi; actions=delete.'
+        )
+        ($captured | Out-String) | Should -Match 'may only manage dedicated identities'
+        ($captured | Out-String) | Should -Not -Match $previousAddress
+        ($captured | Out-String) | Should -Not -Match $secret
+    }
+
     It 'continues rejecting forbidden dedicated identity and role operations: <Case>' -ForEach @(
         @{
             Case = 'user-assigned identity'
@@ -537,6 +816,82 @@ Describe 'Bicep identity saved-plan ownership guard' {
 
         { Assert-AvmBicepIdentityPlan @script:guard } |
             Should -Throw '*may only manage dedicated identities*'
+    }
+
+    It 'allows only the exact unchanged dedicated identity state move' {
+        $identity = $script:plan.resource_changes[0]
+        $identity.previous_address = $identity.address.Replace('.identity[0]', '.identity')
+
+        { Assert-AvmBicepIdentityPlan @script:guard } | Should -Not -Throw
+    }
+
+    It 'rejects incompatible dedicated identity state moves: <Case>' -ForEach @(
+        @{
+            Case = 'wrong source'
+            Edit = { param($change, $guard) $change.previous_address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.identity[1]' }
+        }
+        @{
+            Case = 'wrong destination'
+            Edit = { param($change, $guard) $change.address = $change.address.Replace('.identity[0]', '.identity[1]') }
+        }
+        @{
+            Case = 'cross module'
+            Edit = { param($change, $guard) $change.previous_address = 'module.bicep["avm/res/storage/storage-account"].azapi_resource.identity' }
+        }
+        @{
+            Case = 'provider mismatch'
+            Edit = { param($change, $guard) $change.provider_name = 'registry.terraform.io/example/azapi' }
+        }
+        @{
+            Case = 'type mismatch'
+            Edit = { param($change, $guard) $change.type = 'azuread_group_member' }
+        }
+        @{
+            Case = 'non-no-op action'
+            Edit = { param($change, $guard) $change.change.actions = @('update') }
+        }
+        @{
+            Case = 'importing'
+            Edit = { param($change, $guard) $change.change.importing = @{ id = 'synthetic-import-must-not-be-disclosed' } }
+        }
+        @{
+            Case = 'external identity path'
+            Edit = { param($change, $guard) $guard['ExistingIdentities'] = @{ 'avm/res/fabric/capacity' = @{ name = 'shared-identity' } } }
+        }
+        @{
+            Case = 'changed before or after attributes'
+            Edit = { param($change, $guard) $change.change.after.name = 'changed-identity-name' }
+        }
+    ) {
+        $identity = $script:plan.resource_changes[0]
+        $identity.previous_address = $identity.address.Replace('.identity[0]', '.identity')
+        & $Edit $identity $script:guard
+
+        { Assert-AvmBicepIdentityPlan @script:guard } | Should -Throw
+    }
+
+    It 'classifies state address moves without disclosing either address' {
+        $secret = 'synthetic-previous-address-must-not-be-disclosed'
+        $script:plan.resource_changes[0].previous_address = $secret
+
+        $captured = & {
+            try {
+                Assert-AvmBicepIdentityPlan @script:guard
+            }
+            catch {
+                $_
+            }
+        } 6>&1
+
+        $diagnostic = @($captured | Where-Object {
+                $_ -is [System.Management.Automation.InformationRecord] -and
+                ([string]$_.MessageData).StartsWith(
+                    'Bicep plan rejection [state-address-move]:',
+                    [System.StringComparison]::Ordinal
+                )
+            })
+        $diagnostic | Should -HaveCount 1
+        ($captured | Out-String) | Should -Not -Match $secret
     }
 
     It 'allows revoking only a membership belonging to the same dedicated principal' {
