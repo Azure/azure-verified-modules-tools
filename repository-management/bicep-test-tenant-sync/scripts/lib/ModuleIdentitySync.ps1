@@ -113,6 +113,40 @@ function Get-AvmBicepSubscriptionVendingStateRetirementEntry {
     }
 }
 
+function Get-AvmBicepStateRecoveryReadFailureMessage {
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [string] $Message,
+        [Parameter(Mandatory)] [ValidateSet('storage-account-read', 'blob-service-properties-read', 'state-version-read')] [string] $Operation,
+        [Parameter(Mandatory)] [object] $Result
+    )
+
+    $diagnosticText = @([string]$Result.StdErr, [string]$Result.StdOut) -join "`n"
+    $statusMatch = [regex]::Match($diagnosticText, '(?i)\b(?:HTTP|status(?:\s+code)?)\s*[:=]?\s*(?<status>[1-5][0-9]{2})\b')
+    $errorCodePatterns = @(
+        '(?i)\bx-ms-error-code\s*[:=]\s*(?<code>[A-Za-z][A-Za-z0-9.-]{0,127})',
+        '(?i)"code"\s*:\s*"(?<code>[A-Za-z][A-Za-z0-9.-]{0,127})"',
+        '(?i)ERROR:\s*\((?<code>[A-Za-z][A-Za-z0-9.-]{0,127})\)'
+    )
+    $errorCodeMatch = $null
+    foreach ($pattern in $errorCodePatterns) {
+        $candidate = [regex]::Match($diagnosticText, $pattern)
+        if ($candidate.Success) {
+            $errorCodeMatch = $candidate
+            break
+        }
+    }
+
+    $details = @("operation=$Operation")
+    if ($statusMatch.Success) {
+        $details += "status=$($statusMatch.Groups['status'].Value)"
+    }
+    if ($null -ne $errorCodeMatch) {
+        $details += "error-code=$($errorCodeMatch.Groups['code'].Value)"
+    }
+    return "$($Message.TrimEnd('.')) ($($details -join '; '))."
+}
+
 function Get-AvmBicepStateRecoveryPolicy {
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -132,7 +166,12 @@ function Get-AvmBicepStateRecoveryPolicy {
     if ($resourceGroupResult.ExitCode -ne 0 -or
         $resourceGroup -cnotmatch '^[a-zA-Z0-9_().-]{1,90}$' -or
         $resourceGroup.EndsWith('.')) {
-        throw [System.InvalidOperationException]::new('State retirement could not identify the backend storage resource group.')
+        throw [System.InvalidOperationException]::new(
+            (Get-AvmBicepStateRecoveryReadFailureMessage `
+                -Message 'State retirement could not identify the backend storage resource group.' `
+                -Operation 'storage-account-read' `
+                -Result $resourceGroupResult)
+        )
     }
 
     $result = Invoke-RepositorySyncProcess -Command az -Arguments @(
@@ -144,7 +183,12 @@ function Get-AvmBicepStateRecoveryPolicy {
         '--query', '{versioningEnabled:isVersioningEnabled,deleteRetentionEnabled:deleteRetentionPolicy.enabled,deleteRetentionDays:deleteRetentionPolicy.days,allowPermanentDelete:deleteRetentionPolicy.allowPermanentDelete}'
     ) -EnvVars $Environment -TimeoutSec 60
     if ($result.ExitCode -ne 0) {
-        throw [System.InvalidOperationException]::new('State retirement could not verify the backend recovery policy.')
+        throw [System.InvalidOperationException]::new(
+            (Get-AvmBicepStateRecoveryReadFailureMessage `
+                -Message 'State retirement could not verify the backend recovery policy.' `
+                -Operation 'blob-service-properties-read' `
+                -Result $result)
+        )
     }
     try {
         $policy = ConvertFrom-Json -InputObject $result.StdOut -AsHashtable -Depth 10 -ErrorAction Stop
@@ -171,7 +215,12 @@ function Get-AvmBicepStateRecoveryPolicy {
         '--query', '{versionId:versionId}'
     ) -EnvVars $Environment -TimeoutSec 60
     if ($version.ExitCode -ne 0) {
-        throw [System.InvalidOperationException]::new('State retirement could not identify the pre-retirement recoverable state version.')
+        throw [System.InvalidOperationException]::new(
+            (Get-AvmBicepStateRecoveryReadFailureMessage `
+                -Message 'State retirement could not identify the pre-retirement recoverable state version.' `
+                -Operation 'state-version-read' `
+                -Result $version)
+        )
     }
     $versionDocument = $null
     try {

@@ -546,6 +546,31 @@ Describe 'Bicep identity saved-plan ownership guard' {
                 $Command -ceq 'az' -and (@($Arguments) -join '|') -match '^storage\|account\|show\|'
             }
         }
+
+        It 'reports only safe Azure error metadata when backend account discovery fails' {
+            $backend = @{
+                SubscriptionId = '20000000-0000-4000-8000-000000000002'
+                StorageAccountName = 'fixturestatestore'
+                ContainerName = 'tfstate'
+            }
+            $secret = 'synthetic-backend-resource-id'
+            Mock Invoke-RepositorySyncProcess {
+                [pscustomobject]@{
+                    ExitCode = 1
+                    StdOut = ''
+                    StdErr = "ERROR: (AuthorizationFailed) HTTP 403 for $secret"
+                }
+            }
+
+            $error = { Get-AvmBicepStateRecoveryPolicy -Backend $backend -Environment @{} } |
+                Should -Throw -PassThru
+            $error.Exception.Message | Should -BeExactly (
+                'State retirement could not identify the backend storage resource group ' +
+                '(operation=storage-account-read; status=403; error-code=AuthorizationFailed).'
+            )
+            $error.Exception.Message | Should -Not -Match $secret
+            Should -Invoke Invoke-RepositorySyncProcess -Exactly 1
+        }
     }
 
     It 'accepts both existing identities and new identities with explicitly unknown outputs' -ForEach @($true, $false) {
