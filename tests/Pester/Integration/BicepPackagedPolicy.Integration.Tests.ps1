@@ -105,6 +105,43 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
         @($result.Evaluations | Where-Object { $_.ProcessedRules -gt 0 }).Count | Should -Be 8
     }
 
+    It 'evaluates tokenized templates with no Azure configuration or credentials' {
+        $saved = @{}
+        $names = @('TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_ID',
+            'VALIDATE_TENANT_ID', 'VALIDATE_MANAGEMENT_GROUP_ID', 'ARM_MGMTGROUP_ID',
+            'AVM_CI_VARIABLES', 'AVM_CI_SECRETS', 'TOKEN_NAMEPREFIX') +
+        @(Get-ChildItem Env: | Where-Object { $_.Name -like 'localToken_*' } | ForEach-Object Name)
+        try {
+            foreach ($name in $names) {
+                $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+                [Environment]::SetEnvironmentVariable($name, [NullString]::Value)
+            }
+            $sourcePath = Join-Path $script:modulePath 'tests' 'e2e' 'defaults' 'main.test.bicep'
+            $source = [IO.File]::ReadAllText($sourcePath).Replace("param serviceShort string = 'stgmin'", @'
+param policySubscriptionId string = '#_subscriptionId_#'
+param policyTenantId string = '#_tenantId_#'
+param policyManagementGroupId string = '#_managementGroupId_#'
+param serviceShort string = 'stgmin'
+'@)
+            [IO.File]::WriteAllText($sourcePath, $source)
+            $result = Invoke-AvmCheckPolicy -Path $script:modulePath -SkipModuleVersionCheck
+            $result.Status | Should -Be 'pass' -Because (@($result.Issues | ForEach-Object Message) -join '; ')
+            $result.TestsSelected | Should -Be 2
+            $result.BaselinesExecuted | Should -Be 8
+            @($result.Evaluations | Where-Object { $_.ProcessedRules -gt 0 }).Count | Should -Be 8
+            [IO.File]::ReadAllText($sourcePath) | Should -BeExactly $source
+            foreach ($name in $names) {
+                [Environment]::GetEnvironmentVariable($name) | Should -BeNullOrEmpty
+            }
+        }
+        finally {
+            foreach ($name in $saved.Keys) {
+                $value = $saved[$name]
+                [Environment]::SetEnvironmentVariable($name, $(if ($null -eq $value) { [NullString]::Value } else { $value }))
+            }
+        }
+    }
+
     It 'rejects an independent canonical repository without a root reservation map' {
         Remove-Item -LiteralPath (Join-Path $script:consumer '.reserved-test-subscriptions.json') -Force
         $result = Invoke-AvmCheckPolicy -Path $script:modulePath -SkipModuleVersionCheck

@@ -1581,6 +1581,15 @@ UTF-8 lowercase canonical GUID `D` text. PSRule uses the first matching entry.
 A configured pool without the required tag never uses another tag or the legacy
 singleton.
 
+Without subscription configuration, Bicep policy uses public offline token
+values: subscription `11111111-1111-4111-8111-111111111111`, tenant
+`22222222-2222-4222-8222-222222222222`, and management group `avm-policy`.
+These defaults apply to General and reserved modules and need no Azure login,
+real tenant/subscription or secrets. Explicit token overrides retain precedence;
+malformed configured pools and missing matching tags remain errors. These values
+are only for static template expansion: never populate deployment configuration,
+authenticate, or query Azure with them. Unknown and sensitive tokens still fail.
+
 `Select-AvmTestSubscription` exposes this shared read-only selection to workflow
 callers. Require an explicit repository `Path`, exact `ModulePath` and complete
 `TestSubscriptionIds` pool; do not read ambient aliases or synthesize a fallback.

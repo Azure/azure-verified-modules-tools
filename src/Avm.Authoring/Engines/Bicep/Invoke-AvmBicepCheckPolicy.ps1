@@ -8,7 +8,7 @@ function Invoke-AvmBicepCheckPolicy {
         to evaluate defaults and waf-aligned e2e tests with the required
         Reliability and AVM WAF Security baselines and the advisory Default
         and Security baselines. Files are tokenized in a temporary tree;
-        original module files are never changed. Missing inputs, tools,
+        original module files are never changed. Missing custom tokens, tools,
         baselines, or uninspectable results fail the check.
 
         The PSRule and PSRule.Rules.Azure versions pinned in avm.pins.jsonc are
@@ -18,8 +18,16 @@ function Invoke-AvmBicepCheckPolicy {
         entry matching the exact root reservation map), with
         VALIDATE_SUBSCRIPTION_ID as a General-only fallback, VALIDATE_TENANT_ID,
         VALIDATE_MANAGEMENT_GROUP_ID (or ARM_MGMTGROUP_ID), and localToken_*
-        environment variables. namePrefix defaults to the portable public value
-        'gci'; localToken_namePrefix or TOKEN_NAMEPREFIX can override it.
+        environment variables. Without configured IDs, offline policy uses
+        public placeholders:
+        subscriptionId 11111111-1111-4111-8111-111111111111, tenantId
+        22222222-2222-4222-8222-222222222222 and managementGroupId avm-policy.
+        These are template-expansion values, not verified Azure targets;
+        policy checks never authenticate or query Azure. The same defaults
+        apply to reserved modules without subscription configuration, but
+        configured pools still require an exact matching tag. namePrefix
+        defaults to 'gci'; localToken_* values override policy tokens.
+        These defaults are policy-only and never supply deployment inputs.
 
     .PARAMETER Context
         Bicep module context produced by Get-AvmModuleContext.

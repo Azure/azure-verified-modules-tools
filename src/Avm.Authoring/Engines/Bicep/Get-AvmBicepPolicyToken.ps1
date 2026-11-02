@@ -24,7 +24,7 @@ function Get-AvmBicepPolicyToken {
         }
         $subscriptionId = $pool[0].SubscriptionId
     }
-    elseif ($tag -cne 'General') {
+    elseif ($tag -cne 'General' -and -not [string]::IsNullOrEmpty($subscriptionId)) {
         throw [AvmConfigurationException]::new("Reserved subscription tag '$tag' requires a tagged pool; singleton fallback is not permitted.")
     }
     $namePrefix = [string]$ci.Tokens['namePrefix']
@@ -32,12 +32,18 @@ function Get-AvmBicepPolicyToken {
         $namePrefix = 'gci'
     }
     $tokens = @{
-        subscriptionId    = $subscriptionId
-        tenantId          = $ci.TenantId
+        subscriptionId    = if ([string]::IsNullOrEmpty($subscriptionId)) {
+            '11111111-1111-4111-8111-111111111111'
+        }
+        else { $subscriptionId }
+        tenantId          = if ([string]::IsNullOrEmpty($ci.TenantId)) {
+            '22222222-2222-4222-8222-222222222222'
+        }
+        else { $ci.TenantId }
         managementGroupId = if ($ci.ManagementGroupId) {
             $ci.ManagementGroupId
         }
-        else { $env:ARM_MGMTGROUP_ID }
+        else { 'avm-policy' }
         namePrefix        = $namePrefix
     }
 
