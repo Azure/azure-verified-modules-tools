@@ -244,12 +244,23 @@ switch ($args[0]) {
         $outArg = @($args | Where-Object { $_ -like '-out=*' } | Select-Object -First 1)
         if ($outArg.Count -gt 0) {
             $planName = $outArg[0].Substring('-out='.Length)
-            Set-Content -LiteralPath (Join-Path (Get-Location).Path $planName) -Value 'stub plan' -Encoding utf8
+            $planPath = if ([System.IO.Path]::IsPathRooted($planName)) {
+                $planName
+            }
+            else {
+                Join-Path (Get-Location).Path $planName
+            }
+            Set-Content -LiteralPath $planPath -Value 'stub plan' -Encoding utf8
         }
         Write-Output 'No changes. Your infrastructure matches the configuration.'
+        if ($env:AVM_STUB_TERRAFORM_E2E_TELEMETRY_DRIFT -eq '1') { exit 2 }
         exit 0
     }
     'show' {
+        if ($env:AVM_STUB_TERRAFORM_E2E_TELEMETRY_DRIFT -eq '1') {
+            Write-Output '{"format_version":"1.2","resource_changes":[{"address":"module.child.azapi_resource.telemetry[0]","change":{"actions":["update"]}}],"output_changes":{}}'
+            exit 0
+        }
         Write-Output '{"format_version":"1.2","terraform_version":"__VERSION__","planned_values":{"root_module":{"resources":[]}},"resource_changes":[],"configuration":{"root_module":{"resources":[]}}}'.Replace('__VERSION__', $toolVersion)
         exit 0
     }

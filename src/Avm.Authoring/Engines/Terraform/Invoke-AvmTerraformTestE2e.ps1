@@ -59,10 +59,12 @@ function Invoke-AvmTerraformTestE2e {
                   records a warning-level Issue, so a recovered example stays
                   green but the flake is still visible.
                e. idempotency: terraform plan -detailed-exitcode -input=false
-                  -no-color. Exit 2 means the second plan still reports pending
-                  changes (the module is not idempotent) and is recorded as a
-                  failure. Never retried: retrying would hide a module that is
-                  genuinely not idempotent.
+                  -no-color. Inspect an exit-2 plan as JSON and ignore updates
+                  to the generated azapi_resource.telemetry, whose payload
+                  intentionally includes plantimestamp(). Other pending
+                  resource or output changes are recorded as failures. Never
+                  retried: retrying would hide a module that is genuinely not
+                  idempotent.
                f. terraform destroy -auto-approve -input=false -no-color. Run
                   whenever init succeeded - including after a failed apply - so
                   a broken run does not leak real Azure resources.
@@ -294,22 +296,100 @@ function Invoke-AvmTerraformTestE2e {
                 }
 
                 if ($applyOk) {
-                    $plan = Invoke-AvmProcess `
-                        -FilePath $tool.Path `
-                        -ArgumentList @('plan', '-detailed-exitcode', '-input=false', '-no-color') `
-                        -Label ('{0}: terraform plan (idempotency)' -f $rel) `
-                        -WorkingDirectory $exampleDir `
-                        -EnvVars $envVars `
-                        -StreamOutput `
-                        -IgnoreExitCode
+                    $planPath = Join-Path $exampleDir ('.avm-e2e-idempotency-{0}.tfplan' -f [Guid]::NewGuid().ToString('N'))
+                    try {
+                        $plan = Invoke-AvmProcess `
+                            -FilePath $tool.Path `
+                            -ArgumentList @('plan', '-detailed-exitcode', '-input=false', '-no-color', "-out=$planPath") `
+                            -Label ('{0}: terraform plan (idempotency)' -f $rel) `
+                            -WorkingDirectory $exampleDir `
+                            -EnvVars $envVars `
+                            -StreamOutput `
+                            -IgnoreExitCode
 
-                    # -detailed-exitcode: 0 = no changes, 2 = changes, 1 = error.
-                    if ($plan.ExitCode -eq 2) {
-                        $issues.Add((New-AvmE2eIssue -File $rel -Message 'idempotency check failed: a second plan reported pending changes (exit 2).'))
+                        # -detailed-exitcode: 0 = no changes, 2 = changes, 1 = error.
+                        if ($plan.ExitCode -eq 2) {
+                            $shownPlan = Invoke-AvmProcess `
+                                -FilePath $tool.Path `
+                                -ArgumentList @('show', '-json', $planPath) `
+                                -Label ('{0}: terraform show (idempotency)' -f $rel) `
+                                -WorkingDirectory $exampleDir `
+                                -EnvVars $envVars `
+                                -IgnoreExitCode
+
+                            $inspectionError = $null
+                            $pendingChanges = @()
+                            if ($shownPlan.ExitCode -ne 0) {
+                                $detail = if ($shownPlan.StdErr) { $shownPlan.StdErr.Trim() } elseif ($shownPlan.StdOut) { $shownPlan.StdOut.Trim() } else { '' }
+                                $inspectionError = 'terraform show failed (exit {0}): {1}' -f $shownPlan.ExitCode, $detail
+                            }
+                            elseif (-not (Test-Json -Json ([string]$shownPlan.StdOut) -ErrorAction SilentlyContinue)) {
+                                $inspectionError = 'terraform show returned invalid plan JSON.'
+                            }
+                            else {
+                                $planDocument = ConvertFrom-Json -InputObject ([string]$shownPlan.StdOut) -AsHashtable -ErrorAction Stop
+                                if ($planDocument -isnot [System.Collections.IDictionary] -or
+                                    $planDocument['resource_changes'] -isnot [System.Collections.IList] -or
+                                    $planDocument['output_changes'] -isnot [System.Collections.IDictionary]) {
+                                    $inspectionError = 'terraform show returned an incomplete plan document.'
+                                }
+                                else {
+                                    foreach ($change in $planDocument['resource_changes']) {
+                                        if ($change -isnot [System.Collections.IDictionary] -or
+                                            $change['change'] -isnot [System.Collections.IDictionary] -or
+                                            $change['change']['actions'] -isnot [System.Collections.IList]) {
+                                            $inspectionError = 'terraform show returned an uninspectable resource change.'
+                                            break
+                                        }
+
+                                        $address = [string]$change['address']
+                                        $actions = @($change['change']['actions'])
+                                        if ($address -match '(?:^|\.)azapi_resource\.telemetry(?:\[[^\]]+\])?$' -or
+                                            ($actions.Count -eq 1 -and $actions[0] -in @('no-op', 'read'))) {
+                                            continue
+                                        }
+                                        $pendingChanges += $address
+                                    }
+
+                                    if (-not $inspectionError) {
+                                        foreach ($outputChange in $planDocument['output_changes'].Values) {
+                                            if ($outputChange -isnot [System.Collections.IDictionary] -or
+                                                $outputChange['actions'] -isnot [System.Collections.IList]) {
+                                                $inspectionError = 'terraform show returned an uninspectable output change.'
+                                                break
+                                            }
+
+                                            $actions = @($outputChange['actions'])
+                                            if ($actions.Count -gt 0 -and
+                                                -not ($actions.Count -eq 1 -and $actions[0] -eq 'no-op')) {
+                                                $pendingChanges += 'output'
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if ($inspectionError) {
+                                $issues.Add((New-AvmE2eIssue -File $rel -Message ('idempotency plan inspection failed: {0}' -f $inspectionError)))
+                            }
+                            elseif ($pendingChanges.Count -gt 0) {
+                                $issues.Add((New-AvmE2eIssue -File $rel -Message 'idempotency check failed: a second plan reported pending changes outside generated telemetry (exit 2).'))
+                            }
+                        }
+                        elseif ($plan.ExitCode -ne 0) {
+                            $detail = if ($plan.StdErr) { $plan.StdErr.Trim() } elseif ($plan.StdOut) { $plan.StdOut.Trim() } else { '' }
+                            $issues.Add((New-AvmE2eIssue -File $rel -Message ('idempotency plan errored (exit {0}): {1}' -f $plan.ExitCode, $detail)))
+                        }
                     }
-                    elseif ($plan.ExitCode -ne 0) {
-                        $detail = if ($plan.StdErr) { $plan.StdErr.Trim() } elseif ($plan.StdOut) { $plan.StdOut.Trim() } else { '' }
-                        $issues.Add((New-AvmE2eIssue -File $rel -Message ('idempotency plan errored (exit {0}): {1}' -f $plan.ExitCode, $detail)))
+                    finally {
+                        if (Test-Path -LiteralPath $planPath -PathType Leaf) {
+                            try {
+                                Remove-Item -LiteralPath $planPath -Force -ErrorAction Stop
+                            }
+                            catch {
+                                $issues.Add((New-AvmE2eIssue -File $rel -Message ('idempotency plan cleanup failed: {0}' -f $_.Exception.Message)))
+                            }
+                        }
                     }
                 }
 

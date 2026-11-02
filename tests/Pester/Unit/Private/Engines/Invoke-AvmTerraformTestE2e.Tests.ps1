@@ -165,7 +165,54 @@ Describe 'Invoke-AvmTerraformTestE2e' {
         }
     }
 
-    It 'records an idempotency failure when the second plan reports changes (exit 2) but still destroys' {
+    It 'ignores generated telemetry updates in the second plan and still checks other changes' {
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
+        $ctx = $script:context
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'terraform'; Version = '1.15.8'; Platform = 'linux-amd64'
+                    Source = 'cache'; Path = '/fake/terraform'
+                }
+            }
+            Mock Invoke-AvmProcess {
+                param($FilePath, $ArgumentList)
+                if ($ArgumentList[0] -eq 'plan') {
+                    return [pscustomobject]@{ ExitCode = 2; StdOut = ''; StdErr = '' }
+                }
+                if ($ArgumentList[0] -eq 'show') {
+                    $json = @{
+                        resource_changes = @(
+                            @{
+                                address = 'module.child.azapi_resource.telemetry[0]'
+                                change = @{ actions = @('update') }
+                            }
+                            @{
+                                address = 'module.child.terraform_data.telemetry[0]'
+                                change = @{ actions = @('no-op') }
+                            }
+                        )
+                        output_changes = @{}
+                    } | ConvertTo-Json -Depth 10 -Compress
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = $json; StdErr = '' }
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Invoke-AvmTerraformTestE2e -Context $C
+        }
+        $result.Status         | Should -Be 'pass'
+        $result.Issues         | Should -BeNullOrEmpty
+
+        InModuleScope 'Avm.Authoring' {
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $ArgumentList[0] -eq 'show' -and $ArgumentList[1] -eq '-json'
+            }
+        }
+    }
+
+    It 'records an idempotency failure for non-telemetry changes and still destroys' {
         New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
         $ctx = $script:context
@@ -180,6 +227,18 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             Mock Invoke-AvmProcess {
                 param($FilePath, $ArgumentList)
                 if ($ArgumentList[0] -eq 'plan') { return [pscustomobject]@{ ExitCode = 2; StdOut = ''; StdErr = '' } }
+                if ($ArgumentList[0] -eq 'show') {
+                    $json = @{
+                        resource_changes = @(
+                            @{
+                                address = 'azurerm_resource_group.example'
+                                change = @{ actions = @('update') }
+                            }
+                        )
+                        output_changes = @{}
+                    } | ConvertTo-Json -Depth 10 -Compress
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = $json; StdErr = '' }
+                }
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
             Invoke-AvmTerraformTestE2e -Context $C
