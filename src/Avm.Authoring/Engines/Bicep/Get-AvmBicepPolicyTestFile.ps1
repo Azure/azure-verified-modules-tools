@@ -27,7 +27,7 @@ function Get-AvmBicepPolicyTestFile {
     }
 
     $pattern = if ($IncludeAllExamples) { '(?i)(?:^|/)main\.test\.bicep$' }
-    else { '(?i)(?:^|/)(?:defaults|waf-aligned)/main\.test\.bicep$' }
+    else { '(?i)(?:^|/)(?:[^/]+\.)?(?:defaults|waf-aligned)/main\.test\.bicep$' }
     $selected = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
     foreach ($file in @(Get-ChildItem -LiteralPath $testRoot -Recurse -File `
                 -Filter '*.test.bicep' -Force)) {

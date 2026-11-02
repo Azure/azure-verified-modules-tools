@@ -207,7 +207,8 @@ Describe 'Bicep PSRule configuration boundaries' {
             function New-PSRuleOption {
                 param($Option)
                 [pscustomobject]@{
-                    Input = @{ PathIgnore = @('*', '!avm/**/defaults/*.test.bicep', '!avm/**/waf-aligned/*.test.bicep') }
+                    Input = @{ PathIgnore = @('*', '!avm/**/defaults/*.test.bicep', '!avm/**/waf-aligned/*.test.bicep',
+                            '!avm/**/*.defaults/*.test.bicep', '!avm/**/*.waf-aligned/*.test.bicep') }
                     Include = @{ Module = @('PSRule.Rules.Azure'); Path = '' }
                     Rule = @{ IncludeLocal = $false }
                     Configuration = @{ AZURE_BICEP_FILE_EXPANSION = 'true'; AZURE_PARAMETER_FILE_EXPANSION = 'false' }
@@ -276,6 +277,29 @@ Describe 'Bicep PSRule configuration boundaries' {
                 Get-AvmBicepPolicyConfiguration
             }
         } | Should -Throw '*rules cannot be linked outside the installed package*'
+    }
+}
+
+Describe 'Bicep PSRule fixture selection' {
+    It 'includes scoped defaults and WAF fixtures without selecting max or lookalike names' {
+        $root = Join-Path $TestDrive 'module'
+        $folders = @('defaults', 'waf-aligned', 'mg.defaults', 'rg.defaults', 'sub.defaults',
+            'linux.defaults', 'windows.defaults', 'windows.waf-aligned', 'max', 'mg.max',
+            'notdefaults', 'defaults.extra', '.defaults', 'windows.waf-aligned.extra')
+        foreach ($folder in $folders) {
+            $directory = Join-Path $root 'tests' 'e2e' $folder
+            $null = New-Item -ItemType Directory -Path $directory -Force
+            [IO.File]::WriteAllText((Join-Path $directory 'main.test.bicep'), '')
+        }
+        InModuleScope Avm.Authoring -Parameters @{ Root = $root; Total = $folders.Count } {
+            param($Root, $Total)
+            $selected = @(Get-AvmBicepPolicyTestFile -ModulePath $Root)
+            $selected.Count | Should -Be 8
+            @($selected | ForEach-Object { $_.Directory.Name } | Sort-Object) |
+                Should -Be @('defaults', 'linux.defaults', 'mg.defaults', 'rg.defaults', 'sub.defaults',
+                    'waf-aligned', 'windows.defaults', 'windows.waf-aligned')
+            @(Get-AvmBicepPolicyTestFile -ModulePath $Root -IncludeAllExamples).Count | Should -Be $Total
+        }
     }
 }
 
