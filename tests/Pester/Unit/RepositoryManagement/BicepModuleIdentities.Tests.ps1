@@ -250,6 +250,19 @@ Describe 'Bicep module client-ID mapping' {
         { Assert-AvmBicepModuleMappingExtension -ExistingJson $existing -ClientIds $mapping } | Should -Throw '*removed or retargeted*'
     }
 
+    It 'permits a retarget only to the exact configured existing identity client' {
+        $existing = '{"avm/ptn/lz/sub-vending":"10000000-0000-4000-8000-000000000006"}'
+        $shared = '90000000-0000-4000-8000-000000000006'
+        { Assert-AvmBicepModuleMappingExtension -ExistingJson $existing -ClientIds @{ 'avm/ptn/lz/sub-vending' = $shared } `
+                -ExistingIdentityClientIds @{ 'avm/ptn/lz/sub-vending' = $shared } } | Should -Not -Throw
+        { Assert-AvmBicepModuleMappingExtension -ExistingJson $existing -ClientIds @{ 'avm/ptn/lz/sub-vending' = '90000000-0000-4000-8000-000000000007' } `
+                -ExistingIdentityClientIds @{ 'avm/ptn/lz/sub-vending' = $shared } } | Should -Throw '*removed or retargeted*'
+        { Assert-AvmBicepModuleMappingExtension -ExistingJson $existing -ClientIds @{ 'avm/ptn/lz/sub-vending' = $shared } `
+                -ExistingIdentityClientIds @{ 'avm/res/fabric/capacity' = $shared } } | Should -Throw '*removed or retargeted*'
+        { Assert-AvmBicepModuleMappingExtension -ExistingJson $existing -ClientIds @{} `
+                -ExistingIdentityClientIds @{ 'avm/ptn/lz/sub-vending' = $shared } } | Should -Throw '*removed or retargeted*'
+    }
+
     It 'does not overwrite malformed or duplicate existing JSON: <Existing>' -ForEach @(
         @{ Existing = '{}' }
         @{ Existing = '[]' }
