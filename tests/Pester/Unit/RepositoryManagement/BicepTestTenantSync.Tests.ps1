@@ -128,9 +128,8 @@ Describe 'Guarded nonsecret Bicep variable publication' {
         $result.Target | Should -BeExactly 'Azure/bicep-registry-modules'
         @($result.ChangedNames | Sort-Object) | Should -Be @($script:executionNames | Sort-Object)
         @($result.PSObject.Properties.Name | Sort-Object) | Should -Be @(
-            'BillingScopeSecretAction', 'ChangedNames', 'HasChanges', 'PlanOnly', 'Status', 'Target'
+            'ChangedNames', 'HasChanges', 'PlanOnly', 'Status', 'Target'
         )
-        $result.BillingScopeSecretAction | Should -BeExactly 'None'
         Should -Invoke Get-AvmBicepTestTenantSnapshot -Exactly 1
         Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
         Should -Invoke Invoke-RepositorySyncProcess -Exactly 0
@@ -867,44 +866,31 @@ Describe 'Guarded nonsecret Bicep variable publication' {
         }
     }
 
-    Context 'Subscription-vending billing-scope secret publication' {
+    Context 'Subscription-vending billing-scope variable publication' {
         BeforeEach {
             Initialize-BicepSyncTestCandidate
             $script:billingScopes = [ordered]@{
                 'avm/ptn/lz/sub-vending' =
                     '/providers/Microsoft.Billing/billingAccounts/account:segment/billingProfiles/profile/invoiceSections/section'
             }
-            $script:secretWrites = [System.Collections.Generic.List[string]]::new()
-            Mock Set-AvmBicepRegistryBillingScopeSecret {
-                param($Value)
-                $script:secretWrites.Add($Value)
-            }
+            $script:billingJson = '{"avm/ptn/lz/sub-vending":"/providers/Microsoft.Billing/billingAccounts/account:segment/billingProfiles/profile/invoiceSections/section"}'
         }
 
-        It 'plans and publishes the environment secret without adding it to the variable snapshot' {
+        It 'plans and publishes the billing-scope map as a repository variable' {
             $plan = Invoke-AvmBicepTestTenantSync -Values $script:values -BillingScopes $script:billingScopes
             $plan.Status | Should -BeExactly 'Planned'
-            $plan.HasChanges | Should -BeTrue
-            $plan.ChangedNames | Should -BeNullOrEmpty
-            $plan.BillingScopeSecretAction | Should -BeExactly 'Set'
-            $script:secretWrites.Count | Should -Be 0
+            $plan.ChangedNames | Should -Contain 'VALIDATE_MODULE_BILLING_SCOPES'
+            Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
 
             $published = Invoke-AvmBicepTestTenantSync -Values $script:values -BillingScopes $script:billingScopes -Apply
             $published.Status | Should -BeExactly 'Published'
-            $script:secretWrites | Should -Be @(
-                '{"avm/ptn/lz/sub-vending":"/providers/Microsoft.Billing/billingAccounts/account:segment/billingProfiles/profile/invoiceSections/section"}'
-            )
-            Should -Invoke Set-AvmBicepRegistryBillingScopeSecret -Exactly 1 -ParameterFilter {
-                $Value -ceq $script:secretWrites[0]
-            }
-            Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
+            $script:consumer['VALIDATE_MODULE_BILLING_SCOPES'].Value | Should -BeExactly $script:billingJson
         }
 
-        It 'publishes an empty map to clear a stale secret when no selector remains' {
+        It 'publishes an empty map when no selector remains' {
             $result = Invoke-AvmBicepTestTenantSync -Values $script:values -BillingScopes @{} -Apply
             $result.Status | Should -BeExactly 'Published'
-            $result.BillingScopeSecretAction | Should -BeExactly 'Set'
-            $script:secretWrites | Should -Be @('{}')
+            $script:consumer['VALIDATE_MODULE_BILLING_SCOPES'].Value | Should -BeExactly '{}'
         }
 
         It 'rejects unexpected map entries before GitHub reads or writes' {
@@ -912,21 +898,7 @@ Describe 'Guarded nonsecret Bicep variable publication' {
                     'avm/res/storage/storage-account' = '/providers/Microsoft.Billing/billingAccounts/account/billingProfiles/profile/invoiceSections/section'
                 } -Apply } | Should -Throw '*canonical subscription-vending root*'
             Should -Invoke Get-AvmBicepTestTenantSnapshot -Exactly 0
-            Should -Invoke Set-AvmBicepRegistryBillingScopeSecret -Exactly 0
-        }
-
-        It 'reports an unverified publication when the secret writer fails without exposing its value' {
-            Mock Set-AvmBicepRegistryBillingScopeSecret { throw [System.UnauthorizedAccessException]::new('HTTP 403') }
-            $failure = $null
-            try {
-                Invoke-AvmBicepTestTenantSync -Values $script:values -BillingScopes $script:billingScopes -Apply
-            }
-            catch {
-                $failure = $_.Exception.Message
-            }
-            $failure | Should -BeLike '*publication is unverified*HTTP 403*'
-            $failure | Should -Not -Match 'invoiceSections/section'
-            Should -Invoke Set-AvmBicepRegistryBillingScopeSecret -Exactly 1
+            Should -Invoke Invoke-AvmBicepTestTenantVariableApi -Exactly 0
         }
     }
 
@@ -1064,9 +1036,10 @@ Describe 'Narrow GitHub nonsecret variable adapter' {
             )
         }
         $snapshot = Get-AvmBicepTestTenantSnapshot
-        $snapshot.Count | Should -Be 7
+        $snapshot.Count | Should -Be 8
         @($snapshot.Keys | Sort-Object) | Should -Be @((@($script:executionNames) + @(
-                    'VALIDATE_MODULE_CLIENT_IDS', 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'
+                    'VALIDATE_MODULE_CLIENT_IDS', 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS',
+                    'VALIDATE_MODULE_BILLING_SCOPES'
                 )) | Sort-Object)
         $snapshot.VALIDATE_TENANT_ID.Value | Should -BeExactly 'fixture-value'
         $snapshot.VALIDATE_TENANT_ID.CreatedAt | Should -BeExactly '2026-09-01T00:00:00.0000000Z'
@@ -1076,7 +1049,7 @@ Describe 'Narrow GitHub nonsecret variable adapter' {
 
     It 'distinguishes genuinely absent variables from unreadable collection responses' {
         $snapshot = Get-AvmBicepTestTenantSnapshot
-        $snapshot.Count | Should -Be 7
+        $snapshot.Count | Should -Be 8
         @($snapshot.Values | Where-Object { $null -ne $_ }) | Should -HaveCount 0
         $script:response.StdOut = ''
         { Get-AvmBicepTestTenantSnapshot } | Should -Throw '*empty variable collection*'
@@ -1167,44 +1140,6 @@ Describe 'Bicep variable adapter uses Invoke-AvmProcess without exposing credent
         }
     }
 
-    It 'publishes the billing-scope secret from an ephemeral standard-input file, not argv' {
-        $scope = '/providers/Microsoft.Billing/billingAccounts/account/billingProfiles/profile/invoiceSections/section'
-        $script:secretInputPath = $null
-        $script:secretInput = $null
-        Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
-            param($StandardInputPath)
-            $script:secretInputPath = $StandardInputPath
-            $script:secretInput = Get-Content -LiteralPath $StandardInputPath -Raw
-            [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
-        }
-
-        Set-AvmBicepRegistryBillingScopeSecret -Value $scope
-
-        $script:secretInput | Should -BeExactly $scope
-        [System.IO.Path]::GetDirectoryName($script:secretInputPath) |
-            Should -BeExactly ([System.IO.Path]::GetFullPath((Get-Location).ProviderPath))
-        Test-Path -LiteralPath $script:secretInputPath | Should -BeFalse
-        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
-            ($ArgumentList -join '|') -ceq
-            'secret|set|VALIDATE_MODULE_BILLING_SCOPES|--repo|Azure/bicep-registry-modules|--env|avm-validation' -and
-            [System.IO.Path]::IsPathRooted($StandardInputPath) -and
-            ($ArgumentList -join '|') -cnotmatch [regex]::Escape($scope) -and
-            $EnvVars.GH_TOKEN -ceq 'fixture-installation-token' -and
-            $EnvVars.GH_HOST -ceq 'github.com' -and
-            $null -eq $EnvVars.GITHUB_TOKEN -and
-            $null -eq $EnvVars.GH_DEBUG -and
-            $EnvVars.GH_PROMPT_DISABLED -ceq '1' -and
-            $IgnoreExitCode -and -not $StreamOutput -and $TimeoutSec -eq 60
-        }
-    }
-
-    It 'fails explicitly when the target token cannot write the billing-scope secret' {
-        Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
-            [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'private detail (HTTP 403)' }
-        }
-        { Set-AvmBicepRegistryBillingScopeSecret -Value '{}' } |
-            Should -Throw '*HTTP 403*Actions secrets write permission*'
-    }
 }
 
 Describe 'Bicep workflow isolation and trusted input boundary' {
@@ -1256,16 +1191,14 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
         @([regex]::Matches($script:workflow, '(?m)^    if:')) | Should -HaveCount 2
     }
 
-    It 'uses a separate target-only Variables and secrets token in avm without broadening default permissions' {
+    It 'uses a separate target-only Variables token in avm without broadening default permissions' {
         $script:workflow | Should -Match '(?m)^permissions:\n  contents: read\n'
         $script:variablesJob | Should -Match '(?m)^    environment: avm$'
         $script:variablesJob | Should -Match '(?m)^          owner: Azure$'
         $script:variablesJob | Should -Match '(?m)^          repositories: bicep-registry-modules$'
         $permissions = @([regex]::Matches($script:variablesJob, '(?m)^          INPUT_PERMISSION-[^\n]+$') | ForEach-Object { $_.Value.Trim() })
         $permissions | Should -Be @(
-            'INPUT_PERMISSION-ACTIONS-VARIABLES: write',
-            'INPUT_PERMISSION-ENVIRONMENTS: write',
-            'INPUT_PERMISSION-SECRETS: write'
+            'INPUT_PERMISSION-ACTIONS-VARIABLES: write'
         )
         $script:variablesJob | Should -Match 'GH_TOKEN: \$\{\{ steps\.variables-token\.outputs\.token \}\}'
         $script:variablesJob | Should -Not -Match 'steps\.app-token|permission-contents|permission-pull-requests|permission-workflows|id-token:'
@@ -1276,12 +1209,7 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
         @{ Job = 'sync-module-identities' }
     ) {
         $jobText = if ($Job -ceq 'sync-test-tenant-variables') { $script:variablesJob } else { $script:identitiesJob }
-        $tokenName = if ($Job -ceq 'sync-test-tenant-variables') {
-            'Create target-scoped Variables and secrets token'
-        }
-        else {
-            'Create target-scoped Variables token'
-        }
+        $tokenName = 'Create target-scoped Variables token'
         $tokenSteps = @([regex]::Matches($jobText, "(?ms)^      - name: $tokenName`n.*?(?=^      - |\\z)"))
         $tokenSteps | Should -HaveCount 1
         $token = $tokenSteps[0].Value
@@ -1297,18 +1225,11 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
         )
         $environment = [regex]::Match($token, '(?ms)^        env:\n(.*?)(?=^        \S|\z)').Groups[1].Value
         $permissionInputs = @([regex]::Matches($environment, '(?m)^          ([^#\s][^:]*): (.+)$'))
-        $permissionCount = if ($Job -ceq 'sync-test-tenant-variables') { 3 } else { 1 }
-        $permissionInputs | Should -HaveCount $permissionCount
+        $permissionInputs | Should -HaveCount 1
         $permissionInputs[0].Groups[1].Value | Should -BeExactly 'INPUT_PERMISSION-ACTIONS-VARIABLES'
         $permissionInputs[0].Groups[2].Value | Should -BeExactly 'write'
-        if ($Job -ceq 'sync-test-tenant-variables') {
-            $permissionInputs[1].Groups[1].Value | Should -BeExactly 'INPUT_PERMISSION-ENVIRONMENTS'
-            $permissionInputs[1].Groups[2].Value | Should -BeExactly 'write'
-            $permissionInputs[2].Groups[1].Value | Should -BeExactly 'INPUT_PERMISSION-SECRETS'
-            $permissionInputs[2].Groups[2].Value | Should -BeExactly 'write'
-        }
         $token | Should -Not -Match '(?im)^\s+permission-|skip-token-revoke|ACTIONS_STEP_DEBUG|ACTIONS_RUNNER_DEBUG'
-        @([regex]::Matches($script:workflow, '(?m)^          INPUT_PERMISSION-')) | Should -HaveCount 4
+        @([regex]::Matches($script:workflow, '(?m)^          INPUT_PERMISSION-')) | Should -HaveCount 2
     }
 
     It 'pins both actions and checks out the immutable dispatched revision without persisted credentials' {

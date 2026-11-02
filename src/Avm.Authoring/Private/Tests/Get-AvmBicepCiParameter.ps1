@@ -65,8 +65,10 @@ function Get-AvmBicepCiParameter {
         }
     }
     $billingScopeMapName = 'VALIDATE_MODULE_BILLING_SCOPES'
-    if (-not [string]::IsNullOrWhiteSpace($ModulePath) -and $Secrets.Contains($billingScopeMapName)) {
-        $mapJson = $Secrets[$billingScopeMapName]
+    $billingScopeSource = if ($Variables.Contains($billingScopeMapName)) { @{ Values = $Variables; Secret = $false } }
+    elseif ($Secrets.Contains($billingScopeMapName)) { @{ Values = $Secrets; Secret = $true } }
+    if (-not [string]::IsNullOrWhiteSpace($ModulePath) -and $null -ne $billingScopeSource) {
+        $mapJson = $billingScopeSource.Values[$billingScopeMapName]
         try {
             $billingScopes = ConvertFrom-AvmStrictJson -Json $mapJson -RejectCaseInsensitiveDuplicates
         }
@@ -89,7 +91,7 @@ function Get-AvmBicepCiParameter {
             $selected[$names['subscriptionBillingScope']] = @{
                 Name   = $billingScopeMapName
                 Value  = $billingScopes[$root]
-                Secret = $true
+                Secret = $billingScopeSource.Secret
             }
         }
     }
