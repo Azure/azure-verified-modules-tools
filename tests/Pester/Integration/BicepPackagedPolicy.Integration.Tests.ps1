@@ -94,6 +94,17 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
         $result.Evaluations.Baseline | Should -Contain 'CB.AVM.WAF.Security'
     }
 
+    It 'evaluates scoped defaults and WAF fixtures through the packaged input filters' {
+        $e2e = Join-Path $script:modulePath 'tests' 'e2e'
+        Rename-Item -LiteralPath (Join-Path $e2e 'defaults') -NewName 'mg.defaults'
+        Rename-Item -LiteralPath (Join-Path $e2e 'waf-aligned') -NewName 'windows.waf-aligned'
+        $result = Invoke-AvmCheckPolicy -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'pass' -Because (@($result.Issues | ForEach-Object Message) -join '; ')
+        $result.TestsSelected | Should -Be 2
+        $result.BaselinesExecuted | Should -Be 8
+        @($result.Evaluations | Where-Object { $_.ProcessedRules -gt 0 }).Count | Should -Be 8
+    }
+
     It 'rejects an independent canonical repository without a root reservation map' {
         Remove-Item -LiteralPath (Join-Path $script:consumer '.reserved-test-subscriptions.json') -Force
         $result = Invoke-AvmCheckPolicy -Path $script:modulePath -SkipModuleVersionCheck

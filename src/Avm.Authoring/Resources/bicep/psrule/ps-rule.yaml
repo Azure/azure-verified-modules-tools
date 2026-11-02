@@ -20,6 +20,8 @@ input:
     - "*"
     - "!avm/**/defaults/*.test.bicep"
     - "!avm/**/waf-aligned/*.test.bicep"
+    - "!avm/**/*.defaults/*.test.bicep"
+    - "!avm/**/*.waf-aligned/*.test.bicep"
 configuration:
   AZURE_PARAMETER_DEFAULTS:
     builtInServicePrincipalObjectId: "00000000-0000-4000-8000-000000000001"

@@ -54,6 +54,8 @@ function Get-AvmBicepPolicyConfiguration {
     if (-not ($selection -ccontains '*') -or
         -not ($selection -ccontains '!avm/**/defaults/*.test.bicep') -or
         -not ($selection -ccontains '!avm/**/waf-aligned/*.test.bicep') -or
+        -not ($selection -ccontains '!avm/**/*.defaults/*.test.bicep') -or
+        -not ($selection -ccontains '!avm/**/*.waf-aligned/*.test.bicep') -or
         @($option.Include.Module).Count -ne 1 -or
         $option.Include.Module[0] -cne 'PSRule.Rules.Azure' -or
         -not [string]::IsNullOrWhiteSpace([string]$option.Include.Path) -or
