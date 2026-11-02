@@ -99,7 +99,7 @@ Describe 'Bicep test tenant entry point with a synthetic bundle and mocked GitHu
             if ($ArgumentList[0] -ceq 'secret') {
                 $ArgumentList | Should -Be @(
                     'secret', 'set', 'VALIDATE_MODULE_BILLING_SCOPES',
-                    '--repo', 'Azure/bicep-registry-modules', '--env', 'avm'
+                    '--repo', 'Azure/bicep-registry-modules', '--env', 'avm-validation'
                 )
                 Test-Path -LiteralPath $StandardInputPath | Should -BeTrue
                 $entryState.SecretWrites.Add([System.IO.File]::ReadAllText($StandardInputPath))

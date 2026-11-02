@@ -127,7 +127,7 @@ Describe 'Bicep module identity entry points with real files and mocked services
                 if ($ArgumentList[0] -ceq 'secret') {
                     $ArgumentList | Should -Be @(
                         'secret', 'set', 'VALIDATE_MODULE_BILLING_SCOPES',
-                        '--repo', 'Azure/bicep-registry-modules', '--env', 'avm'
+                        '--repo', 'Azure/bicep-registry-modules', '--env', 'avm-validation'
                     )
                     Test-Path -LiteralPath $StandardInputPath | Should -BeTrue
                     return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }

@@ -1186,7 +1186,7 @@ Describe 'Bicep variable adapter uses Invoke-AvmProcess without exposing credent
         Test-Path -LiteralPath $script:secretInputPath | Should -BeFalse
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
             ($ArgumentList -join '|') -ceq
-            'secret|set|VALIDATE_MODULE_BILLING_SCOPES|--repo|Azure/bicep-registry-modules|--env|avm' -and
+            'secret|set|VALIDATE_MODULE_BILLING_SCOPES|--repo|Azure/bicep-registry-modules|--env|avm-validation' -and
             [System.IO.Path]::IsPathRooted($StandardInputPath) -and
             ($ArgumentList -join '|') -cnotmatch [regex]::Escape($scope) -and
             $EnvVars.GH_TOKEN -ceq 'fixture-installation-token' -and

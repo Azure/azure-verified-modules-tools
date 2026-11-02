@@ -83,7 +83,7 @@ retried or rolled back automatically.
 
 When the exact `avm/ptn/lz/sub-vending` selector remains configured and the
 complete bootstrap-owned vending identity tuple verifies, the variable sync
-publishes the `avm` environment secret `VALIDATE_MODULE_BILLING_SCOPES` in the
+publishes the `avm-validation` environment secret `VALIDATE_MODULE_BILLING_SCOPES` in the
 Bicep Registry. Its compact JSON value contains only that canonical root and
 its invoice-section resource ID. If the selector is removed, it publishes
 `{}` so a previous scope cannot be reused. The value is provided to `gh` on
