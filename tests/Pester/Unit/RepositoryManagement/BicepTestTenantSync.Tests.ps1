@@ -1279,7 +1279,8 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
         $permissions = @([regex]::Matches($script:variablesJob, '(?m)^          INPUT_PERMISSION-[^\n]+$') | ForEach-Object { $_.Value.Trim() })
         $permissions | Should -Be @(
             'INPUT_PERMISSION-ACTIONS-VARIABLES: write',
-            'INPUT_PERMISSION-ENVIRONMENTS: write'
+            'INPUT_PERMISSION-ENVIRONMENTS: write',
+            'INPUT_PERMISSION-SECRETS: write'
         )
         $script:variablesJob | Should -Match 'GH_TOKEN: \$\{\{ steps\.variables-token\.outputs\.token \}\}'
         $script:variablesJob | Should -Not -Match 'steps\.app-token|permission-contents|permission-pull-requests|permission-workflows|id-token:'
@@ -1311,16 +1312,18 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
         )
         $environment = [regex]::Match($token, '(?ms)^        env:\n(.*?)(?=^        \S|\z)').Groups[1].Value
         $permissionInputs = @([regex]::Matches($environment, '(?m)^          ([^#\s][^:]*): (.+)$'))
-        $permissionCount = if ($Job -ceq 'sync-test-tenant-variables') { 2 } else { 1 }
+        $permissionCount = if ($Job -ceq 'sync-test-tenant-variables') { 3 } else { 1 }
         $permissionInputs | Should -HaveCount $permissionCount
         $permissionInputs[0].Groups[1].Value | Should -BeExactly 'INPUT_PERMISSION-ACTIONS-VARIABLES'
         $permissionInputs[0].Groups[2].Value | Should -BeExactly 'write'
         if ($Job -ceq 'sync-test-tenant-variables') {
             $permissionInputs[1].Groups[1].Value | Should -BeExactly 'INPUT_PERMISSION-ENVIRONMENTS'
             $permissionInputs[1].Groups[2].Value | Should -BeExactly 'write'
+            $permissionInputs[2].Groups[1].Value | Should -BeExactly 'INPUT_PERMISSION-SECRETS'
+            $permissionInputs[2].Groups[2].Value | Should -BeExactly 'write'
         }
         $token | Should -Not -Match '(?im)^\s+permission-|skip-token-revoke|ACTIONS_STEP_DEBUG|ACTIONS_RUNNER_DEBUG'
-        @([regex]::Matches($script:workflow, '(?m)^          INPUT_PERMISSION-')) | Should -HaveCount 3
+        @([regex]::Matches($script:workflow, '(?m)^          INPUT_PERMISSION-')) | Should -HaveCount 4
     }
 
     It 'pins both actions and checks out the immutable dispatched revision without persisted credentials' {

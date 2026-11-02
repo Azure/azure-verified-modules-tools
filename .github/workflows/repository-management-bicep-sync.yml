@@ -56,6 +56,7 @@ jobs:
           # The pinned parser supports this permission, but its input manifest omits it.
           INPUT_PERMISSION-ACTIONS-VARIABLES: write
           INPUT_PERMISSION-ENVIRONMENTS: write
+          INPUT_PERMISSION-SECRETS: write
         with:
           client-id: ${{ vars.AVM_APP_CLIENT_ID }}
           private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
