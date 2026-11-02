@@ -14,6 +14,10 @@ on:
         description: Read and dry-run the exact subscription-vending ownership retirement
         type: boolean
         default: false
+      approved_state_retirement:
+        description: Approved lineage|serial|versionId; when set, removes the exact entry after preparation
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -236,7 +240,9 @@ jobs:
           ARM_BACKEND_CLIENT_ID: ${{ vars.ARM_BACKEND_CLIENT_ID }}
           ARM_BACKEND_STORAGE_ACCOUNT_NAME: ${{ vars.ARM_BACKEND_STORAGE_ACCOUNT_NAME }}
           ARM_BACKEND_STORAGE_CONTAINER_NAME: ${{ vars.ARM_BACKEND_STORAGE_CONTAINER_NAME }}
+          APPROVED_STATE_RETIREMENT: ${{ inputs.approved_state_retirement }}
         run: |
           & (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'Invoke-BicepModuleIdentityStateRetirement.ps1') `
             -TerraformRoot (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'terraform') `
-            -RecoveryReceiptPath (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'state-recovery-receipt.json')
+            -RecoveryReceiptPath (Join-Path $env:GITHUB_WORKSPACE 'repository-management' 'bicep-test-tenant-sync' 'state-recovery-receipt.json') `
+            -Expected $env:APPROVED_STATE_RETIREMENT

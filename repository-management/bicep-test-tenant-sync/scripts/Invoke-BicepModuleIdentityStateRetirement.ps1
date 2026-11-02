@@ -3,7 +3,8 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [Parameter(Mandatory)] [string] $TerraformRoot,
-    [Parameter(Mandatory)] [string] $RecoveryReceiptPath
+    [Parameter(Mandatory)] [string] $RecoveryReceiptPath,
+    [string] $Expected
 )
 
 Set-StrictMode -Version 3.0
@@ -53,7 +54,15 @@ $backend = @{
 $configuration = ConvertFrom-AvmTestTenantJson -Json (
     Get-Content -LiteralPath (Join-Path $repositoryRoot 'repository-management' 'bicep-config' 'config.json') -Raw -ErrorAction Stop
 )
-Invoke-AvmBicepSubscriptionVendingStateRetirementPreparation -TerraformRoot $TerraformRoot `
-    -Values $values -Backend $backend -Configuration $configuration -RecoveryReceiptPath $RecoveryReceiptPath |
-    ConvertTo-Json -Compress
+$retirement = @{
+    TerraformRoot = $TerraformRoot
+    Values = $values
+    Backend = $backend
+    Configuration = $configuration
+    RecoveryReceiptPath = $RecoveryReceiptPath
+}
+if (-not [string]::IsNullOrWhiteSpace($Expected)) {
+    $retirement.Expected = $Expected
+}
+Invoke-AvmBicepSubscriptionVendingStateRetirementPreparation @retirement | ConvertTo-Json -Compress
 $global:LASTEXITCODE = 0

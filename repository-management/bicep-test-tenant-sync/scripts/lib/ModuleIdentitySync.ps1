@@ -260,7 +260,8 @@ function Invoke-AvmBicepSubscriptionVendingStateRetirementPreparation {
         [Parameter(Mandatory)] [hashtable] $Backend,
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Values,
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Configuration,
-        [Parameter(Mandatory)] [string] $RecoveryReceiptPath
+        [Parameter(Mandatory)] [string] $RecoveryReceiptPath,
+        [ValidatePattern('^[0-9a-f-]{36}\|[0-9]+\|[0-9TZ:.-]+$')] [string] $Expected
     )
 
     $settings = Get-AvmBamiSettings -Values $Values
@@ -296,6 +297,41 @@ function Invoke-AvmBicepSubscriptionVendingStateRetirementPreparation {
     Invoke-RepositorySyncTerraform -Root $TerraformRoot -Environment $environment -Quiet -Arguments @(
         'state', 'rm', '-dry-run', '-lock=true', '-lock-timeout=5m', $entry.Address
     )
+
+    if ($PSBoundParameters.ContainsKey('Expected')) {
+        $expectedParts = $Expected -csplit '\|'
+        $expectedSerial = [long]0
+        if ($expectedParts.Count -ne 3 -or -not [long]::TryParse($expectedParts[1], [ref]$expectedSerial) -or
+            $entry.Lineage -cne $expectedParts[0] -or $entry.Serial -ne $expectedSerial -or
+            $recoveryPolicy.PreRetirementVersionId -cne $expectedParts[2]) {
+            throw [System.InvalidOperationException]::new('State retirement evidence does not match the approved lineage, serial, and recovery version.')
+        }
+        Invoke-RepositorySyncTerraform -Root $TerraformRoot -Environment $environment -Quiet -Arguments @(
+            'state', 'rm', '-lock=true', '-lock-timeout=5m', $entry.Address
+        )
+        $verified = Invoke-RepositorySyncProcess -Command terraform -Arguments @('state', 'pull') `
+            -WorkingDirectory $TerraformRoot -EnvVars $environment -TimeoutSec 300
+        if ($verified.ExitCode -ne 0) {
+            throw [System.InvalidOperationException]::new('State retirement could not verify the updated Terraform state; raw state is private.')
+        }
+        $afterState = ConvertFrom-Json -InputObject $verified.StdOut -AsHashtable -Depth 100 -ErrorAction Stop
+        $remaining = @($afterState['resources'] | Where-Object {
+                $_['module'] -ceq 'module.bicep["avm/ptn/lz/sub-vending"]' -and $_['type'] -ceq 'azapi_resource' -and
+                $_['name'] -ceq 'identity'
+            })
+        if ($afterState['lineage'] -cne $entry.Lineage -or $afterState['serial'] -le $entry.Serial -or $remaining.Count -ne 0) {
+            throw [System.InvalidOperationException]::new('State retirement post-removal verification failed; restore from the recorded state version.')
+        }
+        return [pscustomobject]@{
+            Status = 'Retired'
+            Address = $entry.Address
+            Lineage = $afterState['lineage']
+            PreviousSerial = $entry.Serial
+            Serial = $afterState['serial']
+            PreRetirementVersionId = $recoveryPolicy.PreRetirementVersionId
+        }
+    }
+
     return [pscustomobject]@{
         Status = 'Prepared'
         Address = $entry.Address

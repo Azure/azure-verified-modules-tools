@@ -499,6 +499,55 @@ Describe 'Bicep identity saved-plan ownership guard' {
             }
         }
 
+        It 'removes only the exact approved entry and verifies the updated state: <Case>' -ForEach @(
+            @{ Case = 'approved'; Expected = '10000000-0000-4000-8000-000000000001|42|2026-10-30T14:19:27.7550000Z'; Removes = $true }
+            @{ Case = 'serial mismatch'; Expected = '10000000-0000-4000-8000-000000000001|41|2026-10-30T14:19:27.7550000Z'; Removes = $false }
+            @{ Case = 'version mismatch'; Expected = '10000000-0000-4000-8000-000000000001|42|2026-10-30T14:19:27.0000000Z'; Removes = $false }
+        ) {
+            Mock Get-AvmBamiSettings { @{} }
+            Mock Resolve-AvmBicepModuleExistingIdentities { @{ 'avm/ptn/lz/sub-vending' = @{ name = 'bootstrap' } } }
+            Mock Resolve-AvmSubscriptionVendingIdentity { $script:bootstrap }
+            Mock Get-RepositorySyncTerraformEnvironment { @{} }
+            Mock Invoke-TerraformInit {}
+            $script:pulls = 0
+            Mock Invoke-RepositorySyncProcess {
+                param($Command)
+                $body = if ($Command -ceq 'terraform') {
+                    $script:pulls++
+                    if ($script:pulls -eq 1) { $script:state } else {
+                        @{ lineage = $script:state.lineage; serial = [long]43; resources = @() }
+                    }
+                }
+                else {
+                    @{ versionId = '2026-10-30T14:19:27.7550000Z' }
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = (ConvertTo-Json -InputObject $body -Depth 20 -Compress); StdErr = '' }
+            }
+            Mock Invoke-RepositorySyncTerraform {}
+            $invoke = {
+                Invoke-AvmBicepSubscriptionVendingStateRetirementPreparation `
+                    -TerraformRoot $TestDrive -Backend $script:recoveryBackend -Values @{} -Configuration @{} `
+                    -RecoveryReceiptPath $script:recoveryReceiptPath -Expected $Expected
+            }
+
+            if ($Removes) {
+                $result = & $invoke
+                $result.Status | Should -BeExactly 'Retired'
+                $result.PreviousSerial | Should -Be 42
+                $result.Serial | Should -Be 43
+                ($result | ConvertTo-Json -Compress) | Should -Not -Match $script:stateSecret
+            }
+            else {
+                $invoke | Should -Throw '*does not match the approved*'
+            }
+            Should -Invoke Invoke-RepositorySyncTerraform -Exactly ([int]$Removes) -ParameterFilter {
+                (@($Arguments) -join '|') -ceq (
+                    'state|rm|-lock=true|-lock-timeout=5m|' +
+                    'module.bicep["avm/ptn/lz/sub-vending"].azapi_resource.identity'
+                )
+            }
+        }
+
         It 'rejects absent, stale, mismatched, or unsafe recovery-policy receipts before data-plane work: <Case>' -ForEach @(
             @{
                 Case = 'absent'

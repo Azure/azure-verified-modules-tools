@@ -1244,6 +1244,10 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
             '        description: Read and dry-run the exact subscription-vending ownership retirement'
             '        type: boolean'
             '        default: false'
+            '      approved_state_retirement:'
+            '        description: Approved lineage|serial|versionId; when set, removes the exact entry after preparation'
+            '        type: string'
+            "        default: ''"
         ) -join "`n")
         $script:workflow | Should -Not -Match 'enable_test_tenant_sync|AVM_BAMI_TEST_TENANT_SYNC_ENABLED'
     }
