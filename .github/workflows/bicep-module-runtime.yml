@@ -6,6 +6,23 @@ on:
       modulePath:
         type: string
         required: true
+      moduleTestFilePaths:
+        type: string
+        required: true
+      psRuleModuleTestFilePaths:
+        type: string
+        required: true
+      e2eRoute:
+        description: Native, registry-local, or disabled E2E route selected by the caller.
+        type: string
+        required: true
+      baseCommit:
+        type: string
+        required: false
+        default: ''
+      workflowInput:
+        type: string
+        required: true
       targetCommit:
         type: string
         required: true
@@ -17,7 +34,7 @@ permissions: {}
 
 jobs:
   pr-check:
-    name: '${{ inputs.modulePath }}: PR check'
+    name: PR check
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -64,7 +81,7 @@ jobs:
           avm -SkipModuleVersionCheck pr-check
 
   unit-test:
-    name: '${{ inputs.modulePath }}: Unit tests'
+    name: Unit tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -109,3 +126,106 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
           avm -SkipModuleVersionCheck test unit --recurse --include-compliance
+
+  discover-examples:
+    name: Discover e2e examples
+    if: |
+      inputs.e2eRoute == 'native' &&
+      fromJSON(inputs.workflowInput).deploymentValidation == 'true' &&
+      inputs.moduleTestFilePaths != '' && inputs.moduleTestFilePaths != '[]'
+    runs-on: ubuntu-latest
+    environment: avm-validation
+    permissions:
+      contents: read
+    env:
+      AVM_AUTHORING_MODULE: Avm.Authoring
+    outputs:
+      deploymentMatrix: ${{ steps.select.outputs.deploymentMatrix }}
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.targetCommit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download prepared authoring runtime
+        if: inputs.authoringArtifact != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.authoringArtifact }}
+          path: ${{ runner.temp }}/avm-authoring
+      - name: Select prepared authoring runtime
+        if: inputs.authoringArtifact != ''
+        shell: pwsh
+        run: |
+          $manifest = Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1'
+          if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { throw 'Prepared Avm.Authoring manifest is missing.' }
+          "AVM_AUTHORING_MODULE=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Install Avm.Authoring
+        if: env.AVM_AUTHORING_MODULE == 'Avm.Authoring'
+        uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
+      - name: Select deployments
+        id: select
+        shell: pwsh
+        env:
+          MODULE_PATH: ${{ inputs.modulePath }}
+          TEST_FILES: ${{ inputs.moduleTestFilePaths }}
+          TEST_SUBSCRIPTION_IDS: ${{ vars.VALIDATE_SUBSCRIPTION_IDS || vars.TEST_SUBSCRIPTION_IDS || secrets.VALIDATE_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS }}
+          VALIDATE_SUBSCRIPTION_ID: ${{ vars.VALIDATE_SUBSCRIPTION_ID || secrets.VALIDATE_SUBSCRIPTION_ID }}
+          VALIDATE_MODULE_CLIENT_IDS: ${{ vars.VALIDATE_MODULE_CLIENT_IDS }}
+          VALIDATE_TENANT_ID: ${{ vars.VALIDATE_TENANT_ID || secrets.VALIDATE_TENANT_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
+          $capabilities = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities
+          if ($capabilities.BicepWorkflowE2eRuntime -isnot [int] -or $capabilities.BicepWorkflowE2eRuntime -ne 1) {
+            throw 'The installed Avm.Authoring package does not provide BicepWorkflowE2eRuntime = 1.'
+          }
+          $testFiles = @(ConvertFrom-Json -InputObject $env:TEST_FILES -AsHashtable)
+          $matrix = @(Get-AvmBicepE2eDeploymentMatrix -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH `
+              -TestFiles $testFiles -PoolJson $env:TEST_SUBSCRIPTION_IDS -FallbackSubscriptionId $env:VALIDATE_SUBSCRIPTION_ID `
+              -ModuleClientIds $env:VALIDATE_MODULE_CLIENT_IDS -TenantId $env:VALIDATE_TENANT_ID `
+              -RandomSeed ([int](([long]$env:GITHUB_RUN_ID + [long]$env:GITHUB_RUN_ATTEMPT) % [int]::MaxValue)) `
+              -DisplaySubscriptionNames:($env:TEST_SUBSCRIPTION_IDS -ne '') -SkipModuleVersionCheck)
+          $value = ConvertTo-Json -InputObject $matrix -Depth 20 -Compress
+          "deploymentMatrix=$value" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+  e2e-test:
+    name: End-to-end tests (${{ matrix.testCase.Name }})
+    needs: discover-examples
+    if: |
+      !cancelled() &&
+      inputs.e2eRoute == 'native' &&
+      needs.discover-examples.result == 'success'
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        testCase: ${{ fromJSON(needs.discover-examples.outputs.deploymentMatrix) }}
+    uses: ./.github/workflows/bicep-module-runtime-deployment.yml
+    with:
+      modulePath: ${{ inputs.modulePath }}
+      workflowInput: ${{ inputs.workflowInput }}
+      testCase: ${{ toJSON(matrix.testCase) }}
+      targetCommit: ${{ inputs.targetCommit }}
+      authoringArtifact: ${{ inputs.authoringArtifact }}
+    secrets: inherit
+
+  e2e-test-legacy:
+    name: End-to-end tests (legacy)
+    if: inputs.e2eRoute == 'legacy'
+    permissions:
+      contents: read
+      id-token: write
+    uses: Azure/bicep-registry-modules/.github/workflows/avm.template.module.preview.yml@795bfc3da023e8bd2d0831856ec684ed4352880b
+    with:
+      workflowInput: ${{ inputs.workflowInput }}
+      modulePath: ${{ inputs.modulePath }}
+      moduleTestFilePaths: ${{ inputs.moduleTestFilePaths }}
+      psRuleModuleTestFilePaths: ${{ inputs.psRuleModuleTestFilePaths }}
+      baseCommit: ${{ inputs.baseCommit }}
+      targetCommit: ${{ inputs.targetCommit }}
+    secrets: inherit

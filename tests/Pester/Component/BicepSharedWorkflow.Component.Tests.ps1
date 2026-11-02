@@ -77,7 +77,7 @@ Describe 'Component: Bicep PR entrypoint admission and routing' -Tag Component {
             }
             . ([scriptblock]::Create($script:prEntrypoint.jobs.initialize.steps[-1].run))
             $outputs = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
-            $outputs.routes = @(foreach ($name in @('check', 'e2e', 'check_legacy')) {
+            $outputs.routes = @(foreach ($name in @('check')) {
                     if (Test-AvmEntrypointCondition -Condition $script:prEntrypoint.jobs[$name]['if'] -Outputs $outputs) {
                         $name
                     }
@@ -218,7 +218,7 @@ function Get-TestSubscriptionTag {
     ) {
         $script:eventAction = $Action
         $output = Invoke-AvmPrEntrypointFixture
-        $output.routes | Should -Be @('check', 'check_legacy')
+        $output.routes | Should -Be @('check')
         $controls = $output.workflowInput | ConvertFrom-Json
         $controls.staticValidation | Should -BeExactly 'true'
         $controls.deploymentValidation | Should -BeExactly 'false'
@@ -227,15 +227,16 @@ function Get-TestSubscriptionTag {
         Should -Invoke Initialize-AvmBicepWorkflowMatrix -Exactly 1 -ParameterFilter { $SkipModuleVersionCheck }
     }
 
-    It 'admits shared E2E with only its own label while retaining the legacy route' {
+    It 'assigns each module E2E route inside the one per-module check matrix' {
         $script:eventAction = 'labeled'
         $script:eventLabel = 'PR: Run E2E Tests'
         $env:PR_LABELS = '["PR: Run E2E Tests"]'
         $output = Invoke-AvmPrEntrypointFixture
-        $output.routes | Should -Be @('check', 'e2e', 'check_legacy')
+        $output.routes | Should -Be @('check')
         ($output.workflowInput | ConvertFrom-Json).deploymentValidation | Should -BeExactly 'true'
-        ($output.sharedModuleMatrix | ConvertFrom-Json).include.modulePath | Should -Be 'avm/res/mock/widget'
-        ($output.localModuleMatrix | ConvertFrom-Json).include.modulePath | Should -Be 'avm/res/mock/reserved'
+        $routes = @($output.moduleMatrix | ConvertFrom-Json).include
+        ($routes | Where-Object modulePath -EQ 'avm/res/mock/widget').e2eRoute | Should -BeExactly 'native'
+        ($routes | Where-Object modulePath -EQ 'avm/res/mock/reserved').e2eRoute | Should -BeExactly 'legacy'
     }
 
     It 'ignores unrelated label events before bootstrap or discovery (<Label>)' -ForEach @(
@@ -268,7 +269,7 @@ function Get-TestSubscriptionTag {
         $env:PULL_REQUEST_HEAD_COMMIT = ''
         $env:MODULE_PATHS = 'avm/res/mock/reserved, avm/res/mock/widget'
         $output = Invoke-AvmPrEntrypointFixture
-        $output.routes | Should -Be @('check', 'e2e', 'check_legacy')
+        $output.routes | Should -Be @('check')
         $controls = $output.workflowInput | ConvertFrom-Json
         $controls.staticValidation | Should -BeExactly 'true'
         $controls.deploymentValidation | Should -BeExactly 'true'
