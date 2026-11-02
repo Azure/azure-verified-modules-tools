@@ -154,6 +154,7 @@ function Invoke-AvmBicepTestTenantSync {
         [System.Collections.IDictionary] $IdentityMigration,
         [System.Collections.IDictionary] $BillingScopes,
         [System.Collections.IDictionary] $SubscriptionCleanupManagementGroups,
+        [System.Collections.IDictionary] $ExistingIdentityClientIds = @{},
         [Parameter(ParameterSetName = 'Plan')] [switch] $PlanOnly = $true,
         [Parameter(Mandatory, ParameterSetName = 'Apply')] [switch] $Apply
     )
@@ -183,9 +184,8 @@ function Invoke-AvmBicepTestTenantSync {
         }
         $null = ConvertFrom-AvmBicepIdentityMigration -Migration $IdentityMigration -ClientIds $ModuleClientIds -Settings $bundle
     }
-    $billingScopeSecret = $null
     if ($PSBoundParameters.ContainsKey('BillingScopes')) {
-        $billingScopeSecret = ConvertTo-AvmBicepModuleBillingScopeJson -BillingScopes $BillingScopes
+        $projection['VALIDATE_MODULE_BILLING_SCOPES'] = ConvertTo-AvmBicepModuleBillingScopeJson -BillingScopes $BillingScopes
     }
     if ($PSBoundParameters.ContainsKey('SubscriptionCleanupManagementGroups')) {
         $projection['VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'] =
@@ -198,7 +198,7 @@ function Invoke-AvmBicepTestTenantSync {
         }
     )
     if (@($retargetedNames | Where-Object {
-                $_ -cnotin @('VALIDATE_SUBSCRIPTION_IDS', 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS')
+                $_ -cnotin @('VALIDATE_SUBSCRIPTION_IDS', 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS', 'VALIDATE_MODULE_BILLING_SCOPES')
             }).Count -gt 0) {
         throw [System.InvalidOperationException]::new(
             "Existing BAMI execution values cannot change: $($retargetedNames -join ', '). Retargeting requires coordinated maintenance; routine publication cannot overwrite present values."
@@ -206,7 +206,7 @@ function Invoke-AvmBicepTestTenantSync {
     }
     if ($retargetedNames -ccontains 'VALIDATE_SUBSCRIPTION_IDS') {
         if (@($projection.Keys | Where-Object {
-                    $_ -cnotin @('VALIDATE_MODULE_CLIENT_IDS', 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS') -and $null -eq $snapshot[$_]
+                    $_ -cnotin @('VALIDATE_MODULE_CLIENT_IDS', 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS', 'VALIDATE_MODULE_BILLING_SCOPES') -and $null -eq $snapshot[$_]
                 }).Count -gt 0 -or [string]::IsNullOrEmpty($snapshot['VALIDATE_SUBSCRIPTION_IDS'].Value)) {
             throw [System.InvalidOperationException]::new('Existing BAMI execution values cannot change: VALIDATE_SUBSCRIPTION_IDS. Tag updates require the complete matching Bicep execution bundle; missing or empty values require coordinated maintenance.')
         }
@@ -217,7 +217,8 @@ function Invoke-AvmBicepTestTenantSync {
         $projection['VALIDATE_MODULE_CLIENT_IDS'] = $moduleJson
         if ($null -ne $snapshot['VALIDATE_MODULE_CLIENT_IDS']) {
             Assert-AvmBicepModuleMappingExtension -ExistingJson $snapshot['VALIDATE_MODULE_CLIENT_IDS'].Value `
-                -ClientIds $ModuleClientIds -ForbiddenClientIds $forbidden -IdentityMigration $IdentityMigration -Settings $bundle
+                -ClientIds $ModuleClientIds -ForbiddenClientIds $forbidden -IdentityMigration $IdentityMigration -Settings $bundle `
+                -ExistingIdentityClientIds $ExistingIdentityClientIds
         }
     }
     $cleanupTargetName = 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'
@@ -232,26 +233,21 @@ function Invoke-AvmBicepTestTenantSync {
     $changes = @(
         foreach ($name in $projection.Keys) {
             if ($null -eq $snapshot[$name] -or
-                ($name -cin @('VALIDATE_MODULE_CLIENT_IDS', 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS', 'VALIDATE_SUBSCRIPTION_IDS') -and
+                ($name -cin @('VALIDATE_MODULE_CLIENT_IDS', 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS', 'VALIDATE_SUBSCRIPTION_IDS', 'VALIDATE_MODULE_BILLING_SCOPES') -and
                     $snapshot[$name].Value -cne $projection[$name])) { $name }
         }
     )
     $publishing = $PSCmdlet.ParameterSetName -ceq 'Apply' -and $Apply.IsPresent
-    $secretAction = if ($null -ne $billingScopeSecret) { 'Set' } else { 'None' }
     $result = [ordered]@{
         Target = 'Azure/bicep-registry-modules'
         Status = if ($changes.Count -eq 0) { 'NoChange' } else { 'Planned' }
         PlanOnly = -not $publishing
-        HasChanges = $changes.Count -gt 0 -or $secretAction -cne 'None'
+        HasChanges = $changes.Count -gt 0
         ChangedNames = $changes
-        BillingScopeSecretAction = $secretAction
-    }
-    if ($secretAction -cne 'None' -and $result.Status -ceq 'NoChange') {
-        $result.Status = 'Planned'
     }
     if (-not $publishing) { return [pscustomobject]$result }
-    if (($changes.Count -gt 0 -or $secretAction -cne 'None') -and
-        -not $PSCmdlet.ShouldProcess($result.Target, 'Publish nonsecret Bicep variables and the guarded billing-scope environment secret')) {
+    if ($changes.Count -gt 0 -and
+        -not $PSCmdlet.ShouldProcess($result.Target, 'Publish nonsecret Bicep variables')) {
         $result.Status = 'Preview'
         $result.PlanOnly = $true
         return [pscustomobject]$result
@@ -269,9 +265,6 @@ function Invoke-AvmBicepTestTenantSync {
                 throw [System.InvalidOperationException]::new("Complete execution-value readback does not match $name.")
             }
         }
-        if ($secretAction -ceq 'Set') {
-            Set-AvmBicepRegistryBillingScopeSecret -Value $billingScopeSecret -Confirm:$false
-        }
         $final = Get-AvmBicepTestTenantSnapshot
         Assert-AvmBicepTestTenantSnapshot -Expected $snapshot -Actual $final -Stage 'final publication readback'
     }
@@ -281,7 +274,7 @@ function Invoke-AvmBicepTestTenantSync {
             $_.Exception
         )
     }
-    if ($changes.Count -gt 0 -or $secretAction -cne 'None') {
+    if ($changes.Count -gt 0) {
         $result.Status = 'Published'
     }
     return [pscustomobject]$result

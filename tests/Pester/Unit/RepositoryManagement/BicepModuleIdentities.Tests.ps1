@@ -250,6 +250,19 @@ Describe 'Bicep module client-ID mapping' {
         { Assert-AvmBicepModuleMappingExtension -ExistingJson $existing -ClientIds $mapping } | Should -Throw '*removed or retargeted*'
     }
 
+    It 'permits a retarget only to the exact configured existing identity client' {
+        $existing = '{"avm/ptn/lz/sub-vending":"10000000-0000-4000-8000-000000000006"}'
+        $shared = '90000000-0000-4000-8000-000000000006'
+        { Assert-AvmBicepModuleMappingExtension -ExistingJson $existing -ClientIds @{ 'avm/ptn/lz/sub-vending' = $shared } `
+                -ExistingIdentityClientIds @{ 'avm/ptn/lz/sub-vending' = $shared } } | Should -Not -Throw
+        { Assert-AvmBicepModuleMappingExtension -ExistingJson $existing -ClientIds @{ 'avm/ptn/lz/sub-vending' = '90000000-0000-4000-8000-000000000007' } `
+                -ExistingIdentityClientIds @{ 'avm/ptn/lz/sub-vending' = $shared } } | Should -Throw '*removed or retargeted*'
+        { Assert-AvmBicepModuleMappingExtension -ExistingJson $existing -ClientIds @{ 'avm/ptn/lz/sub-vending' = $shared } `
+                -ExistingIdentityClientIds @{ 'avm/res/fabric/capacity' = $shared } } | Should -Throw '*removed or retargeted*'
+        { Assert-AvmBicepModuleMappingExtension -ExistingJson $existing -ClientIds @{} `
+                -ExistingIdentityClientIds @{ 'avm/ptn/lz/sub-vending' = $shared } } | Should -Throw '*removed or retargeted*'
+    }
+
     It 'does not overwrite malformed or duplicate existing JSON: <Existing>' -ForEach @(
         @{ Existing = '{}' }
         @{ Existing = '[]' }
@@ -466,7 +479,6 @@ Describe 'Bicep identity saved-plan ownership guard' {
         @{ Case = 'foreign existing state'; Edit = { param($p) $p.resource_changes[0].change.before.id = '/shared/identity' } }
         @{ Case = 'foreign provider'; Edit = { param($p) $p.resource_changes[0].provider_name = 'registry.terraform.io/example/azapi' } }
         @{ Case = 'import'; Edit = { param($p) $p.resource_changes[0].change.importing = @{ id = '/foreign/identity' } } }
-        @{ Case = 'state move'; Edit = { param($p) $p.resource_changes[0].previous_address = 'module.shared.azapi_resource.identity' } }
         @{ Case = 'unrestricted federation'; Edit = { param($p) $p.planned_values.root_module.child_modules[0].resources[-2].values.body.properties.subject = 'repo:Azure/bicep-registry-modules:environment:avm-validation' } }
         @{ Case = 'another caller'; Edit = { param($p) $p.planned_values.root_module.child_modules[0].resources[-2].values.body.properties.subject = $p.planned_values.root_module.child_modules[1].resources[-2].values.body.properties.subject } }
         @{ Case = 'wrong Graph tenant'; Edit = { param($p) $p.prior_state.values.root_module.child_modules[0].resources[1].values.tenant_id = '90000000-0000-4000-8000-000000000001' } }
@@ -517,6 +529,62 @@ Describe 'Bicep identity saved-plan ownership guard' {
         ($captured | Out-String) | Should -Not -Match $secret
     }
 
+    It 'reports every rejected resource in plan order without disclosing raw values' {
+        $previousAddress = 'synthetic-previous-address-must-not-be-disclosed'
+        $secret = 'synthetic-secret-must-not-be-disclosed'
+        $identity = $script:plan.resource_changes[0]
+        $identity.previous_address = $previousAddress
+        $script:plan.resource_changes += @(
+            @{
+                address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.identity_role_assignment'
+                mode = 'managed'
+                type = 'azapi_resource'
+                provider_name = 'registry.terraform.io/azure/azapi'
+                change = @{ actions = @('create'); after = @{ secret = $secret } }
+            }
+            @{
+                address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.unapproved_user_assigned_identity'
+                mode = 'managed'
+                type = 'azapi_resource'
+                provider_name = 'registry.terraform.io/azure/azapi'
+                change = @{ actions = @('delete'); before = @{ secret = $secret } }
+            }
+        )
+
+        $captured = & {
+            try {
+                Assert-AvmBicepIdentityPlan @script:guard
+            }
+            catch {
+                $_
+            }
+        } 6>&1
+
+        $diagnostics = @($captured | Where-Object {
+                $_ -is [System.Management.Automation.InformationRecord] -and
+                ([string]$_.MessageData).StartsWith('Bicep plan rejection [', [System.StringComparison]::Ordinal)
+            } | ForEach-Object MessageData)
+        $diagnostics | Should -HaveCount 3
+        $diagnostics[0] | Should -BeExactly (
+            'Bicep plan rejection [state-address-move]: ' +
+            'address=module.bicep["avm/res/fabric/capacity"].azapi_resource.identity[0]; ' +
+            'mode=managed; type=azapi_resource; provider_name=registry.terraform.io/azure/azapi; actions=no-op.'
+        )
+        $diagnostics[1] | Should -BeExactly (
+            'Bicep plan rejection [unexpected-resource]: ' +
+            'address=module.bicep["avm/res/fabric/capacity"].azapi_resource.identity_role_assignment; ' +
+            'mode=managed; type=azapi_resource; provider_name=registry.terraform.io/azure/azapi; actions=create.'
+        )
+        $diagnostics[2] | Should -BeExactly (
+            'Bicep plan rejection [unexpected-resource]: ' +
+            'address=module.bicep["avm/res/fabric/capacity"].azapi_resource.unapproved_user_assigned_identity; ' +
+            'mode=managed; type=azapi_resource; provider_name=registry.terraform.io/azure/azapi; actions=delete.'
+        )
+        ($captured | Out-String) | Should -Match 'may only manage dedicated identities'
+        ($captured | Out-String) | Should -Not -Match $previousAddress
+        ($captured | Out-String) | Should -Not -Match $secret
+    }
+
     It 'continues rejecting forbidden dedicated identity and role operations: <Case>' -ForEach @(
         @{
             Case = 'user-assigned identity'
@@ -537,6 +605,82 @@ Describe 'Bicep identity saved-plan ownership guard' {
 
         { Assert-AvmBicepIdentityPlan @script:guard } |
             Should -Throw '*may only manage dedicated identities*'
+    }
+
+    It 'allows only the exact unchanged dedicated identity state move' {
+        $identity = $script:plan.resource_changes[0]
+        $identity.previous_address = $identity.address.Replace('.identity[0]', '.identity')
+
+        { Assert-AvmBicepIdentityPlan @script:guard } | Should -Not -Throw
+    }
+
+    It 'rejects incompatible dedicated identity state moves: <Case>' -ForEach @(
+        @{
+            Case = 'wrong source'
+            Edit = { param($change, $guard) $change.previous_address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.identity[1]' }
+        }
+        @{
+            Case = 'wrong destination'
+            Edit = { param($change, $guard) $change.address = $change.address.Replace('.identity[0]', '.identity[1]') }
+        }
+        @{
+            Case = 'cross module'
+            Edit = { param($change, $guard) $change.previous_address = 'module.bicep["avm/res/storage/storage-account"].azapi_resource.identity' }
+        }
+        @{
+            Case = 'provider mismatch'
+            Edit = { param($change, $guard) $change.provider_name = 'registry.terraform.io/example/azapi' }
+        }
+        @{
+            Case = 'type mismatch'
+            Edit = { param($change, $guard) $change.type = 'azuread_group_member' }
+        }
+        @{
+            Case = 'non-no-op action'
+            Edit = { param($change, $guard) $change.change.actions = @('update') }
+        }
+        @{
+            Case = 'importing'
+            Edit = { param($change, $guard) $change.change.importing = @{ id = 'synthetic-import-must-not-be-disclosed' } }
+        }
+        @{
+            Case = 'external identity path'
+            Edit = { param($change, $guard) $guard['ExistingIdentities'] = @{ 'avm/res/fabric/capacity' = @{ name = 'shared-identity' } } }
+        }
+        @{
+            Case = 'changed before or after attributes'
+            Edit = { param($change, $guard) $change.change.after.name = 'changed-identity-name' }
+        }
+    ) {
+        $identity = $script:plan.resource_changes[0]
+        $identity.previous_address = $identity.address.Replace('.identity[0]', '.identity')
+        & $Edit $identity $script:guard
+
+        { Assert-AvmBicepIdentityPlan @script:guard } | Should -Throw
+    }
+
+    It 'classifies state address moves without disclosing either address' {
+        $secret = 'synthetic-previous-address-must-not-be-disclosed'
+        $script:plan.resource_changes[0].previous_address = $secret
+
+        $captured = & {
+            try {
+                Assert-AvmBicepIdentityPlan @script:guard
+            }
+            catch {
+                $_
+            }
+        } 6>&1
+
+        $diagnostic = @($captured | Where-Object {
+                $_ -is [System.Management.Automation.InformationRecord] -and
+                ([string]$_.MessageData).StartsWith(
+                    'Bicep plan rejection [state-address-move]:',
+                    [System.StringComparison]::Ordinal
+                )
+            })
+        $diagnostic | Should -HaveCount 1
+        ($captured | Out-String) | Should -Not -Match $secret
     }
 
     It 'allows revoking only a membership belonging to the same dedicated principal' {

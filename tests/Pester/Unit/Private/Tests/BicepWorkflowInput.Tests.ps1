@@ -146,6 +146,20 @@ Describe 'Bicep workflow CI parameter inputs' {
         }
     }
 
+    It 'prefers the billing-scope map from repository variables over legacy secrets' {
+        InModuleScope Avm.Authoring {
+            $scope = '/providers/Microsoft.Billing/billingAccounts/ABC:123/billingProfiles/profile/invoiceSections/section'
+            $actual = Get-AvmBicepCiParameter -TemplateParameters @{
+                subscriptionBillingScope = @{ type = 'secureString' }
+            } -Variables @{
+                VALIDATE_MODULE_BILLING_SCOPES = "{`"avm/ptn/lz/sub-vending`":`"$scope`"}"
+            } -Secrets @{
+                VALIDATE_MODULE_BILLING_SCOPES = '{"avm/ptn/lz/sub-vending":"not-a-scope"}'
+            } -ModulePath 'avm/ptn/lz/sub-vending'
+            $actual['subscriptionBillingScope'] | Should -BeOfType [securestring]
+            [System.Net.NetworkCredential]::new('', $actual['subscriptionBillingScope']).Password | Should -BeExactly $scope
+        }
+    }
     It 'rejects malformed canonical billing-scope input without exposing its value' {
         InModuleScope Avm.Authoring {
             $failure = $null

@@ -124,14 +124,6 @@ Describe 'Bicep module identity entry points with real files and mocked services
             $command = [IO.Path]::GetFileNameWithoutExtension($FilePath)
             $state.Calls.Add(@{ Command = $command; Arguments = $ArgumentList; Environment = $EnvVars; Directory = $WorkingDirectory })
             if ($command -ceq 'gh') {
-                if ($ArgumentList[0] -ceq 'secret') {
-                    $ArgumentList | Should -Be @(
-                        'secret', 'set', 'VALIDATE_MODULE_BILLING_SCOPES',
-                        '--repo', 'Azure/bicep-registry-modules', '--env', 'avm'
-                    )
-                    Test-Path -LiteralPath $StandardInputPath | Should -BeTrue
-                    return [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
-                }
                 $ArgumentList[0] | Should -BeExactly 'api'
                 $ArgumentList[4] | Should -BeIn @('GET', 'POST', 'PATCH')
                 if ($ArgumentList[-1] -ceq 'repos/Azure/azure-verified-modules-tools') {
@@ -157,6 +149,7 @@ Describe 'Bicep module identity entry points with real files and mocked services
                     }
                     $name | Should -BeIn @(
                         'VALIDATE_MODULE_CLIENT_IDS',
+                        'VALIDATE_MODULE_BILLING_SCOPES',
                         'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'
                     )
                     $state.Writes.Add($name)
@@ -351,13 +344,14 @@ Describe 'Bicep module identity entry points with real files and mocked services
         $publication = & $script:publisherPath -ModuleClientIdPath $script:mappingPath -Apply | ConvertFrom-Json -AsHashtable
         $publication.Status | Should -BeExactly 'Published'
         $script:state.Writes | Should -Be @(
+            'VALIDATE_MODULE_BILLING_SCOPES',
             'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS',
             'VALIDATE_MODULE_CLIENT_IDS'
         )
         $remaining = [ordered]@{}
         foreach ($name in $script:state.Variables.Keys) {
             if ($name -cnotin @(
-                'VALIDATE_MODULE_CLIENT_IDS',
+                'VALIDATE_MODULE_CLIENT_IDS', 'VALIDATE_MODULE_BILLING_SCOPES',
                 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'
             )) {
                 $remaining[$name] = $script:state.Variables[$name]
@@ -387,13 +381,14 @@ Describe 'Bicep module identity entry points with real files and mocked services
             -IdentityMigrationPath $script:migrationPath -Apply | ConvertFrom-Json -AsHashtable
         $publication.Status | Should -BeExactly 'Published'
         $script:state.Writes | Should -Be @(
+            'VALIDATE_MODULE_BILLING_SCOPES',
             'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS',
             'VALIDATE_MODULE_CLIENT_IDS'
         )
         $remaining = [ordered]@{}
         foreach ($name in $script:state.Variables.Keys) {
             if ($name -cnotin @(
-                'VALIDATE_MODULE_CLIENT_IDS',
+                'VALIDATE_MODULE_CLIENT_IDS', 'VALIDATE_MODULE_BILLING_SCOPES',
                 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'
             )) {
                 $remaining[$name] = $script:state.Variables[$name]
@@ -401,8 +396,8 @@ Describe 'Bicep module identity entry points with real files and mocked services
         }
         ConvertTo-Json -InputObject $remaining -Depth 5 -Compress | Should -BeExactly $script:beforeVariables
         (& $script:publisherPath -ModuleClientIdPath $script:mappingPath -IdentityMigrationPath $script:migrationPath -Apply |
-            ConvertFrom-Json -AsHashtable).Status | Should -BeExactly 'Published'
-        $script:state.Writes | Should -HaveCount 2
+            ConvertFrom-Json -AsHashtable).Status | Should -BeExactly 'NoChange'
+        $script:state.Writes | Should -HaveCount 3
     }
 
     It 'refuses a naming apply without a path for its verified publication evidence' {

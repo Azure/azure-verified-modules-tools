@@ -128,6 +128,23 @@ function Resolve-AvmBicepSubscriptionVendingBillingScopes {
     return $result
 }
 
+function Resolve-AvmBicepExistingIdentityClientIds {
+    [CmdletBinding()]
+    [OutputType([System.Collections.IDictionary])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Configuration,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Values
+    )
+
+    $selector = 'avm/ptn/lz/sub-vending'
+    $identities = Resolve-AvmBicepModuleExistingIdentities -ModulePaths @($selector) -Configuration $Configuration
+    $result = [ordered]@{}
+    if ($identities.Contains($selector)) {
+        $result[$selector] = (Resolve-AvmSubscriptionVendingIdentity -ExistingIdentity $identities[$selector] -Values $Values)['client_id']
+    }
+    return $result
+}
+
 function ConvertTo-AvmBicepModuleBillingScopeJson {
     [CmdletBinding()]
     [OutputType([string])]
@@ -309,7 +326,8 @@ function Assert-AvmBicepModuleMappingExtension {
         [Parameter(Mandatory)] [System.Collections.IDictionary] $ClientIds,
         [string[]] $ForbiddenClientIds = @(),
         [System.Collections.IDictionary] $IdentityMigration,
-        [System.Collections.IDictionary] $Settings
+        [System.Collections.IDictionary] $Settings,
+        [System.Collections.IDictionary] $ExistingIdentityClientIds = @{}
     )
 
     $existing = ConvertFrom-AvmTestTenantJson -Json $ExistingJson
@@ -323,7 +341,8 @@ function Assert-AvmBicepModuleMappingExtension {
     else { @{} }
     foreach ($path in $existing.Keys) {
         if (-not $ClientIds.Contains($path) -or ($ClientIds[$path] -ine $existing[$path] -and
-            (-not $previous.Contains($path) -or $previous[$path] -ine $existing[$path]))) {
+            (-not $previous.Contains($path) -or $previous[$path] -ine $existing[$path]) -and
+            -not ($ExistingIdentityClientIds.Contains($path) -and $ClientIds[$path] -ieq $ExistingIdentityClientIds[$path]))) {
             throw [System.InvalidOperationException]::new("The existing client ID for '$path' cannot be removed or retargeted by routine synchronization.")
         }
     }
