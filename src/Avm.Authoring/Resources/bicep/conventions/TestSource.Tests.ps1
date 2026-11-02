@@ -16,7 +16,7 @@ if ($cases.Count -gt 0) {
             $Convention.NativeTestSourceExpected += 2
             Context 'Literal metadata <MetadataName>' -ForEach @(@{ MetadataName = 'name' }, @{ MetadataName = 'description' }) {
                 It 'has a nonempty literal value' -Tag "avm.bicep.test-metadata-$MetadataName" {
-                    $pattern = "(?m)^[ \t]*metadata[ \t]+$MetadataName[ \t]*=[ \t]*'(?<value>(?:\\.|[^'\\\r\n])*)'[ \t]*\r?$"
+                    $pattern = "(?m)^[ \t]*metadata[ \t]+$MetadataName[ \t]*=[ \t]*(?:'''(?<value>(?:(?!''')[\s\S])*)'''|'(?<value>(?:\\.|[^'\\\r\n])*)')[ \t]*\r?$"
                     $declaration = [regex]::Match($Case.Source, $pattern)
                     $declaration.Success | Should -BeTrue
                     $declaration.Groups['value'].Value.Trim() | Should -Not -BeNullOrEmpty

@@ -404,6 +404,29 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $issue[0].File | Should -Be 'tests/e2e/defaults/main.test.bicep'
     }
 
+    It 'validates test metadata literal syntax: <Case>' -ForEach @(
+        @{ Case = 'multiline LF'; Literal = "'''`nFirst line`nSecond line`n'''"; Valid = $true }
+        @{ Case = 'multiline CRLF'; Literal = "'''`r`nFirst line`r`nSecond line`r`n'''"; Valid = $true }
+        @{ Case = 'multiline apostrophe and backslash'; Literal = "'''`nA resource's C:\path`n'''"; Valid = $true }
+        @{ Case = 'inline triple quotes'; Literal = "'''Description'''"; Valid = $true }
+        @{ Case = 'empty triple quotes'; Literal = "''''''"; Valid = $false }
+        @{ Case = 'whitespace multiline'; Literal = "'''`n  `t`n'''"; Valid = $false }
+        @{ Case = 'unterminated multiline'; Literal = "'''`nDescription"; Valid = $false }
+        @{ Case = 'trailing expression'; Literal = "'''Description''' + 'extra'"; Valid = $false }
+        @{ Case = 'empty single quotes'; Literal = "''"; Valid = $false }
+        @{ Case = 'expression'; Literal = "concat('first', 'second')"; Valid = $false }
+    ) {
+        $path = Join-Path $script:modulePath 'tests' 'e2e' 'defaults' 'main.test.bicep'
+        $source = [System.IO.File]::ReadAllText($path)
+        $source = [regex]::Replace($source, '(?m)^metadata description[^\r\n]*',
+            [System.Text.RegularExpressions.MatchEvaluator]{ param($match) "metadata description = $Literal" })
+        [System.IO.File]::WriteAllText($path, $source)
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $issues = @($result.Issues | Where-Object Code -eq 'avm.bicep.test-metadata-description')
+        $issues.Count | Should -Be $(if ($Valid) { 0 } else { 1 })
+        @($result.Issues | Where-Object Code -like 'avm.bicep.pester-*') | Should -HaveCount 0
+    }
+
     It 'reports malformed UTF-8 test source instead of hiding a preparation failure' {
         $path = Join-Path $script:modulePath 'tests' 'e2e' 'defaults' 'main.test.bicep'
         [System.IO.File]::WriteAllBytes($path, [byte[]]@(0xC3, 0x28))
