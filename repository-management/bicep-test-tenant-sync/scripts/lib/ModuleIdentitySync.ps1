@@ -29,12 +29,15 @@ function Test-AvmBicepDedicatedIdentityStateMove {
     )
 
     $change = $Resource['change']
-    if ($ExistingIdentities.Contains($ModulePath) -or
+    $movable = @{ "$ModuleAddress.azapi_resource.validation_federated_credential[0]" = "$ModuleAddress.azapi_resource.validation_federated_credential" }
+    if (-not $ExistingIdentities.Contains($ModulePath)) {
+        $movable["$ModuleAddress.azapi_resource.identity[0]"] = "$ModuleAddress.azapi_resource.identity"
+    }
+    if (-not $movable.ContainsKey([string]$Resource['address']) -or
         $Resource['mode'] -cne 'managed' -or
         $Resource['type'] -cne 'azapi_resource' -or
         $Resource['provider_name'] -cne 'registry.terraform.io/azure/azapi' -or
-        $Resource['address'] -cne "$ModuleAddress.azapi_resource.identity[0]" -or
-        $Resource['previous_address'] -cne "$ModuleAddress.azapi_resource.identity" -or
+        $Resource['previous_address'] -cne $movable[$Resource['address']] -or
         $change -isnot [System.Collections.IDictionary] -or
         $change['actions'] -isnot [System.Collections.IList] -or
         $change['actions'].Count -ne 1 -or
@@ -96,7 +99,7 @@ function Assert-AvmBicepIdentityPlan {
         if ($resource['mode'] -ceq 'managed' -and $resource['type'] -ceq 'azapi_resource' -and
             $suffix -cin @(
                 'azapi_resource.identity[0]', 'azapi_resource.identity_federated_credentials["avm-validation"]',
-                'azapi_resource.validation_federated_credential', 'azapi_resource.bicep_registry_federated_credential[0]'
+                'azapi_resource.validation_federated_credential[0]', 'azapi_resource.bicep_registry_federated_credential[0]'
             )) {
             $expectedProvider = 'registry.terraform.io/azure/azapi'
         }

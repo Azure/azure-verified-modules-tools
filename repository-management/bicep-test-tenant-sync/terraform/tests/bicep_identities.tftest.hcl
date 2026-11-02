@@ -123,7 +123,7 @@ override_resource {
   }
 }
 override_resource {
-  target = module.bicep["avm/res/fabric/capacity"].azapi_resource.validation_federated_credential
+  target = module.bicep["avm/res/fabric/capacity"].azapi_resource.validation_federated_credential[0]
   values = {
     id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-fabric-capacity/federatedIdentityCredentials/id-test-bicep-avm-res-fabric-capacity-avm-validation"
   }
@@ -135,7 +135,7 @@ override_resource {
   }
 }
 override_resource {
-  target = module.bicep["avm/res/storage/storage-account"].azapi_resource.validation_federated_credential
+  target = module.bicep["avm/res/storage/storage-account"].azapi_resource.validation_federated_credential[0]
   values = {
     id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-storage-storage-account/federatedIdentityCredentials/id-test-bicep-avm-res-storage-storage-account-avm-validation"
   }

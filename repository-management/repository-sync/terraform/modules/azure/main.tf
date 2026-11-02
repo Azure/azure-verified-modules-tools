@@ -102,6 +102,8 @@ resource "azapi_resource" "identity_federated_credentials" {
 }
 
 resource "azapi_resource" "validation_federated_credential" {
+  count = var.existing_identity == null || var.existing_identity.manage_entra_groups ? 1 : 0
+
   type      = "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview"
   name      = "${local.federation_identity_name}-avm-validation"
   parent_id = local.identity_resource_id
@@ -171,4 +173,9 @@ resource "azuread_group_member" "test_permissions" {
 moved {
   from = azapi_resource.identity
   to   = azapi_resource.identity[0]
+}
+
+moved {
+  from = azapi_resource.validation_federated_credential
+  to   = azapi_resource.validation_federated_credential[0]
 }

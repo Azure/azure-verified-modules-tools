@@ -76,12 +76,12 @@ run "validation_trust_stays_on_the_same_test_identity" {
 
   assert {
     condition = (
-      azapi_resource.validation_federated_credential.body.properties.subject ==
+      azapi_resource.validation_federated_credential[0].body.properties.subject ==
       "repository_owner_id:${var.github_organization_id}:repository_id:${var.repository_sync_repository_id}:environment:avm-validation" &&
-      azapi_resource.validation_federated_credential.body.properties.issuer ==
+      azapi_resource.validation_federated_credential[0].body.properties.issuer ==
       "https://token.actions.githubusercontent.com" &&
-      length(azapi_resource.validation_federated_credential.body.properties.audiences) == 1 &&
-      azapi_resource.validation_federated_credential.body.properties.audiences[0] ==
+      length(azapi_resource.validation_federated_credential[0].body.properties.audiences) == 1 &&
+      azapi_resource.validation_federated_credential[0].body.properties.audiences[0] ==
       "api://AzureADTokenExchange"
     )
     error_message = "Validation must trust only the tools repository's avm-validation environment."
@@ -89,10 +89,10 @@ run "validation_trust_stays_on_the_same_test_identity" {
 
   assert {
     condition = (
-      azapi_resource.validation_federated_credential.name == "${local.owner_repo_name}-avm-validation" &&
-      azapi_resource.validation_federated_credential.parent_id == azapi_resource.identity[0].id &&
-      length(azapi_resource.validation_federated_credential.locks) == 1 &&
-      azapi_resource.validation_federated_credential.locks[0] == azapi_resource.identity[0].id
+      azapi_resource.validation_federated_credential[0].name == "${local.owner_repo_name}-avm-validation" &&
+      azapi_resource.validation_federated_credential[0].parent_id == azapi_resource.identity[0].id &&
+      length(azapi_resource.validation_federated_credential[0].locks) == 1 &&
+      azapi_resource.validation_federated_credential[0].locks[0] == azapi_resource.identity[0].id
     )
     error_message = "Validation federation must remain on the existing module test identity."
   }
@@ -107,7 +107,7 @@ run "validation_subject_follows_the_verified_context_inputs" {
   }
   assert {
     condition = (
-      azapi_resource.validation_federated_credential.body.properties.subject ==
+      azapi_resource.validation_federated_credential[0].body.properties.subject ==
       "repository_owner_id:7654321:repository_id:987654321:environment:avm-validation"
     )
     error_message = "Validation subject must be built from the supplied organization and tools repository IDs."
@@ -155,7 +155,7 @@ run "identity_names_preserve_the_stem_except_the_reserved_windows_substring" {
       alltrue([for environment, credential in azapi_resource.identity_federated_credentials :
         credential.name == "id-test-terraform-azapi-avm-res-compute-w5s-terraform-${environment}"
       ]) &&
-      azapi_resource.validation_federated_credential.name == "id-test-terraform-azapi-avm-res-compute-w5s-terraform-avm-validation"
+      azapi_resource.validation_federated_credential[0].name == "id-test-terraform-azapi-avm-res-compute-w5s-terraform-avm-validation"
     )
     error_message = "The owner and leading terraform- are removed, and only the reserved windows substring is abbreviated in identity and credential names."
   }

@@ -170,6 +170,27 @@ run "external_identity_requires_existing_iam_admin_membership" {
   expect_failures = [data.azuread_group.test_permissions["avm-test-management-group-iam-admins"]]
 }
 
+run "shared_identity_validation_credential_has_one_owner" {
+  command = plan
+
+  variables {
+    github_repository_name = "terraform-azurerm-avm-ptn-alz-sub-vending"
+    entra_group_names      = []
+    existing_identity = {
+      name                = "id-avm-subscription-vending"
+      resource_id         = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-avm-managed-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-subscription-vending"
+      client_id           = "10000000-0000-4000-8000-000000000006"
+      principal_id        = "10000000-0000-4000-8000-000000000007"
+      federation_name_key = "terraform-sub-vending"
+      manage_entra_groups = false
+    }
+  }
+
+  assert {
+    condition     = length(azapi_resource.validation_federated_credential) == 0
+    error_message = "Only the group-edge owner of a shared identity may manage its validation credential."
+  }
+}
 run "registry_environment_federation_rejects_terraform_repositories" {
   command = plan
 
@@ -359,7 +380,7 @@ run "seed_legacy_terraform_identity" {
     }
   }
   override_resource {
-    target = azapi_resource.validation_federated_credential
+    target = azapi_resource.validation_federated_credential[0]
     values = {
       id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-avm-validation"
     }
@@ -396,7 +417,7 @@ run "rename_legacy_terraform_identity" {
       azapi_resource.identity_federated_credentials["pr-check"],
       azapi_resource.identity_federated_credentials["integration-test"],
       azapi_resource.identity_federated_credentials["examples-test"],
-      azapi_resource.validation_federated_credential,
+      azapi_resource.validation_federated_credential[0],
       azuread_group_member.test_permissions["repository-readers"],
       azuread_group_member.test_permissions["repository-owners"]
     ]
@@ -483,7 +504,7 @@ run "seed_legacy_bicep_identity" {
     }
   }
   override_resource {
-    target = azapi_resource.validation_federated_credential
+    target = azapi_resource.validation_federated_credential[0]
     values = {
       id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-bicep-avm-res-fabric-capacity-32f81a9a/federatedIdentityCredentials/id-avm-bicep-avm-res-fabric-capacity-32f81a9a-avm-validation"
     }
@@ -508,7 +529,7 @@ run "rename_legacy_bicep_identity" {
     replace = [
       azapi_resource.identity[0],
       azapi_resource.identity_federated_credentials["avm-validation"],
-      azapi_resource.validation_federated_credential,
+      azapi_resource.validation_federated_credential[0],
       azuread_group_member.test_permissions["repository-readers"],
       azuread_group_member.test_permissions["repository-owners"]
     ]

@@ -257,6 +257,15 @@ Describe 'Candidate plan and output safety' {
         $credential['previous_address'] = 'module.bami[0].azapi_resource.other'
         { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } | Should -Throw
     }
+    It 'accepts only the exact no-op validation credential move to its counted address' {
+        $script:plan = New-AvmTestBamiPlan -KnownClient
+        $credential = @($script:plan.resource_changes | Where-Object { $_.address -clike '*.azapi_resource.validation_federated_credential`[0`]' })[0]
+        $credential['previous_address'] = $credential['address'].Substring(0, $credential['address'].Length - 3)
+        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } | Should -Not -Throw
+        $credential['change']['actions'] = @('update')
+        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } | Should -Throw
+    }
+
     It 'validates naming replacements through the ordinary root and refuses incomplete root plans' {
         $plan = New-AvmTestRepositorySyncPlan -NamingMigration
         $arguments = @{
@@ -381,10 +390,10 @@ Describe 'Candidate plan and output safety' {
     It 'requires the tools validation credential alongside all four environment credentials' {
         $addresses = @($script:plan.planned_values.root_module.child_modules[0].resources | ForEach-Object { $_.address })
         @($addresses | Where-Object { $_ -like '*federated_credential*' }).Count | Should -Be 5
-        $addresses | Should -Contain 'module.azure.azapi_resource.validation_federated_credential'
+        $addresses | Should -Contain 'module.azure.azapi_resource.validation_federated_credential[0]'
         $script:plan.planned_values.root_module.child_modules[0].resources =
             @($script:plan.planned_values.root_module.child_modules[0].resources | Where-Object {
-                    $_.address -cne 'module.azure.azapi_resource.validation_federated_credential'
+                    $_.address -cne 'module.azure.azapi_resource.validation_federated_credential[0]'
                 })
         { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } |
             Should -Throw '*scope*'
@@ -457,7 +466,7 @@ Describe 'Candidate plan and output safety' {
         foreach ($mutation in $mutations) {
             $invalid = New-AvmTestBamiPlan -KnownClient
             $credential = @($invalid.planned_values.root_module.child_modules[0].resources | Where-Object {
-                    $_.address -ceq 'module.azure.azapi_resource.validation_federated_credential'
+                    $_.address -ceq 'module.azure.azapi_resource.validation_federated_credential[0]'
                 })[0].values
             if ($mutation.field -in @('subject', 'issuer', 'audiences')) {
                 $credential.body.properties[$mutation.field] = $mutation.value
