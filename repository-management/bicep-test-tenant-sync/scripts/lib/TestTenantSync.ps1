@@ -154,6 +154,7 @@ function Invoke-AvmBicepTestTenantSync {
         [System.Collections.IDictionary] $IdentityMigration,
         [System.Collections.IDictionary] $BillingScopes,
         [System.Collections.IDictionary] $SubscriptionCleanupManagementGroups,
+        [System.Collections.IDictionary] $ExistingIdentityClientIds = @{},
         [Parameter(ParameterSetName = 'Plan')] [switch] $PlanOnly = $true,
         [Parameter(Mandatory, ParameterSetName = 'Apply')] [switch] $Apply
     )
@@ -216,7 +217,8 @@ function Invoke-AvmBicepTestTenantSync {
         $projection['VALIDATE_MODULE_CLIENT_IDS'] = $moduleJson
         if ($null -ne $snapshot['VALIDATE_MODULE_CLIENT_IDS']) {
             Assert-AvmBicepModuleMappingExtension -ExistingJson $snapshot['VALIDATE_MODULE_CLIENT_IDS'].Value `
-                -ClientIds $ModuleClientIds -ForbiddenClientIds $forbidden -IdentityMigration $IdentityMigration -Settings $bundle
+                -ClientIds $ModuleClientIds -ForbiddenClientIds $forbidden -IdentityMigration $IdentityMigration -Settings $bundle `
+                -ExistingIdentityClientIds $ExistingIdentityClientIds
         }
     }
     $cleanupTargetName = 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'

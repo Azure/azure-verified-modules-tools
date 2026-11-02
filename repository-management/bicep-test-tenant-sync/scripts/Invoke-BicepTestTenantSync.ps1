@@ -45,5 +45,6 @@ $configuration = ConvertFrom-AvmTestTenantJson -Json (
 )
 $options.BillingScopes = Resolve-AvmBicepSubscriptionVendingBillingScopes -Configuration $configuration -Values $values
 $options.SubscriptionCleanupManagementGroups = Resolve-AvmBicepSubscriptionCleanupManagementGroups -Configuration $configuration -Values $values
+$options.ExistingIdentityClientIds = Resolve-AvmBicepExistingIdentityClientIds -Configuration $configuration -Values $values
 Invoke-AvmBicepTestTenantSync -Values $values @options | ConvertTo-Json -Depth 5
 $global:LASTEXITCODE = 0
