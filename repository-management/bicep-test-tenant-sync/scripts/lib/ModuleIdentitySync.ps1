@@ -218,7 +218,7 @@ function Get-AvmBicepStateRecoveryPolicy {
         '--auth-mode', 'login',
         '--subscription', $Backend.SubscriptionId,
         '--only-show-errors', '--output', 'json',
-        '--query', '{versionId:versionId}'
+        '--query', '{versionId:versionId,contentMd5:properties.contentSettings.contentMd5}'
     ) -EnvVars $Environment -TimeoutSec 60
     if ($version.ExitCode -ne 0) {
         throw [System.InvalidOperationException]::new(
@@ -233,6 +233,7 @@ function Get-AvmBicepStateRecoveryPolicy {
         $versionDocument = [System.Text.Json.JsonDocument]::Parse($version.StdOut)
         $versionProperty = $versionDocument.RootElement.GetProperty('versionId')
         $versionId = $versionProperty.GetString()
+        $contentMd5 = $versionDocument.RootElement.GetProperty('contentMd5').GetString()
     }
     catch {
         throw [System.IO.InvalidDataException]::new('State retirement received invalid pre-retirement version evidence.')
@@ -242,13 +243,14 @@ function Get-AvmBicepStateRecoveryPolicy {
             $versionDocument.Dispose()
         }
     }
-    if ([string]::IsNullOrWhiteSpace($versionId)) {
+    if ([string]::IsNullOrWhiteSpace($versionId) -or [string]::IsNullOrWhiteSpace($contentMd5)) {
         throw [System.InvalidOperationException]::new('State retirement requires an explicit pre-retirement recoverable state version.')
     }
     return [pscustomobject]@{
         VersioningEnabled = $true
         DeleteRetentionDays = $receipt['deleteRetentionDays']
         PreRetirementVersionId = $versionId
+        ContentMd5 = $contentMd5
     }
 }
 
@@ -261,7 +263,7 @@ function Invoke-AvmBicepSubscriptionVendingStateRetirementPreparation {
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Values,
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Configuration,
         [Parameter(Mandatory)] [string] $RecoveryReceiptPath,
-        [ValidatePattern('^[0-9a-f-]{36}\|[0-9]+\|[0-9TZ:.-]+$')] [string] $Expected
+        [ValidatePattern('^[0-9a-f-]{36}\|[0-9]+\|[A-Za-z0-9+/]{22}==$')] [string] $Expected
     )
 
     $settings = Get-AvmBamiSettings -Values $Values
@@ -303,8 +305,8 @@ function Invoke-AvmBicepSubscriptionVendingStateRetirementPreparation {
         $expectedSerial = [long]0
         if ($expectedParts.Count -ne 3 -or -not [long]::TryParse($expectedParts[1], [ref]$expectedSerial) -or
             $entry.Lineage -cne $expectedParts[0] -or $entry.Serial -ne $expectedSerial -or
-            $recoveryPolicy.PreRetirementVersionId -cne $expectedParts[2]) {
-            throw [System.InvalidOperationException]::new('State retirement evidence does not match the approved lineage, serial, and recovery version.')
+            $recoveryPolicy.ContentMd5 -cne $expectedParts[2]) {
+            throw [System.InvalidOperationException]::new('State retirement evidence does not match the approved lineage, serial, and state content.')
         }
         Invoke-RepositorySyncTerraform -Root $TerraformRoot -Environment $environment -Quiet -Arguments @(
             'state', 'rm', '-lock=true', '-lock-timeout=5m', $entry.Address

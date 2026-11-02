@@ -1245,7 +1245,7 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
             '        type: boolean'
             '        default: false'
             '      approved_state_retirement:'
-            '        description: Approved lineage|serial|versionId; when set, removes the exact entry after preparation'
+            '        description: Approved lineage|serial|contentMd5; when set, removes the exact entry after preparation'
             '        type: string'
             "        default: ''"
         ) -join "`n")

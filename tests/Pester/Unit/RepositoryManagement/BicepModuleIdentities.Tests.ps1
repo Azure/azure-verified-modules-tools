@@ -459,7 +459,7 @@ Describe 'Bicep identity saved-plan ownership guard' {
                     $script:state
                 }
                 else {
-                    @{ versionId = '2026-10-30T14:19:27.7550000Z' }
+                    @{ versionId = '2026-10-30T14:19:27.7550000Z'; contentMd5 = 'o0ZC9+WT5HMGHrrQl7uFaA==' }
                 }
                 $standardOutput = if ($body -is [string]) { $body } else {
                     ConvertTo-Json -InputObject $body -Depth 20 -Compress
@@ -485,7 +485,8 @@ Describe 'Bicep identity saved-plan ownership guard' {
                 $Command -ceq 'az' -and (@($Arguments) -join '|') -ceq (
                     'storage|blob|show|--account-name|fixturestatestore|--container-name|tfstate|' +
                     '--name|bicep-module-identities.tfstate|--auth-mode|login|--subscription|' +
-                    '20000000-0000-4000-8000-000000000002|--only-show-errors|--output|json|--query|{versionId:versionId}'
+                    '20000000-0000-4000-8000-000000000002|--only-show-errors|--output|json|--query|' +
+                    '{versionId:versionId,contentMd5:properties.contentSettings.contentMd5}'
                 )
             }
             Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter {
@@ -500,9 +501,9 @@ Describe 'Bicep identity saved-plan ownership guard' {
         }
 
         It 'removes only the exact approved entry and verifies the updated state: <Case>' -ForEach @(
-            @{ Case = 'approved'; Expected = '10000000-0000-4000-8000-000000000001|42|2026-10-30T14:19:27.7550000Z'; Removes = $true }
-            @{ Case = 'serial mismatch'; Expected = '10000000-0000-4000-8000-000000000001|41|2026-10-30T14:19:27.7550000Z'; Removes = $false }
-            @{ Case = 'version mismatch'; Expected = '10000000-0000-4000-8000-000000000001|42|2026-10-30T14:19:27.0000000Z'; Removes = $false }
+            @{ Case = 'approved'; Expected = '10000000-0000-4000-8000-000000000001|42|o0ZC9+WT5HMGHrrQl7uFaA=='; Removes = $true }
+            @{ Case = 'serial mismatch'; Expected = '10000000-0000-4000-8000-000000000001|41|o0ZC9+WT5HMGHrrQl7uFaA=='; Removes = $false }
+            @{ Case = 'content mismatch'; Expected = '10000000-0000-4000-8000-000000000001|42|AAAAAAAAAAAAAAAAAAAAAA=='; Removes = $false }
         ) {
             Mock Get-AvmBamiSettings { @{} }
             Mock Resolve-AvmBicepModuleExistingIdentities { @{ 'avm/ptn/lz/sub-vending' = @{ name = 'bootstrap' } } }
@@ -519,7 +520,7 @@ Describe 'Bicep identity saved-plan ownership guard' {
                     }
                 }
                 else {
-                    @{ versionId = '2026-10-30T14:19:27.7550000Z' }
+                    @{ versionId = '2026-10-30T14:19:27.7550000Z'; contentMd5 = 'o0ZC9+WT5HMGHrrQl7uFaA==' }
                 }
                 [pscustomobject]@{ ExitCode = 0; StdOut = (ConvertTo-Json -InputObject $body -Depth 20 -Compress); StdErr = '' }
             }
