@@ -1480,6 +1480,39 @@ param zoneEmpty int[] = []
         Test-Path -LiteralPath (Join-Path $module 'README.md') | Should -BeFalse
     }
 
+    It 'renders sibling imports from a module-scoped context: <Template>' -ForEach @(
+        @{ Template = 'packaged'; CustomTemplate = $false }
+        @{ Template = 'configured'; CustomTemplate = $true }
+    ) {
+        $root = Join-Path $TestDrive "sibling-import-$Template"
+        $module = Join-Path $root 'avm' 'res' 'storage' 'storage-account'
+        $sibling = Join-Path $root 'avm' 'res' 'storage' 'sibling'
+        $null = New-Item -ItemType Directory -Path $module, $sibling -Force
+        Copy-Item -Path (Join-Path $script:fixtureRoot '*') -Destination $module -Recurse
+        [IO.File]::WriteAllText((Join-Path $sibling 'main.bicep'), @'
+@export()
+type siblingType = string
+'@)
+        [IO.File]::AppendAllText((Join-Path $module 'main.bicep'),
+            "`nimport { siblingType } from '../sibling/main.bicep'`n")
+        $config = @{ analyzers = @{ core = @{ enabled = $false } } }
+        if ($CustomTemplate) {
+            $templatePath = Join-Path $root 'docs' 'avm-readme-v1.scriban'
+            $null = New-Item -ItemType Directory -Path (Split-Path $templatePath) -Force
+            Copy-Item -LiteralPath (Join-Path $script:moduleRoot 'Resources' 'bicep' 'avm-readme-v1.scriban') `
+                -Destination $templatePath
+            $config['documentation'] = @{ template = @{ file = 'docs/avm-readme-v1.scriban' } }
+        }
+        [IO.File]::WriteAllText((Join-Path $root 'bicepconfig.json'),
+            (ConvertTo-Json -InputObject $config -Depth 10))
+        $result = Invoke-AvmDocs -Path $module -CheckDrift -IncludeRenderedContent -SkipModuleVersionCheck
+        $result.FilesProcessed | Should -Be 2 -Because (@($result.Issues | ForEach-Object Message) -join '; ')
+        @($result.Issues | Where-Object Code -EQ 'avm.bicep.docs-render-failed') | Should -HaveCount 0
+        $result.GeneratedReadmes | Should -HaveCount 2
+        Test-Path -LiteralPath (Join-Path $module 'README.md') | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $sibling 'README.md') | Should -BeFalse
+    }
+
     It 'compiles existing-only Graph and Key Vault references and documents neither as a deployed resource' {
         $root = Join-Path $TestDrive 'graph-existing'
         $null = New-Item -ItemType Directory -Path $root -Force
