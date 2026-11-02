@@ -53,7 +53,7 @@ function Set-AvmBicepRegistryBillingScopeSecret {
         }
     }
     if ($response.ExitCode -ne 0) {
-        $httpStatus = [regex]::Match([string]$response.StdErr, '\(HTTP ([0-9]{3})\)')
+        $httpStatus = [regex]::Match([string]$response.StdErr, '\bHTTP ([0-9]{3})\b')
         $detail = if ($httpStatus.Success) { "; HTTP $($httpStatus.Groups[1].Value)" } else { '' }
         throw [System.InvalidOperationException]::new(
             "GitHub environment secret publication failed (exit $($response.ExitCode)$detail). Verify the target token has Actions secrets write permission."
@@ -132,7 +132,7 @@ function Invoke-AvmBicepTestTenantVariableApi {
         if ($null -ne $requestPath) { Remove-Item -LiteralPath $requestPath -Force -ErrorAction Stop }
     }
     if ($response.ExitCode -ne 0) {
-        $httpStatus = [regex]::Match([string]$response.StdErr, '\(HTTP ([0-9]{3})\)')
+        $httpStatus = [regex]::Match([string]$response.StdErr, '\bHTTP ([0-9]{3})\b')
         $detail = if ($httpStatus.Success) { "; HTTP $($httpStatus.Groups[1].Value)" } else { '' }
         throw [System.InvalidOperationException]::new("GitHub variable $Method $Name failed (exit $($response.ExitCode)$detail).")
     }
