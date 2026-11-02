@@ -55,6 +55,8 @@ function Set-AvmBicepRegistryBillingScopeSecret {
     if ($response.ExitCode -ne 0) {
         $httpStatus = [regex]::Match([string]$response.StdErr, '\bHTTP ([0-9]{3})\b')
         $detail = if ($httpStatus.Success) { "; HTTP $($httpStatus.Groups[1].Value)" } else { '' }
+        $reason = [regex]::Match([string]$response.StdErr, '\bHTTP [0-9]{3}: ([A-Za-z][A-Za-z ,.''-]{0,120})')
+        if ($reason.Success) { $detail += ": $($reason.Groups[1].Value.Trim())" }
         throw [System.InvalidOperationException]::new(
             "GitHub environment secret publication failed (exit $($response.ExitCode)$detail). Verify the target token has Actions secrets write permission."
         )
@@ -134,6 +136,8 @@ function Invoke-AvmBicepTestTenantVariableApi {
     if ($response.ExitCode -ne 0) {
         $httpStatus = [regex]::Match([string]$response.StdErr, '\bHTTP ([0-9]{3})\b')
         $detail = if ($httpStatus.Success) { "; HTTP $($httpStatus.Groups[1].Value)" } else { '' }
+        $reason = [regex]::Match([string]$response.StdErr, '\bHTTP [0-9]{3}: ([A-Za-z][A-Za-z ,.''-]{0,120})')
+        if ($reason.Success) { $detail += ": $($reason.Groups[1].Value.Trim())" }
         throw [System.InvalidOperationException]::new("GitHub variable $Method $Name failed (exit $($response.ExitCode)$detail).")
     }
     if ($Method -ceq 'GET') {
