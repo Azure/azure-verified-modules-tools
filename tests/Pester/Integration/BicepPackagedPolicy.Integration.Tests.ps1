@@ -37,7 +37,7 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
                 Should -BeExactly (Get-FileHash -LiteralPath $file.FullName).Hash
         }
         $rules = @(Get-ChildItem -LiteralPath (Join-Path $script:package 'Resources' 'bicep' 'psrule' 'rules') -File)
-        $rules | Should -HaveCount 8
+        $rules | Should -HaveCount 9
         @($rules | Where-Object { $_.Name -cnotmatch '\.Rule\.yaml$' }) | Should -HaveCount 0
         Import-Module (Join-Path $script:package 'Avm.Authoring.psd1') -Force
         . (Join-Path $repoRoot 'scripts' 'bicep-workflows' 'Validation.ps1')
@@ -150,6 +150,48 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
                 $_.Baseline -eq 'CB.AVM.WAF.Security' -and $_.Severity -eq 'error'
             }).Count | Should -BeGreaterThan 0
         $result.BaselinesExecuted | Should -Be 8
+    }
+
+    It 'limits the accepted firewall exception to FinOps Hub: <Label>' -ForEach @(
+        @{ Label = 'FinOps Hub'; RelativePath = 'avm/ptn/finops-toolkit/finops-hub'; Suppressed = $true; InsecureTransport = $false }
+        @{ Label = 'unrelated module'; RelativePath = 'avm/res/storage/storage-account'; Suppressed = $false; InsecureTransport = $false }
+        @{ Label = 'lookalike sibling'; RelativePath = 'avm/ptn/finops-toolkit/finops-hub-other'; Suppressed = $false; InsecureTransport = $false }
+        @{ Label = 'other security rule inside FinOps Hub'; RelativePath = 'avm/ptn/finops-toolkit/finops-hub'; Suppressed = $true; InsecureTransport = $true }
+    ) {
+        $target = Join-Path $script:consumer $RelativePath
+        if ($target -ne $script:modulePath) {
+            $null = New-Item -ItemType Directory -Path (Split-Path $target) -Force
+            Move-Item -LiteralPath $script:modulePath -Destination $target
+            $script:modulePath = $target
+        }
+        $sourcePath = Join-Path $script:modulePath 'main.bicep'
+        $source = [System.IO.File]::ReadAllText($sourcePath).Replace(
+            "publicNetworkAccess: 'Disabled'", "publicNetworkAccess: 'Enabled'").Replace(
+            "defaultAction: 'Deny'", "defaultAction: 'Allow'")
+        if ($InsecureTransport) {
+            $source = $source.Replace('param supportsHttpsTrafficOnly bool = true',
+                'param supportsHttpsTrafficOnly bool = false')
+        }
+        [System.IO.File]::WriteAllText($sourcePath, $source, [System.Text.UTF8Encoding]::new($false))
+        $result = Invoke-AvmCheckPolicy -Path $script:modulePath -SkipModuleVersionCheck
+        $firewallIssues = @($result.Issues | Where-Object {
+                $_.RuleName -eq 'Azure.Storage.Firewall' -and $_.Baseline -eq 'CB.AVM.WAF.Security'
+            })
+        if ($Suppressed) {
+            $firewallIssues | Should -HaveCount 0
+        }
+        else {
+            $firewallIssues.Count | Should -BeGreaterThan 0
+        }
+        if ($InsecureTransport) {
+            $result.Status | Should -Be 'fail'
+            @($result.Issues | Where-Object {
+                    $_.RuleName -eq 'Azure.Storage.SecureTransfer' -and $_.Baseline -eq 'CB.AVM.WAF.Security'
+                }).Count | Should -BeGreaterThan 0
+        }
+        $result.TestsSelected | Should -Be 2
+        $result.BaselinesExecuted | Should -Be 8
+        @($result.Evaluations | Where-Object { $_.ProcessedRules -gt 0 }).Count | Should -Be 8
     }
 
     It 'supplies the static principal default without changing required consumer parameters' {

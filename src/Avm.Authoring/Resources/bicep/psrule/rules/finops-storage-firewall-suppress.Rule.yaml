@@ -1,0 +1,14 @@
+---
+apiVersion: github.com/microsoft/PSRule/v1
+kind: SuppressionGroup
+metadata:
+  name: "FinOpsHubStorageFirewallException"
+spec:
+  rule:
+    - Azure.Storage.Firewall
+  # Accepted public-network risk: account-key/default Azure IR ingestion and
+  # settings upload require this route until end-to-end hardening is validated.
+  if:
+    source: Template
+    withinPath:
+      - avm/ptn/finops-toolkit/finops-hub/
