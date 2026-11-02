@@ -92,6 +92,23 @@ Describe 'Component: Invoke-AvmTestE2e (terraform e2e tier end-to-end)' -Tag 'Co
         @($result.PSObject.Properties['Issues'].Value).Count | Should -Be 0
     }
 
+    It 'ignores the generated telemetry update reported by the idempotency plan' {
+        $root = Join-Path $TestDrive 'telemetry-drift'
+        $exampleDir = Join-Path $root 'examples' 'default'
+        $null = New-Item -ItemType Directory -Path $exampleDir -Force
+        $null = New-Item -ItemType Directory -Path (Join-Path $root 'tests') -Force
+        Set-Content -LiteralPath (Join-Path $root 'main.tf') -Value 'terraform {}' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $exampleDir 'main.tf') -Value 'terraform {}' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $exampleDir '.env') -Value 'AVM_STUB_TERRAFORM_E2E_TELEMETRY_DRIFT=1' -Encoding utf8NoBOM
+
+        $result = Invoke-AvmTestE2e -Path $root -Ecosystem terraform -AllowPathFallback
+
+        $result.Status | Should -Be 'pass'
+        $result.FilesProcessed | Should -Be 1
+        @($result.Issues | Where-Object Severity -eq 'error').Count | Should -Be 0
+        @(Get-ChildItem -LiteralPath $exampleDir -Filter '.avm-e2e-idempotency-*.tfplan').Count | Should -Be 0
+    }
+
     It 'F40: reports skipped when the module ships no runnable examples' {
         $emptyModule = Join-Path $TestDrive 'empty-module'
         $null = New-Item -ItemType Directory -Path $emptyModule -Force
