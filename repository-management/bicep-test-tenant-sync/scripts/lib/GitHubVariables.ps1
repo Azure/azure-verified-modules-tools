@@ -27,7 +27,7 @@ function Set-AvmBicepRegistryBillingScopeSecret {
     if ([string]::IsNullOrWhiteSpace($token)) {
         throw [System.InvalidOperationException]::new('Bicep secret synchronization requires an explicit target-scoped app installation token in GH_TOKEN.')
     }
-    $target = 'Azure/bicep-registry-modules:avm/VALIDATE_MODULE_BILLING_SCOPES'
+    $target = 'Azure/bicep-registry-modules:avm-validation/VALIDATE_MODULE_BILLING_SCOPES'
     if (-not $PSCmdlet.ShouldProcess($target, 'Publish an environment secret')) {
         throw [System.OperationCanceledException]::new('The environment secret write was not approved.')
     }
@@ -40,7 +40,7 @@ function Set-AvmBicepRegistryBillingScopeSecret {
         [System.IO.File]::WriteAllText($bodyPath, $Value, [System.Text.UTF8Encoding]::new($false))
         $response = Invoke-RepositorySyncProcess -Command 'gh' -Arguments @(
             'secret', 'set', 'VALIDATE_MODULE_BILLING_SCOPES',
-            '--repo', 'Azure/bicep-registry-modules', '--env', 'avm'
+            '--repo', 'Azure/bicep-registry-modules', '--env', 'avm-validation'
         ) -StandardInputPath $bodyPath -TimeoutSec 60 -EnvVars @{
             GH_TOKEN = $token
             GH_ENTERPRISE_TOKEN = $null
