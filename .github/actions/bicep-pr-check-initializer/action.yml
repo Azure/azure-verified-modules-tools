@@ -11,6 +11,10 @@ inputs:
   modulePaths:
     description: Comma-separated Bicep modules required for manual dispatch.
     required: false
+  deploymentValidation:
+    description: Exact true or false override for workflow_dispatch deployment validation; ignored for pull requests.
+    required: false
+    default: 'true'
 outputs:
   admitted:
     description: Whether the calling event is an admitted Bicep check event.
@@ -46,8 +50,12 @@ runs:
         EVENT_ACTION: ${{ github.event.action }}
         EVENT_LABEL: ${{ github.event.label.name }}
         PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        DEPLOYMENT_VALIDATION: ${{ inputs.deploymentValidation }}
       run: |
         $ErrorActionPreference = 'Stop'
+        if ($env:DEPLOYMENT_VALIDATION -cnotin @('true', 'false')) {
+          throw [ArgumentException]::new('deploymentValidation must be exactly true or false.')
+        }
         $labels = @()
         if (-not [string]::IsNullOrWhiteSpace($env:PR_LABELS) -and $env:PR_LABELS -cne 'null') {
           $labels = @(ConvertFrom-Json -InputObject $env:PR_LABELS)
@@ -60,7 +68,12 @@ runs:
         $manual = $env:EVENT_NAME -ceq 'workflow_dispatch'
         $admitted = $automatic -or $manual
         $fork = $env:EVENT_NAME -ceq 'pull_request' -and $env:HEAD_REPOSITORY -cne $env:REPOSITORY
-        $deployment = $manual -or (-not $fork -and $labels -ccontains 'PR: Run E2E Tests')
+        $deployment = if ($manual) {
+          $env:DEPLOYMENT_VALIDATION -ceq 'true'
+        }
+        else {
+          -not $fork -and $labels -ccontains 'PR: Run E2E Tests'
+        }
         "admitted=$($admitted.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
         "fork=$($fork.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
         "deployment=$($deployment.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8

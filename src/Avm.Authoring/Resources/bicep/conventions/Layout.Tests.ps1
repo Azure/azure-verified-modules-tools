@@ -121,8 +121,14 @@ if ($cases.Count -gt 0) {
                                             }
                                             if ($Ignore.Count -eq 1 -and -not $Ignore[0].PSIsContainer -and $Ignore[0].Name -ceq '.e2eignore' -and
                                                 -not ($Ignore[0].Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
-                                                if ($Case.Scope.ModuleType -ceq 'res' -and $Folder.Name -cmatch '(defaults|waf-aligned)$' -and
-                                                    $Case.Scope.ModuleRelativePath -cnotin $Convention.LayoutExemptions['e2eIgnoreAllowedModules']) {
+                                                $modulePath = $Case.Scope.ModuleRelativePath
+                                                $defaultExcluded = $Convention.LayoutExemptions['e2eIgnoreAllowedModules'] -ccontains $modulePath
+                                                $wafAlignedExcluded = $Convention.LayoutExemptions['wafAlignedE2eIgnoreAllowedModules'] -ccontains $modulePath
+                                                $requiredResourceTest = $Case.Scope.ModuleType -ceq 'res' -and (
+                                                    ($Folder.Name -ceq 'defaults' -and -not $defaultExcluded) -or
+                                                    ($Folder.Name -ceq 'waf-aligned' -and -not $defaultExcluded -and -not $wafAlignedExcluded)
+                                                )
+                                                if ($requiredResourceTest) {
                                                     $Convention.NativeLayoutExpected++
                                                     It 'does not exclude a required resource test' -Tag 'avm.bicep.e2eignore-required-test' {
                                                         @($Ignore) | Should -HaveCount 0 -Because 'defaults and waf-aligned resource tests must deploy'

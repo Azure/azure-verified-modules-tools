@@ -20,7 +20,10 @@ Describe 'Bicep e2e settings' {
         $settings['conventionExemptions']['majorVersionAllowedModules'] | Should -Be @('avm/res/network/nat-gateway')
         $settings['conventionExemptions']['defaultsTestOptionalModules'] | Should -Be @('avm/res/aad/domain-service')
         $settings['conventionExemptions']['e2eIgnoreAllowedModules'] | Should -Contain 'avm/res/cache/redis'
-        $settings['conventionExemptions']['e2eIgnoreAllowedModules'].Count | Should -Be 8
+        $settings['conventionExemptions']['e2eIgnoreAllowedModules'] | Should -Contain 'avm/res/operational-insights/cluster'
+        $settings['conventionExemptions']['e2eIgnoreAllowedModules'].Count | Should -Be 9
+        $settings['conventionExemptions']['wafAlignedE2eIgnoreAllowedModules'] |
+            Should -BeExactly @('avm/res/dev-center/dev-center/project')
     }
 }
 

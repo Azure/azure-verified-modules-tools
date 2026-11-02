@@ -1839,6 +1839,20 @@ uses only those outputs to fan out one visible reusable
 reservation lookup, or routing policy. The established reusable entrypoint stays
 backward-compatible, but new callers do not need to invoke it.
 
+The initializer's `deploymentValidation` string input defaults to `true` and
+accepts only exact lowercase `true` or `false`. It is honored only for
+`workflow_dispatch`, so an explicit static/unit campaign can set it to `false`.
+Pull-request routing remains label- and trust-gated; this input cannot enable or
+disable a pull-request deployment route.
+
+Each runtime unit job writes the public `Invoke-AvmTestUnit` result to a
+seven-day, machine-readable artifact before it reports a failed status. The
+artifact contains the engine, aggregate counts, stable issue coordinates and
+bounded normalized diagnostics; it never includes environment values or an
+unfiltered test error record. This preserves the unit job's failure semantics
+while giving maintainers a per-module diagnostic for platform-specific Pester
+failures.
+
 Every selected non-fork deployment route is native. The exact root
 `.reserved-test-subscriptions.json` map remains the only source of reservation
 tags; it currently protects the seven Azure Local modules. Native execution
@@ -1865,6 +1879,14 @@ source, version, ref and resolved SHA; a failed selection, build, download
 or import never falls back to another source. Automatic events cannot select
 the new overrides. The caller's static `uses` pin still selects workflow
 code independently of the selected module source.
+
+Artifact consumers retain the downloaded manifest path as the runtime identity
+and additionally copy that exact package into a correctly named
+`Avm.Authoring` module directory on process `PSModulePath`. They verify that
+the copied package is the only discoverable `Avm.Authoring` module before a
+name-based minimum-version import. This supports repository test helpers that
+import the package by name on Linux without allowing an installed Gallery or
+otherwise ambient module fallback.
 
 PR checks use the original
 caller's `github` event context. Automatic upstream PR checks admit `opened`,
