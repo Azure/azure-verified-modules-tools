@@ -57,6 +57,10 @@ function Invoke-AvmBicepDocs {
     }
 
     $tool = Resolve-AvmTool -Name 'bicep' -ModuleRoot $Context.Root -AllowPathFallback:$AllowPathFallback
+    $repositoryRoot = Get-AvmBicepMonorepoRoot -Path $Context.Root
+    if (-not $repositoryRoot) {
+        $repositoryRoot = $Context.Root
+    }
     $scopes = @(if ($PSBoundParameters.ContainsKey('SelectedScope')) { $SelectedScope } else {
             Get-AvmMetadataScope -Context $Context -IncludeModuleDirectories -IncludeReadmeOnly
         })
@@ -113,7 +117,7 @@ function Invoke-AvmBicepDocs {
             $filesSelected++
             try {
                 $values = Get-AvmBicepDocsCustomValue -ModulePath $scope.Path `
-                    -RepositoryRoot $Context.Root -ToolPath $tool.Path `
+                    -RepositoryRoot $repositoryRoot -ToolPath $tool.Path `
                     -CompiledTemplateCache $compiledTemplates
             }
             catch [AvmProcessException], [AvmConfigurationException] {
@@ -131,7 +135,7 @@ function Invoke-AvmBicepDocs {
                 continue
             }
             try {
-                $renderInput = Get-AvmBicepDocsRenderInput -SourcePath $sourcePath -Root $Context.Root `
+                $renderInput = Get-AvmBicepDocsRenderInput -SourcePath $sourcePath -Root $repositoryRoot `
                     -Configuration $docsConfiguration -Stages $renderStages -Confirm:$false -WhatIf:$false
                 $result = Invoke-AvmBicepDocsRender -Values $values -SourcePath $renderInput.SourcePath `
                     -ToolPath $tool.Path -WorkingDirectory $renderInput.WorkingDirectory

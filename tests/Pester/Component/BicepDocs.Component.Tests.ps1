@@ -1283,6 +1283,70 @@ import { lockType } from 'br/public:avm/utl/types/avm-common-types:0.3.0'
         } | Should -Throw '*outside the repository*'
     }
 
+    It 'prepares module-scoped documentation with a valid sibling <Kind> reference' -ForEach @(
+        @{ Kind = 'module'; Declaration = "module sibling '../sibling/main.bicep' = {}" }
+        @{ Kind = 'import'; Declaration = "import { siblingType } from '../sibling/main.bicep'" }
+    ) {
+        $fixture = New-BicepDocsFixture -Name "module-sibling-$Kind"
+        $sibling = Join-Path (Split-Path $fixture.Module) 'sibling'
+        $null = New-Item -ItemType Directory -Path $sibling
+        [IO.File]::WriteAllText((Join-Path $sibling 'main.bicep'), 'type siblingType = string')
+        [IO.File]::AppendAllText((Join-Path $fixture.Module 'main.bicep'), "`n$Declaration`n")
+        InModuleScope Avm.Authoring -Parameters @{ F = $fixture } {
+            param($F)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'bicep'; Version = 'test'; Path = 'mock-bicep'; Source = 'test' }
+            }
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{ ExitCode = 0; StdOut = "# Preview`n"; StdErr = '' }
+            }
+            $context = Get-AvmModuleContext -Path $F.Module
+            $context.Root | Should -BeExactly $F.Module
+            $result = Invoke-AvmDocs -Path $F.Module -CheckDrift -SkipModuleVersionCheck
+            $result.FilesProcessed | Should -Be 2
+            @($result.Issues | Where-Object Code -EQ 'avm.bicep.docs-render-failed') |
+                Should -HaveCount 0
+        }
+    }
+
+    It 'keeps module-scoped documentation inside the repository boundary' {
+        $fixture = New-BicepDocsFixture -Name 'module-outside-reference'
+        [IO.File]::AppendAllText((Join-Path $fixture.Module 'main.bicep'),
+            "`nimport { escapedType } from '../../../../../outside/main.bicep'`n")
+        InModuleScope Avm.Authoring -Parameters @{ F = $fixture } {
+            param($F)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'bicep'; Version = 'test'; Path = 'mock-bicep'; Source = 'test' }
+            }
+            $result = Invoke-AvmDocs -Path $F.Module -CheckDrift -SkipModuleVersionCheck
+            @($result.Issues | Where-Object {
+                    $_.Code -eq 'avm.bicep.docs-render-failed' -and $_.Message -like '*outside the repository*'
+                }) | Should -HaveCount 1
+        }
+    }
+
+    It 'rejects linked sibling sources in module-scoped documentation' {
+        $fixture = New-BicepDocsFixture -Name 'module-linked-reference'
+        $sibling = Join-Path (Split-Path $fixture.Module) 'sibling'
+        $outside = Join-Path $TestDrive 'linked-source-target'
+        $null = New-Item -ItemType Directory -Path $outside
+        [IO.File]::WriteAllText((Join-Path $outside 'main.bicep'), "targetScope = 'resourceGroup'")
+        $linkType = if ($IsWindows) { 'Junction' } else { 'SymbolicLink' }
+        $null = New-Item -ItemType $linkType -Path $sibling -Target $outside
+        [IO.File]::AppendAllText((Join-Path $fixture.Module 'main.bicep'),
+            "`nmodule sibling '../sibling/main.bicep' = {}`n")
+        InModuleScope Avm.Authoring -Parameters @{ F = $fixture } {
+            param($F)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'bicep'; Version = 'test'; Path = 'mock-bicep'; Source = 'test' }
+            }
+            $result = Invoke-AvmDocs -Path $F.Module -CheckDrift -SkipModuleVersionCheck
+            @($result.Issues | Where-Object {
+                    $_.Code -eq 'avm.bicep.docs-render-failed' -and $_.Message -like '*linked source*'
+                }) | Should -HaveCount 1
+        }
+    }
+
     It 'requires drift mode when returning rendered content' {
         $fixture = New-BicepDocsFixture -Name 'rendered-guard'
         { Invoke-AvmDocs -Path $fixture.Root -IncludeRenderedContent -SkipModuleVersionCheck } |
