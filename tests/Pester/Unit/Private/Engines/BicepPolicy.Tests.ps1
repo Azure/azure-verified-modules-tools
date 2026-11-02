@@ -102,7 +102,8 @@ Describe 'Bicep PSRule token replacement' {
             $script:savedTokenEnvironment = @{}
             foreach ($name in @('TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_IDS',
                     'AVM_CI_VARIABLES', 'AVM_CI_SECRETS', 'VALIDATE_SUBSCRIPTION_ID', 'localToken_subscriptionId',
-                    'VALIDATE_MANAGEMENT_GROUP_ID', 'ARM_MGMTGROUP_ID', 'localToken_managementGroupId')) {
+                    'VALIDATE_MANAGEMENT_GROUP_ID', 'ARM_MGMTGROUP_ID', 'localToken_managementGroupId',
+                    'VALIDATE_TENANT_ID', 'localToken_tenantId')) {
                 $script:savedTokenEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
                 [Environment]::SetEnvironmentVariable($name, [NullString]::Value)
             }
@@ -112,6 +113,55 @@ Describe 'Bicep PSRule token replacement' {
             foreach ($name in $script:savedTokenEnvironment.Keys) {
                 $saved = $script:savedTokenEnvironment[$name]
                 [Environment]::SetEnvironmentVariable($name, $(if ($null -eq $saved) { [NullString]::Value } else { $saved }))
+            }
+        }
+
+        It 'expands public offline identity tokens without configuring deployment inputs' {
+            InModuleScope Avm.Authoring {
+                $tokens = Get-AvmBicepPolicyToken
+                $tokens.subscriptionId | Should -BeExactly '11111111-1111-4111-8111-111111111111'
+                $tokens.tenantId | Should -BeExactly '22222222-2222-4222-8222-222222222222'
+                $tokens.managementGroupId | Should -BeExactly 'avm-policy'
+                [guid]::Parse($tokens.subscriptionId) | Should -Not -Be ([guid]::Empty)
+                [guid]::Parse($tokens.tenantId) | Should -Not -Be ([guid]::Empty)
+                ConvertTo-AvmBicepPolicyText -Text '#_subscriptionId_#/#_tenantId_#/#_managementGroupId_#' -Tokens $tokens |
+                    Should -BeExactly '11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/avm-policy'
+                $deployment = Get-AvmBicepWorkflowEnvironment -Enabled
+                $deployment.SubscriptionId | Should -BeNullOrEmpty
+                $deployment.TenantId | Should -BeNullOrEmpty
+                $deployment.ManagementGroupId | Should -BeNullOrEmpty
+                $deployment.PoolJson | Should -BeNullOrEmpty
+            }
+        }
+
+        It 'retains explicit tenant configuration and local policy overrides' {
+            $env:VALIDATE_TENANT_ID = '33333333-3333-4333-8333-333333333333'
+            InModuleScope Avm.Authoring { (Get-AvmBicepPolicyToken).tenantId } |
+                Should -BeExactly $env:VALIDATE_TENANT_ID
+            $env:localToken_tenantId = '44444444-4444-4444-8444-444444444444'
+            $env:localToken_managementGroupId = 'local-policy-group'
+            InModuleScope Avm.Authoring {
+                $tokens = Get-AvmBicepPolicyToken
+                $tokens.tenantId | Should -BeExactly '44444444-4444-4444-8444-444444444444'
+                $tokens.managementGroupId | Should -BeExactly 'local-policy-group'
+            }
+        }
+
+        It 'uses offline defaults for a reserved module only when no subscription is configured' {
+            $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            $null = New-Item -ItemType Directory -Path $root
+            [IO.File]::WriteAllText((Join-Path $root '.reserved-test-subscriptions.json'),
+                '{"avm/res/azure-stack-hci/cluster":"Azure Local"}')
+            InModuleScope Avm.Authoring -Parameters @{ Root = $root } {
+                param($Root)
+                (Get-AvmBicepPolicyToken -RepositoryRoot $Root -ModulePath 'avm/res/azure-stack-hci/cluster').subscriptionId |
+                    Should -BeExactly '11111111-1111-4111-8111-111111111111'
+            }
+            $env:VALIDATE_SUBSCRIPTION_ID = '33333333-3333-4333-8333-333333333333'
+            InModuleScope Avm.Authoring -Parameters @{ Root = $root } {
+                param($Root)
+                { Get-AvmBicepPolicyToken -RepositoryRoot $Root -ModulePath 'avm/res/azure-stack-hci/cluster' } |
+                    Should -Throw '*singleton fallback is not permitted*'
             }
         }
 
