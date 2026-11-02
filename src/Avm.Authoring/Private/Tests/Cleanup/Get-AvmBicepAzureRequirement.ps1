@@ -39,6 +39,7 @@ function Get-AvmBicepAzureRequirement {
                 'New-AzRoleAssignmentScheduleRequest'  = @('Name', 'Scope', 'PrincipalId', 'RequestType', 'RoleDefinitionId')
                 'Get-AzManagementGroupSubscription'    = @('GroupName', 'SubscriptionId')
                 'New-AzManagementGroupSubscription'    = @('GroupName', 'SubscriptionId')
+                'Remove-AzManagementGroup'             = @('GroupName')
             }
         }
         @{

@@ -583,6 +583,32 @@ Describe 'Component: Bicep cleanup state and context' -Tag Component {
         }
     }
 
+    It 'retains a management group after its dedicated deletion fails' {
+        InModuleScope Avm.Authoring -Parameters @{ File = $script:statePath } {
+            param($File)
+            $created = New-AvmBicepCleanupState -Path $File -Environment AzureCloud `
+                -SubscriptionId '00000000-0000-0000-0000-000000000001' `
+                -TenantId '00000000-0000-0000-0000-000000000002'
+            $managementGroupId = '/providers/Microsoft.Management/managementGroups/test'
+            $created.State['resources'].Add(@{
+                    id = $managementGroupId; type = 'Microsoft.Management/managementGroups'
+                    removed = $false; postProcessed = $false; metadataCaptured = $false
+                    managedResourceGroupIds = @(); originalSoftDeleteFeatureState = ''
+                })
+            Save-AvmBicepCleanupState -State $created.State -Path $File
+            Mock Remove-AvmBicepResource { throw 'Management group deletion denied' }
+            Mock Remove-AvmBicepResourceRemainder {}
+            $result = Remove-AvmBicepCleanupResourceBatch -State $created.State -StatePath $File -RetryLimit 1
+            $result.Cleaned | Should -BeFalse
+            $result.Pending | Should -Contain $managementGroupId
+            $result.Issues.Count | Should -Be 1
+            Should -Invoke Remove-AvmBicepResource -Exactly 1 -ParameterFilter {
+                $ResourceId -eq $managementGroupId -and $Type -eq 'Microsoft.Management/managementGroups'
+            }
+            (Read-AvmBicepCleanupState -Path $File)['resources'][0]['removed'] | Should -BeFalse
+        }
+    }
+
     It 'resolves caller-selected relative state paths against the PowerShell location' {
         InModuleScope Avm.Authoring -Parameters @{ File = $script:statePath } {
             param($File)

@@ -22,15 +22,31 @@ function Remove-AvmBicepResource {
             throw [AvmConfigurationException]::new('Role-assignment cleanup requires an exact ARM role assignment ID ending in a GUID.')
         }
     }
+    $managementGroupName = ''
+    if ($Type -ieq 'Microsoft.Management/managementGroups') {
+        $resource = ConvertTo-AvmBicepCleanupResource -ResourceIds @($ResourceId)
+        if ($resource.type -ine $Type -or
+            $ResourceId -notmatch '^/providers/Microsoft\.Management/managementGroups/[^/]+$') {
+            throw [AvmConfigurationException]::new('Management-group cleanup requires an exact management group ID.')
+        }
+        $managementGroupName = $ResourceId.Split('/')[-1]
+    }
     if (-not $PSCmdlet.ShouldProcess($ResourceId, 'Remove Bicep test resource')) {
         return
     }
 
-    if ($PSCmdlet.ShouldProcess("Possible locks on resource with ID [$ResourceId]", 'Handle')) {
+    if ($Type -ine 'Microsoft.Management/managementGroups' -and
+        $PSCmdlet.ShouldProcess("Possible locks on resource with ID [$ResourceId]", 'Handle')) {
         Remove-AvmBicepResourceLock -ResourceId $ResourceId -Type $Type
     }
 
     switch ($Type) {
+        'Microsoft.Management/managementGroups' {
+            if ($PSCmdlet.ShouldProcess("Management group [$managementGroupName]", 'Remove')) {
+                $null = Remove-AzManagementGroup -GroupName $managementGroupName -ErrorAction Stop
+            }
+            break
+        }
         'Microsoft.Insights/diagnosticSettings' {
             $parentResourceId = $ResourceId.Substring(
                 0, $ResourceId.LastIndexOf('/providers/', [System.StringComparison]::OrdinalIgnoreCase))
