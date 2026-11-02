@@ -48,6 +48,84 @@ Describe 'Invoke-AvmTerraformTransform' -Tag Component {
         } | Should -Throw -ExceptionType ([System.ArgumentException])
     }
 
+    It 'rejects unsupported MaPoTF versions before running the bundled module-call profile: <Version>' -ForEach @(
+        @{ Version = '0.5.0' }
+        @{ Version = '1.0.0-rc.1' }
+        @{ Version = 'invalid' }
+    ) {
+        $before = @(Get-ChildItem -LiteralPath $script:moduleDir -File | Sort-Object Name |
+            ForEach-Object { '{0}:{1}' -f $_.Name, (Get-FileHash -LiteralPath $_.FullName).Hash })
+        $bundledProfile = Join-Path $script:moduleRoot 'Resources' 'mapotf' 'module-call'
+        InModuleScope Avm.Authoring -Parameters @{ C = $script:context; V = $Version; Bundled = $bundledProfile } {
+            param($C, $V, $Bundled)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'mapotf'; Version = $V; Source = 'cache'; Path = '/fake/mapotf' }
+            }
+            Mock Resolve-AvmMapotfConfigDir {
+                if ($ProfileName -eq 'module-call') { $Bundled } else { "/fake/$ProfileName" }
+            }
+            Mock Invoke-AvmProcess { throw 'Native processes must not run.' }
+            { Invoke-AvmTerraformTransform -Context $C } |
+                Should -Throw -ExceptionType ([AvmToolException]) -ExpectedMessage '*MaPoTF 1.0.0 or later*'
+            Should -Invoke Resolve-AvmTool -Exactly 1 -ParameterFilter { $Name -eq 'mapotf' }
+            Should -Invoke Resolve-AvmTool -Exactly 0 -ParameterFilter { $Name -eq 'terraform' }
+            Should -Invoke Get-AvmTerraformUtilityMigrationPlan -Exactly 0
+            Should -Invoke Invoke-AvmProcess -Exactly 0
+        }
+        $after = @(Get-ChildItem -LiteralPath $script:moduleDir -File | Sort-Object Name |
+            ForEach-Object { '{0}:{1}' -f $_.Name, (Get-FileHash -LiteralPath $_.FullName).Hash })
+        $after | Should -Be $before
+    }
+
+    It 'allows an older MaPoTF with an overridden module-call profile' {
+        InModuleScope Avm.Authoring -Parameters @{ C = $script:context } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = '0.5.0'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Resolve-AvmMapotfConfigDir { "/fake/$ProfileName" }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            (Invoke-AvmTerraformTransform -Context $C).Status | Should -Be 'pass'
+            Should -Invoke Invoke-AvmProcess -ParameterFilter { $ArgumentList[0] -eq 'transform' }
+        }
+    }
+
+    It 'allows the bundled profile with the required MaPoTF version' {
+        $bundledProfile = Join-Path $script:moduleRoot 'Resources' 'mapotf' 'module-call'
+        InModuleScope Avm.Authoring -Parameters @{ C = $script:context; Bundled = $bundledProfile } {
+            param($C, $Bundled)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = '1.0.0'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Resolve-AvmMapotfConfigDir {
+                if ($ProfileName -eq 'module-call') { $Bundled } else { "/fake/$ProfileName" }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            (Invoke-AvmTerraformTransform -Context $C).Status | Should -Be 'pass'
+            Should -Invoke Invoke-AvmProcess -ParameterFilter { $ArgumentList[0] -eq 'transform' }
+        }
+    }
+
+    It 'allows an older MaPoTF when no module-call profile is scheduled' {
+        $bundledProfile = Join-Path $script:moduleRoot 'Resources' 'mapotf' 'module-call'
+        InModuleScope Avm.Authoring -Parameters @{ C = $script:context; Bundled = $bundledProfile } {
+            param($C, $Bundled)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = $Name; Version = '0.5.0'; Source = 'cache'; Path = "/fake/$Name" }
+            }
+            Mock Resolve-AvmMapotfConfigDir {
+                if ($ProfileName -eq 'module-call') { $Bundled } else { "/fake/$ProfileName" }
+            }
+            Mock Get-AvmTerraformTransformTarget {
+                [pscustomobject]@{ Path = $C.Root; Scope = 'example'; Profiles = @('example', 'common') }
+            }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+            Mock Invoke-AvmParallel { throw 'Example profile reached.' }
+            { Invoke-AvmTerraformTransform -Context $C } | Should -Throw '*Example profile reached.*'
+            Should -Invoke Invoke-AvmParallel -Exactly 1
+        }
+    }
+
     It 'routes utility migration mode without skipping other transforms: <Mode>' -ForEach @(
         @{ Mode = $null; Preserve = $false }
         @{ Mode = ''; Preserve = $false }

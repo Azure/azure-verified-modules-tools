@@ -1309,6 +1309,13 @@ variable "location" {
     error_message = "Use a nonempty region."
   }
 }
+
+check "fixture" {
+  assert {
+    condition     = local.fixture
+    error_message = "The fixture must remain enabled."
+  }
+}
 '@
     }
 ) {
@@ -1337,6 +1344,7 @@ removed {
     if ($Declaration -eq 'authored') {
         $first | Should -Match 'An authored description\.'
         $first | Should -Match 'Use a nonempty region\.'
+        $first | Should -Match '(?s)check "fixture" \{.*?condition\s*=\s*local\.fixture.*?The fixture must remain enabled\.'
         $first | Should -Match '# tflint-ignore: terraform_unused_declarations'
     }
     $tests = Join-Path $root 'tests' 'unit'
@@ -1409,6 +1417,69 @@ It 'keeps business location dependencies required: <Usage>' -ForEach @(
     @{ Usage = 'output'; Source = "output `"business_region`" {`n  value = var.location`n}" }
     @{ Usage = 'commented traversal'; Source = "resource `"terraform_data`" `"business`" {`n  input = var /* region */ . location`n}" }
     @{ Usage = 'data'; Source = "data `"terraform_remote_state`" `"business`" {`n  backend = var.location`n}" }
+    @{ Usage = 'check'; Source = "check `"business`" {`n  assert {`n    condition = var.location != null`n    error_message = `"Location is required.`"`n  }`n}" }
+    @{
+        Usage = 'check indexed location'
+        Source = @'
+check "business" {
+  assert {
+    condition     = var["location"] != null
+    error_message = "Location is required."
+  }
+}
+'@
+    }
+    @{
+        Usage = 'check computed variable'
+        Source = @'
+check "business" {
+  assert {
+    condition     = var[var.selected] != null
+    error_message = "A selected input is required."
+  }
+}
+'@
+    }
+    @{ Usage = 'check local alias'; Source = "check `"business`" {`n  assert {`n    condition = local.main_location != null`n    error_message = `"Location is required.`"`n  }`n}" }
+    @{
+        Usage = 'check computed local dependency'
+        Source = @'
+locals {
+  selected = var[var.input_name]
+}
+check "business" {
+  assert {
+    condition     = local.selected != null
+    error_message = "A selected input is required."
+  }
+}
+'@
+    }
+    @{
+        Usage = 'check indexed local alias'
+        Source = @'
+locals {
+  selected = local["main_location"]
+}
+check "business" {
+  assert {
+    condition     = local.selected != null
+    error_message = "Location is required."
+  }
+}
+'@
+    }
+    @{
+        Usage = 'check interpolated location'
+        Source = @'
+check "business" {
+  assert {
+    condition     = length([var.enable_telemetry]) == 1
+    error_message = "The region ${var.location} is required."
+  }
+}
+'@
+    }
     @{ Usage = 'uninspected provider'; Source = "provider `"azapi`" {`n  environment = var.location`n}" }
 ) {
     $root = Join-Path $TestDrive ("required-location-" + ($Usage -replace ' ', '-'))
@@ -1419,6 +1490,71 @@ It 'keeps business location dependencies required: <Usage>' -ForEach @(
     $location = [regex]::Match($variables, '(?ms)^variable "location" \{.*?^\}').Value
     $location | Should -Match 'nullable\s*=\s*false'
     $location | Should -Not -Match 'default\s*='
+}
+
+It 'converges through the public transform with an unrelated child check' {
+    $root = Join-Path $TestDrive 'public-check-location'
+    $child = Join-Path $root 'modules' 'mesh'
+    New-TelemetryModule -Root $root
+    New-TelemetryModule -Root $child -Child
+    Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+resource "terraform_data" "business" {
+  input = var.location
+}
+
+module "mesh" {
+  source = "./modules/mesh"
+}
+'@
+    $checkPath = Join-Path $child 'checks.tf'
+    $check = @'
+check "subnet_endpoints" {
+  # var.location is not a dependency of this check.
+  assert {
+    condition     = length(var.subnet_endpoints) >= 0
+    error_message = "The subnet endpoints must be valid {not var.location}."
+  }
+}
+'@
+    [IO.File]::WriteAllText($checkPath, $check + "`n", [Text.UTF8Encoding]::new($false))
+    Set-Content -LiteralPath (Join-Path $child 'variables.tf') -Encoding utf8NoBOM -Value @'
+variable "location" {
+  type     = string
+  nullable = false
+}
+
+variable "subnet_endpoints" {
+  type    = list(string)
+  default = []
+}
+'@
+    $authoredCheck = [IO.File]::ReadAllBytes($checkPath)
+    $result = Invoke-AvmTransform -Path $root -Ecosystem terraform -ThrottleLimit 1 -SkipModuleVersionCheck
+    $result.Status | Should -BeExactly 'pass'
+    $rootVariables = [IO.File]::ReadAllText((Join-Path $root 'variables.tf'))
+    $rootLocation = [regex]::Match($rootVariables, '(?ms)^variable "location" \{.*?^\}').Value
+    $rootLocation | Should -Match 'nullable\s*=\s*false'
+    $rootLocation | Should -Not -Match 'default\s*='
+    $childVariables = [IO.File]::ReadAllText((Join-Path $child 'variables.tf'))
+    $childLocation = [regex]::Match($childVariables, '(?ms)^variable "location" \{.*?^\}').Value
+    $childLocation | Should -Match 'default\s*=\s*null'
+    $childLocation | Should -Not -Match 'nullable\s*=\s*false'
+    $childLocation | Should -Match '!var\.enable_telemetry\s*\|\|\s*var\.location\s*!=\s*null'
+    [IO.File]::ReadAllBytes($checkPath) | Should -Be $authoredCheck
+    $first = Get-TerraformAcceptanceFiles -Root $root
+    $second = Invoke-AvmTransform -Path $root -Ecosystem terraform -ThrottleLimit 1 -SkipModuleVersionCheck
+    $second.Status | Should -BeExactly 'pass'
+    $second.Changed | Should -BeNullOrEmpty
+    Assert-TerraformAcceptanceFiles -Context ([pscustomobject]@{
+            Root = $root
+            ConfigurationDirectories = @()
+        }) -Expected $first
+    (Invoke-AvmTransform -Path $root -Ecosystem terraform -ThrottleLimit 1 -SkipModuleVersionCheck -CheckDrift).Status |
+        Should -BeExactly 'pass'
+    Assert-TerraformAcceptanceFiles -Context ([pscustomobject]@{
+            Root = $root
+            ConfigurationDirectories = @()
+        }) -Expected $first
 }
 
 It 'restores a required location when business code begins using a telemetry-only input' {
