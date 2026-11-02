@@ -1233,6 +1233,21 @@ function Invoke-AvmTerraformTransform {
         }
     }
 
+    $moduleRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $bundledModuleCall = [System.IO.Path]::GetFullPath((Join-Path -Path $moduleRoot -ChildPath 'Resources' -AdditionalChildPath @('mapotf', 'module-call')))
+    $pathComparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    $usesBundledModuleCall = [string]::Equals(
+        [System.IO.Path]::GetFullPath($profileDirs['module-call']), $bundledModuleCall, $pathComparison)
+    $usesModuleCall = @($targets | Where-Object { $_.Scope -in @('root', 'module') -or $_.Profiles -contains 'module-call' }).Count -gt 0
+    if ($usesBundledModuleCall -and $usesModuleCall) {
+        $mapotfVersion = $tool.Version -as [System.Management.Automation.SemanticVersion]
+        if ($null -eq $mapotfVersion -or $mapotfVersion -lt [System.Management.Automation.SemanticVersion]'1.0.0') {
+            throw [AvmToolException]::new(
+                "The bundled module-call profile requires MaPoTF 1.0.0 or later for native check reflection; selected version is '$($tool.Version)'. Update the tool or its repository version override.",
+                'AVM1012')
+        }
+    }
+
     $before = @{}
     foreach ($f in $beforeFiles) {
         $before[$f.FullName] = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash

@@ -4,10 +4,11 @@ data "ephemeral" "location_usage" {}
 data "local" "location_usage" {}
 data "output" "location_usage" {}
 data "variable" "location_usage" {}
+data "check" "location_usage" {}
 
 locals {
   location_reference_gap = "([[:space:]]|/[*]([^*]|[*]+[^*/])*[*]+/|//[^\n]*\n|#[^\n]*\n)*"
-  location_reference = "(^|[^A-Za-z0-9_])(var${local.location_reference_gap}[.]${local.location_reference_gap}location|var${local.location_reference_gap}\\[${local.location_reference_gap}\"location\"${local.location_reference_gap}\\]|local${local.location_reference_gap}[.]${local.location_reference_gap}main_location)([^A-Za-z0-9_]|$)"
+  location_reference = "(^|[^A-Za-z0-9_])(var${local.location_reference_gap}[.]${local.location_reference_gap}location|var${local.location_reference_gap}\\[${local.location_reference_gap}\"location\"${local.location_reference_gap}\\]|local${local.location_reference_gap}[.]${local.location_reference_gap}main_location|local${local.location_reference_gap}\\[${local.location_reference_gap}\"main_location\"${local.location_reference_gap}\\])([^A-Za-z0-9_]|$)"
   location_telemetry_resource = try(data.resource.location_usage.result.azapi_resource.telemetry, null)
   location_has_telemetry = try(
     local.location_telemetry_resource.type == "Microsoft.Resources/deployments@2025-04-01" &&
@@ -51,18 +52,41 @@ locals {
     },
   ])
   location_business_source = replace(replace(replace(replace(local.location_business_expressions, "\\n", "\n"), "\\r", "\r"), "\\t", "\t"), "\\\"", "\"")
+  location_check_references = flatten([
+    for check in values(data.check.location_usage.result) : check.mptf.references
+  ])
+  location_check_required = anytrue([
+    for reference in local.location_check_references :
+    contains(["var", "local"], reference.root) && (
+      length(reference.steps) == 0 ||
+      !try(contains(["attribute", "index"], reference.steps[0].kind) && reference.steps[0].value_type == "string", false) ||
+      (reference.root == "var" && try(reference.steps[0].value == "location", true)) ||
+      (reference.root == "local" && try(reference.steps[0].value == "main_location", true))
+    )
+  ])
+  location_check_unresolved_business_source = length(local.location_check_references) > 0 && (
+    length(regexall("(^|[^A-Za-z0-9_])(var|local)${local.location_reference_gap}\\[", local.location_business_source)) > 0 ||
+    length(regexall("(^|[^A-Za-z0-9_])(var|local)${local.location_reference_gap}([^A-Za-z0-9_.\\[-]|$)", local.location_business_source)) > 0 ||
+    anytrue([
+      for root in ["var", "local"] :
+      length(regexall("(^|[^A-Za-z0-9_])${root}([^A-Za-z0-9_-]|$)", local.location_business_source)) >
+      length(regexall("(^|[^A-Za-z0-9_])${root}${local.location_reference_gap}[.]${local.location_reference_gap}[A-Za-z_][A-Za-z0-9_-]*", local.location_business_source))
+    ])
+  )
   location_source_files = {
     for filename in fileset(".", "*.tf") : filename => file(filename)
   }
   location_owned_removal = "(?m)^[[:space:]]*removed[[:space:]]*\\{[[:space:]]*from[[:space:]]*=[[:space:]]*(modtm_telemetry[.]telemetry|random_uuid[.]telemetry|azurerm_resource_group_template_deployment[.]telemetry|random_id[.]telem)[[:space:]]+lifecycle[[:space:]]*\\{[[:space:]]*destroy[[:space:]]*=[[:space:]]*false[[:space:]]*\\}[[:space:]]*\\}"
   location_uninspected_blocks = length(fileset(".", "*.tf.json")) > 0 || anytrue([
     for filename, source in local.location_source_files :
-    length(regexall("(?m)^[[:space:]]*(provider|check|import|action|list)[[:space:]\"]", source)) > 0 ||
+    length(regexall("(?m)^[[:space:]]*(provider|import|action|list)[[:space:]\"]", source)) > 0 ||
     length(regexall("(?m)^[[:space:]]*removed[[:space:]]*\\{", source)) != length(regexall(local.location_owned_removal, source))
   ])
   location_business_required = (
     length(local.location_required_children) > 0 ||
     length(regexall(local.location_reference, local.location_business_source)) > 0 ||
+    local.location_check_required ||
+    local.location_check_unresolved_business_source ||
     local.location_uninspected_blocks
   )
   location_telemetry_contract = !var.test_wrapper && (local.location_has_telemetry || length(local.telemetry_calls) > 0)

@@ -725,9 +725,19 @@ omitted and explicit null locations are accepted; telemetry on, including its
 default, requires a non-null region. Preserve authored descriptions and other
 validations. Non-telemetry references, including indirect use through
 `local.main_location`, and missing required child inputs keep location required.
+Inspect top-level checks through MaPoTF's native typed traversal references,
+including nested check blocks and interpolations; preserve checks and their
+expressions. Direct or indexed location references and references to
+`local.main_location` keep location required. A bare or ambiguous variable or
+local traversal also keeps it required. Check dependencies through other
+locals remain covered by the existing business-expression inspection;
+unresolved variable or local accesses in that inspected source are conservative
+when checks have references, not proof of a transitive dependency closure.
 Uninspected top-level block kinds conservatively retain the required contract;
 only the exact state-only removal blocks generated for retired telemetry are
-exempt from that guard.
+exempt from that guard. When the bundled module-call profile is scheduled,
+require MaPoTF 1.0.0 or later and reject an older selected tool before any
+source transforms; custom profile overrides retain their own compatibility.
 Remove the exact generated unused-declaration directive when its canonical
 location input becomes telemetry-only; preserve unrelated or authored ignores.
 If business code starts consuming a previously generated optional input, remove
