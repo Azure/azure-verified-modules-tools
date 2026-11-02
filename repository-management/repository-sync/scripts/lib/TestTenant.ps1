@@ -185,7 +185,10 @@ function Assert-AvmExternalBamiIdentityPlan {
     $federationName = "$($Identity['name'])-$(if ($moduleMatch.Success) { 'bicep-sub-vending' } else { 'terraform-sub-vending' })"
     $resources = @(Get-AvmTerraformPlannedResource -Module $Plan['planned_values']['root_module'])
     $managed = @($resources | Where-Object { $_['mode'] -ceq 'managed' })
-    $allowed = @("$ModuleAddress.azapi_resource.validation_federated_credential")
+    $allowed = @()
+    if ($Identity['manage_entra_groups']) {
+        $allowed += "$ModuleAddress.azapi_resource.validation_federated_credential[0]"
+    }
     foreach ($environment in $Environments) {
         $allowed += "$ModuleAddress.azapi_resource.identity_federated_credentials[`"$environment`"]"
     }
@@ -243,9 +246,11 @@ function Assert-AvmExternalBamiIdentityPlan {
         Assert-AvmExternalFederatedCredential -Resource @($managed | Where-Object { $_['address'] -ceq $address })[0] `
             -Name $expectedName -ParentId $Identity['resource_id'] -Subject $subject
     }
-    Assert-AvmExternalFederatedCredential -Resource @($managed | Where-Object { $_['address'] -ceq "$ModuleAddress.azapi_resource.validation_federated_credential" })[0] `
-        -Name "$federationName-avm-validation" -ParentId $Identity['resource_id'] `
-        -Subject "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
+    if ($Identity['manage_entra_groups']) {
+        Assert-AvmExternalFederatedCredential -Resource @($managed | Where-Object { $_['address'] -ceq "$ModuleAddress.azapi_resource.validation_federated_credential[0]" })[0] `
+            -Name "$federationName-avm-validation" -ParentId $Identity['resource_id'] `
+            -Subject "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
+    }
     if ($BicepRegistryFederation) {
         Assert-AvmExternalFederatedCredential -Resource @($managed | Where-Object { $_['address'] -ceq "$ModuleAddress.azapi_resource.bicep_registry_federated_credential[0]" })[0] `
             -Name "$federationName-registry-avm-validation" -ParentId $Identity['resource_id'] `
@@ -323,7 +328,7 @@ function Assert-AvmBamiIdentityPlan {
     }
     $resources = @(Get-AvmTerraformPlannedResource -Module $Plan['planned_values']['root_module'])
     $identityAddress = "$ModuleAddress.azapi_resource.identity[0]"
-    $validationCredentialAddress = "$ModuleAddress.azapi_resource.validation_federated_credential"
+    $validationCredentialAddress = "$ModuleAddress.azapi_resource.validation_federated_credential[0]"
     $registryCredentialAddress = "$ModuleAddress.azapi_resource.bicep_registry_federated_credential[0]"
     $membershipNames = @{}
     foreach ($groupName in $EntraGroupNames) {
@@ -380,7 +385,8 @@ function Assert-AvmBamiIdentityPlan {
             $null -eq $change -or $change['mode'] -cne 'managed' -or $change['type'] -cne $type -or
             $change['provider_name'] -cne $provider -or $change['change']['after'] -isnot [System.Collections.IDictionary] -or
             ($change.Contains('previous_address') -and $change['previous_address'] -cne $address -and
-                -not ($address -ceq $identityAddress -and $change['previous_address'] -ceq "$ModuleAddress.azapi_resource.identity" -and
+                -not ($address -cin @($identityAddress, $validationCredentialAddress) -and
+                    $change['previous_address'] -ceq $address.Substring(0, $address.Length - 3) -and
                     ($actions -join ',') -ceq 'no-op')) -or
             $null -ne $change['change']['importing'] -or ($actions -join ',') -cnotin $permittedActions) {
             throw [System.InvalidOperationException]::new('Candidate identity plans must not delete or replace required resources, or omit their changes.')
@@ -790,7 +796,7 @@ function Assert-AvmRetiredRepositoryIdentityPlan {
             if ([guid]::TryParseExact([string]$before['group_object_id'], 'D', [ref]$group) -and $group -ne [guid]::Empty) { continue }
         }
         if ($change['type'] -ceq 'azapi_resource' -and
-            $change['address'] -cmatch '^module\.azure\[0\]\.azapi_resource\.(identity_federated_credentials\["(pr-check|integration-test|examples-test|avm-validation)"\]|validation_federated_credential)$' -and
+            $change['address'] -cmatch '^module\.azure\[0\]\.azapi_resource\.(identity_federated_credentials\["(pr-check|integration-test|examples-test|avm-validation)"\]|validation_federated_credential(\[0\])?)$' -and
             $before['type'] -ceq 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview' -and
             $before['parent_id'] -ieq $identity['id']) { continue }
         if ($change['address'] -cin @('module.azure[0].azapi_resource.identity_role_assignment', 'module.azure[0].azapi_resource.identity_role_assignment[0]') -and

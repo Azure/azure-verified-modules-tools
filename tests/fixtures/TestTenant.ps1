@@ -176,7 +176,7 @@ AND
             }
         }
         @{
-            Address = 'module.azure.azapi_resource.validation_federated_credential'
+            Address = 'module.azure.azapi_resource.validation_federated_credential[0]'
             Name = "$IdentityName-avm-validation"
             Subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
         }
@@ -202,7 +202,7 @@ AND
     }
     $changes = @($resources | ForEach-Object {
             $actions = @(if ($KnownClient -and (-not $ValidationPending -or
-                    $_.address -cne 'module.azure.azapi_resource.validation_federated_credential')) {
+                    $_.address -cne 'module.azure.azapi_resource.validation_federated_credential[0]')) {
                 'no-op'
             }
             else {

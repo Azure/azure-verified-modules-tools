@@ -378,7 +378,7 @@ Describe 'Bicep identity saved-plan ownership guard' {
                 'job_workflow_ref:Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml@refs/heads/main:' +
                 "workflow_ref:Azure/bicep-registry-modules/.github/workflows/$($path.Replace('/', '.')).yml@refs/heads/main"
             )
-            $tools = @($credentials | Where-Object { $_.address.EndsWith('.azapi_resource.validation_federated_credential') })[0]
+            $tools = @($credentials | Where-Object { $_.address.EndsWith('.azapi_resource.validation_federated_credential[0]') })[0]
             $tools.values.body.properties.subject |
                 Should -BeExactly 'repository_owner_id:6844498:repository_id:1239632211:environment:avm-validation'
             $registry = @($credentials | Where-Object { $_.address.EndsWith('.azapi_resource.bicep_registry_federated_credential[0]') })[0]
@@ -404,7 +404,7 @@ Describe 'Bicep identity saved-plan ownership guard' {
     }
 
     It 'requires every staged and current registry credential: <_>' -ForEach @(
-        'identity_federated_credentials["avm-validation"]', 'validation_federated_credential', 'bicep_registry_federated_credential[0]'
+        'identity_federated_credentials["avm-validation"]', 'validation_federated_credential[0]', 'bicep_registry_federated_credential[0]'
     ) {
         $address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.' + $_
         $script:plan.resource_changes = @($script:plan.resource_changes | Where-Object address -CNE $address)
@@ -612,6 +612,26 @@ Describe 'Bicep identity saved-plan ownership guard' {
         $identity.previous_address = $identity.address.Replace('.identity[0]', '.identity')
 
         { Assert-AvmBicepIdentityPlan @script:guard } | Should -Not -Throw
+    }
+
+    It 'allows only the exact unchanged validation credential state move for dedicated and existing identities' {
+        $credential = @{
+            address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.validation_federated_credential[0]'
+            previous_address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.validation_federated_credential'
+            mode = 'managed'
+            type = 'azapi_resource'
+            provider_name = 'registry.terraform.io/azure/azapi'
+            change = @{ actions = @('no-op'); before = @{ name = 'credential' }; after = @{ name = 'credential' } }
+        }
+        $arguments = @{ ModuleAddress = 'module.bicep["avm/res/fabric/capacity"]'; ModulePath = 'avm/res/fabric/capacity' }
+
+        Test-AvmBicepDedicatedIdentityStateMove -Resource $credential @arguments -ExistingIdentities @{} | Should -BeTrue
+        Test-AvmBicepDedicatedIdentityStateMove -Resource $credential @arguments -ExistingIdentities @{ 'avm/res/fabric/capacity' = @{} } | Should -BeTrue
+        $credential.change.after.name = 'changed'
+        Test-AvmBicepDedicatedIdentityStateMove -Resource $credential @arguments -ExistingIdentities @{} | Should -BeFalse
+        $credential.change.after.name = 'credential'
+        $credential.previous_address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.bicep_registry_federated_credential'
+        Test-AvmBicepDedicatedIdentityStateMove -Resource $credential @arguments -ExistingIdentities @{} | Should -BeFalse
     }
 
     It 'rejects incompatible dedicated identity state moves: <Case>' -ForEach @(
