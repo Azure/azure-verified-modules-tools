@@ -241,6 +241,22 @@ Describe 'Candidate plan and output safety' {
             Should -Not -Throw
     }
 
+    It 'accepts only the exact no-op dedicated identity move to its counted address' {
+        $script:plan = New-AvmTestBamiPlan -KnownClient
+        $identity = @($script:plan.resource_changes | Where-Object { $_.address -clike '*.azapi_resource.identity`[0`]' })[0]
+        $identity['previous_address'] = $identity['address'].Substring(0, $identity['address'].Length - 3)
+        $identity['change']['actions'] = @('no-op')
+        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } | Should -Not -Throw
+        $identity['change']['actions'] = @('update')
+        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } | Should -Throw
+        $identity['change']['actions'] = @('no-op')
+        $identity['previous_address'] = 'module.bami[0].azapi_resource.other'
+        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } | Should -Throw
+        $credential = @($script:plan.resource_changes | Where-Object { $_.address -clike '*federated_credential*' })[0]
+        $identity['previous_address'] = $identity['address'].Substring(0, $identity['address'].Length - 3)
+        $credential['previous_address'] = 'module.bami[0].azapi_resource.other'
+        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } | Should -Throw
+    }
     It 'validates naming replacements through the ordinary root and refuses incomplete root plans' {
         $plan = New-AvmTestRepositorySyncPlan -NamingMigration
         $arguments = @{

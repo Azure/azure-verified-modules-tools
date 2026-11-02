@@ -379,7 +379,9 @@ function Assert-AvmBamiIdentityPlan {
         if ($resource['type'] -cne $type -or $resource['values'] -isnot [System.Collections.IDictionary] -or
             $null -eq $change -or $change['mode'] -cne 'managed' -or $change['type'] -cne $type -or
             $change['provider_name'] -cne $provider -or $change['change']['after'] -isnot [System.Collections.IDictionary] -or
-            ($change.Contains('previous_address') -and $change['previous_address'] -cne $address) -or
+            ($change.Contains('previous_address') -and $change['previous_address'] -cne $address -and
+                -not ($address -ceq $identityAddress -and $change['previous_address'] -ceq "$ModuleAddress.azapi_resource.identity" -and
+                    ($actions -join ',') -ceq 'no-op')) -or
             $null -ne $change['change']['importing'] -or ($actions -join ',') -cnotin $permittedActions) {
             throw [System.InvalidOperationException]::new('Candidate identity plans must not delete or replace required resources, or omit their changes.')
         }
