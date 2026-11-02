@@ -296,13 +296,15 @@ Describe 'Bicep reusable workflow ownership and syntax' {
     It 'keeps authoring checks secret-free and limits deployment credentials to E2E' {
         $prCheck = $script:entrypoints | Where-Object name -EQ 'Reusable: Bicep PR check'
         $prCheck.jobs.check.permissions.contents | Should -BeExactly 'read'
-        $prCheck.jobs.check.permissions.Contains('id-token') | Should -BeFalse
-        $prCheck.jobs.check.Contains('secrets') | Should -BeFalse
+        $prCheck.jobs.check.permissions.'id-token' | Should -BeExactly 'write'
+        $prCheck.jobs.check.secrets | Should -BeExactly 'inherit'
 
         $runtime = $script:workflows['bicep-module-runtime']
         $runtime.permissions.Count | Should -Be 0
-        @($runtime.jobs.Keys | Sort-Object) | Should -Be @('pr-check', 'unit-test')
-        foreach ($job in $runtime.jobs.Values) {
+        @($runtime.jobs.Keys | Sort-Object) | Should -Be @(
+            'discover-examples', 'e2e-test', 'e2e-test-legacy', 'pr-check', 'unit-test'
+        )
+        foreach ($job in @($runtime.jobs.'pr-check', $runtime.jobs.'unit-test')) {
             $job.permissions.contents | Should -BeExactly 'read'
             $job.permissions.Contains('id-token') | Should -BeFalse
             ($job | ConvertTo-Json -Depth 20) | Should -Not -Match '\bsecrets\b|AVM_CI_|azure/login|environment:'
@@ -317,6 +319,39 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $deployment.permissions.contents | Should -BeExactly 'read'
         $deployment.permissions.'id-token' | Should -BeExactly 'write'
         $e2e.jobs.'select-deployments'.steps[-1].run | Should -Not -Match 'ConvertFrom-Json.*NoEnumerate'
+    }
+
+    It 'uses the Terraform-style per-module test hierarchy under one Bicep outer matrix' {
+        $terraform = ConvertFrom-Yaml (Get-Content -LiteralPath (
+                Join-Path $script:root '.github' 'workflows' 'terraform-module.yml') -Raw)
+        $prCheck = $script:entrypoints | Where-Object name -EQ 'Reusable: Bicep PR check'
+        $runtime = $script:workflows['bicep-module-runtime']
+
+        @($prCheck.jobs.Keys | Sort-Object) | Should -Be @('bootstrap', 'check', 'initialize')
+        $prCheck.jobs.check.name | Should -BeExactly '[AVM] ${{ matrix.modulePath }}'
+        $prCheck.jobs.check.strategy.matrix | Should -BeExactly '${{ fromJSON(needs.initialize.outputs.moduleMatrix) }}'
+        $prCheck.jobs.check.uses | Should -BeExactly './.github/workflows/bicep-module-runtime.yml'
+        $prCheck.jobs.check.with.modulePath | Should -BeExactly '${{ matrix.modulePath }}'
+        $prCheck.jobs.check.with.moduleTestFilePaths | Should -BeExactly '${{ matrix.moduleTestFilePaths }}'
+        $prCheck.jobs.check.with.psRuleModuleTestFilePaths | Should -BeExactly '${{ matrix.psRuleModuleTestFilePaths }}'
+        $prCheck.jobs.check.with.e2eRoute | Should -BeExactly '${{ matrix.e2eRoute }}'
+        $prCheck.jobs.check.with.workflowInput | Should -BeExactly '${{ needs.initialize.outputs.workflowInput }}'
+        $prCheck.jobs.check.with.baseCommit | Should -BeExactly '${{ needs.initialize.outputs.baseCommit }}'
+
+        foreach ($jobName in @('pr-check', 'unit-test', 'discover-examples')) {
+            $runtime.jobs[$jobName].name | Should -BeExactly $terraform.jobs[$jobName].name
+        }
+        $runtime.jobs.'e2e-test'.name | Should -BeExactly 'End-to-end tests (${{ matrix.testCase.Name }})'
+        foreach ($jobName in @('pr-check', 'unit-test', 'discover-examples')) {
+            @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Check out caller'
+            @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Download prepared authoring runtime'
+        }
+        @($runtime.jobs.'pr-check'.steps | ForEach-Object name) | Should -Contain 'Run PR check'
+        @($runtime.jobs.'unit-test'.steps | ForEach-Object name) | Should -Contain 'Run unit tests'
+        @($runtime.jobs.'discover-examples'.steps | ForEach-Object name) | Should -Contain 'Select deployments'
+        $runtime.jobs.'e2e-test'.needs | Should -BeExactly 'discover-examples'
+        $runtime.jobs.'e2e-test'.strategy.'fail-fast' | Should -BeFalse
+        $runtime.jobs.'e2e-test'.uses | Should -BeExactly './.github/workflows/bicep-module-runtime-deployment.yml'
     }
 
     It 'acquires each runtime case lock only in the executable lifecycle job, never its waiting caller' {

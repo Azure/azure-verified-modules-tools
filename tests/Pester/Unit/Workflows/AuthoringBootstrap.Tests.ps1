@@ -89,7 +89,7 @@ Describe 'Prepared Bicep runtime selection' {
                 }
             }
         )
-        if ($scripts.Count -ne 5 -or @($scripts | Select-Object -Unique).Count -ne 1) {
+        if ($scripts.Count -ne 6 -or @($scripts | Select-Object -Unique).Count -ne 1) {
             throw 'Bicep runtime jobs must consistently select the prepared artifact.'
         }
         $script:selectRuntime = [scriptblock]::Create($scripts[0])
