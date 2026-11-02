@@ -88,10 +88,11 @@ function Get-AvmBicepSubscriptionVendingStateRetirementEntry {
     }
     $attributes = $instance['attributes']
     if ($attributes['id'] -isnot [string] -or $attributes['output'] -isnot [System.Collections.IDictionary] -or
-        $attributes['output']['properties'] -isnot [System.Collections.IDictionary]) {
+        $attributes['output']['value'] -isnot [System.Collections.IDictionary] -or
+        $attributes['output']['value']['properties'] -isnot [System.Collections.IDictionary]) {
         throw [System.IO.InvalidDataException]::new('State retirement requires complete historical dedicated identity attributes.')
     }
-    $properties = $attributes['output']['properties']
+    $properties = $attributes['output']['value']['properties']
     if ($properties['clientId'] -isnot [string] -or $properties['principalId'] -isnot [string]) {
         throw [System.IO.InvalidDataException]::new('State retirement requires complete historical dedicated identity bindings.')
     }

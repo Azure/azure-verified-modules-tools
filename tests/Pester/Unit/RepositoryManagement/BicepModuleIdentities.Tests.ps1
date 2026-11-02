@@ -374,10 +374,13 @@ Describe 'Bicep identity saved-plan ownership guard' {
                                 attributes = @{
                                     id = $script:stateSecret
                                     output = @{
-                                        properties = @{
-                                            clientId = '10000000-0000-4000-8000-000000000016'
-                                            principalId = '10000000-0000-4000-8000-000000000017'
+                                        value = @{
+                                            properties = @{
+                                                clientId = '10000000-0000-4000-8000-000000000016'
+                                                principalId = '10000000-0000-4000-8000-000000000017'
+                                            }
                                         }
+                                        type = @('object', @{})
                                     }
                                 }
                             }
@@ -407,6 +410,10 @@ Describe 'Bicep identity saved-plan ownership guard' {
             @{
                 Case = 'indexed instance'
                 Edit = { param($state, $bootstrap) $state.resources[0].instances[0].index_key = 0 }
+            }
+            @{
+                Case = 'unwrapped dynamic output'
+                Edit = { param($state, $bootstrap) $state.resources[0].instances[0].attributes.output = $state.resources[0].instances[0].attributes.output.value }
             }
             @{
                 Case = 'shared resource binding'
