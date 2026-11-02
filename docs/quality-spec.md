@@ -1809,24 +1809,37 @@ creating state; a failing command does not mean no resources exist.
 
 ### Shared Bicep workflows
 
-Tools owns the top-level reusable `bicep-pr-check.yml` and `bicep-release.yml`
-entrypoints, the established six reusable `bicep-module*.yml` legacy leaves, and
-the package-runtime Bicep module leaves. The registry retains thin event callers,
-ordinary module callers, source, authored tests and configuration, including its
-legacy child-publication approval configuration and validator.
-Shared native validation and execution belong to the released `Avm.Authoring`
-package, not registry utilities or copied compliance scripts.
-Reserved Azure Local cases retain registry-owned legacy execution until
-equivalent native coverage exists. The tools entrypoints
-partition generic selections with the caller's existing reservation helper.
-Non-General selections retain explicit, immutable reverse calls to the registry
-legacy preview and publish-only workflows. Relative reusable calls inside tools
-cannot select a registry workflow. This is a legacy compatibility exception, not
-migration of that implementation into tools or a new prepared-HCI, mapped-identity
-or full-environment-lock guarantee. Preserve its existing behavior; do not
-duplicate the reservation inventory, route reserved cases into ordinary native
-execution, or change the ordinary registry module workflows and publication
-approval policy as part of the thin-caller contract.
+Tools owns the package-runtime Bicep module leaves, the top-level reusable
+`bicep-pr-check.yml` and `bicep-release.yml` entrypoints, and the
+`bicep-pr-check-initializer` composite action. The registry retains thin event
+callers, its source, authored tests and configuration, including child-publication
+approval configuration and validator. Shared validation, discovery, subscription
+selection and execution belong to released `Avm.Authoring` and tools-owned
+workflows; they never invoke registry utilities, copied compliance scripts, or a
+registry workflow fallback.
+
+The composite initializer is the caller contract for a new PR-check workflow. A
+single caller-owned initialize job invokes its immutable tools revision and
+receives `admitted`, `moduleMatrix`, `hasModules`, `baseCommit`, `targetCommit`,
+`workflowInput`, and `authoringArtifact`. It performs event admission, fork
+handling, authoring-package bootstrap, checked-out commit verification, and
+module discovery. `moduleMatrix.include` entries contain `modulePath`,
+`moduleTestFilePaths`, `psRuleModuleTestFilePaths`, and `e2eRoute`. The caller
+uses only those outputs to fan out one visible reusable
+`bicep-module-runtime.yml` group per module; it contains no selection scripts,
+reservation lookup, or routing policy. The established reusable entrypoint stays
+backward-compatible, but new callers do not need to invoke it.
+
+Every selected non-fork deployment route is native. The exact root
+`.reserved-test-subscriptions.json` map remains the only source of reservation
+tags; it currently protects the seven Azure Local modules. Native execution
+currently fails closed before authentication for every non-General tag with an
+explicit `protected whole-lifecycle locking is not implemented` error. It never
+falls back to a registry deployment workflow or silently uses a General
+subscription. A future native implementation must prove that one actual
+subscription-wide lock, not a caller-supplied lock string, spans protected
+environment preparation, deploy, renewed completion, and recovery with
+ownership-preserving cleanup before this gate can be removed.
 
 Both entrypoints accept `authoringSource` and `authoringRef` through
 `workflow_call`. The source defaults to `gallery`; manual callers may instead

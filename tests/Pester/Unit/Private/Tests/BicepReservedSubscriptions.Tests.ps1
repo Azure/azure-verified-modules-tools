@@ -149,6 +149,20 @@ Describe 'Bicep reserved subscription contract' {
                     -PoolJson $Json -FallbackSubscriptionId '00000000-0000-4000-8000-000000000002' } |
                 Should -Throw '*singleton fallback*'
         }
+
+        It 'fails closed before authentication when native execution selects a reserved pool' {
+            InModuleScope Avm.Authoring -Parameters @{
+                Root = $script:root
+                ModulePath = $script:modulePath
+                Json = (ConvertTo-Json -InputObject $script:pool -Compress)
+            } {
+                param($Root, $ModulePath, $Json)
+                {
+                    Select-AvmBicepWorkflowDeploymentSubscriptionInternal -Root $Root -ModulePath $ModulePath `
+                        -Example 'tests/e2e/defaults/main.test.bicep' -PoolJson $Json
+                } | Should -Throw '*protected whole-lifecycle locking is not implemented*'
+            }
+        }
     }
 
     It 'never uses a reserved-only pool for an unmapped module or changes tag casing' {

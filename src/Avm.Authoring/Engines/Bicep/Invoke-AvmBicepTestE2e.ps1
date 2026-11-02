@@ -121,7 +121,7 @@ function Invoke-AvmBicepTestE2e {
                     -ModulePath $modulePath
                 if ($requiredTag -cne 'General') {
                     throw [AvmConfigurationException]::new(
-                        "Native Bicep e2e cannot run reserved tag '$requiredTag'. Use the protected registry workflow, which holds the subscription environment lock across preparation, tests, and confirmed cleanup.")
+                        "Native Bicep e2e rejects reserved tag '$requiredTag': protected whole-lifecycle locking is not implemented. No registry fallback is invoked.")
                 }
             }
             Select-AvmBicepWorkflowSubscription @selectionOptions

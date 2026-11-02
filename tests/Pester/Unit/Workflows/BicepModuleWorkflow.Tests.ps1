@@ -209,7 +209,13 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $script:entrypoints.Count | Should -Be 2
         foreach ($entrypoint in $script:entrypoints) {
             @($entrypoint.on.Keys) | Should -Be @('workflow_call')
-            @($entrypoint.on.workflow_call.inputs.Keys | Sort-Object) | Should -Be @('authoringRef', 'authoringSource')
+            $expectedInputs = if ($entrypoint.name -eq 'Reusable: Bicep PR check') {
+                @('authoringRef', 'authoringSource', 'initializeOnly')
+            }
+            else {
+                @('authoringRef', 'authoringSource')
+            }
+            @($entrypoint.on.workflow_call.inputs.Keys | Sort-Object) | Should -Be $expectedInputs
             $entrypoint.on.workflow_call.inputs.authoringSource.default | Should -BeExactly 'gallery'
             $entrypoint.permissions.Count | Should -Be 0
         }
@@ -302,7 +308,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $runtime = $script:workflows['bicep-module-runtime']
         $runtime.permissions.Count | Should -Be 0
         @($runtime.jobs.Keys | Sort-Object) | Should -Be @(
-            'discover-examples', 'e2e-test', 'e2e-test-legacy', 'pr-check', 'unit-test'
+            'discover-examples', 'e2e-test', 'pr-check', 'unit-test'
         )
         foreach ($job in @($runtime.jobs.'pr-check', $runtime.jobs.'unit-test')) {
             $job.permissions.contents | Should -BeExactly 'read'
@@ -341,7 +347,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         foreach ($jobName in @('pr-check', 'unit-test', 'discover-examples')) {
             $runtime.jobs[$jobName].name | Should -BeExactly $terraform.jobs[$jobName].name
         }
-        $runtime.jobs.'e2e-test'.name | Should -BeExactly 'End-to-end tests (${{ matrix.testCase.Name }})'
+        $runtime.jobs.'e2e-test'.name | Should -BeExactly 'End-to-end tests'
         foreach ($jobName in @('pr-check', 'unit-test', 'discover-examples')) {
             @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Check out caller'
             @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Download prepared authoring runtime'
@@ -435,6 +441,21 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         }
         @($script:actions['bicep-workflow-matrix'].outputs.Keys | Sort-Object) |
             Should -Be @('baseCommit', 'hasModules', 'includeAllVersionedModules', 'moduleMatrix', 'targetCommit', 'workflowInput')
+    }
+
+    It 'exposes a self-contained composite initializer for thin caller-owned module groups' {
+        $initializer = $script:actions['bicep-pr-check-initializer']
+        @($initializer.inputs.Keys | Sort-Object) | Should -Be @('authoringRef', 'authoringSource', 'modulePaths')
+        @($initializer.outputs.Keys | Sort-Object) |
+            Should -Be @('admitted', 'authoringArtifact', 'baseCommit', 'hasModules', 'moduleMatrix', 'targetCommit', 'workflowInput')
+        $text = Get-Content -LiteralPath (Join-Path $script:root '.github' 'actions' 'bicep-pr-check-initializer' 'action.yml') -Raw
+        $text | Should -Match 'Initialize-AvmBicepWorkflowMatrix'
+        $text | Should -Match 'BicepWorkflowOrchestration'
+        $text | Should -Match 'actions/upload-artifact@[0-9a-f]{40}'
+        $text | Should -Not -Match 'utilities[/\\]|Get-TestSubscriptionTag|avm\.template\.module\.preview'
+        foreach ($step in $initializer.runs.steps | Where-Object { $_['uses'] }) {
+            $step.uses | Should -Match '@[0-9a-f]{40}$'
+        }
     }
 
     It 'forwards the event pull request head as data without deriving a branch tip or mutable base' {

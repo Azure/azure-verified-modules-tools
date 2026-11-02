@@ -13,7 +13,7 @@ on:
         type: string
         required: true
       e2eRoute:
-        description: Native, registry-local, or disabled E2E route selected by the caller.
+        description: Native or disabled E2E route selected by the caller.
         type: string
         required: true
       baseCommit:
@@ -191,7 +191,7 @@ jobs:
           "deploymentMatrix=$value" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
   e2e-test:
-    name: End-to-end tests (${{ matrix.testCase.Name }})
+    name: End-to-end tests
     needs: discover-examples
     if: |
       !cancelled() &&
@@ -212,20 +212,4 @@ jobs:
       testCase: ${{ toJSON(matrix.testCase) }}
       targetCommit: ${{ inputs.targetCommit }}
       authoringArtifact: ${{ inputs.authoringArtifact }}
-    secrets: inherit
-
-  e2e-test-legacy:
-    name: End-to-end tests (legacy)
-    if: inputs.e2eRoute == 'legacy'
-    permissions:
-      contents: read
-      id-token: write
-    uses: Azure/bicep-registry-modules/.github/workflows/avm.template.module.preview.yml@795bfc3da023e8bd2d0831856ec684ed4352880b
-    with:
-      workflowInput: ${{ inputs.workflowInput }}
-      modulePath: ${{ inputs.modulePath }}
-      moduleTestFilePaths: ${{ inputs.moduleTestFilePaths }}
-      psRuleModuleTestFilePaths: ${{ inputs.psRuleModuleTestFilePaths }}
-      baseCommit: ${{ inputs.baseCommit }}
-      targetCommit: ${{ inputs.targetCommit }}
     secrets: inherit

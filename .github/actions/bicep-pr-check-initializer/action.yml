@@ -1,0 +1,287 @@
+name: Initialize Bicep PR checks
+description: Gate a Bicep check event, prepare Avm.Authoring, and emit the caller-owned module matrix.
+inputs:
+  authoringSource:
+    description: gallery for a stable package or repo for a manually selected immutable tools ref.
+    required: false
+    default: gallery
+  authoringRef:
+    description: Optional stable package version or tools repository reference for manual dispatch.
+    required: false
+  modulePaths:
+    description: Comma-separated Bicep modules required for manual dispatch.
+    required: false
+outputs:
+  admitted:
+    description: Whether the calling event is an admitted Bicep check event.
+    value: ${{ steps.initialize.outputs.admitted }}
+  moduleMatrix:
+    description: JSON module matrix for one caller-owned runtime group per module.
+    value: ${{ steps.initialize.outputs.moduleMatrix }}
+  hasModules:
+    description: Whether moduleMatrix contains runnable modules.
+    value: ${{ steps.initialize.outputs.hasModules }}
+  baseCommit:
+    description: Validated matrix comparison base.
+    value: ${{ steps.initialize.outputs.baseCommit }}
+  targetCommit:
+    description: Validated checked-out target commit.
+    value: ${{ steps.initialize.outputs.targetCommit }}
+  workflowInput:
+    description: JSON static/deployment/cleanup controls.
+    value: ${{ steps.initialize.outputs.workflowInput }}
+  authoringArtifact:
+    description: Run-scoped prepared Avm.Authoring artifact consumed by every runtime group.
+    value: ${{ steps.initialize.outputs.authoringArtifact }}
+runs:
+  using: composite
+  steps:
+    - name: Gate Bicep check event
+      id: gate
+      shell: pwsh
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        REPOSITORY: ${{ github.repository }}
+        HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        EVENT_ACTION: ${{ github.event.action }}
+        EVENT_LABEL: ${{ github.event.label.name }}
+        PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $labels = @()
+        if (-not [string]::IsNullOrWhiteSpace($env:PR_LABELS) -and $env:PR_LABELS -cne 'null') {
+          $labels = @(ConvertFrom-Json -InputObject $env:PR_LABELS)
+        }
+        $automatic = $env:REPOSITORY -ceq 'Azure/bicep-registry-modules' -and
+          $env:EVENT_NAME -ceq 'pull_request' -and (
+            $env:EVENT_ACTION -cin @('opened', 'reopened', 'synchronize') -or
+            ($env:EVENT_ACTION -ceq 'labeled' -and $env:EVENT_LABEL -ceq 'PR: Run E2E Tests')
+          )
+        $manual = $env:EVENT_NAME -ceq 'workflow_dispatch'
+        $admitted = $automatic -or $manual
+        $fork = $env:EVENT_NAME -ceq 'pull_request' -and $env:HEAD_REPOSITORY -cne $env:REPOSITORY
+        $deployment = $manual -or (-not $fork -and $labels -ccontains 'PR: Run E2E Tests')
+        "admitted=$($admitted.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+        "fork=$($fork.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+        "deployment=$($deployment.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+    - name: Check out caller
+      if: steps.gate.outputs.admitted == 'true'
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Validate authoring selection
+      if: steps.gate.outputs.admitted == 'true'
+      shell: pwsh
+      env:
+        SOURCE: ${{ inputs.authoringSource }}
+        REF: ${{ inputs.authoringRef }}
+        EVENT_NAME: ${{ github.event_name }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if ($env:SOURCE -cnotin @('gallery', 'repo')) {
+          throw [ArgumentException]::new('authoringSource must be gallery or repo.')
+        }
+        if ($env:AVM_OFFLINE -eq '1') {
+          throw [InvalidOperationException]::new('AVM_OFFLINE=1 prevents workflow authoring bootstrap.')
+        }
+        if ($env:EVENT_NAME -cne 'workflow_dispatch' -and ($env:SOURCE -cne 'gallery' -or $env:REF -cne '')) {
+          throw [ArgumentException]::new('authoringSource and authoringRef overrides require manual dispatch.')
+        }
+        if ($env:REF -match '[\x00-\x20\x7f]') {
+          throw [ArgumentException]::new('authoringRef cannot contain whitespace or control characters.')
+        }
+        if ($env:SOURCE -ceq 'gallery' -and $env:REF -cne '' -and
+            $env:REF -cnotmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+          throw [ArgumentException]::new('Gallery authoringRef must be an exact stable version.')
+        }
+    - name: Resolve repository commit
+      if: steps.gate.outputs.admitted == 'true' && inputs.authoringSource == 'repo'
+      id: repository
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+      env:
+        AUTHORING_REF: ${{ inputs.authoringRef }}
+      with:
+        script: |
+          const owner = 'Azure';
+          const repo = 'azure-verified-modules-tools';
+          let ref = process.env.AUTHORING_REF;
+          let selectedSha;
+          if (!ref) {
+            const tags = await github.paginate(github.rest.repos.listTags, { owner, repo, per_page: 100 });
+            const stable = tags.map(tag => {
+              const match = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(tag.name);
+              return match && { name: tag.name, sha: tag.commit.sha, version: match.slice(1).map(BigInt) };
+            }).filter(Boolean);
+            stable.sort((a, b) => {
+              for (let i = 0; i < 3; i++) {
+                if (a.version[i] !== b.version[i]) return a.version[i] > b.version[i] ? -1 : 1;
+              }
+              return 0;
+            });
+            if (!stable.length) throw new Error('No stable repository version tag was found.');
+            ref = stable[0].name;
+            selectedSha = stable[0].sha;
+          }
+          if (!/^[0-9a-fA-F]{40}$/.test(ref) &&
+              (ref === '@' || /[\x00-\x20\x7f~^:?*[\]\\]/.test(ref) ||
+               ref.includes('..') || ref.includes('@{') || ref.startsWith('/') ||
+               ref.endsWith('/') || ref.endsWith('.') ||
+               ref.split('/').some(part => !part || part.startsWith('.') || part.endsWith('.lock')))) {
+            throw new Error('Invalid repository authoringRef.');
+          }
+          const commit = await github.rest.repos.getCommit({ owner, repo, ref: selectedSha || ref });
+          const sha = commit.data.sha;
+          if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('Repository ref did not resolve to a full commit SHA.');
+          if (selectedSha && sha !== selectedSha) throw new Error('Selected tag commit changed during resolution.');
+          core.info(`Selected repository ref ${ref}, commit ${sha}.`);
+          core.setOutput('sha', sha);
+          core.setOutput('ref', ref);
+    - name: Check out selected tools commit
+      if: steps.gate.outputs.admitted == 'true' && inputs.authoringSource == 'repo'
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        repository: Azure/azure-verified-modules-tools
+        ref: ${{ steps.repository.outputs.sha }}
+        path: avm-authoring-source
+        persist-credentials: false
+    - name: Save Gallery module
+      if: steps.gate.outputs.admitted == 'true' && inputs.authoringSource == 'gallery'
+      id: gallery
+      uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
+      with:
+        operation: Save
+        destination: ${{ runner.temp }}/avm-gallery
+        version: ${{ inputs.authoringRef }}
+    - name: Prepare Avm.Authoring
+      if: steps.gate.outputs.admitted == 'true'
+      id: prepare
+      shell: pwsh
+      env:
+        SOURCE: ${{ inputs.authoringSource }}
+        REF: ${{ inputs.authoringRef }}
+        GALLERY_VERSION: ${{ steps.gallery.outputs.version }}
+        RESOLVED_REF: ${{ steps.repository.outputs.ref }}
+        RESOLVED_SHA: ${{ steps.repository.outputs.sha }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $packageRoot = Join-Path $env:RUNNER_TEMP 'avm-package'
+        $moduleRoot = Join-Path $packageRoot 'Avm.Authoring'
+        New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+        if ($env:SOURCE -ceq 'repo') {
+          if (-not @(Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet |
+              Where-Object { $_.Version -ge [version]'1.1.1' }).Count) {
+            Install-Module -Name Microsoft.PowerShell.PSResourceGet -MinimumVersion 1.1.1 `
+              -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+          }
+          Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
+          if (-not (Get-Module -ListAvailable -Name InvokeBuild | Where-Object { $_.Version -ge [version]'5.11.0' })) {
+            Install-PSResource -Name InvokeBuild -Version '[5.11.0,)' -Scope CurrentUser -TrustRepository -ErrorAction Stop
+          }
+          $source = Join-Path $env:GITHUB_WORKSPACE 'avm-authoring-source'
+          Push-Location -LiteralPath $source
+          try {
+            . (Join-Path $source 'build.ps1') build
+          }
+          finally {
+            Pop-Location
+          }
+          $built = Join-Path $source 'out' 'Avm.Authoring'
+          if (-not (Test-Path -LiteralPath (Join-Path $built 'Avm.Authoring.psd1') -PathType Leaf)) {
+            throw [IO.FileNotFoundException]::new('The repository build did not produce the Avm.Authoring manifest.')
+          }
+          Copy-Item -LiteralPath $built -Destination $moduleRoot -Recurse
+        }
+        else {
+          $savePath = Join-Path $env:RUNNER_TEMP 'avm-gallery'
+          $manifests = @(Get-ChildItem -LiteralPath $savePath -Filter 'Avm.Authoring.psd1' -Recurse -File)
+          if ($manifests.Count -ne 1) {
+            throw [InvalidOperationException]::new('Gallery download must contain exactly one Avm.Authoring manifest.')
+          }
+          Copy-Item -LiteralPath $manifests[0].Directory.FullName -Destination $moduleRoot -Recurse
+        }
+        $manifest = Join-Path $moduleRoot 'Avm.Authoring.psd1'
+        $module = Import-Module -Name $manifest -PassThru -ErrorAction Stop
+        if ($module.Name -cne 'Avm.Authoring') {
+          throw [InvalidOperationException]::new('The prepared module has an unexpected identity.')
+        }
+        if ($env:SOURCE -ceq 'gallery' -and $module.Version.ToString() -cne $env:GALLERY_VERSION) {
+          throw [InvalidOperationException]::new('The Gallery module version does not match the selected release.')
+        }
+        $selectedRef = if ($env:SOURCE -ceq 'repo') { $env:RESOLVED_REF } else { $env:REF }
+        Write-Host "Selected authoring source $($env:SOURCE), version $($module.Version), ref $selectedRef, SHA $($env:RESOLVED_SHA)."
+        "artifact=avm-authoring-$([guid]::NewGuid().ToString('N'))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+    - name: Upload prepared module
+      if: steps.gate.outputs.admitted == 'true'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ steps.prepare.outputs.artifact }}
+        path: ${{ runner.temp }}/avm-package/Avm.Authoring
+        if-no-files-found: error
+        include-hidden-files: true
+    - name: Initialize checks
+      id: initialize
+      shell: pwsh
+      env:
+        ADMITTED: ${{ steps.gate.outputs.admitted }}
+        FORK: ${{ steps.gate.outputs.fork }}
+        DEPLOYMENT: ${{ steps.gate.outputs.deployment }}
+        TARGET_COMMIT: ${{ github.sha }}
+        EVENT_NAME: ${{ github.event_name }}
+        PULL_REQUEST_HEAD_COMMIT: ${{ github.event.pull_request.head.sha }}
+        MODULE_PATHS: ${{ inputs.modulePaths }}
+        ARTIFACT: ${{ steps.prepare.outputs.artifact }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if ($env:ADMITTED -cne 'true') {
+          @(
+            'admitted=false'
+            'hasModules=false'
+            'baseCommit='
+            'targetCommit='
+            'workflowInput={}'
+            'moduleMatrix={"include":[]}'
+            'authoringArtifact='
+          ) | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          return
+        }
+        $manifest = Join-Path $env:RUNNER_TEMP 'avm-package' 'Avm.Authoring' 'Avm.Authoring.psd1'
+        Import-Module $manifest -ErrorAction Stop
+        $capabilities = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities
+        if ($capabilities.BicepWorkflowOrchestration -isnot [int] -or $capabilities.BicepWorkflowOrchestration -ne 1) {
+          throw 'The installed Avm.Authoring package does not provide BicepWorkflowOrchestration = 1.'
+        }
+        $parameters = @{
+          Root = $env:GITHUB_WORKSPACE
+          EventName = $env:EVENT_NAME
+          TargetCommit = $env:TARGET_COMMIT
+          PullRequestHeadCommit = $env:PULL_REQUEST_HEAD_COMMIT
+          ModulePaths = $env:MODULE_PATHS
+          StaticValidation = $true
+          DeploymentValidation = $env:DEPLOYMENT -ceq 'true'
+          RemoveDeployment = $true
+          SkipModuleVersionCheck = $true
+        }
+        $outputs = Initialize-AvmBicepWorkflowMatrix @parameters
+        $modules = [Collections.Generic.List[object]]::new()
+        foreach ($entry in $outputs.ModuleMatrix.Include) {
+          $modules.Add([pscustomobject]@{
+              modulePath = [string]$entry.ModulePath
+              moduleTestFilePaths = ConvertTo-Json -InputObject @($entry.TestFiles) -Depth 20 -Compress
+              psRuleModuleTestFilePaths = ConvertTo-Json -InputObject @($entry.PolicyTestFiles) -Depth 20 -Compress
+              e2eRoute = if ($env:FORK -ceq 'true' -or $outputs.WorkflowInput.deploymentValidation -cne 'true') { 'none' } else { 'native' }
+            })
+        }
+        $values = [ordered]@{
+          admitted = 'true'
+          baseCommit = $outputs.BaseCommit
+          targetCommit = $outputs.TargetCommit
+          workflowInput = ConvertTo-Json -InputObject $outputs.WorkflowInput -Depth 20 -Compress
+          moduleMatrix = ConvertTo-Json -InputObject @{ include = @($modules) } -Depth 20 -Compress
+          hasModules = ($modules.Count -gt 0).ToString().ToLowerInvariant()
+          authoringArtifact = $env:ARTIFACT
+        }
+        foreach ($entry in $values.GetEnumerator()) {
+          "$($entry.Key)=$($entry.Value)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+        }

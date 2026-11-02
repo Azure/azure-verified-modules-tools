@@ -46,6 +46,7 @@ Describe 'Component: Bicep PR entrypoint admission and routing' -Tag Component {
             $eventName = $env:EVENT_NAME
             $repository = $env:REPOSITORY
             $bootstrapResult = $script:bootstrapResult
+            $initializeOnly = $false
             $workflowInput = if ($Outputs.ContainsKey('workflowInput')) {
                 $Outputs['workflowInput'] | ConvertFrom-Json
             }
@@ -62,6 +63,7 @@ Describe 'Component: Bicep PR entrypoint admission and routing' -Tag Component {
             $expression = $Condition.Replace('!cancelled()', '$true').Replace('needs.bootstrap.result', '$bootstrapResult').
                 Replace('github.event_name', '$eventName').Replace('github.repository', '$repository').
                 Replace('github.event.action', '$action').Replace('github.event.label.name', '$label').
+                Replace('${{', '').Replace('}}', '').Replace('!inputs.initializeOnly', '-not $initializeOnly').
                 Replace('&&', '-and').Replace('||', '-or').Replace('!=', '-cne').Replace('==', '-ceq')
             $expression = [regex]::Replace($expression, 'needs\.initialize\.outputs\.([A-Za-z]+)', {
                     param($match) '$Outputs[''' + $match.Groups[1].Value + ''']'
@@ -96,8 +98,7 @@ Describe 'Component: Bicep PR entrypoint admission and routing' -Tag Component {
     BeforeEach {
         $script:entrypointRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $support = Join-Path $script:entrypointRoot '.avm-tools' 'scripts' 'bicep-workflows'
-        $registry = Join-Path $script:entrypointRoot 'utilities' 'pipelines' 'sharedScripts'
-        $null = New-Item -ItemType Directory -Path $support, $registry -Force
+        $null = New-Item -ItemType Directory -Path $support -Force
         foreach ($path in @('avm/res/mock/widget', 'avm/res/mock/reserved')) {
             $folder = Join-Path $script:entrypointRoot $path
             $null = New-Item -ItemType Directory -Path $folder -Force
@@ -124,18 +125,9 @@ function Invoke-AvmWorkflowGitRead {
 }
 '@
         [IO.File]::WriteAllText((Join-Path $support 'Discovery.ps1'), ". '$discoveryPath'`n$stub")
-        [IO.File]::WriteAllText((Join-Path $registry 'Get-TestSubscriptionTag.ps1'), @'
-function Get-TestSubscriptionTag {
-    param([string] $ModulePath, [string] $RepoRootPath)
-    if ($script:reservationFailure) { throw [ArgumentException]::new('Invalid reservation fixture.') }
-    if ($ModulePath -ceq 'avm/res/mock/reserved') { return 'Azure Local' }
-    return 'General'
-}
-'@)
         $script:entrypointBootstraps = 0
         $script:entrypointImports = 0
         $script:bootstrapResult = 'success'
-        $script:reservationFailure = $false
         $script:entrypointChanges = "avm/res/mock/widget/main.bicep`navm/res/mock/reserved/main.bicep"
         $script:eventAction = 'synchronize'
         $script:eventLabel = ''
@@ -236,7 +228,7 @@ function Get-TestSubscriptionTag {
         ($output.workflowInput | ConvertFrom-Json).deploymentValidation | Should -BeExactly 'true'
         $routes = @($output.moduleMatrix | ConvertFrom-Json).include
         ($routes | Where-Object modulePath -EQ 'avm/res/mock/widget').e2eRoute | Should -BeExactly 'native'
-        ($routes | Where-Object modulePath -EQ 'avm/res/mock/reserved').e2eRoute | Should -BeExactly 'legacy'
+        ($routes | Where-Object modulePath -EQ 'avm/res/mock/reserved').e2eRoute | Should -BeExactly 'native'
     }
 
     It 'ignores unrelated label events before bootstrap or discovery (<Label>)' -ForEach @(
@@ -291,10 +283,9 @@ function Get-TestSubscriptionTag {
         $output.hasModules | Should -BeExactly 'false'
     }
 
-    It 'does not emit partial routes when reservation lookup fails' {
-        $script:reservationFailure = $true
-        { Invoke-AvmPrEntrypointFixture } | Should -Throw '*reservation fixture*'
-        Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
+    It 'keeps routing independent of caller-local reservation helper scripts' {
+        $text = Get-Content -LiteralPath (Join-Path $script:repoRoot '.github' 'workflows' 'bicep-pr-check.yml') -Raw
+        $text | Should -Not -Match 'Get-TestSubscriptionTag|utilities[/\\]|legacy'
     }
 
     It 'denies unsupported automatic events and nonupstream automatic callers' {
