@@ -219,7 +219,7 @@ Describe 'Bicep PSRule configuration boundaries' {
             Join-Path $script:moduleRoot 'Resources' 'bicep' 'psrule' 'ps-rule.yaml')
         $configuration.RulePath | Should -BeExactly (
             Join-Path $script:moduleRoot 'Resources' 'bicep' 'psrule' 'rules')
-        @(Get-ChildItem -LiteralPath $configuration.RulePath -File -Force).Count | Should -Be 8
+        @(Get-ChildItem -LiteralPath $configuration.RulePath -File -Force).Count | Should -Be 9
         $configuration.OptionPath | Should -Not -BeLike "$root*"
     }
 
