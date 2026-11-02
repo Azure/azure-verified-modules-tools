@@ -11,7 +11,7 @@ function Get-AvmBicepPublicationFile {
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
-    if ($Path -cnotmatch '^avm/(?:res|ptn|utl)(?:/[a-z0-9]+(?:-[a-z0-9]+)*){2,}/(?:main|version)\.json\z' -or
+    if ($Path -cnotmatch '^avm/(?:res|ptn|utl)(?:/[a-z0-9]+(?:-+[a-z0-9]+)*){2,}/(?:main|version)\.json\z' -or
         $GitState.BaseSha -cnotmatch '^[0-9a-f]{40,64}\z') {
         throw [AvmConfigurationException]::new('Invalid pinned publication module-data path.')
     }

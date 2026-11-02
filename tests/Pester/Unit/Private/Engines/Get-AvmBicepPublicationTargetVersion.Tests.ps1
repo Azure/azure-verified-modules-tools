@@ -261,6 +261,66 @@ Describe 'Bicep checkout-free publication data' -Tag 'Unit' {
         }
     }
 
+    It 'reads and caches pinned child publication data: <Path>' -ForEach @(
+        @{ Path = 'avm/res/web/hosting-environment/configuration--customdnssuffix/main.json' }
+        @{ Path = 'avm/res/web/hosting-environment/configuration--customdnssuffix/version.json' }
+        @{ Path = 'avm/ptn/mock/widget/child---settings/main.json' }
+        @{ Path = 'avm/utl/mock/widget/child-settings/version.json' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Path = $Path } {
+            param($Path)
+            $first = Get-AvmBicepPublicationFile -Path $Path -GitState $script:snapshotState
+            $second = Get-AvmBicepPublicationFile -Path $Path -GitState $script:snapshotState
+            $first.Exists | Should -BeTrue
+            [object]::ReferenceEquals($first, $second) | Should -BeTrue
+            Should -Invoke Invoke-AvmWebRequest -Exactly 1 -ParameterFilter {
+                $Uri -ceq "https://raw.githubusercontent.com/Azure/bicep-registry-modules/$('a' * 40)/$Path" -and
+                $MaximumRedirection -eq 0
+            }
+        }
+    }
+
+    It 'rejects unsafe publication paths before cache or network access: <Path>' -ForEach @(
+        @{ Path = 'avm/res/mock/widget/../other/main.json' }
+        @{ Path = 'avm/res/mock/widget/./main.json' }
+        @{ Path = 'avm/res/mock/widget//main.json' }
+        @{ Path = 'avm/res/mock/widget\child/main.json' }
+        @{ Path = 'avm/res/mock/widget/%2e%2e/main.json' }
+        @{ Path = 'avm/res/mock/widget/child%2fother/main.json' }
+        @{ Path = 'avm/res/mock/widget/main.json?extra=true' }
+        @{ Path = 'avm/res/mock/widget/main.json#fragment' }
+        @{ Path = 'avm/res/mock/widget/child:settings/main.json' }
+        @{ Path = 'avm/res/mock/widget/-child/main.json' }
+        @{ Path = 'avm/res/mock/widget/child-/main.json' }
+        @{ Path = 'avm/res/mock/widget/--/main.json' }
+        @{ Path = 'avm/res/mock/widget/Child/main.json' }
+        @{ Path = 'avm/res/mock/widget/child_settings/main.json' }
+        @{ Path = 'avm/other/mock/widget/main.json' }
+        @{ Path = 'avm/res/mock/widget/metadata.json' }
+        @{ Path = '/avm/res/mock/widget/main.json' }
+        @{ Path = 'avm/res/mock/main.json' }
+        @{ Path = "avm/res/mock/widget/main.json`n" }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Path = $Path } {
+            param($Path)
+            $script:snapshotState.RemoteFiles[$Path] = [pscustomobject]@{ Exists = $true; Content = '{}' }
+            { Get-AvmBicepPublicationFile -Path $Path -GitState $script:snapshotState } |
+                Should -Throw '*Invalid pinned publication module-data path*'
+            Should -Invoke Invoke-AvmWebRequest -Exactly 0
+        }
+    }
+
+    It 'rejects an invalid publication SHA even for a cached double-hyphen child' {
+        InModuleScope Avm.Authoring {
+            $path = 'avm/res/web/hosting-environment/configuration--customdnssuffix/main.json'
+            $script:snapshotState.RemoteFiles[$path] = [pscustomobject]@{ Exists = $true; Content = '{}' }
+            $script:snapshotState.BaseSha = '../untrusted'
+            { Get-AvmBicepPublicationFile -Path $path -GitState $script:snapshotState } |
+                Should -Throw '*Invalid pinned publication module-data path*'
+            Should -Invoke Invoke-AvmWebRequest -Exactly 0
+        }
+    }
+
     It 'compares selected module data and caches pinned files: <Changed>' -ForEach @(
         @{ Changed = $false }, @{ Changed = $true }
     ) {
