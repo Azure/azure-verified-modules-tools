@@ -11,6 +11,10 @@ function Get-AvmBicepResourceLock {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
+    if ($Type -ieq 'Microsoft.Management/managementGroups') {
+        return @()
+    }
+
     $inputParameters = @{ Scope = $ResourceId; ErrorAction = 'Stop' }
     if ($Type -ieq 'Microsoft.Authorization/locks') {
         $match = [regex]::Match($ResourceId,

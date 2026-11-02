@@ -23,7 +23,7 @@ BeforeAll {
             'Get-AzDataProtectionBackupPolicy', 'Remove-AzDataProtectionBackupPolicy'
             'Remove-AzDataProtectionBackupVault', 'Remove-AzOperationalInsightsWorkspace'
             'Get-AzMLWorkspace', 'Get-AzSubscription', 'Get-AzManagementGroupSubscription'
-            'New-AzManagementGroupSubscription', 'Disable-AzSubscription'
+            'New-AzManagementGroupSubscription', 'Remove-AzManagementGroup', 'Disable-AzSubscription'
             'Get-AzExpressRouteGateway', 'Remove-AzExpressRouteGateway'
             'Get-AzKeyVault', 'Remove-AzKeyVault'
             'Get-AzCognitiveServicesAccount', 'Remove-AzCognitiveServicesAccount'
@@ -295,6 +295,17 @@ Describe 'Bicep workflow cleanup locks and failures' {
         }
     }
 
+    It 'does not query resource locks at management-group scope' {
+        InModuleScope Avm.Authoring {
+            Mock Get-AzResourceLock { throw 'Management groups do not support resource locks.' }
+            $locks = @(Get-AvmBicepResourceLock `
+                    -ResourceId '/providers/Microsoft.Management/managementGroups/test' `
+                    -Type 'Microsoft.Management/managementGroups')
+            $locks.Count | Should -Be 0
+            Should -Invoke Get-AzResourceLock -Exactly 0
+        }
+    }
+
     It 'fails when a lock remains after the bounded wait' {
         InModuleScope Avm.Authoring {
             Mock Get-AvmBicepResourceLock { [pscustomobject]@{ LockId = '/target/providers/Microsoft.Authorization/locks/one' } }
@@ -398,6 +409,47 @@ Describe 'Bicep workflow cleanup native handlers' {
             Should -Invoke Remove-AzResource -Exactly 1 -ParameterFilter {
                 $Force -and $ResourceId -eq "$script:cleanupGroup/providers/Microsoft.Storage/storageAccounts/test"
             }
+        }
+    }
+
+    It 'uses the management-group removal cmdlet without querying unsupported resource locks' {
+        InModuleScope Avm.Authoring {
+            $managementGroupId = '/providers/Microsoft.Management/managementGroups/test'
+            Mock Get-AzResourceLock { throw 'Management groups do not support resource locks.' }
+            Mock Remove-AzManagementGroup {}
+            Mock Remove-AzResource { throw 'Management groups require their dedicated cmdlet.' }
+            Remove-AvmBicepResource -ResourceId $managementGroupId -Type 'Microsoft.Management/managementGroups'
+            Should -Invoke Remove-AvmBicepResourceLock -Exactly 0
+            Should -Invoke Get-AzResourceLock -Exactly 0
+            Should -Invoke Remove-AzManagementGroup -Exactly 1 -ParameterFilter {
+                $GroupName -eq 'test' -and $ErrorAction -eq 'Stop'
+            }
+            Should -Invoke Remove-AzResource -Exactly 0
+        }
+    }
+
+    It 'does not remove a management group under WhatIf' {
+        InModuleScope Avm.Authoring {
+            Mock Remove-AzManagementGroup {}
+            Remove-AvmBicepResource -ResourceId '/providers/Microsoft.Management/managementGroups/test' `
+                -Type 'Microsoft.Management/managementGroups' -WhatIf
+            Should -Invoke Remove-AzManagementGroup -Exactly 0
+            Should -Invoke Remove-AvmBicepResourceLock -Exactly 0
+        }
+    }
+
+    It 'rejects a management-group type paired with another scope' -ForEach @(
+        @{ ResourceId = '/subscriptions/00000000-0000-0000-0000-000000000001/providers/Microsoft.Management/managementGroups/test' }
+        @{ ResourceId = '/providers/Microsoft.Management/managementGroups/parent/providers/Microsoft.Management/managementGroups/test' }
+        @{ ResourceId = '/providers/Microsoft.Storage/storageAccounts/test' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ ResourceId = $ResourceId } {
+            param($ResourceId)
+            Mock Remove-AzManagementGroup {}
+            { Remove-AvmBicepResource -ResourceId $ResourceId -Type 'Microsoft.Management/managementGroups' } |
+                Should -Throw '*exact management group ID*'
+            Should -Invoke Remove-AzManagementGroup -Exactly 0
+            Should -Invoke Remove-AvmBicepResourceLock -Exactly 0
         }
     }
 
