@@ -515,13 +515,13 @@ function Assert-AvmBicepIdentityPlan {
                 throw [System.InvalidOperationException]::new('Renamed Bicep identities must have unique previous clients and principals.')
             }
         }
-        $plannedIdentity = @($slice.planned_values.root_module.resources | Where-Object { $_['address'] -ceq "${prefix}azapi_resource.identity[0]" })[0]['values']
         if ($null -ne $existingIdentity) {
             if (-not $clients.Add($existingIdentity['client_id']) -or -not $principals.Add($existingIdentity['principal_id'])) {
                 throw [System.InvalidOperationException]::new('Bicep modules must not share client IDs or principals.')
             }
             continue
         }
+        $plannedIdentity = @($slice.planned_values.root_module.resources | Where-Object { $_['address'] -ceq "${prefix}azapi_resource.identity[0]" })[0]['values']
         if ($plannedIdentity['output'] -is [System.Collections.IDictionary]) {
             $properties = $plannedIdentity['output']['properties']
             if (-not $clients.Add($properties['clientId']) -or -not $principals.Add($properties['principalId'])) {
