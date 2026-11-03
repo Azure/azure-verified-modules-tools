@@ -379,16 +379,18 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             $runtime.jobs.'pr-check'.steps,
             $runtime.jobs.'unit-test'.steps,
             $runtime.jobs.'discover-examples'.steps,
-            $script:workflows['bicep-module-runtime-deployment'].jobs.deploy.steps
+            $script:workflows['bicep-module-runtime-deployment'].jobs.deploy.steps,
+            $script:workflows['bicep-module-runtime-e2e'].jobs.'select-deployments'.steps,
+            $script:workflows['bicep-module-runtime-release'].jobs.release.steps
         ) | ForEach-Object {
             @($_ | Where-Object name -EQ 'Select prepared authoring runtime')
         }
 
-        $selectors | Should -HaveCount 4
+        $selectors | Should -HaveCount 6
         foreach ($selector in $selectors) {
             $selector.run | Should -Match 'avm-authoring-discovery'
             $selector.run | Should -Match 'PSModulePath'
-            $selector.run | Should -Match 'Import-Module -Name Avm\.Authoring -PassThru -ErrorAction Stop'
+            $selector.run | Should -Match 'Import-Module -Name Avm\.Authoring -Global -PassThru -ErrorAction Stop'
             $selector.run | Should -Match 'only discoverable Avm\.Authoring module'
             $selector.run | Should -Match 'Prepared Avm\.Authoring discovery package does not match'
             $selector.run | Should -Not -Match 'Install-Module|Install-PSResource'

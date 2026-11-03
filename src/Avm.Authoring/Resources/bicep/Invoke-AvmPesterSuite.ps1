@@ -23,6 +23,36 @@ if (-not $inputData.Contains('PesterPath') -or -not $inputData.Contains('PesterV
     -not [System.IO.Path]::IsPathFullyQualified([string]$inputData.PesterPath)) {
     throw [System.ArgumentException]::new('Bicep Pester input requires a resolved PesterPath and PesterVersion.')
 }
+$requiredAuthoring = @('AuthoringManifest', 'AuthoringManifestSha256', 'AuthoringModuleBase', 'AuthoringVersion', 'AuthoringGuid')
+foreach ($property in $requiredAuthoring) {
+    if (-not $inputData.Contains($property) -or [string]::IsNullOrWhiteSpace([string]$inputData[$property])) {
+        throw [System.ArgumentException]::new("Bicep Pester input requires $property.")
+    }
+}
+$authoringManifest = [string]$inputData.AuthoringManifest
+$authoringModuleBase = [string]$inputData.AuthoringModuleBase
+if (-not (Test-Path -LiteralPath $authoringManifest -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $authoringModuleBase -PathType Container) -or
+    (Get-FileHash -LiteralPath $authoringManifest -Algorithm SHA256).Hash -cne [string]$inputData.AuthoringManifestSha256) {
+    throw [System.IO.InvalidDataException]::new('Bicep Pester admitted Avm.Authoring identity is invalid.')
+}
+if ($PSCmdlet.ParameterSetName -eq 'File') {
+    $admissionRoot = Join-Path (Split-Path -Parent $InputPath) 'avm-authoring-admission'
+    $admissionModule = Join-Path $admissionRoot 'Avm.Authoring'
+    New-Item -ItemType Directory -Path $admissionModule -Force | Out-Null
+    Get-ChildItem -LiteralPath $authoringModuleBase -Force | Copy-Item -Destination $admissionModule -Recurse -Force
+    $admissionManifest = Join-Path $admissionModule 'Avm.Authoring.psd1'
+    if ((Get-FileHash -LiteralPath $admissionManifest -Algorithm SHA256).Hash -cne [string]$inputData.AuthoringManifestSha256) {
+        throw [System.IO.InvalidDataException]::new('Bicep Pester admitted Avm.Authoring copy does not match.')
+    }
+    $env:PSModulePath = $admissionRoot
+    $available = @(Get-Module -ListAvailable -Name Avm.Authoring)
+    if ($available.Count -ne 1 -or $available[0].ModuleBase -cne $admissionModule) {
+        throw [System.InvalidOperationException]::new('Bicep Pester child must expose only the admitted Avm.Authoring package.')
+    }
+    $authoring = Import-Module -Name Avm.Authoring -Global -PassThru -ErrorAction Stop
+    if ($authoring.ModuleBase -cne $admissionModule) { throw 'Bicep Pester child did not import the admitted Avm.Authoring package.' }
+}
 $pester = Import-Module -Name $inputData.PesterPath -PassThru -DisableNameChecking -ErrorAction Stop
 if ($pester.Name -cne 'Pester' -or $pester.Version -ne [version]$inputData.PesterVersion) {
     throw [System.IO.InvalidDataException]::new('The Bicep runner did not load the resolved Pester version.')

@@ -92,7 +92,7 @@ jobs:
           if ($selected.Count -ne 1 -or $unexpected.Count -ne 0) {
             throw 'Prepared Avm.Authoring package must be the only discoverable Avm.Authoring module.'
           }
-          $byName = Import-Module -Name Avm.Authoring -PassThru -ErrorAction Stop
+          $byName = Import-Module -Name Avm.Authoring -Global -PassThru -ErrorAction Stop
           if ($byName.ModuleBase -cne $discoveryModule) { throw 'Named Avm.Authoring import did not resolve to the prepared package.' }
           "PSModulePath=$env:PSModulePath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "AVM_AUTHORING_MODULE=$discoveryManifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8

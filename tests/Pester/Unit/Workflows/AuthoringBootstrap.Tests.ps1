@@ -95,7 +95,8 @@ Describe 'Prepared Bicep runtime selection' {
         foreach ($script in $scripts) {
             if ($script -notmatch 'avm-authoring-discovery' -or
                 $script -notmatch 'only discoverable Avm\.Authoring module' -or
-                $script -notmatch 'Prepared Avm\.Authoring discovery package does not match') {
+                $script -notmatch 'Prepared Avm\.Authoring discovery package does not match' -or
+                $script -notmatch 'Import-Module -Name Avm\.Authoring -Global -PassThru -ErrorAction Stop') {
                 throw 'Bicep runtime jobs must consistently bind the prepared artifact.'
             }
         }

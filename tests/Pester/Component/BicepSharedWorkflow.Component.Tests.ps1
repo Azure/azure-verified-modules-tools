@@ -953,7 +953,7 @@ Describe 'Component: Bicep shared workflow target and authentication boundaries'
         )
         { Get-AvmWorkflowDeploymentMatrix -Root $script:root -ModulePath $script:modulePath -TestFiles $cases `
                 -PoolJson $pool -ModuleClientIds $script:mappingJson -TenantId $script:tenant } |
-            Should -Throw '*registry-local prepared environment lifecycle*'
+            Should -Throw '*protected whole-lifecycle locking is not implemented*No registry fallback is invoked*'
         Should -Invoke Get-AvmTool -Exactly 0
         Should -Invoke Invoke-AvmWorkflowProcess -Exactly 0
     }
@@ -988,7 +988,7 @@ Describe 'Component: Bicep shared workflow target and authentication boundaries'
         )
         { Get-AvmWorkflowAuthentication -Root $script:root -ModulePath $script:modulePath -TestCase $script:case `
                 -PoolJson $pool -ModuleClientIds $script:mappingJson -TenantId $script:tenant } |
-            Should -Throw '*registry-local prepared environment lifecycle*'
+            Should -Throw '*protected whole-lifecycle locking is not implemented*No registry fallback is invoked*'
     }
 
     It 'rejects discovered owners that native direct context cannot admit before compiler or authentication' {

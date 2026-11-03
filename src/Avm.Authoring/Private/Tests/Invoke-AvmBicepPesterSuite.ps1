@@ -38,6 +38,11 @@ function Invoke-AvmBicepPesterSuite {
     $ErrorActionPreference = 'Stop'
     if (-not $ModuleRoot) { $ModuleRoot = $WorkingDirectory }
     $pester = Import-AvmPowerShellModule -Name Pester -ModuleRoot $ModuleRoot
+    $authoring = @(Get-Module -Name Avm.Authoring)
+    if ($authoring.Count -ne 1) { throw 'Bicep Pester child admission requires exactly one loaded Avm.Authoring module.' }
+    $authoring = $authoring[0]
+    $authoringManifest = Join-Path $authoring.ModuleBase 'Avm.Authoring.psd1'
+    if (-not (Test-Path -LiteralPath $authoringManifest -PathType Leaf)) { throw 'The loaded Avm.Authoring module has no manifest.' }
 
     $runnerPath = Join-Path -Path $PSScriptRoot -ChildPath '..' `
         -AdditionalChildPath '..', 'Resources', 'bicep', 'Invoke-AvmPesterSuite.ps1'
@@ -52,6 +57,11 @@ function Invoke-AvmBicepPesterSuite {
         Convention     = $ConventionData
         PesterPath     = Join-Path $pester.ModuleBase 'Pester.psd1'
         PesterVersion  = $pester.Version.ToString()
+        AuthoringManifest = (Resolve-Path -LiteralPath $authoringManifest).Path
+        AuthoringManifestSha256 = (Get-FileHash -LiteralPath $authoringManifest -Algorithm SHA256).Hash
+        AuthoringModuleBase = (Resolve-Path -LiteralPath $authoring.ModuleBase).Path
+        AuthoringVersion = $authoring.Version.ToString()
+        AuthoringGuid = $authoring.Guid.ToString()
     }
     if ($Mode -eq 'Convention' -and -not $InProcess) {
         throw [System.ArgumentException]::new('Convention suites must run in process.')
@@ -138,6 +148,6 @@ function Invoke-AvmBicepPesterSuite {
                 Remove-Item -LiteralPath $path -Force
             }
         }
-        if ($null -ne $runDirectory) { Remove-Item -LiteralPath $runDirectory -Force }
+        if ($null -ne $runDirectory) { Remove-Item -LiteralPath $runDirectory -Recurse -Force }
     }
 }
