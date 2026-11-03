@@ -166,6 +166,12 @@ Describe 'deployed example' {
         $summary.Passed | Should -Be 1
         $summary.Failed | Should -Be 0
         $summary.Issues | Should -BeNullOrEmpty
+        $summary.Authoring.SourceManifest | Should -Be (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1')
+        $summary.Authoring.SourceSha256 | Should -Be (
+            Get-FileHash -LiteralPath $summary.Authoring.SourceManifest -Algorithm SHA256).Hash
+        $summary.Authoring.LoadedModuleBase | Should -Match 'avm-authoring-admission[\\/]Avm\.Authoring$'
+        $summary.Authoring.Version | Should -Be '0.0.0'
+        $summary.Authoring.Guid | Should -Be '356c238f-88dd-48bf-ad0a-b7de6a5bb877'
         Get-Variable -Name AvmBicepE2eChildMarker -Scope Global -ErrorAction SilentlyContinue |
             Should -BeNullOrEmpty
     }

@@ -117,7 +117,8 @@ function Invoke-AvmBicepPesterSuite {
             $summary.Authoring.SourceModuleBase -cne $inputData.AuthoringModuleBase -or
             $summary.Authoring.Version -cne $inputData.AuthoringVersion -or
             $summary.Authoring.Guid -cne $inputData.AuthoringGuid -or
-            (-not $InProcess -and $summary.Authoring.LoadedModuleBase -cnotlike '*avm-authoring-admission\Avm.Authoring')) {
+            (-not $InProcess -and $summary.Authoring.LoadedModuleBase -cnotmatch
+                '[\\/]avm-authoring-admission[\\/]Avm\.Authoring$')) {
             throw [AvmProcessException]::new('Bicep Pester child did not retain the exact admitted Avm.Authoring module.')
         }
         foreach ($key in @('Version', 'Total', 'Passed', 'Failed', 'Skipped', 'Inconclusive', 'Filtered', 'Issues')) {
