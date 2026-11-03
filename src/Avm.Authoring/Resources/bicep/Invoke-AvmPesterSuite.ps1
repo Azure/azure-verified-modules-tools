@@ -220,6 +220,14 @@ $summary = [ordered]@{
     Inconclusive = [int]$result.InconclusiveCount
     Filtered     = [int]$result.NotRunCount
     Issues       = $issues.ToArray()
+    Authoring    = [ordered]@{
+        SourceManifest   = $authoringManifest
+        SourceSha256     = [string]$inputData.AuthoringManifestSha256
+        SourceModuleBase = $authoringModuleBase
+        LoadedModuleBase = $(if ($PSCmdlet.ParameterSetName -eq 'File') { $authoring.ModuleBase } else { $authoringModuleBase })
+        Version          = [string]$inputData.AuthoringVersion
+        Guid             = [string]$inputData.AuthoringGuid
+    }
 }
 
 if ($PSCmdlet.ParameterSetName -eq 'File') {

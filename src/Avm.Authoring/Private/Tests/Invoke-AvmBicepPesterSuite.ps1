@@ -110,6 +110,16 @@ function Invoke-AvmBicepPesterSuite {
         if ($summary -isnot [System.Collections.IDictionary]) {
             throw [AvmProcessException]::new('Bicep Pester runner did not return a summary object.')
         }
+        if (-not $summary.Contains('Authoring') -or
+            $summary.Authoring -isnot [System.Collections.IDictionary] -or
+            $summary.Authoring.SourceManifest -cne $inputData.AuthoringManifest -or
+            $summary.Authoring.SourceSha256 -cne $inputData.AuthoringManifestSha256 -or
+            $summary.Authoring.SourceModuleBase -cne $inputData.AuthoringModuleBase -or
+            $summary.Authoring.Version -cne $inputData.AuthoringVersion -or
+            $summary.Authoring.Guid -cne $inputData.AuthoringGuid -or
+            (-not $InProcess -and $summary.Authoring.LoadedModuleBase -cnotlike '*avm-authoring-admission\Avm.Authoring')) {
+            throw [AvmProcessException]::new('Bicep Pester child did not retain the exact admitted Avm.Authoring module.')
+        }
         foreach ($key in @('Version', 'Total', 'Passed', 'Failed', 'Skipped', 'Inconclusive', 'Filtered', 'Issues')) {
             if (-not $summary.Contains($key)) {
                 throw [AvmProcessException]::new("Bicep Pester runner returned a summary without '$key'.")
