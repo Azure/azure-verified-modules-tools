@@ -3,6 +3,7 @@
 
 Describe 'Integration: packaged Bicep policy' -Tag Integration {
     BeforeAll {
+        $script:packageModule = $null
         $script:savedEnvironment = @{}
         $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
         $manifest = Join-Path $repoRoot 'out' 'Avm.Authoring' 'Avm.Authoring.psd1'
@@ -39,7 +40,7 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
         $rules = @(Get-ChildItem -LiteralPath (Join-Path $script:package 'Resources' 'bicep' 'psrule' 'rules') -File)
         $rules | Should -HaveCount 9
         @($rules | Where-Object { $_.Name -cnotmatch '\.Rule\.yaml$' }) | Should -HaveCount 0
-        Import-Module (Join-Path $script:package 'Avm.Authoring.psd1') -Force
+        $script:packageModule = Import-Module (Join-Path $script:package 'Avm.Authoring.psd1') -Force -PassThru
         . (Join-Path $repoRoot 'scripts' 'bicep-workflows' 'Validation.ps1')
         $script:fixture = Join-Path $repoRoot 'tests' 'fixtures' 'modules' 'bicep-storage'
         foreach ($name in @('TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_ID',
@@ -58,7 +59,9 @@ Describe 'Integration: packaged Bicep policy' -Tag Integration {
             $value = $script:savedEnvironment[$name]
             [Environment]::SetEnvironmentVariable($name, $(if ($null -eq $value) { [NullString]::Value } else { $value }))
         }
-        Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
+        if ($null -ne $script:packageModule) {
+            Remove-Module -ModuleInfo $script:packageModule -Force -ErrorAction SilentlyContinue
+        }
     }
 
     BeforeEach {

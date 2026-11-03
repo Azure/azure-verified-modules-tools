@@ -114,6 +114,13 @@ Describe 'Prepared Bicep runtime selection' {
     }
 
     AfterEach {
+        $discoveryModule = Join-Path $env:RUNNER_TEMP 'avm-authoring-discovery' 'Avm.Authoring'
+        foreach ($module in @(Get-Module -Name Avm.Authoring | Where-Object {
+                    [string]::Equals($_.ModuleBase, $discoveryModule,
+                        $(if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }))
+                })) {
+            Remove-Module -ModuleInfo $module -Force
+        }
         [Environment]::SetEnvironmentVariable('RUNNER_TEMP', ($null -eq $script:savedTemp ? [NullString]::Value : $script:savedTemp), 'Process')
         [Environment]::SetEnvironmentVariable('GITHUB_ENV', ($null -eq $script:savedEnv ? [NullString]::Value : $script:savedEnv), 'Process')
         [Environment]::SetEnvironmentVariable('PSModulePath', ($null -eq $script:savedModulePath ? [NullString]::Value : $script:savedModulePath), 'Process')
@@ -126,6 +133,9 @@ Describe 'Prepared Bicep runtime selection' {
         Set-Content -LiteralPath $manifest -Value "@{ ModuleVersion = '0.21.0'; RootModule = 'Avm.Authoring.psm1' }"
         Set-Content -LiteralPath (Join-Path $directory 'Avm.Authoring.psm1') -Value ''
         & $script:selectRuntime
+        @(Get-Module -Name Avm.Authoring | Where-Object {
+                $_.ModuleBase -eq (Join-Path $env:RUNNER_TEMP 'avm-authoring-discovery' 'Avm.Authoring')
+            }) | Should -HaveCount 1
         $environment = Get-Content -LiteralPath $env:GITHUB_ENV
         @($environment | Where-Object { $_ -like 'AVM_AUTHORING_MODULE=*' }) |
             Should -Match '^AVM_AUTHORING_MODULE=.*avm-authoring-discovery.*Avm\.Authoring\.psd1$'
