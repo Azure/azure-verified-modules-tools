@@ -33,9 +33,9 @@ Describe 'Get-AvmTerraformScaffoldPlan' {
         }
         ($plans | Where-Object { $_.Path -like '*terraform.tf' }).Content | Should -Match '"Azure/azapi"'
         $example = ($plans | Where-Object { $_.Path -eq (Join-Path $root 'examples' 'default' 'main.tf') }).Content
-        $example | Should -Match 'version = "0.13.0"'
+        $example | Should -Match '(?s)module "regions" \{\s*source\s*=\s*"Azure/avm-utl-regions/azurerm"\s*version\s*=\s*"0\.13\.2"'
         $example | Should -Match 'location\s*=\s*var.location'
-        $example | Should -Match '"Azure/avm-utl-naming/azure"'
+        $example | Should -Match '(?s)module "naming" \{\s*source\s*=\s*"Azure/avm-utl-naming/azure"\s*version\s*=\s*"0\.3\.0"'
         $example | Should -Not -Match 'legacy_mode'
         ($plans | Where-Object { $_.Path -eq (Join-Path $root 'examples' 'default' 'variables.tf') }).Content |
             Should -Match '(?s)variable "location".*?default\s*=\s*"eastus"'
