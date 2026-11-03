@@ -157,4 +157,50 @@ foreach ($invalidPath in @(
     }
 }
 
+Assert-Equal "off" $defaultOnlySettings.ReleaseMetadataCheck "The release-metadata check must default to off."
+
+$releaseMetadataConfig = [pscustomobject]@{
+    repositoryGroups = @(
+        (New-DefaultGroup -FederationSettings ([pscustomobject]@{ jobWorkflowPath = $defaultWorkflowPath })),
+        [pscustomobject]@{
+            name = "required-ring"
+            order = 30
+            repositories = @("ringed-repository")
+            releaseMetadataCheck = "required"
+        },
+        [pscustomobject]@{
+            name = "evaluate-ring"
+            order = 20
+            repositories = @("ringed-repository", "evaluated-repository")
+            releaseMetadataCheck = "evaluate"
+        }
+    )
+}
+Assert-Equal "required" (Resolve-RepositorySettings -repositoryConfig $releaseMetadataConfig -repoId "ringed-repository").ReleaseMetadataCheck "The highest-order release-metadata mode did not win."
+Assert-Equal "evaluate" (Resolve-RepositorySettings -repositoryConfig $releaseMetadataConfig -repoId "evaluated-repository").ReleaseMetadataCheck "A matching group's release-metadata mode was not applied."
+Assert-Equal "off" (Resolve-RepositorySettings -repositoryConfig $releaseMetadataConfig -repoId "other-repository").ReleaseMetadataCheck "A non-matching group leaked its release-metadata mode."
+
+foreach ($invalidMode in @("Required", "enforced", "", 1, $true)) {
+    Assert-Throws -MessagePattern "Repository group 'invalid' releaseMetadataCheck must be exactly 'off', 'evaluate', or 'required'." -Action {
+        $invalidModeConfig = [pscustomobject]@{
+            repositoryGroups = @(
+                (New-DefaultGroup -FederationSettings ([pscustomobject]@{ jobWorkflowPath = $defaultWorkflowPath })),
+                [pscustomobject]@{
+                    name = "invalid"
+                    repositories = @("unrelated-repository")
+                    releaseMetadataCheck = $invalidMode
+                }
+            )
+        }
+        Resolve-RepositorySettings -repositoryConfig $invalidModeConfig -repoId "repository"
+    }
+}
+
+$expectedReleaseMetadataChecks = @{ "avm-ptn-example-repo" = "evaluate" }
+foreach ($repository in $configuredRepositories) {
+    $expectedMode = if ($expectedReleaseMetadataChecks.ContainsKey($repository)) { $expectedReleaseMetadataChecks[$repository] } else { "off" }
+    $actualSettings = Resolve-RepositorySettings -repositoryConfig $actualConfig -repoId $repository
+    Assert-Equal $expectedMode $actualSettings.ReleaseMetadataCheck "Unexpected release-metadata check mode for '$repository'."
+}
+
 Write-Host "Repository configuration tests passed."

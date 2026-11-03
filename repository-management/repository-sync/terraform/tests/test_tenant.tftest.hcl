@@ -150,6 +150,64 @@ run "standard_labels_are_read_from_tools_json" {
   }
 }
 
+run "release_metadata_off_keeps_standard_labels_only" {
+  command = plan
+
+  assert {
+    condition = (
+      length(local.release_version_labels) == 0 &&
+      length(local.labels) == length(local.standard_labels) &&
+      length(setintersection(keys(local.labels), ["patch", "minor", "major"])) == 0 &&
+      local.release_metadata_check_required == false
+    )
+    error_message = "With the release-metadata check off, repositories get only the standard labels and no required check."
+  }
+}
+
+run "release_metadata_evaluate_adds_version_labels_without_requiring_the_check" {
+  command = plan
+
+  variables {
+    release_metadata_check = "evaluate"
+  }
+
+  assert {
+    condition = (
+      length(local.labels) == length(local.standard_labels) + 3 &&
+      alltrue([for name in ["patch", "minor", "major"] : local.labels[name].name == name && length(local.labels[name].description) <= 100]) &&
+      local.release_metadata_check_required == false
+    )
+    error_message = "In evaluate mode, repositories get the patch, minor, and major labels, but the ruleset does not require the check."
+  }
+}
+
+run "release_metadata_required_adds_labels_and_requires_the_check" {
+  command = plan
+
+  variables {
+    release_metadata_check = "required"
+  }
+
+  assert {
+    condition = (
+      length(local.labels) == length(local.standard_labels) + 3 &&
+      alltrue([for name in ["patch", "minor", "major"] : contains(keys(local.labels), name)]) &&
+      local.release_metadata_check_required
+    )
+    error_message = "In required mode, repositories get the version labels and the main ruleset requires the release-metadata check."
+  }
+}
+
+run "release_metadata_rejects_unknown_modes" {
+  command = plan
+
+  variables {
+    release_metadata_check = "enforced"
+  }
+
+  expect_failures = [var.release_metadata_check]
+}
+
 run "normal_sync_requires_verified_bami_settings" {
   command = plan
 

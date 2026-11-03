@@ -193,6 +193,18 @@ variable "pull_request_bypass_teams" {
   default     = []
 }
 
+variable "release_metadata_check" {
+  type        = string
+  description = "Rollout of the Terraform release-metadata pull request check. off: no version labels and no required check. evaluate: the patch, minor, and major labels exist and the check runs without being required. required: the labels exist and the main ruleset requires the check."
+  default     = "off"
+  nullable    = false
+
+  validation {
+    condition     = contains(["off", "evaluate", "required"], var.release_metadata_check)
+    error_message = "release_metadata_check must be off, evaluate, or required."
+  }
+}
+
 variable "location" {
   type        = string
   description = "Location of the resources."

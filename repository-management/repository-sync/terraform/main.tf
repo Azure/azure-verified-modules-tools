@@ -46,6 +46,7 @@ module "github" {
   bypass_ruleset_for_approval_enabled                        = true
   github_teams                                               = var.github_teams
   pull_request_bypass_teams                                  = var.pull_request_bypass_teams
+  release_metadata_check_required                            = local.release_metadata_check_required
   github_avm_app_id                                          = var.github_avm_app_id
   labels                                                     = local.labels
   arm_client_id                                              = local.test_settings.client_id

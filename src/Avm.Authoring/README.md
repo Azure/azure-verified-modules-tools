@@ -32,6 +32,8 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Public/Invoke-AvmTestE2e.ps1`                    | `avm test e2e` -> deploy selected examples, run assertions and clean up. |
 | `Public/Invoke-AvmTestCleanup.ps1`                | `avm test cleanup` -> resume Bicep cleanup from retained local state. |
 | `Public/Register-AvmFeature.ps1`                  | `avm register-features` -> register root-declared Azure features on an explicitly selected test subscription. |
+| `Public/Test-AvmReleaseMetadata.ps1`              | Check one Terraform pull request's version label and breaking-change details from supplied facts. No network. |
+| `Public/Invoke-AvmReleaseMetadataCheck.ps1`       | Read one pull request from GitHub, run `Test-AvmReleaseMetadata`, and write the release-metadata job summary. |
 | `Public/Get-AvmAuthoringPlaceholder.ps1`          | Back-compat shim from the initial placeholder release.                             |
 | `Engines/`                                        | Per-ecosystem facades over real toolchains. Loaded by the module but not exported. |
 | `Engines/Bicep/Format-AvmBicepModule.ps1`         | Runs `bicep format` over every `.bicep` / `.bicepparam` source in the module.      |

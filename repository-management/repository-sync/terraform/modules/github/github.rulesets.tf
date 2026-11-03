@@ -1,3 +1,8 @@
+locals {
+  release_metadata_check_context = "release-metadata / Validate"
+  github_actions_integration_id  = 15368
+}
+
 resource "github_repository_ruleset" "main" {
   count       = var.repository_creation_mode_enabled ? 0 : 1
   name        = "Azure Verified Modules"
@@ -43,6 +48,18 @@ resource "github_repository_ruleset" "main" {
       required_approving_review_count   = var.is_protected_repo ? 1 : 0
       require_last_push_approval        = var.is_protected_repo
       required_review_thread_resolution = true
+    }
+
+    dynamic "required_status_checks" {
+      for_each = var.release_metadata_check_required ? [1] : []
+      content {
+        strict_required_status_checks_policy = false
+
+        required_check {
+          context        = local.release_metadata_check_context
+          integration_id = local.github_actions_integration_id
+        }
+      }
     }
   }
 }

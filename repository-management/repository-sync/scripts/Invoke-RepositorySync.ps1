@@ -145,6 +145,7 @@ $terraformVariables = @{
     is_protected_repo = $true
     github_teams = $githubTeams
     pull_request_bypass_teams = $settings.PullRequestBypassTeams
+    release_metadata_check = $settings.ReleaseMetadataCheck
     topics = $settings.Topics
 }
 

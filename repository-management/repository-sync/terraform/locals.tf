@@ -15,9 +15,31 @@ locals {
   }
 
   label_list = jsondecode(file(var.github_labels_source_path)).labels
-  labels = { for label in local.label_list : label.name => {
+  standard_labels = { for label in local.label_list : label.name => {
     name        = trimspace(label.name)
     color       = label.color
     description = trimspace(try(label.githubDescription, label.description))
   } }
+
+  release_version_labels = var.release_metadata_check == "off" ? {} : {
+    patch = {
+      name        = "patch"
+      color       = "C2E0C6"
+      description = "Release a patch version: backwards-compatible bug fixes."
+    }
+    minor = {
+      name        = "minor"
+      color       = "FBCA04"
+      description = "Release a minor version: new features, or breaking changes before 1.0.0."
+    }
+    major = {
+      name        = "major"
+      color       = "B60205"
+      description = "Release a major version: breaking changes from 1.0.0 onwards."
+    }
+  }
+
+  labels = merge(local.standard_labels, local.release_version_labels)
+
+  release_metadata_check_required = var.release_metadata_check == "required"
 }

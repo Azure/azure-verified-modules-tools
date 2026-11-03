@@ -67,6 +67,7 @@
       "name": "canary-ring-0",
       "order": 20,
       "testTenant": "bami",
+      "releaseMetadataCheck": "evaluate",
       "pullRequestBypassTeams": [
         "azure-verified-modules-engineering-owners"
       ],
