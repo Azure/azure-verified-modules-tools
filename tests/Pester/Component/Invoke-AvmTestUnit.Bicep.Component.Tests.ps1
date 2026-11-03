@@ -54,6 +54,19 @@ Describe 'Component: Bicep Pester unit tier' -Tag 'Component' {
         $result.RunsPassed | Should -Be 1
         $result.RunsFiltered | Should -Be 2
         $result.Issues | Should -BeNullOrEmpty
+        $result.Authoring.SourceManifest | Should -Be (Join-Path (Get-Module Avm.Authoring).ModuleBase 'Avm.Authoring.psd1')
+        $result.Authoring.SourceSha256 | Should -Be (
+            Get-FileHash -LiteralPath $result.Authoring.SourceManifest -Algorithm SHA256).Hash
+        $result.Authoring.ChildProcessId | Should -Not -Be $PID
+        $result.Authoring.LoadedSha256 | Should -Be $result.Authoring.SourceSha256
+        $result.Authoring.LoadedManifest | Should -Be (
+            Join-Path $result.Authoring.LoadedModuleBase 'Avm.Authoring.psd1')
+        $result.Authoring.Version | Should -Be (Get-Module Avm.Authoring).Version.ToString()
+        $result.Authoring.Guid | Should -Be (Get-Module Avm.Authoring).Guid.ToString()
+        $result.Authoring.DiscoverableModuleBase | Should -Be $result.Authoring.LoadedModuleBase
+        $result.Authoring.GetAvmToolModuleBase | Should -Be $result.Authoring.LoadedModuleBase
+        $result.Authoring.InstallAvmToolModuleBase | Should -Be $result.Authoring.LoadedModuleBase
+        Test-Path -LiteralPath $result.Authoring.LoadedModuleBase | Should -BeFalse
         Get-Variable -Name AvmBicepUnitChildMarker -Scope Global -ErrorAction SilentlyContinue |
             Should -BeNullOrEmpty
     }

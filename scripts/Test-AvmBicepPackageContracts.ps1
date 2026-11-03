@@ -47,6 +47,7 @@ $selectors = @(
     'Bicep PSRule policy checks.reports required failures*'
     'Component: extracted package test imports*'
     'Component: Bicep Pester unit tier*'
+    '*Component: Bicep child admission identity*'
     'Component: Bicep native*'
     'Component: Bicep cleanup state and context*'
     'Component: Bicep cleanup dependency scope*'

@@ -171,6 +171,7 @@ function Invoke-AvmBicepTestUnit {
         RunsSkipped      = [int]$summary.Skipped
         RunsInconclusive = [int]$summary.Inconclusive
         RunsFiltered     = [int]$summary.Filtered
+        Authoring        = if ($files.Count -gt 0) { $summary.Authoring } else { $null }
         Issues           = $issues
     }
 }
