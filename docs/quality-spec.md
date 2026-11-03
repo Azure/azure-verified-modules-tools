@@ -2741,6 +2741,14 @@ This section is the implementation-level expression of the **Security stance** p
 ### Workflow / GitHub Actions hardening
 
 - Every external `uses:` reference in `.github/workflows/*.yml` is pinned to a 40-character commit SHA, with the human-readable version as a trailing `# vX.Y.Z` comment. Floating tag references (`@v5`, `@main`, branch refs) are rejected at PR review. Same-repository reusable workflows use local `./.github/workflows/` paths, which resolve at the caller's commit. Rationale: a single tag-repoint on a compromised maintainer account would deliver attacker-controlled code into every CI run on the next push, and that code runs with `GITHUB_TOKEN`, `secrets.*`, OIDC mint rights, and full write access to the working tree. SHA pinning closes that vector at the cost of needing a maintenance loop for security fixes; that loop is Dependabot.
+- This SFI requirement also applies to cross-repository reusable workflow
+  references distributed through managed templates and scaffolds, including
+  Terraform module callers. To consume a newer workflow, update the full commit
+  SHA after reviewing its source; never replace the pin with `@main`, another
+  branch, or a tag. An OIDC federation mismatch is not an exception: preserve
+  SHA pinning and reconcile the workflow reference with the separately reviewed
+  identity contract. Updating the SHA alone does not establish that federation
+  or Azure authentication succeeds.
 - `.github/dependabot.yml` enables the `github-actions` ecosystem on a weekly cadence, batches minor/patch bumps to reduce noise, and keeps major bumps as individual PRs so they get individual review.
 - Every workflow declares an explicit top-level `permissions:` block. Default is `permissions: contents: read`. Write scopes (`contents: write`, `packages: write`, `id-token: write`, etc.) are added job-by-job with an inline comment justifying why.
 - `actions/checkout` is always called with `persist-credentials: false` outside the release pipeline so the cloned repo's `.git/config` doesn't carry a token usable by any subsequent step or any subprocess that reads from the working tree.
