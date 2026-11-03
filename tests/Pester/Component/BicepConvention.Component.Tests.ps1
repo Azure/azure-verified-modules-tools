@@ -1730,37 +1730,50 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.Issues.Code | Should -Contain 'avm.bicep.e2eignore-reason'
     }
 
-    It 'allows only the documented E2E ignore exemptions: <ModuleRelativePath> <Folder>' -TestCases @(
+    It 'matches only actual resource paths for E2E ignore exemptions: <ModuleRelativePath> <Folder>' -TestCases @(
         @{
             ModuleRelativePath = 'avm/res/operational-insights/cluster'
             Folder = 'defaults'
             Required = $false
         }
         @{
-            ModuleRelativePath = 'avm/res/dev-center/dev-center/project'
+            ModuleRelativePath = 'avm/res/dev-center/devcenter'
             Folder = 'waf-aligned'
             Required = $false
         }
         @{
-            ModuleRelativePath = 'avm/res/dev-center/dev-center/project'
+            ModuleRelativePath = 'avm/res/dev-center/project'
+            Folder = 'waf-aligned'
+            Required = $false
+        }
+        @{
+            ModuleRelativePath = 'avm/res/dev-center/devcenter'
             Folder = 'defaults'
             Required = $true
         }
         @{
-            ModuleRelativePath = 'avm/res/dev-center/dev-center/project-child'
+            ModuleRelativePath = 'avm/res/dev-center/project'
+            Folder = 'defaults'
+            Required = $true
+        }
+        @{
+            ModuleRelativePath = 'avm/res/dev-center/project-child'
             Folder = 'waf-aligned'
             Required = $true
         }
     ) {
         param([string] $ModuleRelativePath, [string] $Folder, [bool] $Required)
 
-        Set-Content -LiteralPath (Join-Path $script:modulePath 'tests' 'e2e' $Folder '.e2eignore') `
+        $target = Join-Path $script:workingRoot ($ModuleRelativePath.Split('/') -join [IO.Path]::DirectorySeparatorChar)
+        $null = New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force
+        Copy-Item -LiteralPath $script:modulePath -Destination $target -Recurse -Force
+        Set-Content -LiteralPath (Join-Path $target 'tests' 'e2e' $Folder '.e2eignore') `
             -Value 'This module is excluded by an explicit convention exemption.' -Encoding utf8NoBOM
-        $scope = InModuleScope 'Avm.Authoring' -Parameters @{ Path = $script:modulePath } {
+        $scope = InModuleScope 'Avm.Authoring' -Parameters @{ Path = $target } {
             param($Path)
             Get-AvmBicepConventionScope -Path $Path
         }
-        $scope.ModuleRelativePath = $ModuleRelativePath
+        $scope.ModuleRelativePath | Should -BeExactly $ModuleRelativePath
 
         $run = Invoke-NativeLayoutFixture -Root $script:workingRoot -Scopes @($scope)
         $run.Summary.Total | Should -Be $run.Expected

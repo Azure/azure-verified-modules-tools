@@ -16,7 +16,8 @@
       "avm/res/operational-insights/cluster"
     ],
     "wafAlignedE2eIgnoreAllowedModules": [
-      "avm/res/dev-center/dev-center/project"
+      "avm/res/dev-center/devcenter",
+      "avm/res/dev-center/project"
     ],
     "defaultsTestOptionalModules": [
       "avm/res/aad/domain-service"

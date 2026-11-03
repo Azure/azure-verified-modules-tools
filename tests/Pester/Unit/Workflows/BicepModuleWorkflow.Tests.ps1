@@ -330,6 +330,17 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $unitArtifact[0].with.path | Should -BeExactly '${{ steps.unit-result.outputs.resultPath }}'
         @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Fail failed unit tests')[0].if |
             Should -BeExactly "steps.unit-result.outputs.failed == 'True'"
+        $unitRun = @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Run unit tests')[0].run
+        $unitRun | Should -Match 'Authored unit tests did not return a validated child identity receipt'
+        $unitRun | Should -Match '\$document\.authoring = \[ordered\]@\{'
+        foreach ($field in @(
+                'ChildProcessId', 'SourceManifest', 'SourceSha256', 'SourceModuleBase',
+                'LoadedModuleBase', 'LoadedManifest', 'LoadedSha256', 'DiscoverableModuleBase',
+                'Version', 'Guid', 'GetAvmToolModuleBase', 'InstallAvmToolModuleBase'
+            )) {
+            $unitRun | Should -Match ("(?m)^\s+{0}\s+=\s+\[(?:int|string)\]\`$receipt\.{0}\s*$" -f $field)
+        }
+        $unitRun | Should -Not -Match 'authoring\s*=\s*\$result\.Authoring'
 
         $e2e = $script:workflows['bicep-module-runtime-e2e']
         $deployment = $e2e.jobs.deploy

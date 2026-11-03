@@ -23,7 +23,7 @@ Describe 'Bicep e2e settings' {
         $settings['conventionExemptions']['e2eIgnoreAllowedModules'] | Should -Contain 'avm/res/operational-insights/cluster'
         $settings['conventionExemptions']['e2eIgnoreAllowedModules'].Count | Should -Be 9
         $settings['conventionExemptions']['wafAlignedE2eIgnoreAllowedModules'] |
-            Should -BeExactly @('avm/res/dev-center/dev-center/project')
+            Should -BeExactly @('avm/res/dev-center/devcenter', 'avm/res/dev-center/project')
     }
 }
 

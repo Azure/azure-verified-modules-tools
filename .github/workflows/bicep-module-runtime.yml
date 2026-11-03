@@ -234,6 +234,27 @@ jobs:
                 }
                 issues = $issues
             }
+            if ($result.UnitFiles -gt 0 -and
+                (-not $result.PSObject.Properties['Authoring'] -or $null -eq $result.Authoring)) {
+              throw 'Authored unit tests did not return a validated child identity receipt.'
+            }
+            if ($result.PSObject.Properties['Authoring'] -and $null -ne $result.Authoring) {
+              $receipt = $result.Authoring
+              $document.authoring = [ordered]@{
+                ChildProcessId           = [int]$receipt.ChildProcessId
+                SourceManifest           = [string]$receipt.SourceManifest
+                SourceSha256             = [string]$receipt.SourceSha256
+                SourceModuleBase         = [string]$receipt.SourceModuleBase
+                LoadedModuleBase         = [string]$receipt.LoadedModuleBase
+                LoadedManifest           = [string]$receipt.LoadedManifest
+                LoadedSha256             = [string]$receipt.LoadedSha256
+                DiscoverableModuleBase   = [string]$receipt.DiscoverableModuleBase
+                Version                  = [string]$receipt.Version
+                Guid                     = [string]$receipt.Guid
+                GetAvmToolModuleBase     = [string]$receipt.GetAvmToolModuleBase
+                InstallAvmToolModuleBase = [string]$receipt.InstallAvmToolModuleBase
+              }
+            }
           }
           catch {
             $failure = $true
