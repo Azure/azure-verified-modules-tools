@@ -308,9 +308,31 @@ $Text
     It 'validates in-process summaries through the same protocol as isolated Pester' {
         InModuleScope Avm.Authoring -Parameters @{ Root = $TestDrive } {
             param($Root)
-            Mock Invoke-AvmBicepTestScript {
-                [pscustomobject]@{ ExitCode = 0; Output = @([ordered]@{ Version = '5.7.1'; Total = -1 }) }
+            $module = Get-Module Avm.Authoring
+            $manifest = Join-Path $module.ModuleBase 'Avm.Authoring.psd1'
+            $script:identityFixture = @{
+                ChildProcessId = $PID
+                SourceManifest = $manifest
+                SourceSha256 = (Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash
+                SourceModuleBase = $module.ModuleBase
+                LoadedModuleBase = $module.ModuleBase
+                LoadedManifest = $manifest
+                LoadedSha256 = (Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash
+                DiscoverableModuleBase = $module.ModuleBase
+                GetAvmToolModuleBase = $module.ModuleBase
+                InstallAvmToolModuleBase = $module.ModuleBase
+                Version = $module.Version.ToString()
+                Guid = $module.Guid.ToString()
             }
+            $script:missingIdentityFixture = $true
+            Mock Invoke-AvmBicepTestScript {
+                $output = [ordered]@{ Version = '5.7.1'; Total = -1 }
+                if (-not $script:missingIdentityFixture) { $output.Authoring = $script:identityFixture }
+                [pscustomobject]@{ ExitCode = 0; Output = @($output) }
+            }
+            { Invoke-AvmBicepPesterSuite -Mode E2e -Files @('never-run.Tests.ps1') -WorkingDirectory $Root `
+                    -TestInputData @{} -InProcess } | Should -Throw -ExpectedMessage '*identity receipt*'
+            $script:missingIdentityFixture = $false
             { Invoke-AvmBicepPesterSuite -Mode E2e -Files @('never-run.Tests.ps1') -WorkingDirectory $Root `
                     -TestInputData @{} -InProcess } | Should -Throw -ExpectedMessage '*summary without*'
         }

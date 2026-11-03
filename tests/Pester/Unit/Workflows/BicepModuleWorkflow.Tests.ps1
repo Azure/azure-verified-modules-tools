@@ -209,7 +209,13 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $script:entrypoints.Count | Should -Be 2
         foreach ($entrypoint in $script:entrypoints) {
             @($entrypoint.on.Keys) | Should -Be @('workflow_call')
-            @($entrypoint.on.workflow_call.inputs.Keys | Sort-Object) | Should -Be @('authoringRef', 'authoringSource')
+            $expectedInputs = if ($entrypoint.name -eq 'Reusable: Bicep PR check') {
+                @('authoringRef', 'authoringSource', 'initializeOnly')
+            }
+            else {
+                @('authoringRef', 'authoringSource')
+            }
+            @($entrypoint.on.workflow_call.inputs.Keys | Sort-Object) | Should -Be $expectedInputs
             $entrypoint.on.workflow_call.inputs.authoringSource.default | Should -BeExactly 'gallery'
             $entrypoint.permissions.Count | Should -Be 0
         }
@@ -302,7 +308,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $runtime = $script:workflows['bicep-module-runtime']
         $runtime.permissions.Count | Should -Be 0
         @($runtime.jobs.Keys | Sort-Object) | Should -Be @(
-            'discover-examples', 'e2e-test', 'e2e-test-legacy', 'pr-check', 'unit-test'
+            'discover-examples', 'e2e-test', 'pr-check', 'unit-test'
         )
         foreach ($job in @($runtime.jobs.'pr-check', $runtime.jobs.'unit-test')) {
             $job.permissions.contents | Should -BeExactly 'read'
@@ -310,7 +316,31 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             ($job | ConvertTo-Json -Depth 20) | Should -Not -Match '\bsecrets\b|AVM_CI_|azure/login|environment:'
         }
         $runtime.jobs.'pr-check'.steps[-1].run | Should -Match '(?m)^\s*avm -SkipModuleVersionCheck pr-check\s*$'
-        $runtime.jobs.'unit-test'.steps[-1].run | Should -Match 'avm -SkipModuleVersionCheck test unit --recurse --include-compliance'
+        $unitResult = @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Run unit tests')
+        $unitResult | Should -HaveCount 1
+        $unitResult[0].id | Should -BeExactly 'unit-result'
+        $unitResult[0].run | Should -Match 'Invoke-AvmTestUnit .* -SkipModuleVersionCheck -Recurse -IncludeCompliance'
+        $unitResult[0].run | Should -Match 'ConvertTo-Json'
+        $unitResult[0].run | Should -Match 'Normalize-UnitDiagnostic'
+        $unitArtifact = @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Upload unit test result')
+        $unitArtifact | Should -HaveCount 1
+        $unitArtifact[0].if | Should -BeExactly 'always()'
+        $unitArtifact[0].uses | Should -Match '^actions/upload-artifact@[0-9a-f]{40}$'
+        $unitArtifact[0].with.'retention-days' | Should -Be 7
+        $unitArtifact[0].with.path | Should -BeExactly '${{ steps.unit-result.outputs.resultPath }}'
+        @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Fail failed unit tests')[0].if |
+            Should -BeExactly "steps.unit-result.outputs.failed == 'True'"
+        $unitRun = @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Run unit tests')[0].run
+        $unitRun | Should -Match 'Authored unit tests did not return a validated child identity receipt'
+        $unitRun | Should -Match '\$document\.authoring = \[ordered\]@\{'
+        foreach ($field in @(
+                'ChildProcessId', 'SourceManifest', 'SourceSha256', 'SourceModuleBase',
+                'LoadedModuleBase', 'LoadedManifest', 'LoadedSha256', 'DiscoverableModuleBase',
+                'Version', 'Guid', 'GetAvmToolModuleBase', 'InstallAvmToolModuleBase'
+            )) {
+            $unitRun | Should -Match ("(?m)^\s+{0}\s+=\s+\[(?:int|string)\]\`$receipt\.{0}\s*$" -f $field)
+        }
+        $unitRun | Should -Not -Match 'authoring\s*=\s*\$result\.Authoring'
 
         $e2e = $script:workflows['bicep-module-runtime-e2e']
         $deployment = $e2e.jobs.deploy
@@ -341,7 +371,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         foreach ($jobName in @('pr-check', 'unit-test', 'discover-examples')) {
             $runtime.jobs[$jobName].name | Should -BeExactly $terraform.jobs[$jobName].name
         }
-        $runtime.jobs.'e2e-test'.name | Should -BeExactly 'End-to-end tests (${{ matrix.testCase.Name }})'
+        $runtime.jobs.'e2e-test'.name | Should -BeExactly 'End-to-end tests'
         foreach ($jobName in @('pr-check', 'unit-test', 'discover-examples')) {
             @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Check out caller'
             @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Download prepared authoring runtime'
@@ -352,6 +382,32 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $runtime.jobs.'e2e-test'.needs | Should -BeExactly 'discover-examples'
         $runtime.jobs.'e2e-test'.strategy.'fail-fast' | Should -BeFalse
         $runtime.jobs.'e2e-test'.uses | Should -BeExactly './.github/workflows/bicep-module-runtime-deployment.yml'
+    }
+
+    It 'makes each prepared runtime package discoverable by its exact module name without a fallback' {
+        $runtime = $script:workflows['bicep-module-runtime']
+        $selectors = @(
+            $runtime.jobs.'pr-check'.steps,
+            $runtime.jobs.'unit-test'.steps,
+            $runtime.jobs.'discover-examples'.steps,
+            $script:workflows['bicep-module-runtime-deployment'].jobs.deploy.steps,
+            $script:workflows['bicep-module-runtime-e2e'].jobs.'select-deployments'.steps,
+            $script:workflows['bicep-module-runtime-release'].jobs.release.steps
+        ) | ForEach-Object {
+            @($_ | Where-Object name -EQ 'Select prepared authoring runtime')
+        }
+
+        $selectors | Should -HaveCount 6
+        foreach ($selector in $selectors) {
+            $selector.run | Should -Match 'avm-authoring-discovery'
+            $selector.run | Should -Match 'PSModulePath'
+            $selector.run | Should -Match 'Import-Module -Name Avm\.Authoring -Global -PassThru -ErrorAction Stop'
+            $selector.run | Should -Match 'only discoverable Avm\.Authoring module'
+            $selector.run | Should -Match 'Prepared Avm\.Authoring discovery package does not match'
+            $selector.run | Should -Not -Match 'Install-Module|Install-PSResource'
+        }
+        @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Run unit tests')[0].run |
+            Should -Match 'Authored unit setup did not retain the exact admitted Avm\.Authoring package'
     }
 
     It 'acquires each runtime case lock only in the executable lifecycle job, never its waiting caller' {
@@ -435,6 +491,27 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         }
         @($script:actions['bicep-workflow-matrix'].outputs.Keys | Sort-Object) |
             Should -Be @('baseCommit', 'hasModules', 'includeAllVersionedModules', 'moduleMatrix', 'targetCommit', 'workflowInput')
+    }
+
+    It 'exposes a self-contained composite initializer for thin caller-owned module groups' {
+        $initializer = $script:actions['bicep-pr-check-initializer']
+        @($initializer.inputs.Keys | Sort-Object) |
+            Should -Be @('authoringRef', 'authoringSource', 'deploymentValidation', 'modulePaths')
+        $initializer.inputs.deploymentValidation.default | Should -BeExactly 'true'
+        @($initializer.outputs.Keys | Sort-Object) |
+            Should -Be @('admitted', 'authoringArtifact', 'baseCommit', 'hasModules', 'moduleMatrix', 'targetCommit', 'workflowInput')
+        $text = Get-Content -LiteralPath (Join-Path $script:root '.github' 'actions' 'bicep-pr-check-initializer' 'action.yml') -Raw
+        $text | Should -Match 'Initialize-AvmBicepWorkflowMatrix'
+        $text | Should -Match 'BicepWorkflowOrchestration'
+        $text | Should -Match 'actions/upload-artifact@[0-9a-f]{40}'
+        $text | Should -Match 'deploymentValidation must be exactly true or false'
+        $text | Should -Match '\$deployment = if \(\$manual\)'
+        $text | Should -Match '\$env:DEPLOYMENT_VALIDATION -ceq ''true'''
+        $text | Should -Match "labels -ccontains 'PR: Run E2E Tests'"
+        $text | Should -Not -Match 'utilities[/\\]|Get-TestSubscriptionTag|avm\.template\.module\.preview'
+        foreach ($step in $initializer.runs.steps | Where-Object { $_['uses'] }) {
+            $step.uses | Should -Match '@[0-9a-f]{40}$'
+        }
     }
 
     It 'forwards the event pull request head as data without deriving a branch tip or mutable base' {

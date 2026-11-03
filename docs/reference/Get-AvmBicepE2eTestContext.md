@@ -10,7 +10,7 @@ Revalidate one selected Bicep E2E case and return its execution context.
 
 Revalidates the selected module identity, tenant, subscription pool
 ordering, exact owning module, and isolation evidence before returning
-the explicit values a caller passes to Invoke-AvmTestE2e. It performs no
+the                 explicit values a caller passes to Invoke-AvmTestE2e. It performs no
 sign-in, Azure call, deployment, cleanup, or artifact write.
 
 ## Syntax

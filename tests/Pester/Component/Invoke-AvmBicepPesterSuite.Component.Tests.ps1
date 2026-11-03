@@ -3,7 +3,9 @@
 
 BeforeAll {
     $script:repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
-    Import-Module (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
+    . (Join-Path $PSScriptRoot '..' 'Import-AvmTestModule.ps1') `
+        -SourceManifest (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1')
+    $script:admittedModule = Get-Module Avm.Authoring
 }
 
 Describe 'Component: native Bicep convention diagnostics' -Tag Component {
@@ -166,8 +168,98 @@ Describe 'deployed example' {
         $summary.Passed | Should -Be 1
         $summary.Failed | Should -Be 0
         $summary.Issues | Should -BeNullOrEmpty
+        $summary.Authoring.SourceManifest | Should -Be (Join-Path $script:admittedModule.ModuleBase 'Avm.Authoring.psd1')
+        $summary.Authoring.SourceSha256 | Should -Be (
+            Get-FileHash -LiteralPath $summary.Authoring.SourceManifest -Algorithm SHA256).Hash
+        $summary.Authoring.LoadedModuleBase | Should -Match 'avm-authoring-admission[\\/]Avm\.Authoring$'
+        $summary.Authoring.Version | Should -Be $script:admittedModule.Version.ToString()
+        $summary.Authoring.Guid | Should -Be $script:admittedModule.Guid.ToString()
+        $summary.Authoring.LoadedSha256 | Should -Be $summary.Authoring.SourceSha256
+        $summary.Authoring.LoadedManifest | Should -Be (Join-Path $summary.Authoring.LoadedModuleBase 'Avm.Authoring.psd1')
+        $summary.Authoring.DiscoverableModuleBase | Should -Be $summary.Authoring.LoadedModuleBase
+        $summary.Authoring.GetAvmToolModuleBase | Should -Be $summary.Authoring.LoadedModuleBase
+        $summary.Authoring.InstallAvmToolModuleBase | Should -Be $summary.Authoring.LoadedModuleBase
+        if (-not $env:AVM_TEST_PACKAGE_ROOT) { $summary.Authoring.Version | Should -Be '0.0.0' }
         Get-Variable -Name AvmBicepE2eChildMarker -Scope Global -ErrorAction SilentlyContinue |
             Should -BeNullOrEmpty
+    }
+
+    Describe 'Component: Bicep child admission identity' -Tag Component {
+        BeforeEach {
+            $script:caseDirectory = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            $null = New-Item -ItemType Directory -Path $script:caseDirectory
+            $script:caseSuite = Join-Path $script:caseDirectory 'identity.Tests.ps1'
+            $moduleBase = $script:admittedModule.ModuleBase
+            $moduleParent = Split-Path -Parent $moduleBase
+            $script:discoveryRoot = if ((Split-Path -Leaf $moduleParent) -eq 'Avm.Authoring') {
+                Split-Path -Parent $moduleParent
+            } else { $moduleParent }
+            $script:caseInput = @{
+                SourceManifest = Join-Path $moduleBase 'Avm.Authoring.psd1'
+                DiscoveryRoot = $script:discoveryRoot
+                ParentPid = $PID
+                PinnedPSRule = @(Get-Module -ListAvailable -Name PSRule |
+                    Where-Object { $_.Version -eq [version]'2.9.0' }).Count -gt 0
+            }
+        }
+
+        It 'runs in a genuine child and retains named pinned dependencies while reporting source identity' {
+            Set-Content -LiteralPath $script:caseSuite -Encoding utf8NoBOM -Value @'
+param($TestInputData)
+Describe 'identity' {
+    It 'imports named dependencies in the child' {
+        $PID | Should -Not -Be $TestInputData.ParentPid
+        Import-Module -Name Microsoft.PowerShell.Management -ErrorAction Stop
+        Get-Command Get-Item -Module Microsoft.PowerShell.Management | Should -Not -BeNullOrEmpty
+        if ($TestInputData.PinnedPSRule) {
+            Import-Module -Name PSRule -RequiredVersion '2.9.0' -ErrorAction Stop
+            (Get-Module PSRule).Version.ToString() | Should -Be '2.9.0'
+        }
+    }
+}
+'@
+            $summary = InModuleScope Avm.Authoring -Parameters @{
+                Suite = $script:caseSuite; Root = $script:caseDirectory; Data = $script:caseInput
+            } {
+                param($Suite, $Root, $Data)
+                Invoke-AvmBicepPesterSuite -Mode E2e -Files @($Suite) -WorkingDirectory $Root `
+                    -TestInputData $Data -TimeoutSec 60
+            }
+            $summary.Total | Should -Be 1
+            $summary.Passed | Should -Be 1
+            $summary.Authoring.SourceManifest | Should -Be $script:caseInput.SourceManifest
+            $summary.Authoring.Version | Should -Be $script:admittedModule.Version.ToString()
+            $summary.Authoring.LoadedSha256 | Should -Be $summary.Authoring.SourceSha256
+        }
+
+        It 'fails closed after <Name> changes the child identity' -ForEach @(
+            @{ Name = 'manifest hash'; Action = "Add-Content -LiteralPath (Join-Path (Get-Module Avm.Authoring).ModuleBase 'Avm.Authoring.psd1') -Value '# corrupted'"; Expected = 'did not retain' }
+            @{ Name = 'missing manifest'; Action = "Remove-Item -LiteralPath (Join-Path (Get-Module Avm.Authoring).ModuleBase 'Avm.Authoring.psd1')"; Expected = 'Avm.Authoring.psd1' }
+            @{ Name = 'loaded module path'; Action = 'Remove-Module Avm.Authoring -Force; Import-Module -Name $TestInputData.SourceManifest -Global -Force'; Expected = 'did not retain' }
+            @{ Name = 'polluted named discovery'; Action = '$env:PSModulePath = $TestInputData.DiscoveryRoot + [IO.Path]::PathSeparator + $env:PSModulePath'; Expected = 'did not retain' }
+            @{ Name = 'shadowed command owners'; Action = 'function global:Get-AvmTool { }; function global:Install-AvmTool { }'; Expected = 'did not retain' }
+        ) {
+            $content = @'
+param($TestInputData)
+BeforeAll { ACTION }
+Describe 'identity' {
+    It 'runs the authored suite before refusing the receipt' {
+        $PID | Should -Not -Be $TestInputData.ParentPid
+    }
+}
+'@.Replace('ACTION', $Action)
+            Set-Content -LiteralPath $script:caseSuite -Encoding utf8NoBOM -Value $content
+            $invoke = {
+                InModuleScope Avm.Authoring -Parameters @{
+                    Suite = $script:caseSuite; Root = $script:caseDirectory; Data = $script:caseInput
+                } {
+                    param($Suite, $Root, $Data)
+                    Invoke-AvmBicepPesterSuite -Mode E2e -Files @($Suite) -WorkingDirectory $Root `
+                        -TestInputData $Data -TimeoutSec 60
+                }
+            }
+            $invoke | Should -Throw "*$Expected*"
+        }
     }
 
     It 'returns detailed assertion failures and skips from the real child process' {

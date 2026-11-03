@@ -11,6 +11,23 @@ on:
         description: 'Avm.Authoring reference: authoringSource=gallery uses a package version (blank = latest); authoringSource=repo uses a tools SHA, tag or branch (blank = latest stable tag).'
         type: string
         default: ''
+      initializeOnly:
+        description: Return the prepared module matrix for a caller-owned per-module workflow group.
+        type: boolean
+        default: false
+    outputs:
+      moduleMatrix:
+        value: ${{ jobs.initialize.outputs.moduleMatrix }}
+      hasModules:
+        value: ${{ jobs.initialize.outputs.hasModules }}
+      baseCommit:
+        value: ${{ jobs.initialize.outputs.baseCommit }}
+      targetCommit:
+        value: ${{ jobs.initialize.outputs.targetCommit }}
+      workflowInput:
+        value: ${{ jobs.initialize.outputs.workflowInput }}
+      authoringArtifact:
+        value: ${{ jobs.bootstrap.outputs.artifact }}
 
 permissions: {}
 
@@ -102,10 +119,7 @@ jobs:
             SkipModuleVersionCheck = $true
           }
           $outputs = Initialize-AvmBicepWorkflowMatrix @parameters
-          . (Join-Path $env:GITHUB_WORKSPACE 'utilities' 'pipelines' 'sharedScripts' 'Get-TestSubscriptionTag.ps1')
-
-          $shared = [Collections.Generic.List[object]]::new()
-          $local = [Collections.Generic.List[object]]::new()
+          $modules = [Collections.Generic.List[object]]::new()
           foreach ($entry in $outputs.ModuleMatrix.Include) {
             $record = [pscustomobject]@{
               modulePath = [string]$entry.ModulePath
@@ -113,24 +127,17 @@ jobs:
               psRuleModuleTestFilePaths = ConvertTo-Json -InputObject @($entry.PolicyTestFiles) -Depth 20 -Compress
               e2eRoute = 'none'
             }
-            $tag = Get-TestSubscriptionTag -ModulePath $record.modulePath -RepoRootPath $env:GITHUB_WORKSPACE
-            if (-not $fork) {
-              if ($tag -ceq 'General' -and $outputs.WorkflowInput.deploymentValidation -ceq 'true') {
-                $record.e2eRoute = 'native'
-              }
-              elseif ($tag -cne 'General') {
-                $record.e2eRoute = 'legacy'
-              }
+            if (-not $fork -and $outputs.WorkflowInput.deploymentValidation -ceq 'true') {
+              $record.e2eRoute = 'native'
             }
-            if ($tag -ceq 'General') { $shared.Add($record) } else { $local.Add($record) }
+            $modules.Add($record)
           }
-          $all = @($shared) + @($local)
           $values = [ordered]@{
             baseCommit = $outputs.BaseCommit
             targetCommit = $outputs.TargetCommit
             workflowInput = ConvertTo-Json -InputObject $outputs.WorkflowInput -Depth 20 -Compress
-            moduleMatrix = ConvertTo-Json -InputObject @{ include = $all } -Depth 20 -Compress
-            hasModules = ($all.Count -gt 0).ToString().ToLowerInvariant()
+            moduleMatrix = ConvertTo-Json -InputObject @{ include = @($modules) } -Depth 20 -Compress
+            hasModules = ($modules.Count -gt 0).ToString().ToLowerInvariant()
           }
           foreach ($entry in $values.GetEnumerator()) {
             "$($entry.Key)=$($entry.Value)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -139,7 +146,7 @@ jobs:
   check:
     name: '[AVM] ${{ matrix.modulePath }}'
     needs: [bootstrap, initialize]
-    if: needs.initialize.outputs.hasModules == 'true'
+    if: ${{ !inputs.initializeOnly && needs.initialize.outputs.hasModules == 'true' }}
     permissions:
       contents: read
       id-token: write

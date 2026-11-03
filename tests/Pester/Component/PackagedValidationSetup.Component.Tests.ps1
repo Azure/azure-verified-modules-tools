@@ -23,6 +23,12 @@ Describe 'Component: packaged validation setup' -Tag Component {
                 -Tag Integration -TimeoutSec 60
         }
         $summary.Passed | Should -Be 0
+        $summary.Authoring.ChildProcessId | Should -Not -Be $PID
+        $summary.Authoring.SourceSha256 | Should -Be (
+            Get-FileHash -LiteralPath $summary.Authoring.SourceManifest -Algorithm SHA256).Hash
+        $summary.Authoring.LoadedSha256 | Should -Be $summary.Authoring.SourceSha256
+        $summary.Authoring.LoadedModuleBase | Should -Be $summary.Authoring.GetAvmToolModuleBase
+        $summary.Authoring.LoadedModuleBase | Should -Be $summary.Authoring.InstallAvmToolModuleBase
         $setup = @($summary.Issues | Where-Object { $_.Code -eq 'avm.bicep.pester-setup-failed' })
         $setup | Should -HaveCount 1
         $setup[0].Message | Should -Match 'Run .*build\.ps1 build'

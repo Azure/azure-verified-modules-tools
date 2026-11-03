@@ -38,20 +38,30 @@ function Invoke-AvmBicepPesterSuite {
     $ErrorActionPreference = 'Stop'
     if (-not $ModuleRoot) { $ModuleRoot = $WorkingDirectory }
     $pester = Import-AvmPowerShellModule -Name Pester -ModuleRoot $ModuleRoot
+    $authoring = @(Get-Module -Name Avm.Authoring)
+    if ($authoring.Count -ne 1) { throw 'Bicep Pester child admission requires exactly one loaded Avm.Authoring module.' }
+    $authoring = $authoring[0]
+    $authoringManifest = Join-Path $authoring.ModuleBase 'Avm.Authoring.psd1'
+    if (-not (Test-Path -LiteralPath $authoringManifest -PathType Leaf)) { throw 'The loaded Avm.Authoring module has no manifest.' }
 
     $runnerPath = Join-Path -Path $PSScriptRoot -ChildPath '..' `
         -AdditionalChildPath '..', 'Resources', 'bicep', 'Invoke-AvmPesterSuite.ps1'
     $inputData = @{
-        Mode           = $Mode
-        Files          = $Files
-        ModulePaths    = $ModulePaths
-        RepositoryRoot = $RepositoryRoot
-        Tag            = $Tag
-        TestName       = $TestName
-        TestInputData  = $TestInputData
-        Convention     = $ConventionData
-        PesterPath     = Join-Path $pester.ModuleBase 'Pester.psd1'
-        PesterVersion  = $pester.Version.ToString()
+        Mode                    = $Mode
+        Files                   = $Files
+        ModulePaths             = $ModulePaths
+        RepositoryRoot          = $RepositoryRoot
+        Tag                     = $Tag
+        TestName                = $TestName
+        TestInputData           = $TestInputData
+        Convention              = $ConventionData
+        PesterPath              = Join-Path $pester.ModuleBase 'Pester.psd1'
+        PesterVersion           = $pester.Version.ToString()
+        AuthoringManifest       = (Resolve-Path -LiteralPath $authoringManifest).Path
+        AuthoringManifestSha256 = (Get-FileHash -LiteralPath $authoringManifest -Algorithm SHA256).Hash
+        AuthoringModuleBase     = (Resolve-Path -LiteralPath $authoring.ModuleBase).Path
+        AuthoringVersion        = $authoring.Version.ToString()
+        AuthoringGuid           = $authoring.Guid.ToString()
     }
     if ($Mode -eq 'Convention' -and -not $InProcess) {
         throw [System.ArgumentException]::new('Convention suites must run in process.')
@@ -75,6 +85,7 @@ function Invoke-AvmBicepPesterSuite {
             $null = New-Item -ItemType Directory -Path $runDirectory -ErrorAction Stop
             $inputPath = Join-Path $runDirectory 'input.json'
             $resultPath = Join-Path $runDirectory 'result.json'
+            $inputData.AuthoringCopyModuleBase = Join-Path (Join-Path $runDirectory 'avm-authoring-admission') 'Avm.Authoring'
             [System.IO.File]::WriteAllText(
                 $inputPath, ($inputData | ConvertTo-Json -Depth 100 -Compress),
                 [System.Text.UTF8Encoding]::new($false))
@@ -99,6 +110,52 @@ function Invoke-AvmBicepPesterSuite {
         $summary = $raw | ConvertFrom-Json -AsHashtable -ErrorAction Stop
         if ($summary -isnot [System.Collections.IDictionary]) {
             throw [AvmProcessException]::new('Bicep Pester runner did not return a summary object.')
+        }
+        $expectedCopy = if ($InProcess) { $inputData.AuthoringModuleBase } else { $inputData.AuthoringCopyModuleBase }
+        $pathComparison = if ($IsWindows) {
+            [System.StringComparison]::OrdinalIgnoreCase
+        }
+        else {
+            [System.StringComparison]::Ordinal
+        }
+        $receiptFields = @('SourceManifest', 'SourceSha256', 'SourceModuleBase', 'LoadedModuleBase',
+            'LoadedManifest', 'LoadedSha256', 'DiscoverableModuleBase',
+            'GetAvmToolModuleBase', 'InstallAvmToolModuleBase', 'Version', 'Guid')
+        if (-not $summary.Contains('Authoring') -or
+            $summary.Authoring -isnot [System.Collections.IDictionary]) {
+            throw [AvmProcessException]::new('Bicep Pester child did not return a complete Avm.Authoring identity receipt.')
+        }
+        foreach ($field in $receiptFields) {
+            if (-not $summary.Authoring.Contains($field) -or
+                [string]::IsNullOrWhiteSpace([string]$summary.Authoring[$field])) {
+                throw [AvmProcessException]::new('Bicep Pester child did not return a complete Avm.Authoring identity receipt.')
+            }
+        }
+        if ($summary.Authoring.ChildProcessId -isnot [int] -and
+            $summary.Authoring.ChildProcessId -isnot [long] -or
+            [int]$summary.Authoring.ChildProcessId -le 0 -or
+            (-not $InProcess -and [int]$summary.Authoring.ChildProcessId -eq $PID)) {
+            throw [AvmProcessException]::new('Bicep Pester child did not return a genuine process identity.')
+        }
+        if (
+            $summary.Authoring.SourceManifest -cne $inputData.AuthoringManifest -or
+            $summary.Authoring.SourceSha256 -cne $inputData.AuthoringManifestSha256 -or
+            $summary.Authoring.SourceModuleBase -cne $inputData.AuthoringModuleBase -or
+            -not [string]::Equals([IO.Path]::GetFullPath($summary.Authoring.LoadedModuleBase), $expectedCopy, $pathComparison) -or
+            (-not $InProcess -and
+            -not [string]::Equals([IO.Path]::GetFullPath($summary.Authoring.DiscoverableModuleBase), $expectedCopy, $pathComparison)) -or
+            -not [string]::Equals([IO.Path]::GetFullPath($summary.Authoring.GetAvmToolModuleBase), $expectedCopy, $pathComparison) -or
+            -not [string]::Equals([IO.Path]::GetFullPath($summary.Authoring.InstallAvmToolModuleBase), $expectedCopy, $pathComparison) -or
+            -not [string]::Equals([IO.Path]::GetFullPath($summary.Authoring.LoadedManifest),
+                (Join-Path $expectedCopy 'Avm.Authoring.psd1'), $pathComparison) -or
+            $summary.Authoring.LoadedSha256 -cne $inputData.AuthoringManifestSha256 -or
+            $summary.Authoring.Version -cne $inputData.AuthoringVersion -or
+            $summary.Authoring.Guid -cne $inputData.AuthoringGuid -or
+            (Get-FileHash -LiteralPath $inputData.AuthoringManifest -Algorithm SHA256).Hash -cne
+            $inputData.AuthoringManifestSha256 -or
+            (Get-FileHash -LiteralPath (Join-Path $expectedCopy 'Avm.Authoring.psd1') -Algorithm SHA256).Hash -cne
+            $inputData.AuthoringManifestSha256) {
+            throw [AvmProcessException]::new('Bicep Pester child did not retain the exact admitted Avm.Authoring module.')
         }
         foreach ($key in @('Version', 'Total', 'Passed', 'Failed', 'Skipped', 'Inconclusive', 'Filtered', 'Issues')) {
             if (-not $summary.Contains($key)) {
@@ -138,6 +195,8 @@ function Invoke-AvmBicepPesterSuite {
                 Remove-Item -LiteralPath $path -Force
             }
         }
-        if ($null -ne $runDirectory) { Remove-Item -LiteralPath $runDirectory -Force }
+        if ($null -ne $runDirectory) {
+            Remove-Item -LiteralPath $runDirectory -Recurse -Force -ProgressAction SilentlyContinue
+        }
     }
 }

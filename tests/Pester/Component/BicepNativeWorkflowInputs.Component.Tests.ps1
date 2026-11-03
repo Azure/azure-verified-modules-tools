@@ -327,7 +327,8 @@ Describe 'Component: Bicep native reserved execution boundary' -Tag Component {
         @{ Phase = 'Deploy' }
     ) {
         [IO.File]::WriteAllText($script:mapPath, (ConvertTo-Json -InputObject @{ $script:modulePath = 'Azure Local' } -Compress))
-        { Invoke-AvmTestE2e @script:options -Phase $Phase } | Should -Throw '*protected registry workflow*environment lock*'
+        { Invoke-AvmTestE2e @script:options -Phase $Phase } |
+            Should -Throw '*protected whole-lifecycle locking is not implemented*No registry fallback is invoked*'
         $script:fixture.Calls | Should -HaveCount 0
         InModuleScope Avm.Authoring {
             Should -Invoke Resolve-AvmTool -Exactly 0
@@ -360,7 +361,8 @@ Describe 'Component: Bicep native reserved execution boundary' -Tag Component {
         [IO.File]::WriteAllText((Join-Path $child 'main.bicep'), 'param name string')
         [IO.File]::WriteAllText((Join-Path $directory 'main.test.bicep'), 'param name string')
         $script:options.Remove('CleanupStatePath')
-        { Invoke-AvmTestE2e @script:options -Recurse } | Should -Throw '*protected registry workflow*'
+        { Invoke-AvmTestE2e @script:options -Recurse } |
+            Should -Throw '*protected whole-lifecycle locking is not implemented*No registry fallback is invoked*'
         $script:fixture.Calls | Should -HaveCount 0
     }
 
@@ -370,7 +372,8 @@ Describe 'Component: Bicep native reserved execution boundary' -Tag Component {
         $script:fixture.Calls.Clear()
         $script:options.Remove('ResourceLocation')
         $script:options.Remove('ResourceGroupPrefix')
-        { Invoke-AvmTestE2e @script:options -Phase Complete } | Should -Throw '*protected registry workflow*'
+        { Invoke-AvmTestE2e @script:options -Phase Complete } |
+            Should -Throw '*protected whole-lifecycle locking is not implemented*No registry fallback is invoked*'
         $script:fixture.Calls | Should -HaveCount 0
     }
 }

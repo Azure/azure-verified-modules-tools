@@ -1581,6 +1581,15 @@ UTF-8 lowercase canonical GUID `D` text. PSRule uses the first matching entry.
 A configured pool without the required tag never uses another tag or the legacy
 singleton.
 
+Without subscription configuration, Bicep policy uses public offline token
+values: subscription `11111111-1111-4111-8111-111111111111`, tenant
+`22222222-2222-4222-8222-222222222222`, and management group `avm-policy`.
+These defaults apply to General and reserved modules and need no Azure login,
+real tenant/subscription or secrets. Explicit token overrides retain precedence;
+malformed configured pools and missing matching tags remain errors. These values
+are only for static template expansion: never populate deployment configuration,
+authenticate, or query Azure with them. Unknown and sensitive tokens still fail.
+
 `Select-AvmTestSubscription` exposes this shared read-only selection to workflow
 callers. Require an explicit repository `Path`, exact `ModulePath` and complete
 `TestSubscriptionIds` pool; do not read ambient aliases or synthesize a fallback.
@@ -1809,24 +1818,51 @@ creating state; a failing command does not mean no resources exist.
 
 ### Shared Bicep workflows
 
-Tools owns the top-level reusable `bicep-pr-check.yml` and `bicep-release.yml`
-entrypoints, the established six reusable `bicep-module*.yml` legacy leaves, and
-the package-runtime Bicep module leaves. The registry retains thin event callers,
-ordinary module callers, source, authored tests and configuration, including its
-legacy child-publication approval configuration and validator.
-Shared native validation and execution belong to the released `Avm.Authoring`
-package, not registry utilities or copied compliance scripts.
-Reserved Azure Local cases retain registry-owned legacy execution until
-equivalent native coverage exists. The tools entrypoints
-partition generic selections with the caller's existing reservation helper.
-Non-General selections retain explicit, immutable reverse calls to the registry
-legacy preview and publish-only workflows. Relative reusable calls inside tools
-cannot select a registry workflow. This is a legacy compatibility exception, not
-migration of that implementation into tools or a new prepared-HCI, mapped-identity
-or full-environment-lock guarantee. Preserve its existing behavior; do not
-duplicate the reservation inventory, route reserved cases into ordinary native
-execution, or change the ordinary registry module workflows and publication
-approval policy as part of the thin-caller contract.
+Tools owns the package-runtime Bicep module leaves, the top-level reusable
+`bicep-pr-check.yml` and `bicep-release.yml` entrypoints, and the
+`bicep-pr-check-initializer` composite action. The registry retains thin event
+callers, its source, authored tests and configuration, including child-publication
+approval configuration and validator. Shared validation, discovery, subscription
+selection and execution belong to released `Avm.Authoring` and tools-owned
+workflows; they never invoke registry utilities, copied compliance scripts, or a
+registry workflow fallback.
+
+The composite initializer is the caller contract for a new PR-check workflow. A
+single caller-owned initialize job invokes its immutable tools revision and
+receives `admitted`, `moduleMatrix`, `hasModules`, `baseCommit`, `targetCommit`,
+`workflowInput`, and `authoringArtifact`. It performs event admission, fork
+handling, authoring-package bootstrap, checked-out commit verification, and
+module discovery. `moduleMatrix.include` entries contain `modulePath`,
+`moduleTestFilePaths`, `psRuleModuleTestFilePaths`, and `e2eRoute`. The caller
+uses only those outputs to fan out one visible reusable
+`bicep-module-runtime.yml` group per module; it contains no selection scripts,
+reservation lookup, or routing policy. The established reusable entrypoint stays
+backward-compatible, but new callers do not need to invoke it.
+
+The initializer's `deploymentValidation` string input defaults to `true` and
+accepts only exact lowercase `true` or `false`. It is honored only for
+`workflow_dispatch`, so an explicit static/unit campaign can set it to `false`.
+Pull-request routing remains label- and trust-gated; this input cannot enable or
+disable a pull-request deployment route.
+
+Each runtime unit job writes the public `Invoke-AvmTestUnit` result to a
+seven-day, machine-readable artifact before it reports a failed status. The
+artifact contains the engine, aggregate counts, stable issue coordinates and
+bounded normalized diagnostics; it never includes environment values or an
+unfiltered test error record. This preserves the unit job's failure semantics
+while giving maintainers a per-module diagnostic for platform-specific Pester
+failures.
+
+Every selected non-fork deployment route is native. The exact root
+`.reserved-test-subscriptions.json` map remains the only source of reservation
+tags; it currently protects the seven Azure Local modules. Native execution
+currently fails closed before authentication for every non-General tag with an
+explicit `protected whole-lifecycle locking is not implemented` error. It never
+falls back to a registry deployment workflow or silently uses a General
+subscription. A future native implementation must prove that one actual
+subscription-wide lock, not a caller-supplied lock string, spans protected
+environment preparation, deploy, renewed completion, and recovery with
+ownership-preserving cleanup before this gate can be removed.
 
 Both entrypoints accept `authoringSource` and `authoringRef` through
 `workflow_call`. The source defaults to `gallery`; manual callers may instead
@@ -1843,6 +1879,14 @@ source, version, ref and resolved SHA; a failed selection, build, download
 or import never falls back to another source. Automatic events cannot select
 the new overrides. The caller's static `uses` pin still selects workflow
 code independently of the selected module source.
+
+Artifact consumers retain the downloaded manifest path as the runtime identity
+and additionally copy that exact package into a correctly named
+`Avm.Authoring` module directory on process `PSModulePath`. They verify that
+the copied package is the only discoverable `Avm.Authoring` module before a
+name-based minimum-version import. This supports repository test helpers that
+import the package by name on Linux without allowing an installed Gallery or
+otherwise ambient module fallback.
 
 PR checks use the original
 caller's `github` event context. Automatic upstream PR checks admit `opened`,

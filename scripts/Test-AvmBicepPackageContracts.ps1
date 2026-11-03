@@ -15,7 +15,7 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
-$env:PSModulePath = $InstallRoot + [System.IO.Path]::PathSeparator + (Join-Path $PSHOME 'Modules')
+$env:PSModulePath = $InstallRoot + [System.IO.Path]::PathSeparator + $env:PSModulePath
 $env:AVM_TEST_PACKAGE_ROOT = Join-Path -Path $InstallRoot -ChildPath 'Avm.Authoring' `
     -AdditionalChildPath $ModuleVersion
 $env:AVM_NO_AUTO_INSTALL = '1'
@@ -47,6 +47,7 @@ $selectors = @(
     'Bicep PSRule policy checks.reports required failures*'
     'Component: extracted package test imports*'
     'Component: Bicep Pester unit tier*'
+    '*Component: Bicep child admission identity*'
     'Component: Bicep native*'
     'Component: Bicep cleanup state and context*'
     'Component: Bicep cleanup dependency scope*'

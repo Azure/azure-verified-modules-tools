@@ -800,7 +800,8 @@ function Select-AvmBicepWorkflowDeploymentSubscriptionInternal {
         throw [InvalidOperationException]::new('Native subscription selection must return exactly one eligible target.')
     }
     if ($selected[0].Tag -cne 'General') {
-        throw [InvalidOperationException]::new('Reserved test subscriptions require the registry-local prepared environment lifecycle; shared native deployment cannot authenticate or execute this case.')
+        throw [InvalidOperationException]::new(
+            "Native Bicep workflows reject reserved subscription tag '$($selected[0].Tag)': protected whole-lifecycle locking is not implemented. No registry fallback is invoked.")
     }
     $ownerPath = Resolve-AvmBicepWorkflowPath -Root $Root -RelativePath $selected[0].ModulePath
     $null = Get-AvmModuleContext -Path $ownerPath -Ecosystem bicep -SkipModuleVersionCheck

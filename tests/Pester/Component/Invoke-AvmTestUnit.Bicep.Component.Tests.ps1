@@ -54,8 +54,107 @@ Describe 'Component: Bicep Pester unit tier' -Tag 'Component' {
         $result.RunsPassed | Should -Be 1
         $result.RunsFiltered | Should -Be 2
         $result.Issues | Should -BeNullOrEmpty
+        $result.Authoring.SourceManifest | Should -Be (Join-Path (Get-Module Avm.Authoring).ModuleBase 'Avm.Authoring.psd1')
+        $result.Authoring.SourceSha256 | Should -Be (
+            Get-FileHash -LiteralPath $result.Authoring.SourceManifest -Algorithm SHA256).Hash
+        $result.Authoring.ChildProcessId | Should -Not -Be $PID
+        $result.Authoring.LoadedSha256 | Should -Be $result.Authoring.SourceSha256
+        $result.Authoring.LoadedManifest | Should -Be (
+            Join-Path $result.Authoring.LoadedModuleBase 'Avm.Authoring.psd1')
+        $result.Authoring.Version | Should -Be (Get-Module Avm.Authoring).Version.ToString()
+        $result.Authoring.Guid | Should -Be (Get-Module Avm.Authoring).Guid.ToString()
+        $result.Authoring.DiscoverableModuleBase | Should -Be $result.Authoring.LoadedModuleBase
+        $result.Authoring.GetAvmToolModuleBase | Should -Be $result.Authoring.LoadedModuleBase
+        $result.Authoring.InstallAvmToolModuleBase | Should -Be $result.Authoring.LoadedModuleBase
+        Test-Path -LiteralPath $result.Authoring.LoadedModuleBase | Should -BeFalse
         Get-Variable -Name AvmBicepUnitChildMarker -Scope Global -ErrorAction SilentlyContinue |
             Should -BeNullOrEmpty
+    }
+
+    It 'retains the actual public child receipt in the normalized hosted unit artifact' {
+        $script:realUnitResult = Invoke-AvmTestUnit -Path $script:root -Tag fast
+        $script:realUnitResult.Status | Should -Be 'pass'
+        $emptyRoot = Join-Path $TestDrive 'no authored suite'
+        $null = New-Item -ItemType Directory -Path $emptyRoot -Force
+        Set-Content -LiteralPath (Join-Path $emptyRoot 'main.bicep') `
+            -Value 'param name string' -Encoding utf8NoBOM
+        $script:noSuiteResult = Invoke-AvmTestUnit -Path $emptyRoot
+        $script:noSuiteResult.UnitFiles | Should -Be 0
+        $script:noSuiteResult.PSObject.Properties['Authoring'] | Should -BeNullOrEmpty
+        Import-Module -FullyQualifiedName @{ ModuleName = 'powershell-yaml'; RequiredVersion = '0.4.12' }
+        $workflow = ConvertFrom-Yaml (Get-Content -LiteralPath (
+                Join-Path $script:repoRoot '.github' 'workflows' 'bicep-module-runtime.yml') -Raw)
+        $unitRun = @($workflow.jobs.'unit-test'.steps | Where-Object name -EQ 'Run unit tests')[0].run
+        $saved = @{}
+        foreach ($name in @('RUNNER_TEMP', 'GITHUB_OUTPUT', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT',
+                'MODULE_PATH', 'AVM_AUTHORING_MODULE', 'AVM_AUTHORING_ARTIFACT_MANIFEST_SHA256')) {
+            $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+        }
+        $previousLocation = $PWD.Path
+        try {
+            $env:RUNNER_TEMP = Join-Path $TestDrive 'hosted-result'
+            $env:GITHUB_OUTPUT = Join-Path $TestDrive 'github-output'
+            $env:GITHUB_RUN_ID = '123'
+            $env:GITHUB_RUN_ATTEMPT = '1'
+            $env:MODULE_PATH = 'avm/res/mock/widget'
+            $env:AVM_AUTHORING_MODULE = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Avm.Authoring.psd1'
+            $env:AVM_AUTHORING_ARTIFACT_MANIFEST_SHA256 = (
+                Get-FileHash -LiteralPath $env:AVM_AUTHORING_MODULE -Algorithm SHA256).Hash
+            Set-Location $script:root
+            Mock Invoke-AvmTestUnit { $script:realUnitResult }
+            . ([scriptblock]::Create($unitRun))
+
+            $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
+                    [Text.Encoding]::UTF8.GetBytes($env:MODULE_PATH))).ToLowerInvariant().Substring(0, 16)
+            $artifact = Get-Content -LiteralPath (
+                Join-Path $env:RUNNER_TEMP 'avm-bicep-unit-results' "$key.json") -Raw | ConvertFrom-Json
+            $artifact.status | Should -BeExactly 'pass'
+            $artifact.runs.passed | Should -Be 1
+            $receipt = $artifact.authoring
+            $receipt | Should -Not -BeNullOrEmpty
+            foreach ($field in @(
+                    'ChildProcessId', 'SourceManifest', 'SourceSha256', 'SourceModuleBase',
+                    'LoadedModuleBase', 'LoadedManifest', 'LoadedSha256', 'DiscoverableModuleBase',
+                    'Version', 'Guid', 'GetAvmToolModuleBase', 'InstallAvmToolModuleBase'
+                )) {
+                $receipt.$field | Should -BeExactly $script:realUnitResult.Authoring.$field
+            }
+            $receipt.ChildProcessId | Should -Not -Be $PID
+            $receipt.LoadedModuleBase | Should -Be $receipt.GetAvmToolModuleBase
+            $receipt.LoadedModuleBase | Should -Be $receipt.InstallAvmToolModuleBase
+
+            $env:MODULE_PATH = 'avm/res/mock/no-unit'
+            Set-Location $emptyRoot
+            Mock Invoke-AvmTestUnit { $script:noSuiteResult }
+            . ([scriptblock]::Create($unitRun))
+
+            $emptyKey = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
+                    [Text.Encoding]::UTF8.GetBytes($env:MODULE_PATH))).ToLowerInvariant().Substring(0, 16)
+            $emptyArtifact = Get-Content -LiteralPath (
+                Join-Path $env:RUNNER_TEMP 'avm-bicep-unit-results' "$emptyKey.json") -Raw | ConvertFrom-Json
+            $emptyArtifact.unitFiles | Should -Be 0
+            $emptyArtifact.PSObject.Properties.Name | Should -Not -Contain 'authoring'
+
+            $script:missingReceiptResult = $script:realUnitResult | Select-Object * -ExcludeProperty Authoring
+            $env:MODULE_PATH = 'avm/res/mock/missing-receipt'
+            Mock Invoke-AvmTestUnit { $script:missingReceiptResult }
+            . ([scriptblock]::Create($unitRun))
+            $missingKey = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
+                    [Text.Encoding]::UTF8.GetBytes($env:MODULE_PATH))).ToLowerInvariant().Substring(0, 16)
+            $missingArtifact = Get-Content -LiteralPath (
+                Join-Path $env:RUNNER_TEMP 'avm-bicep-unit-results' "$missingKey.json") -Raw | ConvertFrom-Json
+            $missingArtifact.status | Should -BeExactly 'error'
+            $missingArtifact.issues[0].code | Should -BeExactly 'avm.bicep.unit-runtime-error'
+            $missingArtifact.issues[0].message |
+                Should -Match 'Authored unit tests did not return a validated child identity receipt'
+        }
+        finally {
+            Set-Location $previousLocation
+            foreach ($name in $saved.Keys) {
+                [Environment]::SetEnvironmentVariable($name,
+                    $(if ($null -eq $saved[$name]) { [NullString]::Value } else { $saved[$name] }), 'Process')
+            }
+        }
     }
 
     It 'filters by Pester full name and reports no match as skipped, not passed' {

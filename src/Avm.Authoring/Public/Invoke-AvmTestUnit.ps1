@@ -71,7 +71,14 @@ function Invoke-AvmTestUnit {
         pscustomobject from the engine: Engine, Tool, ToolPath, ToolSource,
         Status, FilesProcessed, RunsTotal, RunsPassed, RunsFailed, Issues.
         Bicep also reports RunsSkipped, RunsInconclusive, RunsFiltered, UnitFiles,
-        ComplianceFile and ModuleScopes.
+        ComplianceFile and ModuleScopes. When authored Pester runs in a child,
+        Bicep also returns Authoring: the child's process ID, admitted source
+        manifest/base/SHA256, observed post-suite loaded and discoverable
+        module bases, loaded manifest/SHA256/version/GUID, and the module bases
+        owning Get-AvmTool and Install-AvmTool. The receipt is validated against
+        the admitted source and exact child copy before it is returned; failed
+        identity checks throw. A skipped run without an authored suite has no
+        Authoring receipt.
         RunsFailed includes native compliance warning assertions; their warning
         severity does not fail the tier. Authored test failures always fail it.
 

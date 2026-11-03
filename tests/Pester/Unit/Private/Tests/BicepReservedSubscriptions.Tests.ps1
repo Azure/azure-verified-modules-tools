@@ -16,6 +16,12 @@ Describe 'Bicep reserved subscription contract' {
         $script:modulePath = 'avm/res/azure-stack-hci/cluster'
         $script:map = '{"avm/res/azure-stack-hci/cluster":"Azure Local"}'
         [IO.File]::WriteAllText($script:path, $script:map)
+        $moduleDirectory = Join-Path $script:root 'avm' 'res' 'azure-stack-hci' 'cluster'
+        $null = New-Item -ItemType Directory -Path $moduleDirectory -Force
+        [IO.File]::WriteAllText((Join-Path $moduleDirectory 'main.bicep'), 'param name string')
+        $exampleDirectory = Join-Path $moduleDirectory 'tests' 'e2e' 'defaults'
+        $null = New-Item -ItemType Directory -Path $exampleDirectory -Force
+        [IO.File]::WriteAllText((Join-Path $exampleDirectory 'main.test.bicep'), 'metadata description = ''test''')
         $script:pool = @(
             @{ name = 'reserved'; id = 'ABCDEF01-ABCD-4ABC-8ABC-ABCDEF012345'; tag = 'Azure Local' }
             @{ name = 'historical'; id = '00000000-0000-4000-8000-000000000002' }
@@ -148,6 +154,20 @@ Describe 'Bicep reserved subscription contract' {
             { Select-AvmBicepWorkflowSubscription -RepositoryRoot $Root -ModulePath $ModulePath `
                     -PoolJson $Json -FallbackSubscriptionId '00000000-0000-4000-8000-000000000002' } |
                 Should -Throw '*singleton fallback*'
+        }
+    }
+
+    It 'fails closed before authentication when native execution selects a reserved pool' {
+        InModuleScope Avm.Authoring -Parameters @{
+            Root = $script:root
+            ModulePath = $script:modulePath
+            Json = (ConvertTo-Json -InputObject $script:pool -Compress)
+        } {
+            param($Root, $ModulePath, $Json)
+            {
+                Select-AvmBicepWorkflowDeploymentSubscriptionInternal -Root $Root -ModulePath $ModulePath `
+                    -Example 'tests/e2e/defaults/main.test.bicep' -PoolJson $Json
+            } | Should -Throw '*protected whole-lifecycle locking is not implemented*'
         }
     }
 

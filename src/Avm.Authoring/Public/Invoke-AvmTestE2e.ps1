@@ -147,8 +147,8 @@ function Invoke-AvmTestE2e {
         Missing tags mean General. Cases use only General subscriptions in a
         stable seeded ordering, independent of JSON ordering. Registry-layout
         modules require the exact root .reserved-test-subscriptions.json map.
-        Non-General reservations require the protected registry workflow, not
-        native e2e, so its environment lock covers preparation through cleanup.
+        Non-General reservations fail closed before authentication because native
+        whole-lifecycle locking is not yet implemented; no registry fallback runs.
     .PARAMETER SubscriptionSelectionSeed
         Shared nonnegative seed for deterministic subscription ordering.
     .PARAMETER SubscriptionJobIndex

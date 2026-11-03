@@ -72,9 +72,32 @@ jobs:
         if: inputs.authoringArtifact != ''
         shell: pwsh
         run: |
-          $manifest = Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1'
+          $packageRoot = Join-Path $env:RUNNER_TEMP 'avm-authoring'
+          $manifest = Join-Path $packageRoot 'Avm.Authoring.psd1'
           if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { throw 'Prepared Avm.Authoring manifest is missing.' }
-          "AVM_AUTHORING_MODULE=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $discoveryRoot = Join-Path $env:RUNNER_TEMP 'avm-authoring-discovery'
+          $discoveryModule = Join-Path $discoveryRoot 'Avm.Authoring'
+          Remove-Item -LiteralPath $discoveryRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $discoveryModule -Force | Out-Null
+          Copy-Item -Path (Join-Path $packageRoot '*') -Destination $discoveryModule -Recurse -Force
+          $artifactHash = (Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash
+          $discoveryManifest = Join-Path $discoveryModule 'Avm.Authoring.psd1'
+          if ((Get-FileHash -LiteralPath $discoveryManifest -Algorithm SHA256).Hash -cne $artifactHash) {
+            throw 'Prepared Avm.Authoring discovery package does not match the downloaded artifact.'
+          }
+          $env:PSModulePath = "$discoveryRoot$([IO.Path]::PathSeparator)$env:PSModulePath"
+          $candidates = @(Get-Module -ListAvailable -Name Avm.Authoring)
+          $selected = @($candidates | Where-Object { $_.ModuleBase -ceq $discoveryModule })
+          $unexpected = @($candidates | Where-Object { $_.ModuleBase -cne $discoveryModule })
+          if ($selected.Count -ne 1 -or $unexpected.Count -ne 0) {
+            throw 'Prepared Avm.Authoring package must be the only discoverable Avm.Authoring module.'
+          }
+          $byName = Import-Module -Name Avm.Authoring -Global -PassThru -ErrorAction Stop
+          if ($byName.ModuleBase -cne $discoveryModule) { throw 'Named Avm.Authoring import did not resolve to the prepared package.' }
+          "PSModulePath=$env:PSModulePath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "AVM_AUTHORING_MODULE=$discoveryManifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "AVM_AUTHORING_ARTIFACT_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "AVM_AUTHORING_ARTIFACT_MANIFEST_SHA256=$artifactHash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Install Avm.Authoring
         if: env.AVM_AUTHORING_MODULE == 'Avm.Authoring'
         uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0

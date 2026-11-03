@@ -433,8 +433,8 @@ Optional Bicep JSON array of id/name objects with an optional tag.
 Missing tags mean General. Cases use only General subscriptions in a
 stable seeded ordering, independent of JSON ordering. Registry-layout
 modules require the exact root .reserved-test-subscriptions.json map.
-Non-General reservations require the protected registry workflow, not
-native e2e, so its environment lock covers preparation through cleanup.
+Non-General reservations fail closed before authentication because native
+whole-lifecycle locking is not yet implemented; no registry fallback runs.
 
 | Property | Value |
 | --- | --- |

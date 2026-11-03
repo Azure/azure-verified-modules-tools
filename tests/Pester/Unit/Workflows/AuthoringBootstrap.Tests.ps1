@@ -89,8 +89,16 @@ Describe 'Prepared Bicep runtime selection' {
                 }
             }
         )
-        if ($scripts.Count -ne 6 -or @($scripts | Select-Object -Unique).Count -ne 1) {
-            throw 'Bicep runtime jobs must consistently select the prepared artifact.'
+        if ($scripts.Count -ne 6) {
+            throw 'Bicep runtime jobs must select the prepared artifact.'
+        }
+        foreach ($script in $scripts) {
+            if ($script -notmatch 'avm-authoring-discovery' -or
+                $script -notmatch 'only discoverable Avm\.Authoring module' -or
+                $script -notmatch 'Prepared Avm\.Authoring discovery package does not match' -or
+                $script -notmatch 'Import-Module -Name Avm\.Authoring -Global -PassThru -ErrorAction Stop') {
+                throw 'Bicep runtime jobs must consistently bind the prepared artifact.'
+            }
         }
         $script:selectRuntime = [scriptblock]::Create($scripts[0])
     }
@@ -98,23 +106,39 @@ Describe 'Prepared Bicep runtime selection' {
     BeforeEach {
         $script:savedTemp = [Environment]::GetEnvironmentVariable('RUNNER_TEMP', 'Process')
         $script:savedEnv = [Environment]::GetEnvironmentVariable('GITHUB_ENV', 'Process')
+        $script:savedModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'Process')
         $env:RUNNER_TEMP = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $env:GITHUB_ENV = Join-Path $env:RUNNER_TEMP 'environment'
+        $env:PSModulePath = Join-Path $PSHOME 'Modules'
         New-Item -ItemType Directory -Path $env:RUNNER_TEMP -Force | Out-Null
     }
 
     AfterEach {
+        $discoveryModule = Join-Path $env:RUNNER_TEMP 'avm-authoring-discovery' 'Avm.Authoring'
+        foreach ($module in @(Get-Module -Name Avm.Authoring | Where-Object {
+                    [string]::Equals($_.ModuleBase, $discoveryModule,
+                        $(if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }))
+                })) {
+            Remove-Module -ModuleInfo $module -Force
+        }
         [Environment]::SetEnvironmentVariable('RUNNER_TEMP', ($null -eq $script:savedTemp ? [NullString]::Value : $script:savedTemp), 'Process')
         [Environment]::SetEnvironmentVariable('GITHUB_ENV', ($null -eq $script:savedEnv ? [NullString]::Value : $script:savedEnv), 'Process')
+        [Environment]::SetEnvironmentVariable('PSModulePath', ($null -eq $script:savedModulePath ? [NullString]::Value : $script:savedModulePath), 'Process')
     }
 
     It 'selects only the downloaded manifest for subsequent steps' {
         $directory = Join-Path $env:RUNNER_TEMP 'avm-authoring'
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
         $manifest = Join-Path $directory 'Avm.Authoring.psd1'
-        New-Item -ItemType File -Path $manifest | Out-Null
+        Set-Content -LiteralPath $manifest -Value "@{ ModuleVersion = '0.21.0'; RootModule = 'Avm.Authoring.psm1' }"
+        Set-Content -LiteralPath (Join-Path $directory 'Avm.Authoring.psm1') -Value ''
         & $script:selectRuntime
-        Get-Content -LiteralPath $env:GITHUB_ENV | Should -BeExactly "AVM_AUTHORING_MODULE=$manifest"
+        @(Get-Module -Name Avm.Authoring | Where-Object {
+                $_.ModuleBase -eq (Join-Path $env:RUNNER_TEMP 'avm-authoring-discovery' 'Avm.Authoring')
+            }) | Should -HaveCount 1
+        $environment = Get-Content -LiteralPath $env:GITHUB_ENV
+        @($environment | Where-Object { $_ -like 'AVM_AUTHORING_MODULE=*' }) |
+            Should -Match '^AVM_AUTHORING_MODULE=.*avm-authoring-discovery.*Avm\.Authoring\.psd1$'
     }
 
     It 'fails instead of selecting Gallery when the downloaded manifest is missing' {
