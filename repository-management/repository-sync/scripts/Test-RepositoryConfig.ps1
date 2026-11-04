@@ -37,9 +37,7 @@ function Assert-Throws {
 }
 
 function New-DefaultGroup {
-    param(
-        [object]$claimOverrides
-    )
+    param([object] $FederationSettings)
 
     return [pscustomobject]@{
         name = "default"
@@ -49,33 +47,30 @@ function New-DefaultGroup {
             [pscustomobject]@{ name = "test-contributors"; permission = "push" },
             [pscustomobject]@{ name = "test-readers"; permission = "pull" }
         )
-        workloadIdentityFederationSubjectClaimOverrides = $claimOverrides
+        workloadIdentityFederationSubjectClaimOverrides = $FederationSettings
     }
 }
 
-$defaultRef = "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main"
-$groupRef = "Azure/example/.github/workflows/terraform-module.yml@refs/heads/release"
-
+$defaultWorkflowPath = "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml"
+$alternativeWorkflowPath = "Azure/example/.github/workflows/terraform-module.yml"
 $defaultOnlyConfig = [pscustomobject]@{
     repositoryGroups = @(
-        (New-DefaultGroup -claimOverrides ([pscustomobject]@{ jobWorkflowRef = $defaultRef }))
+        (New-DefaultGroup -FederationSettings ([pscustomobject]@{ jobWorkflowPath = $defaultWorkflowPath }))
     )
 }
 $defaultOnlySettings = Resolve-RepositorySettings -repositoryConfig $defaultOnlyConfig -repoId "unlisted-repository"
-Assert-Equal $defaultRef $defaultOnlySettings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowRef"] "Default group OIDC subject was not applied."
+Assert-Equal $defaultWorkflowPath $defaultOnlySettings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowPath"] "Default workflow path was not resolved."
 Assert-Equal 2 $defaultOnlySettings.Teams.Count "Default group teams were not resolved."
 Assert-Equal 0 $defaultOnlySettings.PullRequestBypassTeams.Count "Unlisted repositories must not have a team bypass."
 
 $overrideConfig = [pscustomobject]@{
     repositoryGroups = @(
-        (New-DefaultGroup -claimOverrides ([pscustomobject]@{ jobWorkflowRef = $defaultRef })),
+        (New-DefaultGroup -FederationSettings ([pscustomobject]@{ jobWorkflowPath = $defaultWorkflowPath })),
         [pscustomobject]@{
             name = "override"
             order = 10
             repositories = @("overridden-repository")
-            workloadIdentityFederationSubjectClaimOverrides = [pscustomobject]@{
-                jobWorkflowRef = $groupRef
-            }
+            workloadIdentityFederationSubjectClaimOverrides = [pscustomobject]@{ jobWorkflowPath = $alternativeWorkflowPath }
             pullRequestBypassTeams = @("test-contributors")
         },
         [pscustomobject]@{
@@ -88,11 +83,11 @@ $overrideConfig = [pscustomobject]@{
     )
 }
 $overrideSettings = Resolve-RepositorySettings -repositoryConfig $overrideConfig -repoId "overridden-repository"
-Assert-Equal $groupRef $overrideSettings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowRef"] "Repository-group OIDC subject override did not win."
+Assert-Equal $alternativeWorkflowPath $overrideSettings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowPath"] "Repository-group workflow path override did not win."
 Assert-Equal "test-contributors,test-owners" ($overrideSettings.PullRequestBypassTeams -join ",") "Matching group bypass teams were not combined without duplicates."
 
 $unmatchedSettings = Resolve-RepositorySettings -repositoryConfig $overrideConfig -repoId "other-repository"
-Assert-Equal $defaultRef $unmatchedSettings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowRef"] "A non-matching group leaked its OIDC subject override."
+Assert-Equal $defaultWorkflowPath $unmatchedSettings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowPath"] "A non-matching workflow path override leaked."
 Assert-Equal 0 $unmatchedSettings.PullRequestBypassTeams.Count "A non-matching group leaked its bypass teams."
 
 $actualConfigPath = [System.IO.Path]::Combine(
@@ -113,14 +108,14 @@ $configuredRepositories += "unlisted-repository"
 $expectedBypassTeams = "azure-verified-modules-engineering-owners"
 foreach ($repository in $configuredRepositories) {
     $actualSettings = Resolve-RepositorySettings -repositoryConfig $actualConfig -repoId $repository
-    Assert-Equal $defaultRef $actualSettings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowRef"] "The checked-in OIDC subject is incorrect for '$repository'."
+    Assert-Equal $defaultWorkflowPath $actualSettings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowPath"] "The checked-in workflow path is incorrect for '$repository'."
     Assert-Equal $expectedBypassTeams ($actualSettings.PullRequestBypassTeams -join ",") "Unexpected pull-request bypass teams for '$repository'."
 }
 
 Assert-Throws -MessagePattern "*pullRequestBypassTeams must be an array*" -Action {
     $invalidConfig = [pscustomobject]@{
         repositoryGroups = @(
-            (New-DefaultGroup -claimOverrides $null),
+            (New-DefaultGroup),
             [pscustomobject]@{
                 name = "invalid"
                 repositories = @("repository")
@@ -134,7 +129,7 @@ Assert-Throws -MessagePattern "*pullRequestBypassTeams must be an array*" -Actio
 Assert-Throws -MessagePattern "*not a configured team slug*" -Action {
     $invalidConfig = [pscustomobject]@{
         repositoryGroups = @(
-            (New-DefaultGroup -claimOverrides $null),
+            (New-DefaultGroup),
             [pscustomobject]@{
                 name = "invalid"
                 repositories = @("repository")
@@ -145,40 +140,21 @@ Assert-Throws -MessagePattern "*not a configured team slug*" -Action {
     Resolve-RepositorySettings -repositoryConfig $invalidConfig -repoId "repository"
 }
 
-Assert-Throws -MessagePattern "Repository group 'default' sets unsupported*" -Action {
-    $invalidKeyConfig = [pscustomobject]@{
-        repositoryGroups = @(
-            (New-DefaultGroup -claimOverrides ([pscustomobject]@{ unsupported = "value" }))
-        )
+foreach ($invalidPath in @(
+        "Azure/example/.github/workflows/module.yml@refs/heads/main",
+        "Azure/example/.github/workflows/module.yml@refs/tags/v1",
+        "Azure/example/.github/workflows/module.yml@0123456789abcdef0123456789abcdef01234567",
+        "`$`{`{ github.ref `}`}",
+        "Azure/example/.github/workflows/../module.yml"
+    )) {
+    Assert-Throws -MessagePattern "*jobWorkflowPath must use the form*" -Action {
+        $invalidConfig = [pscustomobject]@{
+            repositoryGroups = @(
+                (New-DefaultGroup -FederationSettings ([pscustomobject]@{ jobWorkflowPath = $invalidPath }))
+            )
+        }
+        Resolve-RepositorySettings -repositoryConfig $invalidConfig -repoId "repository"
     }
-    Resolve-RepositorySettings -repositoryConfig $invalidKeyConfig -repoId "repository"
 }
-
-Assert-Throws -MessagePattern "workloadIdentityFederationSubjectClaimOverrides.jobWorkflowRef must use the form*" -Action {
-    $invalidRefConfig = [pscustomobject]@{
-        repositoryGroups = @(
-            (New-DefaultGroup -claimOverrides ([pscustomobject]@{ jobWorkflowRef = "Azure/example/.github/workflows/terraform-module.yml@main" }))
-        )
-    }
-    Resolve-RepositorySettings -repositoryConfig $invalidRefConfig -repoId "repository"
-}
-
-Assert-Throws -MessagePattern "workloadIdentityFederationSubjectClaimOverrides.jobWorkflowRef must use the form*" -Action {
-    $invalidWorkflowConfig = [pscustomobject]@{
-        repositoryGroups = @(
-            (New-DefaultGroup -claimOverrides ([pscustomobject]@{ jobWorkflowRef = "not-a-workflow@refs/heads/main" }))
-        )
-    }
-    Resolve-RepositorySettings -repositoryConfig $invalidWorkflowConfig -repoId "repository"
-}
-
-$shaRef = "Azure/example/.github/workflows/terraform-module.yaml@0123456789abcdef0123456789abcdef01234567"
-$shaConfig = [pscustomobject]@{
-    repositoryGroups = @(
-        (New-DefaultGroup -claimOverrides ([pscustomobject]@{ jobWorkflowRef = $shaRef }))
-    )
-}
-$shaSettings = Resolve-RepositorySettings -repositoryConfig $shaConfig -repoId "repository"
-Assert-Equal $shaRef $shaSettings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowRef"] "A valid workflow SHA ref was rejected."
 
 Write-Host "Repository configuration tests passed."

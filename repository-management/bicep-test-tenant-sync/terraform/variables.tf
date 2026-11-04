@@ -55,6 +55,16 @@ variable "repository_sync_repository_id" {
   description = "Verified immutable ID of the Tools repository."
 }
 
+variable "github_job_workflow_path" {
+  type        = string
+  description = "Configured Bicep reusable workflow path, excluding its mutable Git reference."
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+/\\.github/workflows/[A-Za-z0-9][A-Za-z0-9_.-]*\\.ya?ml$", var.github_job_workflow_path))
+    error_message = "The Bicep reusable workflow path must be owner/repository/.github/workflows/name.yml with no Git ref."
+  }
+}
+
 variable "location" {
   type        = string
   description = "Region for dedicated Bicep module identities."

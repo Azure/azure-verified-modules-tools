@@ -12,6 +12,7 @@ param(
     [string]$stateSubscriptionId = "",
     [string]$stateClientId = "",
     [bool]$planOnly = $false,
+    [bool]$allowExampleRepositoryBranchApply = $false,
     [string]$repoId = "avm-ptn-example-repo",
     [string]$repoUrl = "https://github.com/Azure/terraform-azurerm-avm-ptn-example-repo",
     [string]$outputDirectory = ".",
@@ -88,9 +89,6 @@ $selectedTestTenant = if ($repositoryCreationModeEnabled) { 'none' } else { $set
 if (-not $repositoryCreationModeEnabled -and $selectedTestTenant -cne 'bami') {
     throw [System.InvalidOperationException]::new('The legacy test tenant is retired. Normal repository sync requires testTenant bami.')
 }
-if ($selectedTestTenant -ceq 'bami' -and $env:GITHUB_ACTIONS -eq 'true') {
-    Assert-AvmBamiRepositorySyncRunContext -PlanOnly $planOnly
-}
 $testTenant = if ($repositoryCreationModeEnabled) {
     [pscustomobject]@{ TestTenant = 'none'; Settings = $null }
 }
@@ -113,7 +111,8 @@ Write-Information "Repository: $orgAndRepoName; plan only: $planOnly; force file
 $discovery = Invoke-RepositorySyncLogGroup -Name 'GitHub repository and team discovery' -Action {
     $context = if ($repositoryCreationModeEnabled) { $null } else {
         Resolve-AvmRepositorySyncContext -RepoId $repoId -Repository $orgAndRepoName `
-            -RepositorySyncRepositoryId $repositorySyncRepositoryId -PlanOnly $planOnly
+            -RepositorySyncRepositoryId $repositorySyncRepositoryId -PlanOnly $planOnly `
+            -AllowExampleRepositoryBranchApply $allowExampleRepositoryBranchApply
     }
     $tree = if ($repositoryCreationModeEnabled) { $null } else {
         Get-RepositoryDefaultBranchTree -orgAndRepoName $orgAndRepoName
@@ -168,11 +167,8 @@ if ($null -ne $existingIdentity) {
 if ($null -ne $repositorySyncContext) {
     $terraformVariables["repository_sync_repository_id"] = $repositorySyncContext.RepositoryId
 }
-
-# Only emit the override when a group actually sets it. Writing a null would
-# clobber the Terraform-side default for every other repository.
-if ($settings.WorkloadIdentityFederationSubjectClaimOverrides.ContainsKey("jobWorkflowRef")) {
-    $terraformVariables["github_job_workflow_ref"] = $settings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowRef"]
+if ($settings.WorkloadIdentityFederationSubjectClaimOverrides.ContainsKey("jobWorkflowPath")) {
+    $terraformVariables["github_job_workflow_path"] = $settings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowPath"]
 }
 
 $terraformVariables | ConvertTo-Json -Depth 100 |
@@ -208,15 +204,15 @@ $issueLog = @(Invoke-RepositorySyncLogGroup -Name 'Terraform repository configur
         $planParameters.repository = $repositorySyncContext.Repository
         $planParameters.repositorySyncRepositoryId = $repositorySyncContext.RepositoryId
     }
+    if ($settings.WorkloadIdentityFederationSubjectClaimOverrides.ContainsKey('jobWorkflowPath')) {
+        $planParameters.jobWorkflowPath = $settings.WorkloadIdentityFederationSubjectClaimOverrides['jobWorkflowPath']
+    }
     if (-not $repositoryCreationModeEnabled) {
         $planParameters.stateStorageAccountName = $stateStorageAccountName
         $planParameters.stateContainerName = $stateContainerName
         $planParameters.stateSubscriptionId = $stateSubscriptionId
         $planParameters.stateTenantId = $stateTenantId
         $planParameters.stateClientId = $stateClientId
-    }
-    if ($settings.WorkloadIdentityFederationSubjectClaimOverrides.ContainsKey('jobWorkflowRef')) {
-        $planParameters.jobWorkflowRef = $settings.WorkloadIdentityFederationSubjectClaimOverrides['jobWorkflowRef']
     }
     Invoke-TerraformPlanAndApply @planParameters -Confirm:$false
 })
@@ -293,6 +289,17 @@ if (!$repositoryCreationModeEnabled) {
         }
         Write-Warning "Skipping file updates for $orgAndRepoName because repository sync reported errors."
     } else {
+        $useGalleryAuthoringModule = (
+            -not $planOnly -and
+            $allowExampleRepositoryBranchApply -and
+            $repoId -ceq 'avm-ptn-example-repo' -and
+            $repositorySyncContext.Repository.full_name -ceq 'Azure/terraform-azurerm-avm-ptn-example-repo'
+        )
+        if ($allowExampleRepositoryBranchApply -and -not $planOnly -and -not $useGalleryAuthoringModule) {
+            throw [System.InvalidOperationException]::new(
+                'The branch-apply opt-in may use Gallery candidate checks only for the resolved example repository.')
+        }
+        $candidateAuthoringModulePath = if ($useGalleryAuthoringModule) { '' } else { $authoringModulePath }
         $preCommitResult = Invoke-RepositorySyncLogGroup -Name 'Managed files and authoring checks' -Action {
             Invoke-AvmPreCommitForRepository `
             -orgAndRepoName $orgAndRepoName `
@@ -304,7 +311,8 @@ if (!$repositoryCreationModeEnabled) {
             -planOnly $planOnly `
             -forceFileUpdate $forceFileUpdate.IsPresent `
             -candidateOutputDirectory $candidateOutputDirectory `
-            -authoringModulePath $authoringModulePath `
+            -authoringModulePath $candidateAuthoringModulePath `
+            -useGalleryAuthoringModule:$useGalleryAuthoringModule `
             -issueLog $issueLog
         }
         $issueLog = @($preCommitResult.IssueLog)

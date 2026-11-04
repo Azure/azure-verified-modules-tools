@@ -76,8 +76,11 @@ variable "github_workflow_ref" {
   default     = null
 
   validation {
-    condition     = var.github_workflow_ref == null ? true : can(regex("^[^/\\s@]+/[^/\\s@]+/\\.github/workflows/[^/\\s@]+\\.ya?ml@refs/heads/main$", var.github_workflow_ref))
-    error_message = "The caller workflow must be a fully qualified workflow ref on trusted main."
+    condition = var.github_workflow_ref == null ? true : (
+      can(regex("^[^/\\s@]+/[^/\\s@]+/\\.github/workflows/[^/\\s@]+\\.ya?ml@refs/heads/main$", var.github_workflow_ref)) &&
+      length("*:workflow_ref:${var.github_workflow_ref}") <= 128
+    )
+    error_message = "The caller workflow must be a fully qualified trusted-main workflow ref whose claims expression comparand is at most 128 characters."
   }
 }
 
@@ -93,9 +96,9 @@ variable "bicep_registry_federation_enabled" {
       var.github_repository_owner == "Azure" &&
       var.github_repository_name == "bicep-registry-modules" &&
       var.github_repository_environment_names == toset(["avm-validation"]) &&
-      can(regex("^[A-Za-z0-9][A-Za-z0-9_-]{2,119}$", "${local.owner_repo_name}-registry-avm-validation"))
+      can(regex("^[A-Za-z0-9][A-Za-z0-9_-]{2,119}$", "${local.owner_repo_name}-fic-r-avm-validation"))
     )
-    error_message = "Registry federation requires a named Azure/bicep-registry-modules identity, only avm-validation, and a credential name within 120 characters."
+    error_message = "Registry federation requires a named Azure/bicep-registry-modules identity, only avm-validation, and a canonical credential name within 120 characters."
   }
 }
 
@@ -125,10 +128,11 @@ variable "github_repository_environment_names" {
     condition = alltrue([
       for name in var.github_repository_environment_names :
       can(regex("^[A-Za-z0-9][A-Za-z0-9_-]{2,119}$",
-        var.github_workflow_ref == null ? "${local.owner_repo_name}-${name}" : "${local.owner_repo_name}-module-${name}"
-      ))
+        "${local.owner_repo_name}-fic-m-${name}"
+      )) &&
+      length("repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:${name}:*") <= 128
     ])
-    error_message = "Environment suffixes must keep federated credential names within 120 characters, including the optional module- prefix."
+    error_message = "Environment suffixes must keep canonical federated credential names within 120 characters and subject comparands within 128 characters."
   }
 }
 
@@ -142,9 +146,17 @@ variable "is_protected_repo" {
   description = "Whether the repository is protected and requires pull request approval."
 }
 
-variable "github_job_workflow_ref" {
+variable "github_job_workflow_path" {
   type        = string
-  description = "GitHub Actions job workflow ref."
+  description = "Configured reusable workflow path, excluding its mutable Git reference, used for module federation."
+
+  validation {
+    condition = (
+      can(regex("^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+/\\.github/workflows/[A-Za-z0-9][A-Za-z0-9_.-]*\\.ya?ml$", var.github_job_workflow_path)) &&
+      length("${var.github_job_workflow_path}@*") <= 128
+    )
+    error_message = "The reusable workflow path must be owner/repository/.github/workflows/name.yml with no Git ref, expression, tag, or commit SHA, and its claims expression comparand must be at most 128 characters."
+  }
 }
 
 variable "github_organization_id" {

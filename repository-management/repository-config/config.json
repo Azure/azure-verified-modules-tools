@@ -7,6 +7,9 @@
       "pullRequestBypassTeams": [
         "azure-verified-modules-engineering-owners"
       ],
+      "workloadIdentityFederationSubjectClaimOverrides": {
+        "jobWorkflowPath": "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml"
+      },
       "entraGroups": [
         "avm-test-entra-readers",
         "avm-test-management-group-owners"
@@ -24,9 +27,6 @@
       "codeOwnersFileProtectionTeams": [
         "azure-verified-modules-engineering-owners"
       ],
-      "workloadIdentityFederationSubjectClaimOverrides": {
-        "jobWorkflowRef": "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main"
-      },
       "teams": [
         {
           "name": "azure-verified-modules-module-contributors",

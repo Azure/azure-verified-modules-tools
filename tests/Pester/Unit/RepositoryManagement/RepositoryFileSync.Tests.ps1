@@ -161,6 +161,30 @@ Describe 'The Terraform repository-sync entry point uses the shared publication 
             Should -Throw '*only supported for plan-only*'
     }
 
+    It 'uses the Gallery module only when candidate preparation explicitly selects it' {
+        $script:preparedState = $null
+        Mock Get-Module { @() }
+        Mock Invoke-RepositoryFileSync {
+            param($State)
+            $script:preparedState = $State
+            @{ HasChanges = $false; Status = 'NoChange' }
+        }
+
+        $null = Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' `
+            -repoId 'avm-res-test' -repositoryConfigDir 'configuration' -defaultBranch main -planOnly $false `
+            -candidateOutputDirectory (Join-Path $TestDrive 'candidate') -useGalleryAuthoringModule -issueLog @()
+
+        $script:preparedState.AuthoringModulePath | Should -BeNullOrEmpty
+        Should -Invoke Import-Module -Exactly 1 -ParameterFilter {
+            $Name -ceq 'Avm.Authoring' -and $Force -and $ErrorAction -eq 'Stop'
+        }
+        $source = Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
+        {
+            Invoke-AvmPreCommitForRepository @script:terraformOwnership -orgAndRepoName 'Azure/terraform-test' `
+                -defaultBranch main -planOnly $false -authoringModulePath $source -useGalleryAuthoringModule -issueLog @()
+        } | Should -Throw '*Gallery candidate checks cannot use*'
+    }
+
     It 'does not replace the checked-out authoring module with the Gallery release' {
         $source = Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
         Mock Invoke-AvmPreCommit { [pscustomobject]@{ Status = 'pass' } }

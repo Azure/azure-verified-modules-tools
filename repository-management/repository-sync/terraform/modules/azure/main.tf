@@ -78,57 +78,21 @@ data "azapi_resource" "existing_identity" {
   }
 }
 
-resource "azapi_resource" "identity_federated_credentials" {
-  for_each = var.github_repository_environment_names
+resource "azapi_resource" "federated_credentials" {
+  for_each = local.federated_credentials
 
-  type      = "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview"
-  name      = var.github_workflow_ref == null ? "${local.federation_identity_name}-${each.value}" : "${local.federation_identity_name}-module-${each.value}"
+  type      = "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview"
+  name      = each.value.name
   parent_id = local.identity_resource_id
   locks     = [local.identity_resource_id]
   body = {
     properties = {
       audiences = ["api://AzureADTokenExchange"]
       issuer    = "https://token.actions.githubusercontent.com"
-      # OIDC subject layout matches the `include_claim_keys` order configured in
-      # modules/github/github.actions_oidc.tf. The `context` claim is not
-      # included literally in `sub`; it expands to its value, which is
-      # `environment:<name>` when the job references an environment.
-      subject = join("", [
-        "repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:${each.value}:job_workflow_ref:${var.github_job_workflow_ref}",
-        var.github_workflow_ref == null ? "" : ":workflow_ref:${var.github_workflow_ref}"
-      ])
-    }
-  }
-}
-
-resource "azapi_resource" "validation_federated_credential" {
-  count = var.existing_identity == null || var.existing_identity.manage_entra_groups ? 1 : 0
-
-  type      = "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview"
-  name      = "${local.federation_identity_name}-avm-validation"
-  parent_id = local.identity_resource_id
-  locks     = [local.identity_resource_id]
-  body = {
-    properties = {
-      audiences = ["api://AzureADTokenExchange"]
-      issuer    = "https://token.actions.githubusercontent.com"
-      subject   = "repository_owner_id:${var.github_organization_id}:repository_id:${var.repository_sync_repository_id}:environment:avm-validation"
-    }
-  }
-}
-
-resource "azapi_resource" "bicep_registry_federated_credential" {
-  count = var.bicep_registry_federation_enabled ? 1 : 0
-
-  type      = "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview"
-  name      = "${local.federation_identity_name}-registry-avm-validation"
-  parent_id = local.identity_resource_id
-  locks     = [local.identity_resource_id]
-  body = {
-    properties = {
-      audiences = ["api://AzureADTokenExchange"]
-      issuer    = "https://token.actions.githubusercontent.com"
-      subject   = "repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:avm-validation"
+      claimsMatchingExpression = {
+        languageVersion = 1
+        value           = join(" and ", local.federated_credential_claim_clauses[each.key])
+      }
     }
   }
 }
@@ -173,9 +137,4 @@ resource "azuread_group_member" "test_permissions" {
 moved {
   from = azapi_resource.identity
   to   = azapi_resource.identity[0]
-}
-
-moved {
-  from = azapi_resource.validation_federated_credential
-  to   = azapi_resource.validation_federated_credential[0]
 }

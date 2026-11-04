@@ -13,6 +13,10 @@ on:
         description: 'Whether to only plan the changes'
         default: true
         type: boolean
+      allow_example_repository_branch_apply:
+        description: 'Allow one non-main apply only for avm-ptn-example-repo. This always uses this workflow source.'
+        default: false
+        type: boolean
       use_workflow_authoring_source:
         description: 'For plan-only runs, use Avm.Authoring from this workflow ref instead of the released Gallery version.'
         default: true
@@ -57,6 +61,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Authorize example repository branch apply
+        if: github.event_name == 'workflow_dispatch' && inputs.allow_example_repository_branch_apply
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_REPOSITORY -cne 'Azure/azure-verified-modules-tools' -or
+              $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or
+              $env:GITHUB_REF -notmatch '^refs/heads/[^/\r\n][^\r\n]*$' -or
+              $env:GITHUB_REF -ceq 'refs/heads/main' -or
+              "${{ inputs.plan_only }}".ToLowerInvariant() -ne 'false' -or
+              "${{ inputs.repositories }}" -cne 'avm-ptn-example-repo') {
+            throw [System.InvalidOperationException]::new(
+              'The branch-apply opt-in is limited to one manual avm-ptn-example-repo apply from a non-main tools branch.')
+          }
+
       - name: Generate matrix
         uses: ./repository-management/repository-sync/actions/avm-repos
         id: matrix
@@ -87,7 +106,7 @@ jobs:
         working-directory: ./repository-management/repository-sync
     env:
       PROJECT_URL: 'https://github.com/orgs/Azure/projects/1011'
-      USE_WORKFLOW_AUTHORING_SOURCE: ${{ github.event_name == 'workflow_dispatch' && inputs.plan_only && inputs.use_workflow_authoring_source }}
+      USE_WORKFLOW_AUTHORING_SOURCE: ${{ github.event_name == 'workflow_dispatch' && (inputs.allow_example_repository_branch_apply || (inputs.plan_only && inputs.use_workflow_authoring_source)) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -164,20 +183,22 @@ jobs:
           $triggerType = "${{ github.event_name }}"
 
           $planOnly = $false
+          $allowExampleRepositoryBranchApply = $false
           $forceFileUpdate = $false
 
           if($triggerType -eq "workflow_dispatch") {
             $planOnly = "${{ inputs.plan_only }}".ToLower() -eq "true"
+            $allowExampleRepositoryBranchApply = "${{ inputs.allow_example_repository_branch_apply }}".ToLower() -eq "true"
             $forceFileUpdate = "${{ inputs.force_file_update }}".ToLower() -eq "true"
           }
           $authoringModulePath = ''
-          if ($planOnly -and $triggerType -eq 'workflow_dispatch' -and
-              $env:USE_WORKFLOW_AUTHORING_SOURCE -eq 'true') {
+          if ($triggerType -eq 'workflow_dispatch' -and $env:USE_WORKFLOW_AUTHORING_SOURCE -eq 'true') {
             $authoringModulePath = Join-Path $env:GITHUB_WORKSPACE 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'
           }
           $candidateDirectory = Join-Path $env:RUNNER_TEMP 'avm-sync-candidates' $env:SYNC_REPO_NAME
 
           Write-Output "Plan Only: $planOnly"
+          Write-Output "Example repository branch apply: $allowExampleRepositoryBranchApply"
           Write-Output "Force File Update: $forceFileUpdate"
           Write-Output "Avm.Authoring source: $(if ($authoringModulePath) { 'workflow checkout' } else { 'PowerShell Gallery' })"
 
@@ -208,6 +229,7 @@ jobs:
           Import-Module -Name $moduleToLoad -Force -ErrorAction Stop
           ./scripts/Invoke-RepositorySync.ps1 `
             -planOnly $planOnly `
+            -allowExampleRepositoryBranchApply $allowExampleRepositoryBranchApply `
             -stateStorageAccountName $env:ARM_BACKEND_STORAGE_ACCOUNT_NAME `
             -stateContainerName $env:ARM_BACKEND_STORAGE_CONTAINER_NAME `
             -stateTenantId $env:ARM_BACKEND_TENANT_ID `

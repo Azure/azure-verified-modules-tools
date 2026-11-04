@@ -85,7 +85,7 @@ function New-AvmTestBamiPlan {
         [string[]] $GroupNames = @('avm-test-management-group-owners', 'avm-test-entra-readers'),
         [string] $RepositoryOwnerId = '6844498',
         [string] $RepositorySyncRepositoryId = '1239632211',
-        [string] $JobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main',
+        [string] $JobWorkflowPath = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml',
         [string] $ModuleAddress = 'module.azure',
         [string] $IdentityName = 'id-test-terraform-azurerm-avm-ptn-example-repo',
         [string] $PreviousIdentityName = 'Azure-terraform-azurerm-avm-ptn-example-repo',
@@ -161,24 +161,27 @@ AND
     $credentials = @(
         if ($BicepRegistryFederation) {
             @{
-                Address = 'module.azure.azapi_resource.bicep_registry_federated_credential[0]'
-                Name = "$IdentityName-registry-avm-validation"
-                Subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:avm-validation"
+                Address = 'module.azure.azapi_resource.federated_credentials["bicep-registry"]'
+                Name = "$IdentityName-fic-r-avm-validation"
+                Expression = Get-AvmBamiFederationExpression `
+                    -SubjectPattern "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:avm-validation" `
+                    -RepositoryOwnerId $RepositoryOwnerId -RepositoryId $RepositoryId
             }
         }
         foreach ($environment in $Environments) {
-            $subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:${environment}:job_workflow_ref:$JobWorkflowRef"
-            if ($WorkflowRef) { $subject += ":workflow_ref:$WorkflowRef" }
             @{
-                Address = 'module.azure.azapi_resource.identity_federated_credentials["' + $environment + '"]'
-                Name = if ($WorkflowRef) { "$IdentityName-module-$environment" } else { "$IdentityName-$environment" }
-                Subject = $subject
+                Address = 'module.azure.azapi_resource.federated_credentials["module-' + $environment + '"]'
+                Name = "$IdentityName-fic-m-$environment"
+                Expression = Get-AvmBamiModuleFederationExpression -RepositoryOwnerId $RepositoryOwnerId `
+                    -RepositoryId $RepositoryId -Environment $environment -JobWorkflowPath $JobWorkflowPath -WorkflowRef $WorkflowRef
             }
         }
         @{
-            Address = 'module.azure.azapi_resource.validation_federated_credential[0]'
-            Name = "$IdentityName-avm-validation"
-            Subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
+            Address = 'module.azure.azapi_resource.federated_credentials["validation"]'
+            Name = "$IdentityName-fic-v-avm-validation"
+            Expression = Get-AvmBamiFederationExpression `
+                -SubjectPattern "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation" `
+                -RepositoryOwnerId $RepositoryOwnerId -RepositoryId $RepositorySyncRepositoryId
         }
     )
     foreach ($credential in $credentials) {
@@ -187,22 +190,25 @@ AND
             mode = 'managed'
             type = 'azapi_resource'
             values = @{
-                type = 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview'
+                type = 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview'
                 name = $credential.Name
                 parent_id = if ($KnownClient) { $identity.identity_resource_id } else { $null }
                 body = @{
                     properties = @{
                         audiences = @('api://AzureADTokenExchange')
                         issuer = 'https://token.actions.githubusercontent.com'
-                        subject = $credential.Subject
                     }
                 }
             }
         }
+        $resources[-1].values.body.properties['claimsMatchingExpression'] = @{
+            languageVersion = 1
+            value = $credential.Expression
+        }
     }
     $changes = @($resources | ForEach-Object {
             $actions = @(if ($KnownClient -and (-not $ValidationPending -or
-                    $_.address -cne 'module.azure.azapi_resource.validation_federated_credential[0]')) {
+                    $_.address -cne 'module.azure.azapi_resource.federated_credentials["validation"]')) {
                 'no-op'
             }
             else {
@@ -285,7 +291,7 @@ AND
         $previous = New-AvmTestBamiPlan -KnownClient -IdentityName $PreviousIdentityName -ModuleAddress $ModuleAddress `
             -ClientId $PreviousClientId -PrincipalId $PreviousPrincipalId -GroupNames $GroupNames `
             -RepositoryOwnerId $RepositoryOwnerId -RepositoryId $RepositoryId -RepositorySyncRepositoryId $RepositorySyncRepositoryId `
-            -JobWorkflowRef $JobWorkflowRef -WorkflowRef $WorkflowRef -Environments $Environments -BicepRegistryFederation:$BicepRegistryFederation `
+            -JobWorkflowPath $JobWorkflowPath -WorkflowRef $WorkflowRef -Environments $Environments -BicepRegistryFederation:$BicepRegistryFederation `
             -OwnerMigration:$OwnerMigration -LegacyMembershipMigration:$LegacyMembershipMigration -RemovedGroup $RemovedGroup
         foreach ($change in $changes) {
             $old = @($previous.resource_changes | Where-Object { $_.address -ceq $change.address })[0]

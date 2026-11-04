@@ -65,7 +65,7 @@ Describe 'Central test tenant group resolution' {
         }
     }
 
-    It 'preserves teams, topics, CODEOWNERS and workflow-ref precedence' {
+    It 'preserves teams, topics, CODEOWNERS and bypass-team precedence' {
         $config = [pscustomobject]@{
             repositoryGroups = @(
                 [pscustomobject]@{
@@ -73,18 +73,12 @@ Describe 'Central test tenant group resolution' {
                     teams = @([pscustomobject]@{ name = 'maintainers'; repositoryPermission = 'push'; environmentApproval = $true })
                     topics = @('shared')
                     codeOwnersFileProtectionTeams = @('maintainers')
-                    workloadIdentityFederationSubjectClaimOverrides = [pscustomobject]@{
-                        jobWorkflowRef = 'Azure/example/.github/workflows/test.yml@refs/heads/main'
-                    }
                 }
                 [pscustomobject]@{
                     name = 'specific'; order = 10; repositories = @('example')
                     topics = @('specific')
                     codeOwnersTeams = @('maintainers')
                     pullRequestBypassTeams = @('maintainers')
-                    workloadIdentityFederationSubjectClaimOverrides = [pscustomobject]@{
-                        jobWorkflowRef = 'Azure/example/.github/workflows/test.yml@refs/heads/release'
-                    }
                 }
             )
         }
@@ -95,14 +89,11 @@ Describe 'Central test tenant group resolution' {
         $after.TestTenant | Should -BeExactly 'bami'
         foreach ($key in @(
             'RepositoryGroupNames', 'Teams', 'Topics', 'CodeOwnersDefaultTeams',
-            'CodeOwnersFileProtectionTeams', 'PullRequestBypassTeams',
-            'WorkloadIdentityFederationSubjectClaimOverrides'
+            'CodeOwnersFileProtectionTeams', 'PullRequestBypassTeams'
         )) {
             (ConvertTo-Json -InputObject $after[$key] -Depth 10 -Compress) |
                 Should -BeExactly (ConvertTo-Json -InputObject $before[$key] -Depth 10 -Compress)
         }
-        $after.WorkloadIdentityFederationSubjectClaimOverrides.jobWorkflowRef |
-            Should -BeExactly 'Azure/example/.github/workflows/test.yml@refs/heads/release'
     }
 
     It 'does not change the authoring module managed-file group resolution' {

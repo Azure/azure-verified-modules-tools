@@ -68,6 +68,7 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
                 owner = [pscustomobject]@{ id = 6844498 }
             }
             repositorySyncRepositoryId = '1239632211'
+            jobWorkflowPath = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml'
             entraGroupNames = @('avm-test-entra-readers', 'avm-test-management-group-owners')
             issueLog = @()
         }

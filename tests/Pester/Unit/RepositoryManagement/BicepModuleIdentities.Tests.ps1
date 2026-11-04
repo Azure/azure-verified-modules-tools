@@ -331,7 +331,10 @@ Describe 'Bicep identity saved-plan ownership guard' {
         $script:modules = New-AvmTestBicepIdentityModules
         $script:context = New-AvmTestBicepIdentityContext
         $script:plan = New-AvmTestBicepIdentityPlan -KnownClient
-        $script:guard = @{ Plan = $script:plan; Settings = $script:settings; Modules = $script:modules; Context = $script:context }
+        $script:guard = @{
+            Plan = $script:plan; Settings = $script:settings; Modules = $script:modules; Context = $script:context
+            JobWorkflowPath = 'Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml'
+        }
     }
 
     It 'accepts both existing identities and new identities with explicitly unknown outputs' -ForEach @($true, $false) {
@@ -355,7 +358,7 @@ Describe 'Bicep identity saved-plan ownership guard' {
         @{ Case = 'different hash'; Edit = { param($p) $p.resource_changes[0].change.before.name = 'id-avm-bicep-avm-res-fabric-capacity-00000000' } }
         @{ Case = 'another tenant'; Edit = { param($p) $p.resource_changes[0].change.before.output.properties.tenantId = '90000000-0000-4000-8000-000000000001' } }
         @{ Case = 'shared client'; Edit = { param($p) $p.resource_changes[0].change.before.output.properties.clientId = '10000000-0000-4000-8000-000000000004' } }
-        @{ Case = 'another caller'; Edit = { param($p) $p.resource_changes[3].change.before.body.properties.subject += ':untrusted' } }
+        @{ Case = 'another caller'; Edit = { param($p) $p.resource_changes[3].change.before.body.properties.claimsMatchingExpression.value += ':untrusted' } }
     ) {
         $script:guard.Plan = New-AvmTestBicepIdentityPlan -NamingMigration
         & $Edit $script:guard.Plan
@@ -367,24 +370,29 @@ Describe 'Bicep identity saved-plan ownership guard' {
         { Assert-AvmBicepIdentityPlan @script:guard } | Should -Throw '*unique identity names*'
     }
 
-    It 'retains staged credentials and adds the same exact registry environment subject to both module identities' {
+    It 'retains staged credentials and adds exact registry environment claims to both module identities' {
         foreach ($module in $script:plan.planned_values.root_module.child_modules) {
             $path = [regex]::Match($module.address, '^module\.bicep\["([^"]+)"\]$').Groups[1].Value
             $credentials = @($module.resources | Where-Object { $_.values['type'] -like '*/federatedIdentityCredentials@*' })
             @($credentials.values.name | Select-Object -Unique) | Should -HaveCount 3
-            $staged = @($credentials | Where-Object { $_.address.EndsWith('.azapi_resource.identity_federated_credentials["avm-validation"]') })[0]
-            $staged.values.body.properties.subject | Should -BeExactly (
-                'repository_owner_id:6844498:repository_id:447791597:environment:avm-validation:' +
-                'job_workflow_ref:Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml@refs/heads/main:' +
-                "workflow_ref:Azure/bicep-registry-modules/.github/workflows/$($path.Replace('/', '.')).yml@refs/heads/main"
+            $staged = @($credentials | Where-Object { $_.address.EndsWith('.azapi_resource.federated_credentials["module-avm-validation"]') })[0]
+            $staged.values.type |
+                Should -BeExactly 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview'
+            $staged.values.body.properties.ContainsKey('subject') | Should -BeFalse
+            $staged.values.body.properties.claimsMatchingExpression.languageVersion | Should -Be 1
+            $staged.values.body.properties.claimsMatchingExpression.value | Should -BeExactly (
+                "claims['sub'] matches 'repository_owner_id:6844498:repository_id:447791597:environment:avm-validation:*' and " +
+                "claims['job_workflow_ref'] matches 'Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml@*' and " +
+                "claims['sub'] matches '*:workflow_ref:Azure/bicep-registry-modules/.github/workflows/$($path.Replace('/', '.')).yml@refs/heads/main' and " +
+                "claims['repository_id'] eq '447791597' and claims['repository_owner_id'] eq '6844498'"
             )
-            $tools = @($credentials | Where-Object { $_.address.EndsWith('.azapi_resource.validation_federated_credential[0]') })[0]
-            $tools.values.body.properties.subject |
-                Should -BeExactly 'repository_owner_id:6844498:repository_id:1239632211:environment:avm-validation'
-            $registry = @($credentials | Where-Object { $_.address.EndsWith('.azapi_resource.bicep_registry_federated_credential[0]') })[0]
-            $registry.values.name | Should -BeExactly ((Get-AvmBicepModuleIdentityName -ModulePath $path) + '-registry-avm-validation')
-            $registry.values.body.properties.subject |
-                Should -BeExactly 'repository_owner_id:6844498:repository_id:447791597:environment:avm-validation'
+            $tools = @($credentials | Where-Object { $_.address.EndsWith('.azapi_resource.federated_credentials["validation"]') })[0]
+            $tools.values.body.properties.claimsMatchingExpression.value |
+                Should -BeExactly "claims['sub'] matches 'repository_owner_id:6844498:repository_id:1239632211:environment:avm-validation' and claims['repository_id'] eq '1239632211' and claims['repository_owner_id'] eq '6844498'"
+            $registry = @($credentials | Where-Object { $_.address.EndsWith('.azapi_resource.federated_credentials["bicep-registry"]') })[0]
+            $registry.values.name | Should -BeExactly ((Get-AvmBicepModuleIdentityName -ModulePath $path) + '-fic-r-avm-validation')
+            $registry.values.body.properties.claimsMatchingExpression.value |
+                Should -BeExactly "claims['sub'] matches 'repository_owner_id:6844498:repository_id:447791597:environment:avm-validation' and claims['repository_id'] eq '447791597' and claims['repository_owner_id'] eq '6844498'"
             $registry.values.body.properties.audiences | Should -Be @('api://AzureADTokenExchange')
             $registry.values.body.properties.issuer | Should -BeExactly 'https://token.actions.githubusercontent.com'
             $registry.values.body.properties.Count | Should -Be 3
@@ -393,7 +401,7 @@ Describe 'Bicep identity saved-plan ownership guard' {
 
     It 'accepts adding only registry federation without replacing existing identities, memberships or credentials' {
         foreach ($change in $script:plan.resource_changes) {
-            if ($change.address.EndsWith('.azapi_resource.bicep_registry_federated_credential[0]')) {
+            if ($change.address.EndsWith('.azapi_resource.federated_credentials["bicep-registry"]')) {
                 $change.change.before = $null
                 $change.change.actions = @('create')
             }
@@ -403,8 +411,27 @@ Describe 'Bicep identity saved-plan ownership guard' {
         @($script:plan.resource_changes | Where-Object { $_.change.actions -contains 'delete' }) | Should -HaveCount 0
     }
 
+    It 'allows only verified Bicep credential deletion paired with canonical recreation' {
+        $script:guard.Plan = New-AvmTestBicepIdentityPlan -KnownClient
+        $current = @($script:guard.Plan.resource_changes | Where-Object {
+                $_.address -ceq 'module.bicep["avm/res/fabric/capacity"].azapi_resource.federated_credentials["module-avm-validation"]'
+            })[0]
+        $legacy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $current -Depth 100) -AsHashtable
+        $legacy.address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.identity_federated_credentials["avm-validation"]'
+        $legacy.change.actions = @('delete')
+        $legacy.change.after = $null
+        $legacy.change.before.name = 'id-test-bicep-avm-res-fabric-capacity-module-avm-validation'
+        $current.change.actions = @('create')
+        $current.change.before = $null
+        $script:guard.Plan.resource_changes += $legacy
+
+        { Assert-AvmBicepIdentityPlan @script:guard } | Should -Not -Throw
+        $legacy.change.before.parent_id = '/foreign/identity'
+        { Assert-AvmBicepIdentityPlan @script:guard } | Should -Throw '*obsolete Owner assignment*'
+    }
+
     It 'requires every staged and current registry credential: <_>' -ForEach @(
-        'identity_federated_credentials["avm-validation"]', 'validation_federated_credential[0]', 'bicep_registry_federated_credential[0]'
+        'federated_credentials["module-avm-validation"]', 'federated_credentials["validation"]', 'federated_credentials["bicep-registry"]'
     ) {
         $address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.' + $_
         $script:plan.resource_changes = @($script:plan.resource_changes | Where-Object address -CNE $address)
@@ -416,20 +443,19 @@ Describe 'Bicep identity saved-plan ownership guard' {
     It 'rejects altered registry federation <Side>: <Case>' -ForEach @(
         foreach ($side in @('before', 'after', 'planned')) {
             foreach ($case in @(
-                @{ Case = 'owner ID'; Edit = { param($v) $v.body.properties.subject = $v.body.properties.subject.Replace('6844498', '9999999') } }
-                @{ Case = 'repository ID'; Edit = { param($v) $v.body.properties.subject = $v.body.properties.subject.Replace('447791597', '999999999') } }
-                @{ Case = 'Tools credential substitution'; Edit = { param($v) $v.body.properties.subject = $v.body.properties.subject.Replace('447791597', '1239632211') } }
-                @{ Case = 'environment'; Edit = { param($v) $v.body.properties.subject = $v.body.properties.subject.Replace('avm-validation', 'pr-check') } }
+                @{ Case = 'owner ID'; Edit = { param($v) $v.body.properties.claimsMatchingExpression.value = $v.body.properties.claimsMatchingExpression.value.Replace('6844498', '9999999') } }
+                @{ Case = 'repository ID'; Edit = { param($v) $v.body.properties.claimsMatchingExpression.value = $v.body.properties.claimsMatchingExpression.value.Replace('447791597', '999999999') } }
+                @{ Case = 'Tools credential substitution'; Edit = { param($v) $v.body.properties.claimsMatchingExpression.value = $v.body.properties.claimsMatchingExpression.value.Replace('447791597', '1239632211') } }
+                @{ Case = 'environment'; Edit = { param($v) $v.body.properties.claimsMatchingExpression.value = $v.body.properties.claimsMatchingExpression.value.Replace('avm-validation', 'pr-check') } }
                 @{ Case = 'issuer'; Edit = { param($v) $v.body.properties.issuer = 'https://untrusted.example' } }
                 @{ Case = 'audience'; Edit = { param($v) $v.body.properties.audiences = @('different-audience') } }
                 @{ Case = 'additional audience'; Edit = { param($v) $v.body.properties.audiences += 'different-audience' } }
-                @{ Case = 'wildcard subject'; Edit = { param($v) $v.body.properties.subject = '*' } }
-                @{ Case = 'unconfigured workflow claim'; Edit = { param($v) $v.body.properties.subject += ':job_workflow_ref:Azure/tools/.github/workflows/run.yml@refs/heads/main' } }
+                @{ Case = 'wildcard subject'; Edit = { param($v) $v.body.properties.claimsMatchingExpression.value = "claims['sub'] matches '*'" } }
+                @{ Case = 'unconfigured workflow claim'; Edit = { param($v) $v.body.properties.claimsMatchingExpression.value += ':job_workflow_ref:Azure/tools/.github/workflows/run.yml@refs/heads/main' } }
                 @{ Case = 'flexible expression'; Edit = { param($v)
-                    $v.body.properties.Remove('subject')
                     $v.body.properties.claimsMatchingExpression = @{ languageVersion = 1; value = "claims['sub'] matches '*'" }
                 } }
-                @{ Case = 'different API'; Edit = { param($v) $v.type = $v.type.Replace('2023-07-31-preview', '2025-01-31-preview') } }
+                @{ Case = 'different API'; Edit = { param($v) $v.type = $v.type.Replace('2025-01-31-preview', '2023-07-31-preview') } }
                 @{ Case = 'credential name'; Edit = { param($v) $v.name = 'shared-registry-credential' } }
                 @{ Case = 'foreign identity'; Edit = { param($v) $v.parent_id = '/foreign/identity' } }
                 @{ Case = 'foreign resource ID'; Edit = { param($v) $v.id = '/foreign/credential' } }
@@ -438,7 +464,7 @@ Describe 'Bicep identity saved-plan ownership guard' {
             }
         }
     ) {
-        $address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.bicep_registry_federated_credential[0]'
+        $address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.federated_credentials["bicep-registry"]'
         $values = if ($Side -ceq 'planned') {
             @($script:plan.planned_values.root_module.child_modules[0].resources | Where-Object address -CEQ $address)[0].values
         }
@@ -452,7 +478,7 @@ Describe 'Bicep identity saved-plan ownership guard' {
     It 'does not treat the shared registry subject as proof of an old module identity during renaming' {
         $script:guard.Plan = New-AvmTestBicepIdentityPlan -NamingMigration
         foreach ($change in $script:guard.Plan.resource_changes) {
-            if ($change.address.EndsWith('.azapi_resource.identity_federated_credentials["avm-validation"]')) {
+            if ($change.address.EndsWith('.azapi_resource.federated_credentials["module-avm-validation"]')) {
                 $change.change.before = $null
                 $change.change.actions = @('create')
             }
@@ -465,6 +491,7 @@ Describe 'Bicep identity saved-plan ownership guard' {
             Assert-AvmBamiIdentityPlan -Plan $script:plan -Settings $script:settings `
                 -Repository 'Azure/terraform-azurerm-avm-ptn-example-repo' -RepositoryId '1234' `
                 -RepositoryOwnerId '6844498' -RepositorySyncRepositoryId '1239632211' `
+                -JobWorkflowPath 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml' `
                 -EntraGroupNames @() -BicepRegistryFederation
         } | Should -Throw '*restricted to dedicated Bicep module identities*'
     }
@@ -479,8 +506,8 @@ Describe 'Bicep identity saved-plan ownership guard' {
         @{ Case = 'foreign existing state'; Edit = { param($p) $p.resource_changes[0].change.before.id = '/shared/identity' } }
         @{ Case = 'foreign provider'; Edit = { param($p) $p.resource_changes[0].provider_name = 'registry.terraform.io/example/azapi' } }
         @{ Case = 'import'; Edit = { param($p) $p.resource_changes[0].change.importing = @{ id = '/foreign/identity' } } }
-        @{ Case = 'unrestricted federation'; Edit = { param($p) $p.planned_values.root_module.child_modules[0].resources[-2].values.body.properties.subject = 'repo:Azure/bicep-registry-modules:environment:avm-validation' } }
-        @{ Case = 'another caller'; Edit = { param($p) $p.planned_values.root_module.child_modules[0].resources[-2].values.body.properties.subject = $p.planned_values.root_module.child_modules[1].resources[-2].values.body.properties.subject } }
+        @{ Case = 'unrestricted federation'; Edit = { param($p) $p.planned_values.root_module.child_modules[0].resources[-2].values.body.properties.claimsMatchingExpression.value = "claims['sub'] matches '*'" } }
+        @{ Case = 'another caller'; Edit = { param($p) $p.planned_values.root_module.child_modules[0].resources[-2].values.body.properties.claimsMatchingExpression.value = $p.planned_values.root_module.child_modules[1].resources[-2].values.body.properties.claimsMatchingExpression.value } }
         @{ Case = 'wrong Graph tenant'; Edit = { param($p) $p.prior_state.values.root_module.child_modules[0].resources[1].values.tenant_id = '90000000-0000-4000-8000-000000000001' } }
         @{ Case = 'wrong group'; Edit = { param($p) $p.prior_state.values.root_module.child_modules[0].resources[2].values.display_name = 'foreign group' } }
         @{ Case = 'duplicate client'; Edit = { param($p) $p.planned_values.root_module.child_modules[1].resources[0].values.output.properties.clientId = '10000000-0000-4000-8000-000000000006' } }
@@ -612,26 +639,6 @@ Describe 'Bicep identity saved-plan ownership guard' {
         $identity.previous_address = $identity.address.Replace('.identity[0]', '.identity')
 
         { Assert-AvmBicepIdentityPlan @script:guard } | Should -Not -Throw
-    }
-
-    It 'allows only the exact unchanged validation credential state move for dedicated and existing identities' {
-        $credential = @{
-            address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.validation_federated_credential[0]'
-            previous_address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.validation_federated_credential'
-            mode = 'managed'
-            type = 'azapi_resource'
-            provider_name = 'registry.terraform.io/azure/azapi'
-            change = @{ actions = @('no-op'); before = @{ name = 'credential' }; after = @{ name = 'credential' } }
-        }
-        $arguments = @{ ModuleAddress = 'module.bicep["avm/res/fabric/capacity"]'; ModulePath = 'avm/res/fabric/capacity' }
-
-        Test-AvmBicepDedicatedIdentityStateMove -Resource $credential @arguments -ExistingIdentities @{} | Should -BeTrue
-        Test-AvmBicepDedicatedIdentityStateMove -Resource $credential @arguments -ExistingIdentities @{ 'avm/res/fabric/capacity' = @{} } | Should -BeTrue
-        $credential.change.after.name = 'changed'
-        Test-AvmBicepDedicatedIdentityStateMove -Resource $credential @arguments -ExistingIdentities @{} | Should -BeFalse
-        $credential.change.after.name = 'credential'
-        $credential.previous_address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.bicep_registry_federated_credential'
-        Test-AvmBicepDedicatedIdentityStateMove -Resource $credential @arguments -ExistingIdentities @{} | Should -BeFalse
     }
 
     It 'rejects incompatible dedicated identity state moves: <Case>' -ForEach @(

@@ -60,6 +60,64 @@ Describe 'Test identity naming' {
     }
 }
 
+Describe 'BAMI repository-sync run context' {
+    BeforeEach {
+        $script:previousRunContext = @{}
+        foreach ($name in @('GITHUB_ACTIONS', 'GITHUB_REPOSITORY', 'GITHUB_EVENT_NAME', 'GITHUB_REF')) {
+            $script:previousRunContext[$name] = [Environment]::GetEnvironmentVariable($name)
+        }
+        $env:GITHUB_ACTIONS = 'true'
+        $env:GITHUB_REPOSITORY = 'Azure/azure-verified-modules-tools'
+        $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
+        $env:GITHUB_REF = 'refs/heads/fix/example-repository-apply'
+    }
+
+    AfterEach {
+        foreach ($name in $script:previousRunContext.Keys) {
+            [Environment]::SetEnvironmentVariable(
+                $name,
+                ($null -eq $script:previousRunContext[$name] ? [NullString]::Value : $script:previousRunContext[$name]),
+                'Process'
+            )
+        }
+    }
+
+    It 'allows only the resolved example repository for the manual branch apply opt-in' {
+        {
+            Assert-AvmBamiRepositorySyncRunContext -PlanOnly $false -AllowExampleRepositoryBranchApply $true `
+                -RepoId 'avm-ptn-example-repo' -ResolvedRepository $script:repository
+        } | Should -Not -Throw
+    }
+
+    It 'preserves manual branch previews and trusted main applies without the opt-in' {
+        { Assert-AvmBamiRepositorySyncRunContext -PlanOnly $true } | Should -Not -Throw
+
+        $env:GITHUB_EVENT_NAME = 'repository_dispatch'
+        $env:GITHUB_REF = 'refs/heads/main'
+        { Assert-AvmBamiRepositorySyncRunContext -PlanOnly $false } | Should -Not -Throw
+    }
+
+    It 'rejects non-manual, main, preview, or misbound example branch apply opt-ins: <Case>' -ForEach @(
+        @{ Case = 'scheduled event'; Event = 'schedule'; Ref = 'refs/heads/fix/example-repository-apply'; PlanOnly = $false; RepoId = 'avm-ptn-example-repo'; Repository = $null }
+        @{ Case = 'repository dispatch'; Event = 'repository_dispatch'; Ref = 'refs/heads/fix/example-repository-apply'; PlanOnly = $false; RepoId = 'avm-ptn-example-repo'; Repository = $null }
+        @{ Case = 'main branch'; Event = 'workflow_dispatch'; Ref = 'refs/heads/main'; PlanOnly = $false; RepoId = 'avm-ptn-example-repo'; Repository = $null }
+        @{ Case = 'plan-only execution'; Event = 'workflow_dispatch'; Ref = 'refs/heads/fix/example-repository-apply'; PlanOnly = $true; RepoId = 'avm-ptn-example-repo'; Repository = $null }
+        @{ Case = 'all repository selection'; Event = 'workflow_dispatch'; Ref = 'refs/heads/fix/example-repository-apply'; PlanOnly = $false; RepoId = 'All'; Repository = $null }
+        @{ Case = 'other module'; Event = 'workflow_dispatch'; Ref = 'refs/heads/fix/example-repository-apply'; PlanOnly = $false; RepoId = 'avm-res-storage-storage-account'; Repository = $null }
+        @{ Case = 'other repository'; Event = 'workflow_dispatch'; Ref = 'refs/heads/fix/example-repository-apply'; PlanOnly = $false; RepoId = 'avm-ptn-example-repo'; Repository = [pscustomobject]@{ full_name = 'Azure/terraform-azurerm-avm-res-storage-storage-account'; fork = $false; owner = [pscustomobject]@{ login = 'Azure'; id = 6844498 } } }
+    ) {
+        param($Event, $Ref, $PlanOnly, $RepoId, $Repository)
+        $env:GITHUB_EVENT_NAME = $Event
+        $env:GITHUB_REF = $Ref
+        $resolvedRepository = if ($null -eq $Repository) { $script:repository } else { $Repository }
+
+        {
+            Assert-AvmBamiRepositorySyncRunContext -PlanOnly $PlanOnly -AllowExampleRepositoryBranchApply $true `
+                -RepoId $RepoId -ResolvedRepository $resolvedRepository
+        } | Should -Throw
+    }
+}
+
 Describe 'Tools repository federation context' {
     BeforeEach {
         $script:previousGitHubContext = @{}
@@ -229,6 +287,7 @@ Describe 'Candidate plan and output safety' {
             RepositoryId = '1234'
             RepositoryOwnerId = '6844498'
             RepositorySyncRepositoryId = '1239632211'
+            JobWorkflowPath = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml'
             EntraGroupNames = @('avm-test-management-group-owners', 'avm-test-entra-readers')
         }
     }
@@ -257,20 +316,12 @@ Describe 'Candidate plan and output safety' {
         $credential['previous_address'] = 'module.bami[0].azapi_resource.other'
         { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } | Should -Throw
     }
-    It 'accepts only the exact no-op validation credential move to its counted address' {
-        $script:plan = New-AvmTestBamiPlan -KnownClient
-        $credential = @($script:plan.resource_changes | Where-Object { $_.address -clike '*.azapi_resource.validation_federated_credential`[0`]' })[0]
-        $credential['previous_address'] = $credential['address'].Substring(0, $credential['address'].Length - 3)
-        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } | Should -Not -Throw
-        $credential['change']['actions'] = @('update')
-        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } | Should -Throw
-    }
-
     It 'validates naming replacements through the ordinary root and refuses incomplete root plans' {
         $plan = New-AvmTestRepositorySyncPlan -NamingMigration
         $arguments = @{
             Plan = $plan; Settings = $script:settings; Repository = $script:repository
-            RepositorySyncRepositoryId = '1239632211'; EntraGroupNames = $script:planArguments.EntraGroupNames
+            RepositorySyncRepositoryId = '1239632211'; JobWorkflowPath = $script:planArguments.JobWorkflowPath
+            EntraGroupNames = $script:planArguments.EntraGroupNames
         }
         { Assert-AvmRepositorySyncPlan @arguments } | Should -Not -Throw
         $plan.complete = $false
@@ -291,13 +342,20 @@ Describe 'Candidate plan and output safety' {
             -PreviousIdentityName 'Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent' `
             -NamingMigration:$NamingMigration -KnownClient:$KnownClient
         { Assert-AvmRepositorySyncPlan -Plan $plan -Settings $script:settings -Repository $repository `
-            -RepositorySyncRepositoryId '1239632211' -EntraGroupNames $script:planArguments.EntraGroupNames } |
+            -RepositorySyncRepositoryId '1239632211' -JobWorkflowPath $script:planArguments.JobWorkflowPath `
+            -EntraGroupNames $script:planArguments.EntraGroupNames } |
             Should -Not -Throw
         $credentials = @($plan.resource_changes | Where-Object { $_.address -like '*federated_credential*' })
         $credentials | Should -HaveCount 5
         foreach ($credential in $credentials) {
             $credential.change.after.name | Should -BeLike 'id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent-*'
-            $credential.change.after.body.properties.subject | Should -Match '^repository_owner_id:6844498:repository_id:'
+            $properties = $credential.change.after.body.properties
+            if ($properties.ContainsKey('subject')) {
+                $properties.subject | Should -Match '^repository_owner_id:6844498:repository_id:'
+            } else {
+                $properties.claimsMatchingExpression.value |
+                    Should -Match "claims\['repository_owner_id'\] eq '6844498'"
+            }
         }
     }
 
@@ -390,10 +448,10 @@ Describe 'Candidate plan and output safety' {
     It 'requires the tools validation credential alongside all four environment credentials' {
         $addresses = @($script:plan.planned_values.root_module.child_modules[0].resources | ForEach-Object { $_.address })
         @($addresses | Where-Object { $_ -like '*federated_credential*' }).Count | Should -Be 5
-        $addresses | Should -Contain 'module.azure.azapi_resource.validation_federated_credential[0]'
+        $addresses | Should -Contain 'module.azure.azapi_resource.federated_credentials["validation"]'
         $script:plan.planned_values.root_module.child_modules[0].resources =
             @($script:plan.planned_values.root_module.child_modules[0].resources | Where-Object {
-                    $_.address -cne 'module.azure.azapi_resource.validation_federated_credential[0]'
+                    $_.address -cne 'module.azure.azapi_resource.federated_credentials["validation"]'
                 })
         { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } |
             Should -Throw '*scope*'
@@ -401,7 +459,7 @@ Describe 'Candidate plan and output safety' {
 
     It 'allows the execution credential to be added without replacing existing identity or federation' {
         $plan = New-AvmTestBamiPlan -KnownClient
-        $address = 'module.azure.azapi_resource.identity_federated_credentials["examples-test-execution"]'
+        $address = 'module.azure.azapi_resource.federated_credentials["module-examples-test-execution"]'
         $credential = @($plan.resource_changes | Where-Object { $_.address -ceq $address })[0]
         $credential.change.before = $null
         $credential.change.actions = @('create')
@@ -416,7 +474,7 @@ Describe 'Candidate plan and output safety' {
         @{ Environment = 'examples-test' }
         @{ Environment = 'examples-test-execution' }
     ) {
-        $address = "module.azure.azapi_resource.identity_federated_credentials[`"$Environment`"]"
+        $address = "module.azure.azapi_resource.federated_credentials[`"module-$Environment`"]"
         $script:plan.planned_values.root_module.child_modules[0].resources =
             @($script:plan.planned_values.root_module.child_modules[0].resources | Where-Object { $_.address -cne $address })
         $script:plan.resource_changes = @($script:plan.resource_changes | Where-Object { $_.address -cne $address })
@@ -427,10 +485,12 @@ Describe 'Candidate plan and output safety' {
     It 'rejects execution federation changes on <Side>: <Case>' -ForEach @(
         foreach ($side in @('planned', 'before', 'after')) {
             foreach ($mutation in @(
-                @{ Case = 'another environment'; Field = 'subject'; Value = 'repository_owner_id:6844498:repository_id:1234:environment:no-approval:job_workflow_ref:Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main' }
-                @{ Case = 'another repository'; Field = 'subject'; Value = 'repository_owner_id:6844498:repository_id:9876:environment:examples-test-execution:job_workflow_ref:Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main' }
-                @{ Case = 'missing workflow binding'; Field = 'subject'; Value = 'repository_owner_id:6844498:repository_id:1234:environment:examples-test-execution' }
-                @{ Case = 'untrusted workflow ref'; Field = 'subject'; Value = 'repository_owner_id:6844498:repository_id:1234:environment:examples-test-execution:job_workflow_ref:Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/untrusted' }
+                @{ Case = 'another environment'; Field = 'claimsMatchingExpression'; Value = @{ languageVersion = 1; value = "claims['sub'] matches 'repository_owner_id:6844498:repository_id:1234:environment:no-approval:job_workflow_ref:Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@*' and claims['repository_id'] eq '1234' and claims['repository_owner_id'] eq '6844498'" } }
+                @{ Case = 'another repository'; Field = 'claimsMatchingExpression'; Value = @{ languageVersion = 1; value = "claims['sub'] matches 'repository_owner_id:6844498:repository_id:9876:environment:examples-test-execution:job_workflow_ref:Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@*' and claims['repository_id'] eq '9876' and claims['repository_owner_id'] eq '6844498'" } }
+                @{ Case = 'missing workflow binding'; Field = 'claimsMatchingExpression'; Value = @{ languageVersion = 1; value = "claims['sub'] matches 'repository_owner_id:6844498:repository_id:1234:environment:examples-test-execution' and claims['repository_id'] eq '1234' and claims['repository_owner_id'] eq '6844498'" } }
+                @{ Case = 'malformed workflow pattern'; Field = 'claimsMatchingExpression'; Value = @{ languageVersion = 1; value = "claims['sub'] matches 'repository_owner_id:6844498:repository_id:1234:environment:examples-test-execution:job_workflow_ref:Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@main' and claims['repository_id'] eq '1234' and claims['repository_owner_id'] eq '6844498'" } }
+                @{ Case = 'another owner'; Field = 'claimsMatchingExpression'; Value = @{ languageVersion = 1; value = "claims['sub'] matches 'repository_owner_id:999:repository_id:1234:environment:examples-test-execution:job_workflow_ref:Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@*' and claims['repository_id'] eq '1234' and claims['repository_owner_id'] eq '999'" } }
+                @{ Case = 'extra claim'; Field = 'claimsMatchingExpression'; Value = @{ languageVersion = 1; value = "claims['sub'] matches 'repository_owner_id:6844498:repository_id:1234:environment:examples-test-execution:job_workflow_ref:Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@*:workflow_ref:unexpected' and claims['repository_id'] eq '1234' and claims['repository_owner_id'] eq '6844498'" } }
                 @{ Case = 'another issuer'; Field = 'issuer'; Value = 'https://example.invalid' }
                 @{ Case = 'additional audience'; Field = 'audiences'; Value = @('api://AzureADTokenExchange', 'untrusted') }
                 @{ Case = 'alternative trust'; Field = 'claimsMatchingExpression'; Value = @{ languageVersion = 1; value = '*' } }
@@ -440,7 +500,7 @@ Describe 'Candidate plan and output safety' {
         }
     ) {
         $plan = New-AvmTestBamiPlan -KnownClient
-        $address = 'module.azure.azapi_resource.identity_federated_credentials["examples-test-execution"]'
+        $address = 'module.azure.azapi_resource.federated_credentials["module-examples-test-execution"]'
         $credential = if ($Side -ceq 'planned') {
             @($plan.planned_values.root_module.child_modules[0].resources | Where-Object { $_.address -ceq $address })[0].values
         }
@@ -450,6 +510,94 @@ Describe 'Candidate plan and output safety' {
         $credential.body.properties[$Field] = $Value
 
         { Assert-AvmBamiIdentityPlan -Plan $plan @script:planArguments } | Should -Throw '*federation*'
+    }
+
+    It 'accepts the trusted Terraform reusable workflow without pinning its reference' {
+        $plan = New-AvmTestBamiPlan -KnownClient
+        $expression = Get-AvmBamiModuleFederationExpression -RepositoryOwnerId '6844498' `
+            -RepositoryId '1234' -Environment 'examples-test-execution' -JobWorkflowPath $script:planArguments.JobWorkflowPath
+        $expression | Should -Match 'terraform-module\.yml@\*'
+        $expression | Should -Not -Match '[0-9a-f]{40}'
+        $expression | Should -Not -Match '&&'
+        ($expression -split ' and ').Count | Should -Be 4
+        $expression | Should -Match "claims\['sub'\] matches 'repository_owner_id:6844498:repository_id:1234:environment:examples-test-execution:\*'"
+        $expression | Should -Match "claims\['job_workflow_ref'\] matches 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@\*'"
+        { Assert-AvmBamiIdentityPlan -Plan $plan @script:planArguments } | Should -Not -Throw
+    }
+
+    It 'rejects a broadened or differently scoped flexible federation expression' -ForEach @(
+        @{ Case = 'wrong owner'; Owner = '999'; Repository = '1234'; Environment = 'pr-check'; ToolsRepository = 'Azure/azure-verified-modules-tools'; Expression = $null; WorkflowName = $null }
+        @{ Case = 'wrong repository'; Owner = '6844498'; Repository = '9876'; Environment = 'pr-check'; ToolsRepository = 'Azure/azure-verified-modules-tools'; Expression = $null; WorkflowName = $null }
+        @{ Case = 'wrong environment'; Owner = '6844498'; Repository = '1234'; Environment = 'untrusted'; ToolsRepository = 'Azure/azure-verified-modules-tools'; Expression = $null; WorkflowName = $null }
+        @{ Case = 'wrong Tools repository'; Owner = '6844498'; Repository = '1234'; Environment = 'pr-check'; ToolsRepository = 'Azure/not-azure-verified-modules-tools'; Expression = $null; WorkflowName = $null }
+        @{ Case = 'wrong Tools workflow'; Owner = '6844498'; Repository = '1234'; Environment = 'pr-check'; ToolsRepository = 'Azure/azure-verified-modules-tools'; Expression = $null; WorkflowName = 'other.yml' }
+        @{ Case = 'broad expression'; Owner = $null; Repository = $null; Environment = $null; ToolsRepository = $null; Expression = "claims['sub'] matches '*'" ; WorkflowName = $null }
+    ) {
+        $plan = New-AvmTestBamiPlan -KnownClient
+        $credential = @($plan.resource_changes | Where-Object {
+                $_.address -ceq 'module.azure.azapi_resource.federated_credentials["module-pr-check"]'
+            })[0]
+        $expression = if ($Expression) {
+            $Expression
+        } else {
+            Get-AvmBamiModuleFederationExpression -RepositoryOwnerId $Owner -RepositoryId $Repository `
+                -Environment $Environment -JobWorkflowPath $script:planArguments.JobWorkflowPath
+        }
+        if ($ToolsRepository -and $ToolsRepository -cne 'Azure/azure-verified-modules-tools') {
+            $expression = $expression.Replace('Azure/azure-verified-modules-tools', $ToolsRepository)
+        }
+        if ($WorkflowName) {
+            $expression = $expression.Replace('terraform-module.yml', $WorkflowName)
+        }
+        $credential.change.after.body.properties.claimsMatchingExpression.value = $expression
+        @($plan.planned_values.root_module.child_modules[0].resources | Where-Object {
+                $_.address -ceq $credential.address
+            })[0].values.body.properties.claimsMatchingExpression.value = $expression
+
+        { Assert-AvmBamiIdentityPlan -Plan $plan @script:planArguments } | Should -Throw '*federation*'
+    }
+
+    It 'permits a legacy Tools workflow during transition to the canonical expression: <PreviousRef>' -ForEach @(
+        @{ PreviousRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/release' }
+        @{ PreviousRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@afcf4d4a2f106eac3a2e6d93dd49faa262bd6546' }
+    ) {
+        $plan = New-AvmTestBamiPlan -KnownClient
+        foreach ($credential in @($plan.resource_changes | Where-Object {
+                    $_.address -clike '*.federated_credentials`["module-*'
+                })) {
+            $environment = [regex]::Match($credential.address, '"module-([^"]+)"').Groups[1].Value
+            $credential.change.before.type = 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview'
+            $credential.change.before.body.properties.Remove('claimsMatchingExpression')
+            $credential.change.before.body.properties['subject'] =
+                "repository_owner_id:6844498:repository_id:1234:environment:${environment}:job_workflow_ref:$PreviousRef"
+            $credential.change.actions = @('update')
+        }
+        { Assert-AvmBamiIdentityPlan -Plan $plan @script:planArguments } | Should -Not -Throw
+    }
+
+    It 'rejects a legacy credential from another reusable-workflow repository' {
+        $plan = New-AvmTestBamiPlan -KnownClient
+        $credential = @($plan.resource_changes | Where-Object {
+                $_.address -clike '*.federated_credentials`["module-*'
+            })[0]
+        $credential.change.before.type = 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview'
+        $credential.change.before.body.properties.Remove('claimsMatchingExpression')
+        $credential.change.before.body.properties['subject'] =
+            'repository_owner_id:6844498:repository_id:1234:environment:pr-check:job_workflow_ref:Azure/previous-workflows/.github/workflows/terraform.yml@refs/heads/main'
+        $credential.change.actions = @('update')
+        { Assert-AvmBamiIdentityPlan -Plan $plan @script:planArguments } | Should -Throw '*federation*'
+    }
+
+    It 'does not rotate an optional caller workflow boundary' {
+        $workflowRef = 'Azure/terraform-azurerm-avm-ptn-example-repo/.github/workflows/validate.yml@refs/heads/main'
+        $plan = New-AvmTestBamiPlan -KnownClient -WorkflowRef $workflowRef
+        { Assert-AvmBamiIdentityPlan -Plan $plan -WorkflowRef $workflowRef @script:planArguments } | Should -Not -Throw
+        $credential = @($plan.resource_changes | Where-Object {
+                $_.address -clike '*.federated_credentials`["module-*'
+            })[0]
+        $credential.change.before.body.properties.claimsMatchingExpression.value =
+            $credential.change.before.body.properties.claimsMatchingExpression.value.Replace($workflowRef, "$workflowRef-other")
+        { Assert-AvmBamiIdentityPlan -Plan $plan -WorkflowRef $workflowRef @script:planArguments } | Should -Throw '*federation*'
     }
 
     It 'rejects changed validation federation claims, identity scope, or audiences' {
@@ -466,7 +614,7 @@ Describe 'Candidate plan and output safety' {
         foreach ($mutation in $mutations) {
             $invalid = New-AvmTestBamiPlan -KnownClient
             $credential = @($invalid.planned_values.root_module.child_modules[0].resources | Where-Object {
-                    $_.address -ceq 'module.azure.azapi_resource.validation_federated_credential[0]'
+                    $_.address -ceq 'module.azure.azapi_resource.federated_credentials["validation"]'
                 })[0].values
             if ($mutation.field -in @('subject', 'issuer', 'audiences')) {
                 $credential.body.properties[$mutation.field] = $mutation.value
@@ -573,12 +721,31 @@ Describe 'Candidate plan and output safety' {
 
     It 'allows a missing credential to be created when another old module credential proves repository ownership' {
         $migration = New-AvmTestBamiPlan -NamingMigration
-        $credential = @($migration.resource_changes | Where-Object { $_.address -ceq 'module.azure.azapi_resource.identity_federated_credentials["pr-check"]' })[0]
+        $credential = @($migration.resource_changes | Where-Object { $_.address -ceq 'module.azure.azapi_resource.federated_credentials["module-pr-check"]' })[0]
         $credential.change.before = $null
         $credential.change.actions = @('create')
         { Assert-AvmBamiIdentityPlan -Plan $migration @script:planArguments } | Should -Not -Throw
         $migration.complete = $false
         { Assert-AvmBamiIdentityPlan -Plan $migration @script:planArguments } | Should -Throw '*incomplete*'
+    }
+
+    It 'allows only a verified legacy credential delete paired with canonical recreation' {
+        $migration = New-AvmTestBamiPlan -KnownClient
+        $current = @($migration.resource_changes | Where-Object {
+                $_.address -ceq 'module.azure.azapi_resource.federated_credentials["module-pr-check"]'
+            })[0]
+        $legacy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $current -Depth 100) -AsHashtable
+        $legacy.address = 'module.azure.azapi_resource.identity_federated_credentials["pr-check"]'
+        $legacy.change.actions = @('delete')
+        $legacy.change.after = $null
+        $legacy.change.before.name = 'id-test-terraform-azurerm-avm-ptn-example-repo-pr-check'
+        $current.change.actions = @('create')
+        $current.change.before = $null
+        $migration.resource_changes += $legacy
+
+        { Assert-AvmBamiIdentityPlan -Plan $migration @script:planArguments } | Should -Not -Throw
+        $legacy.change.before.name = 'foreign-credential'
+        { Assert-AvmBamiIdentityPlan -Plan $migration @script:planArguments } | Should -Throw '*obsolete Owner assignment*'
     }
 
     It 'rejects partial, extra or wrong-target planned resources' {
@@ -923,32 +1090,48 @@ Describe 'Terraform effective contract and state wiring' {
         $test | Should -Not -Match '(?m)^provider\s+"|backend|token|client_secret'
     }
 
-    It 'uses the existing per-module identity for both validation subjects without changing the original trust' {
+    It 'uses configured reusable workflow paths for flexible module federation and exact validation subjects' {
         $azure = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'azure' 'main.tf')
-        $original = [regex]::Match($azure, '(?sm)^resource "azapi_resource" "identity_federated_credentials" \{.*?^\}').Value
-        $original | Should -Match 'for_each\s*=\s*var.github_repository_environment_names'
-        $baseSubject = 'repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:${each.value}:job_workflow_ref:${var.github_job_workflow_ref}'
-        $callerBinding = 'var.github_workflow_ref == null ? "" : ":workflow_ref:${var.github_workflow_ref}"'
-        $original | Should -Match ('(?s)subject\s*=\s*join\("",\s*\[\s*"' +
-            [regex]::Escape($baseSubject) + '",\s*' + [regex]::Escape($callerBinding) + '\s*\]\)')
+        $locals = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'azure' 'locals.tf')
+        $original = [regex]::Match($azure, '(?sm)^resource "azapi_resource" "federated_credentials" \{.*?^\}').Value
+        $original | Should -Match 'for_each\s*=\s*local\.federated_credentials'
+        $original | Should -Match 'federatedIdentityCredentials@2025-01-31-preview'
+        $original | Should -Match 'claimsMatchingExpression'
+        $original | Should -Match 'languageVersion\s*=\s*1'
+        $original | Should -Match 'local\.federated_credential_claim_clauses\[each\.key\]'
+        $original | Should -Match 'join\(" and "'
+        $original | Should -Not -Match '&&'
+        $original | Should -Not -Match '\bsubject\s*='
+        $locals | Should -Match 'var\.github_job_workflow_path'
+        $locals | Should -Match 'job_workflow_pattern\s*=\s*"\$\{var\.github_job_workflow_path\}@\*"'
+        $locals | Should -Match 'caller_subject_pattern\s*=\s*var\.github_workflow_ref == null \? null : "\*:workflow_ref:\$\{var\.github_workflow_ref\}"'
+        $locals | Should -Match "claims\['job_workflow_ref'\] matches"
+        $locals | Should -Match "claims\['repository_id'\] eq '\$\{credential.repository_id\}'"
+        $locals | Should -Match "claims\['repository_owner_id'\] eq '\$\{var.github_organization_id\}'"
+        $locals | Should -Not -Match 'terraform-module\.yml'
         $variables = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'azure' 'variables.tf')
         foreach ($name in @('identity_name', 'github_workflow_ref')) {
             $variable = [regex]::Match($variables, '(?sm)^variable "' + $name + '" \{.*?^\}').Value
             $variable | Should -Match '\bdefault\s*=\s*null\b'
         }
-        $validation = [regex]::Match($azure, '(?sm)^resource "azapi_resource" "validation_federated_credential" \{.*?^\}').Value
-        $validation | Should -Not -BeNullOrEmpty
-        $validation | Should -Match 'parent_id\s*=\s*local.identity_resource_id'
-        $validation | Should -Match 'locks\s*=\s*\[local.identity_resource_id\]'
-        $validation | Should -Match 'name\s*=\s*"\$\{local.federation_identity_name\}-avm-validation"'
-        $validation | Should -Match 'subject\s*=\s*"repository_owner_id:\$\{var.github_organization_id\}:repository_id:\$\{var.repository_sync_repository_id\}:environment:avm-validation"'
-        $validation | Should -Not -Match 'repository_owner_id:[0-9]|repository_id:[0-9]'
-        $validation | Should -Not -Match 'job_workflow_ref:|ref:refs/heads/'
+        $jobWorkflowPath = [regex]::Match($variables, '(?sm)^variable "github_job_workflow_path" \{.*?^\}').Value
+        $jobWorkflowPath | Should -Match 'no Git ref'
+        $jobWorkflowPath | Should -Not -Match '\bdefault\s*='
+        $bicep = Get-Content -Raw (Join-Path $script:root 'repository-management' 'bicep-test-tenant-sync' 'terraform' 'main.tf')
+        $bicep | Should -Match 'github_job_workflow_path\s*=\s*var.github_job_workflow_path'
+        $original | Should -Match 'parent_id\s*=\s*local.identity_resource_id'
+        $original | Should -Match 'locks\s*=\s*\[local.identity_resource_id\]'
+        $locals | Should -Match 'validation\s*=\s*\{'
+        $locals | Should -Match 'name\s*=\s*"\$\{local.federation_identity_name\}-fic-v-avm-validation"'
+        $locals | Should -Match 'repository_id\s*=\s*var.repository_sync_repository_id'
+        $locals | Should -Not -Match 'repository_owner_id:[0-9]|repository_id:[0-9]'
+        $locals | Should -Not -Match 'ref:refs/heads/'
         $ordinary = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'main.tf')
         $ordinary | Should -Match 'source\s*=\s*"\./modules/azure"'
         $ordinary | Should -Match 'repository_sync_repository_id\s*=\s*var.repository_sync_repository_id'
         $ordinary | Should -Not -Match 'resource\s+"azapi_resource"\s+"identity"'
         $ordinary | Should -Not -Match '(?m)^\s*(identity_name|github_workflow_ref)\s*='
+        $ordinary | Should -Match 'github_job_workflow_path\s*=\s*var.github_job_workflow_path'
     }
 
     It 'exposes only the verified BAMI test settings to plan-only consumers' {
@@ -970,8 +1153,13 @@ Describe 'Terraform effective contract and state wiring' {
     It 'validates selected settings and the trusted BAMI run context before mutations without an activation switch' {
         $source = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'Invoke-RepositorySync.ps1')
         $source | Should -Not -Match 'bamiTestTenantSyncEnabled|PendingTestTenantActivation|stateLayout|state_layout|unified-v1'
-        $source | Should -Match 'Assert-AvmBamiRepositorySyncRunContext -PlanOnly \$planOnly'
-        $source.IndexOf('Assert-AvmBamiRepositorySyncRunContext') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
+        $source | Should -Match 'Resolve-AvmRepositorySyncContext -RepoId \$repoId -Repository \$orgAndRepoName'
+        $source | Should -Match '-AllowExampleRepositoryBranchApply \$allowExampleRepositoryBranchApply'
+        $source | Should -Match '\$useGalleryAuthoringModule = \('
+        $source | Should -Match '\$repoId -ceq ''avm-ptn-example-repo'''
+        $source | Should -Match 'Repository\.full_name -ceq ''Azure/terraform-azurerm-avm-ptn-example-repo'''
+        $source | Should -Match '-useGalleryAuthoringModule:\$useGalleryAuthoringModule'
+        $source.IndexOf('Resolve-AvmRepositorySyncContext') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
         $source.IndexOf('Resolve-RepositoryTestTenantSettings') | Should -BeGreaterThan 0
         $source.IndexOf('Resolve-RepositoryTestTenantSettings') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
         $source.IndexOf('Resolve-AvmRepositorySyncContext') | Should -BeGreaterThan $source.IndexOf('Resolve-RepositoryTestTenantSettings')
@@ -987,6 +1175,8 @@ Describe 'Terraform effective contract and state wiring' {
         $workflow | Should -Not -Match 'Write-Output "Token:'
         $helper = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'lib' 'TestTenant.ps1')
         $helper | Should -Match 'Assert-AvmBamiRepositorySyncRunContext -PlanOnly \$PlanOnly'
+        $helper | Should -Match '\$RepoId -cne ''avm-ptn-example-repo'''
+        $helper | Should -Match 'ResolvedRepository\.full_name -cne ''Azure/terraform-azurerm-avm-ptn-example-repo'''
         $helper | Should -Match '\$env:GITHUB_ACTIONS -cne ''true'''
         $helper | Should -Match '\$env:GITHUB_REPOSITORY -cne ''Azure/azure-verified-modules-tools'''
         $helper | Should -Match '\$env:GITHUB_EVENT_NAME -ceq ''workflow_dispatch'''

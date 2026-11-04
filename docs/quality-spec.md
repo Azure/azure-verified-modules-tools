@@ -2777,11 +2777,32 @@ This section is the implementation-level expression of the **Security stance** p
 - Saved-plan guards may permit naming replacement only from the exact known
   legacy name to the computed current name for the same repository/module and
   tenant. Verify before/after resource identity, old dedicated client/principal,
-  immutable repository/workflow federation, provider context and state-owned
+  immutable repository/environment federation and caller binding, provider context and state-owned
   membership edges. A matching name alone is not ownership evidence. Retained
   federation and memberships must transition to the new identity; deletion of
   unrelated identities, shared groups, foreign principals, imported/moved
   identities or widened trust remains forbidden.
+- Module federation uses the UAMI flexible federated-credential API
+  `2025-01-31-preview` and a canonical claims-matching expression, never a
+  `subject`. It must bind the exact GitHub repository owner ID, repository ID,
+  environment, issuer, audience, and a configured `job_workflow_ref`
+  repository workflow path with an `@*` reference boundary. The repository
+  configuration stores only the full
+  `owner/repository/.github/workflows/name.yml` path, never a Git ref, tag,
+  commit SHA, expression, or path traversal.
+  The optional caller-workflow suffix remains exact when configured. The
+  expression is deterministic and validated by the saved-plan guard; callers
+  cannot supply an alternate workflow path or wildcard expression. The
+  expression has one canonical `sub` clause plus separate immutable repository
+  owner and repository ID clauses; do not duplicate `job_workflow_ref` outside
+  `sub`. Validation and registry credentials remain exact-subject credentials.
+- A relevant module credential may transition only from its existing exact
+  Tools-repository legacy subject to the canonical flexible expression, or
+  from that same canonical expression to itself. Previous workflow references
+  from any other owner or repository are not trusted. Preserve identity,
+  credential-name, issuer, audience, provider, ownership, and saved-plan
+  guards. This preview API migration requires recorded SFI review before
+  merge; source review does not authorize an Azure apply.
 - Bicep mapping rebinding requires a trusted current-run/current-attempt
   job-local record produced from the verified saved plan and validated applied
   outputs. Bind it to the Tools repository ID, workflow ref and commit; accept
@@ -2991,6 +3012,11 @@ validate without publishing. Candidate and receipt artifacts remain diagnostic
 outputs, not inter-job transfers. Keep the candidate identity configuration,
 OIDC permission and existing `avm-validation` federation for future authenticated
 checks, but the combined job does not use that environment's OIDC subject.
+The repository-management Terraform sync's only non-main apply exception is an
+explicitly selected `workflow_dispatch` for `avm-ptn-example-repo`: it must use
+the current workflow source, a non-main tools branch, and independently
+verified resolved repository identity. It is never available to schedules,
+repository dispatches, `All`, or any other repository.
 Restoring authenticated candidate checks requires a compatible isolation and
 federation design first. Sharing the preparation environment and runner with
 module-owned checks removes the former validation isolation boundary and

@@ -294,7 +294,7 @@ Describe 'Bicep module identity entry points with real files and mocked services
     It 'applies only additive registry credentials to existing identities through the guarded entry point' {
         $script:state.Plan = New-AvmTestBicepIdentityPlan -KnownClient
         foreach ($change in $script:state.Plan.resource_changes) {
-            if ($change.address.EndsWith('.azapi_resource.bicep_registry_federated_credential[0]')) {
+            if ($change.address.EndsWith('.azapi_resource.federated_credentials["bicep-registry"]')) {
                 $change.change.before = $null
                 $change.change.actions = @('create')
             }
@@ -311,7 +311,7 @@ Describe 'Bicep module identity entry points with real files and mocked services
     }
 
     It 'rejects a missing registry credential before apply or publication' {
-        $address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.bicep_registry_federated_credential[0]'
+        $address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.federated_credentials["bicep-registry"]'
         $module = $script:state.Plan.planned_values.root_module.child_modules[0]
         $module.resources = @($module.resources | Where-Object address -CNE $address)
         $script:state.Plan.resource_changes = @($script:state.Plan.resource_changes | Where-Object address -CNE $address)

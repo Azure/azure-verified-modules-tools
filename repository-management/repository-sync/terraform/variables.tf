@@ -211,12 +211,6 @@ variable "is_protected_repo" {
   default     = true
 }
 
-variable "github_job_workflow_ref" {
-  type        = string
-  description = "GitHub job workflow ref to use for the federated identity credentials."
-  default     = "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main"
-}
-
 variable "repository_sync_repository_id" {
   type        = string
   description = "Verified GitHub Actions repository ID for the tools repository; unused in repository creation mode."
@@ -225,6 +219,21 @@ variable "repository_sync_repository_id" {
   validation {
     condition     = var.repository_creation_mode_enabled || can(regex("^[1-9][0-9]*$", var.repository_sync_repository_id))
     error_message = "Normal sync requires the verified positive decimal GitHub ID of the tools repository."
+  }
+}
+
+variable "github_job_workflow_path" {
+  type        = string
+  description = "Configured reusable workflow path, excluding its mutable Git reference, for module federation."
+  default     = null
+
+  validation {
+    condition = (
+      var.repository_creation_mode_enabled ||
+      var.bami_test_settings == null ||
+      can(regex("^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+/\\.github/workflows/[A-Za-z0-9][A-Za-z0-9_.-]*\\.ya?ml$", var.github_job_workflow_path))
+    )
+    error_message = "Normal repository sync requires a configured owner/repository/.github/workflows/name.yml reusable workflow path without a Git ref."
   }
 }
 

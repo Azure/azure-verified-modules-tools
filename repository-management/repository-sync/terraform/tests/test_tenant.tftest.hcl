@@ -103,6 +103,7 @@ variables {
   github_teams                  = {}
   module_id                     = "avm-ptn-example-repo"
   module_name                   = "Example"
+  github_job_workflow_path      = "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml"
   repository_sync_repository_id = "1239632211"
   bami_test_settings = {
     tenant_id                    = "10000000-0000-4000-8000-000000000001"

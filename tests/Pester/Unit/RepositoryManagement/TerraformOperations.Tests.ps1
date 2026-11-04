@@ -138,9 +138,17 @@ Describe 'State identity wiring' {
         $planOnly.Value | Should -Match '(?m)^        type: boolean\r?$'
         @([regex]::Matches($dispatch.Value, '(?m)^      ([a-z][a-z0-9_]+):\r?$') |
             ForEach-Object { $_.Groups[1].Value }) | Should -Be @(
-            'repositories', 'plan_only', 'use_workflow_authoring_source', 'force_file_update',
+            'repositories', 'plan_only', 'allow_example_repository_branch_apply', 'use_workflow_authoring_source', 'force_file_update',
             'sync_project_items', 'include_closed_project_items', 'project_lookback_days'
         )
+        $branchApply = [regex]::Match($dispatch.Value, '(?ms)^      allow_example_repository_branch_apply:\r?\n.*?(?=^      \S|\z)')
+        $branchApply.Success | Should -BeTrue
+        $branchApply.Value | Should -Match '(?m)^        default: false\r?$'
+        $branchApply.Value | Should -Match '(?m)^        type: boolean\r?$'
+        $workflow | Should -Match 'Authorize example repository branch apply'
+        $workflow | Should -Match 'inputs\.repositories }}" -cne ''avm-ptn-example-repo'''
+        $workflow | Should -Match 'inputs\.allow_example_repository_branch_apply \|\|'
+        $workflow | Should -Match '-allowExampleRepositoryBranchApply \$allowExampleRepositoryBranchApply'
     }
 
     It 'plans, privately reads, and applies one guarded plan without legacy retries or state rewrites' {
