@@ -34,26 +34,26 @@ permissions: {}
 
 jobs:
   pr-check:
-    name: PR check
+    name: Run PR check
     runs-on: ubuntu-latest
     permissions:
       contents: read
     env:
       AVM_AUTHORING_MODULE: Avm.Authoring
     steps:
-      - name: Check out caller
+      - name: Check out module repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.targetCommit }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Download prepared authoring runtime
+      - name: Download AVM tools from build job
         if: inputs.authoringArtifact != ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ inputs.authoringArtifact }}
           path: ${{ runner.temp }}/avm-authoring
-      - name: Select prepared authoring runtime
+      - name: Verify downloaded AVM tools
         if: inputs.authoringArtifact != ''
         shell: pwsh
         run: |
@@ -86,10 +86,10 @@ jobs:
           "AVM_AUTHORING_MODULE=$discoveryManifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "AVM_AUTHORING_ARTIFACT_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "AVM_AUTHORING_ARTIFACT_MANIFEST_SHA256=$artifactHash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Install Avm.Authoring
+      - name: Install AVM tools
         if: env.AVM_AUTHORING_MODULE == 'Avm.Authoring'
         uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
-      - name: Confirm Avm.Authoring capabilities
+      - name: Verify AVM tools capabilities
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -104,29 +104,58 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
-          avm -SkipModuleVersionCheck pr-check
+          function Write-PrCheckIssues {
+            param([AllowNull()][object] $Result)
+            if ($null -eq $Result -or $null -eq $Result.PSObject.Properties['Steps']) { return }
+            foreach ($step in @($Result.Steps)) {
+              if ($null -eq $step -or $null -eq $step.Result -or
+                  $null -eq $step.Result.PSObject.Properties['Issues']) { continue }
+              foreach ($issue in @($step.Result.Issues)) {
+                if ($null -eq $issue) { continue }
+                $fields = @{}
+                foreach ($name in @('Code', 'Severity', 'File', 'Message')) {
+                  $property = $issue.PSObject.Properties[$name]
+                  $fields[$name] = if ($null -ne $property) { [string]$property.Value } else { '' }
+                }
+                if ($fields.Severity -notin @('error', 'warning')) { continue }
+                $level = $fields.Severity.ToLowerInvariant()
+                $text = '[{0}] {1} {2}: {3}' -f $fields.Code, $fields.Severity, $fields.File, $fields.Message
+                $text = $text.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+                Write-Information ("::{0}::{1}" -f $level, $text) -InformationAction Continue
+              }
+            }
+          }
+          try {
+            $result = avm -SkipModuleVersionCheck pr-check --passthru
+          }
+          catch {
+            $property = $_.Exception.PSObject.Properties['Result']
+            if ($null -ne $property) { Write-PrCheckIssues -Result $property.Value }
+            throw
+          }
+          Write-PrCheckIssues -Result $result
 
   unit-test:
-    name: Unit tests
+    name: Run unit tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
     env:
       AVM_AUTHORING_MODULE: Avm.Authoring
     steps:
-      - name: Check out caller
+      - name: Check out module repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.targetCommit }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Download prepared authoring runtime
+      - name: Download AVM tools from build job
         if: inputs.authoringArtifact != ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ inputs.authoringArtifact }}
           path: ${{ runner.temp }}/avm-authoring
-      - name: Select prepared authoring runtime
+      - name: Verify downloaded AVM tools
         if: inputs.authoringArtifact != ''
         shell: pwsh
         run: |
@@ -159,10 +188,10 @@ jobs:
           "AVM_AUTHORING_MODULE=$discoveryManifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "AVM_AUTHORING_ARTIFACT_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "AVM_AUTHORING_ARTIFACT_MANIFEST_SHA256=$artifactHash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Install Avm.Authoring
+      - name: Install AVM tools
         if: env.AVM_AUTHORING_MODULE == 'Avm.Authoring'
         uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
-      - name: Confirm Avm.Authoring capabilities
+      - name: Verify AVM tools capabilities
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -271,6 +300,16 @@ jobs:
           }
 
           $document | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $resultPath -Encoding utf8NoBOM
+          foreach ($issue in @($document.issues)) {
+            $level = switch ($issue.severity) {
+              'error' { 'error' }
+              'warning' { 'warning' }
+              default { 'notice' }
+            }
+            $text = '[{0}] {1} {2}: {3}' -f $issue.code, $issue.severity, $issue['file'], $issue.message
+            $text = $text.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Information ("::{0}::{1}" -f $level, $text) -InformationAction Continue
+          }
           "artifactName=bicep-unit-result-$key-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" |
               Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "resultPath=$resultPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -283,13 +322,13 @@ jobs:
           path: ${{ steps.unit-result.outputs.resultPath }}
           if-no-files-found: error
           retention-days: 7
-      - name: Fail failed unit tests
+      - name: Report failed unit tests
         if: steps.unit-result.outputs.failed == 'True'
         shell: pwsh
         run: throw 'Bicep unit tests failed. Inspect the uploaded machine-readable unit result artifact.'
 
   discover-examples:
-    name: Discover e2e examples
+    name: Discover end-to-end test examples
     if: |
       inputs.e2eRoute == 'native' &&
       fromJSON(inputs.workflowInput).deploymentValidation == 'true' &&
@@ -303,19 +342,19 @@ jobs:
     outputs:
       deploymentMatrix: ${{ steps.select.outputs.deploymentMatrix }}
     steps:
-      - name: Check out caller
+      - name: Check out module repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.targetCommit }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Download prepared authoring runtime
+      - name: Download AVM tools from build job
         if: inputs.authoringArtifact != ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ inputs.authoringArtifact }}
           path: ${{ runner.temp }}/avm-authoring
-      - name: Select prepared authoring runtime
+      - name: Verify downloaded AVM tools
         if: inputs.authoringArtifact != ''
         shell: pwsh
         run: |
@@ -348,10 +387,10 @@ jobs:
           "AVM_AUTHORING_MODULE=$discoveryManifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "AVM_AUTHORING_ARTIFACT_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "AVM_AUTHORING_ARTIFACT_MANIFEST_SHA256=$artifactHash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Install Avm.Authoring
+      - name: Install AVM tools
         if: env.AVM_AUTHORING_MODULE == 'Avm.Authoring'
         uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
-      - name: Select deployments
+      - name: Select tests and subscriptions
         id: select
         shell: pwsh
         env:
@@ -378,7 +417,7 @@ jobs:
           "deploymentMatrix=$value" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
   e2e-test:
-    name: End-to-end tests
+    name: Run end-to-end tests
     needs: discover-examples
     if: |
       !cancelled() &&

@@ -14,6 +14,7 @@ function Get-AvmBicepResourceRemovalOrder {
             'Microsoft.Insights/diagnosticSettings'
             'Microsoft.Network/privateEndpoints/privateDnsZoneGroups'
             'Microsoft.Network/privateEndpoints'
+            'Microsoft.Network/privateLinkServices'
             'Microsoft.Network/virtualHubs/routingIntent'
             'Microsoft.Network/azureFirewalls'
             'Microsoft.Network/expressRouteGateways'

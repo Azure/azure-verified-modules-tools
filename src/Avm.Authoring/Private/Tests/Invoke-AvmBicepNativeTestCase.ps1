@@ -46,6 +46,8 @@ function Invoke-AvmBicepNativeTestCase {
     }
     Invoke-AvmBicepAzureContext -SubscriptionId $Item.SubscriptionId -TenantId $TenantId -ScriptBlock {
         Assert-AvmBicepAzureIdentity -AzPath $executionOptions.AzPath -SubscriptionId $Item.SubscriptionId -TenantId $TenantId
+        Write-AvmLog -Level Info -Message (
+            "Deploying test '$($Item.Case.RelativeDirectory)' at '$($Item.Scope)' scope.")
         $assertRegistrationIdentity = {
             Assert-AvmBicepAzureIdentity -AzPath $executionOptions.AzPath `
                 -SubscriptionId $executionOptions.SubscriptionId -TenantId $executionOptions.TenantId
@@ -95,11 +97,13 @@ function Invoke-AvmBicepNativeTestCase {
             completionStarted                    = $false
         }
         Save-AvmBicepCleanupState -State $state -Path $handle.Path -Confirm:$false
-        Write-AvmLog -Level Info -Message "Bicep cleanup state for '$($Item.Case.RelativeDirectory)': $($handle.Path)"
+        Write-AvmLog -Level Info -Message "Saved clean-up state for '$($Item.Case.RelativeDirectory)' at '$($handle.Path)'."
         $issues = [System.Collections.Generic.List[object]]::new()
         $completion = $null
         $interrupted = $false
         $deployed = $null
+        $diagnosticParameters = $Item.Parameters
+        $validatingDeployment = $false
         try {
             $definitions = $Item.Template['definitions']
             if ($null -eq $definitions) { $definitions = @{} }
@@ -122,6 +126,7 @@ function Invoke-AvmBicepNativeTestCase {
             $freshChangesRegion = $Item.RetryPolicy['modes']['Fresh']['location'] -ceq 'NextEligible'
             $attemptLimit = [Math]::Min($executionOptions.DeploymentRetryLimit, $Item.RetryPolicy['limits']['deploymentAttempts'])
             for ($attempt = 1; $attempt -le $attemptLimit; $attempt++) {
+                Write-AvmLog -Level Info -Message "Preparing deployment attempt $attempt of $attemptLimit ($mode)."
                 if ($mode -ne 'InPlace') {
                     $namingIndex++
                     $attemptInput = $Item.AttemptInputs[$namingIndex]
@@ -139,6 +144,7 @@ function Invoke-AvmBicepNativeTestCase {
                         $parameters[$key] = Resolve-AvmBicepParameterToken -Value $attemptInput.ReferenceParameters[$key] `
                             -Tokens $attemptInput.Tokens -DeferResourceLocation -ReferencedTokens $references
                     }
+                    $diagnosticParameters = $parameters
                     if ($null -ne $parameters['resourceLocation'] -and $parameters['resourceLocation'] -isnot [string]) {
                         throw [AvmConfigurationException]::new('Regional placement requires a non-secure string resourceLocation value.')
                     }
@@ -169,11 +175,14 @@ function Invoke-AvmBicepNativeTestCase {
                         DeploymentName = 'avm-e2e-{0}-t{1}' -f $Item.RunId, $attempt
                         Parameters = $parameters; ResourceGroupName = $groupName; ManagementGroupId = $executionOptions.ManagementGroupId
                     }
+                    $validatingDeployment = $true
                     $validated = Test-AvmBicepNativeDeployment -DeploymentInput $options -SubscriptionId $Item.SubscriptionId `
                         -TemplateContent $attemptInput.TemplateContent -ResourceType $Item.ResourceType `
                         -ResourceLocation $selectedLocation -TokenResourceLocation $Item.TokenResourceLocation `
                         -ParameterResourceLocationToken:($references.Contains('resourceLocation')) `
                         -UnavailableRegions $unavailableRegions -RetryLimit $executionOptions.ValidationRetryLimit
+                    $validatingDeployment = $false
+                    Write-AvmLog -Level Info -Message "Validated deployment in resource location '$($validated.Location)'."
                     $canFresh = -not $freshChangesRegion -or
                     (($validated.CanRelocate -or $groupCanRelocate) -and
                     $validated.AttemptedRegions.Count -lt $executionOptions.ValidationRetryLimit)
@@ -185,7 +194,10 @@ function Invoke-AvmBicepNativeTestCase {
                 $deployed = New-AvmBicepNativeDeployment -State $state -StatePath $handle.Path `
                     -DeploymentInput $validated.DeploymentInput -Attempt $attempt -Mode $mode -NamingId $attemptInput.NamingId `
                     -RecoveryDeadlineUtc $executionOptions.RecoveryDeadlineUtc `
-                    -ClassifyRetry:($attempt -lt $attemptLimit) -ResourceLocation $validated.Location -Confirm:$false
+                    -SensitiveValues @(Get-AvmBicepDiagnosticSecret -Parameters $validated.DeploymentInput.Parameters `
+                        -SecretInputs $executionOptions.CiInput.Secrets) `
+                    -ClassifyRetry:($attempt -lt $attemptLimit) -ShowProgress -ResourceLocation $validated.Location -Confirm:$false
+                Write-AvmLog -Level Info -Message "Finished deployment attempt $attempt with '$($deployed.Outcome)'."
                 if ($deployed.Status -eq 'pass' -or $attempt -eq $attemptLimit -or -not $deployed.RetryMode -or
                     ($deployed.RetryMode -eq 'Fresh' -and -not $canFresh)) { break }
 
@@ -220,6 +232,11 @@ function Invoke-AvmBicepNativeTestCase {
                 $_.FullyQualifiedErrorId.Split(',')[0] -eq 'AvmBicepContextRestoreFailed') {
                 $interrupted = $true
                 throw
+            }
+            if ($validatingDeployment) {
+                $null = Write-AvmBicepDeploymentDiagnostic -DeploymentId 'validation' -Failure $_ `
+                    -SensitiveValues @(Get-AvmBicepDiagnosticSecret -Parameters $diagnosticParameters `
+                        -SecretInputs $executionOptions.CiInput.Secrets)
             }
             $detail = if ($_.Exception -is [AvmConfigurationException]) { $_.Exception.Message } else {
                 $codes = @(Get-AvmBicepSafeErrorCode -ErrorRecord $_)

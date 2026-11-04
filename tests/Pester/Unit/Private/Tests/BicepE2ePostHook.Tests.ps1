@@ -134,6 +134,7 @@ Describe 'Bicep e2e post hook subprocess' {
             '[System.IO.File]::WriteAllText((Join-Path $PSScriptRoot ''context.txt''), "$($env:AVM_E2E_CASE)|$($env:AVM_E2E_SCOPE)|$($env:AVM_E2E_RUN_ID)")'
         InModuleScope 'Avm.Authoring' -Parameters @{ R = $root; C = $casePath } {
             param($R, $C)
+            Mock Write-AvmLog {}
             $item = [pscustomobject]@{
                 Case = [pscustomobject]@{
                     Path = $C
@@ -150,9 +151,32 @@ Describe 'Bicep e2e post hook subprocess' {
             $result.Status | Should -Be 'pass'
             $result.ExitCode | Should -Be 0
             $issues.Count | Should -Be 0
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter { $Message -eq 'Running post-deployment script.' }
         }
         (Get-Content -LiteralPath (Join-Path $caseDirectory 'context.txt') -Raw) |
             Should -BeExactly 'tests/e2e/case with spaces|group|cafebabe'
+    }
+
+    It 'does not announce a post-deployment script when no hook exists' {
+        $root = Join-Path $TestDrive ('post-absent-' + [guid]::NewGuid().ToString('N'))
+        $caseDirectory = Join-Path $root 'tests' 'e2e' 'defaults'
+        $null = New-Item -ItemType Directory -Path $caseDirectory -Force
+        $casePath = Join-Path $caseDirectory 'main.test.bicep'
+        Set-Content -LiteralPath $casePath -Value 'test case' -Encoding utf8NoBOM
+        InModuleScope 'Avm.Authoring' -Parameters @{ R = $root; C = $casePath } {
+            param($R, $C)
+            Mock Write-AvmLog {}
+            $item = [pscustomobject]@{
+                Case = [pscustomobject]@{ Path = $C; RelativeDirectory = 'tests/e2e/defaults' }
+                Scope = 'sub'
+            }
+            $issues = [System.Collections.Generic.List[object]]::new()
+            $result = Invoke-AvmBicepE2ePostHook -Item $item -ModuleRoot $R `
+                -SubscriptionId '00000000-0000-0000-0000-000000000001' `
+                -DeploymentName 'avm-e2e-cafebabe' -RunId 'cafebabe' -Issues $issues
+            $result.Status | Should -Be 'not-present'
+            Should -Invoke Write-AvmLog -Exactly 0 -ParameterFilter { $Message -eq 'Running post-deployment script.' }
+        }
     }
 
     It 'honors the native case ShouldProcess refusal without attempting a hook' {

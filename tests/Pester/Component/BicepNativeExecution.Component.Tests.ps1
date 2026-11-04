@@ -482,8 +482,11 @@ $result = & (Get-Module Avm.Authoring) {
             $arguments = @('-NoProfile', '-NonInteractive', '-File', $Driver,
                 '-Manifest', $Manifest, '-DirectoryPath', $Root)
             if ($InProcess) { $arguments += '-InProcess' }
-            $null = Invoke-AvmProcess -FilePath ([Environment]::ProcessPath) -ArgumentList $arguments `
+            $process = Invoke-AvmProcess -FilePath ([Environment]::ProcessPath) -ArgumentList $arguments `
                 -WorkingDirectory $Root -TimeoutSec 60
+            $process.StdOut | Should -Match "discovers configuration first with expected value one.*Passed"
+            $process.StdOut | Should -Match "discovers configuration second with expected value two.*Passed"
+            $process.StdOut | Should -Match 'retains member casing compatibility.*Passed'
             $summary = Get-Content -LiteralPath (Join-Path $Root 'summary.json') -Raw | ConvertFrom-Json
             $summary.Issues | Should -BeNullOrEmpty
             $summary.Assertion.Status | Should -Be 'pass'

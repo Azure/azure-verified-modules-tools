@@ -276,6 +276,13 @@ $summary = [ordered]@{
         InstallAvmToolModuleBase = $observedInstallAvmTool[0].Module.ModuleBase
     }
 }
+if ($inputData.Mode -ceq 'E2e') {
+    $summary.Tests = @(
+        foreach ($test in @($result.Tests)) {
+            [ordered]@{ Name = [string]$test.ExpandedPath; Result = [string]$test.Result }
+        }
+    )
+}
 
 if ($PSCmdlet.ParameterSetName -eq 'File') {
     [System.IO.File]::WriteAllText(

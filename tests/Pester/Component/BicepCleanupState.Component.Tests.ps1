@@ -896,6 +896,34 @@ Describe 'Component: Bicep cleanup state and context' -Tag Component {
         }
     }
 
+    It 'does not discover a deployment that was never submitted' {
+        InModuleScope Avm.Authoring -Parameters @{ File = $script:statePath } {
+            param($File)
+            $created = New-AvmBicepCleanupState -Path $File -Environment AzureCloud `
+                -SubscriptionId '00000000-0000-0000-0000-000000000001' `
+                -TenantId '00000000-0000-0000-0000-000000000002'
+            $created.State.deployments.Add(@{
+                    id = '/subscriptions/00000000-0000-0000-0000-000000000001/providers/Microsoft.Resources/deployments/not-submitted'
+                    status = 'NotSubmitted'; preflightRejected = $false
+                })
+            Save-AvmBicepCleanupState -State $created.State -Path $File
+            Mock Assert-AvmBicepAzureDependency {}
+            Mock Assert-AvmBicepAzureIdentity {}
+            Mock Get-Command { [pscustomobject]@{ Source = 'fake-az' } }
+            Mock Get-AvmBicepDeploymentCleanupTarget {
+                [pscustomobject]@{ ResourceIds = @(); Deployments = @(); Issues = @() }
+            }
+            $result = Invoke-AvmBicepCleanup -StatePath $File `
+                -SubscriptionId '00000000-0000-0000-0000-000000000001' `
+                -TenantId '00000000-0000-0000-0000-000000000002' -RemovalRetryLimit 1
+            $result.Cleaned | Should -BeTrue
+            (Read-AvmBicepCleanupState -Path $File).deployments[0].status | Should -BeExactly 'NotSubmitted'
+            Should -Invoke Get-AvmBicepDeploymentCleanupTarget -Exactly 1 -ParameterFilter {
+                $DeploymentIds.Count -eq 0
+            }
+        }
+    }
+
     It 'refuses state for a different explicit <Field> before Azure preflight' -ForEach @(
         @{ Field = 'SubscriptionId' }
         @{ Field = 'TenantId' }

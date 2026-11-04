@@ -37,6 +37,7 @@ function Invoke-AvmBicepTestE2eAssertion {
         RunsFiltered     = 0
     }
     if ($Item.AssertionFiles.Count -eq 0) {
+        Write-AvmLog -Level Info -Message 'No post-deployment tests found.'
         return [pscustomobject]$result
     }
     try {
@@ -58,6 +59,7 @@ function Invoke-AvmBicepTestE2eAssertion {
             DeploymentOutputs    = $outputs
             ModuleTestFolderPath = [System.IO.Path]::GetDirectoryName($Item.Case.Path)
         }
+        Write-AvmLog -Level Info -Message "Running Invoke-Pester for $($Item.AssertionFiles.Count) post-deployment test file(s)."
         $summary = Invoke-AvmBicepPesterSuite -Mode E2e `
             -Files $Item.AssertionFiles -TestInputData $testInputData `
             -WorkingDirectory $RepositoryRoot -TimeoutSec 1800 -InProcess:$InProcess
@@ -82,6 +84,23 @@ function Invoke-AvmBicepTestE2eAssertion {
     $result.RunsSkipped = [int]$summary.Skipped
     $result.RunsInconclusive = [int]$summary.Inconclusive
     $result.RunsFiltered = [int]$summary.Filtered
+    $tests = Get-AvmPropertyValue -InputObject $summary -Name 'Tests' -NoEnumerate
+    if ($null -eq $tests) {
+        Write-AvmLog -Level Warning -Message 'Individual assertion results were not available.'
+    }
+    else {
+        if (@($tests).Count -eq 0) {
+            Write-AvmLog -Level Info -Message 'No post-deployment tests found.'
+        }
+        foreach ($test in $tests) {
+            $name = Protect-AvmBicepDiagnosticText -Text ([string]$test.Name)
+            $testResult = [string]$test.Result
+            if ($testResult -notin @('Passed', 'Failed', 'Skipped', 'Inconclusive', 'NotRun')) {
+                throw [AvmProcessException]::new('The assertion runner returned an invalid individual result.')
+            }
+            Write-AvmLog -Level Info -Message "Post-deployment test '$name' result: $testResult."
+        }
+    }
     $result.Status = if ($summary.Passed -gt 0 -and
         $summary.Total -eq $summary.Passed -and $summary.Failed -eq 0 -and
         $summary.Skipped -eq 0 -and $summary.Inconclusive -eq 0 -and

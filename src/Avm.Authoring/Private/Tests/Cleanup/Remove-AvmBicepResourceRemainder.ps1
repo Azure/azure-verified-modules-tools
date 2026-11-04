@@ -46,12 +46,13 @@ function Remove-AvmBicepResourceRemainder {
                             Method = 'POST'
                             Path   = $purgePath
                         }
-                        Write-Verbose ('[*] Purging resource [{0}] of type [{1}]' -f $resourceName, $Type) -Verbose
                         if ($PSCmdlet.ShouldProcess(('App Configuration Store with ID [{0}]' -f $softDeletedConfigurationStore.properties.configurationStoreId), 'Purge')) {
+                            Write-AvmLog -Level Info -Message "Purging App Configuration store $resourceName..."
                             $response = Invoke-AzRestMethod @purgeRequestInputObject
                             if ([int]$response.StatusCode -lt 200 -or [int]$response.StatusCode -ge 300) {
                                 throw [AvmProcessException]::new([string](('Purge of resource [{0}] failed with error code [{1}]' -f $ResourceId, $response.StatusCode)))
                             }
+                            Write-AvmLog -Level Info -Message "Requested purge of App Configuration store $resourceName (HTTP $($response.StatusCode))."
                         }
                     }
                     break
@@ -64,10 +65,11 @@ function Remove-AvmBicepResourceRemainder {
                         throw [AvmProcessException]::new("Purge-protected vault remains reserved: $ResourceId")
                     }
                     if ($matchingKeyVault -and -not $matchingKeyVault.EnablePurgeProtection) {
-                        Write-Verbose ('[*] Purging resource [{0}] of type [{1}]' -f $resourceName, $Type) -Verbose
                         if ($PSCmdlet.ShouldProcess(('Key Vault with ID [{0}]' -f $matchingKeyVault.Id), 'Purge')) {
                             try {
+                                Write-AvmLog -Level Info -Message "Purging Key Vault $resourceName..."
                                 $null = Remove-AzKeyVault -ResourceId $matchingKeyVault.Id -InRemovedState -Force -Location $matchingKeyVault.Location -ErrorAction 'Stop'
+                                Write-AvmLog -Level Info -Message "Requested purge of Key Vault $resourceName."
                             }
                             catch {
                                 if (-not $RequireCompleteRemoval -and
@@ -89,9 +91,10 @@ function Remove-AvmBicepResourceRemainder {
                     $matchingAccount = Get-AzCognitiveServicesAccount -InRemovedState |
                         Where-Object { $_.AccountName -ieq $resourceName -and $_.ResourceGroupName -ieq $resourceGroupName }
                     if ($matchingAccount) {
-                        Write-Verbose ('[*] Purging resource [{0}] of type [{1}]' -f $resourceName, $Type) -Verbose
                         if ($PSCmdlet.ShouldProcess(('Cognitive services account with ID [{0}]' -f $matchingAccount.Id), 'Purge')) {
+                            Write-AvmLog -Level Info -Message "Purging Cognitive Services account $resourceName..."
                             $null = Remove-AzCognitiveServicesAccount -InRemovedState -Force -Location $matchingAccount.Location -ResourceGroupName $resourceGroupName -Name $matchingAccount.AccountName
+                            Write-AvmLog -Level Info -Message "Requested purge of Cognitive Services account $resourceName."
                         }
                     }
                     break
@@ -111,13 +114,14 @@ function Remove-AvmBicepResourceRemainder {
                             Method = 'DELETE'
                             Path   = $purgePath
                         }
-                        Write-Verbose ('[*] Purging resource [{0}] of type [{1}]' -f $resourceName, $Type) -Verbose
                         if ($PSCmdlet.ShouldProcess(('API management service with ID [{0}]' -f $softDeletedService.properties.serviceId), 'Purge')) {
+                            Write-AvmLog -Level Info -Message "Purging API Management service $resourceName..."
                             $response = Invoke-AzRestMethod @purgeRequestInputObject
                             if ([int]$response.StatusCode -lt 200 -or [int]$response.StatusCode -ge 300) {
                                 throw [AvmProcessException]::new(
                                     "API Management purge failed with HTTP $($response.StatusCode): $ResourceId")
                             }
+                            Write-AvmLog -Level Info -Message "Requested purge of API Management service $resourceName (HTTP $($response.StatusCode))."
                         }
                     }
                     break
@@ -155,6 +159,7 @@ function Remove-AvmBicepResourceRemainder {
                                 $null = Undo-AzRecoveryServicesBackupItemDeletion -Item $backupItem -VaultId $vaultId -Force
                             }
                             $null = Disable-AzRecoveryServicesBackupProtection -Item $backupItem -VaultId $vaultId -RemoveRecoveryPoints -Force
+                            Write-AvmLog -Level Info -Message "Requested removal of backup data $resourceName."
                         }
                     }
                     finally {
@@ -195,6 +200,7 @@ function Remove-AvmBicepResourceRemainder {
                         }
                         if ($PSCmdlet.ShouldProcess($candidate, 'Remove Databricks managed resource group')) {
                             $null = Remove-AzResourceGroup -Name $candidate.Split('/')[-1] -Force
+                            Write-AvmLog -Level Info -Message "Requested deletion of managed resource group $($candidate.Split('/')[-1])."
                         }
                     }
                     break

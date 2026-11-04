@@ -107,6 +107,7 @@ function Invoke-AvmBicepE2ePostHook {
         if ($null -eq $hook) {
             return [pscustomobject]$result
         }
+        Write-AvmLog -Level Info -Message 'Running post-deployment script.'
         $result.Status = 'fail'
         $pwshPath = [System.Environment]::ProcessPath
         if ([string]::IsNullOrWhiteSpace($pwshPath)) {

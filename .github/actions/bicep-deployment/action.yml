@@ -1,4 +1,4 @@
-name: Bicep native deployment
+name: Deploy Bicep test
 description: Authenticate the preselected target, run native deployment/completion, and preserve recovery state.
 inputs:
   modulePath:
@@ -45,7 +45,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Validate authentication selection
+    - name: Check selected test and Azure identity
       id: auth
       shell: pwsh
       env:
@@ -84,7 +84,7 @@ runs:
         foreach ($entry in $auth.GetEnumerator()) { Write-AvmWorkflowOutput -Name $entry.Key -Value $entry.Value }
         $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes("$env:MODULE_PATH|$($case.path)"))).ToLowerInvariant()
         Write-AvmWorkflowOutput -Name artifactKey -Value $key
-    - name: Prepare deployment dependencies
+    - name: Install AVM and Azure tools
       id: setup
       shell: pwsh
       env:
@@ -96,7 +96,7 @@ runs:
         $modulePath = Resolve-AvmWorkflowPath -Root $env:GITHUB_WORKSPACE -RelativePath $env:MODULE_PATH
         Initialize-AvmWorkflow -Profile Deployment -Path $modulePath -Confirm:$false
         $null = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'avm-bicep-state') -Force
-    - name: Sign in with OIDC
+    - name: Sign in to Azure
       id: login_oidc
       uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
       with:
@@ -117,7 +117,7 @@ runs:
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Deployment.ps1')
         $tenant = Confirm-AvmWorkflowAzureContext -SubscriptionId $env:SELECTED_SUBSCRIPTION -TenantId $env:SELECTED_TENANT -ClientId $env:SELECTED_CLIENT
         Write-AvmWorkflowOutput -Name tenantId -Value $tenant
-    - name: Deploy native test case
+    - name: Validate (What-If) and deploy test to Azure
       id: deploy
       shell: pwsh
       env:
@@ -150,7 +150,7 @@ runs:
           ResultDirectory = Join-Path $env:RUNNER_TEMP 'avm-bicep-results'
         }
         Invoke-AvmWorkflowE2e @parameters -Confirm:$false
-    - name: Renew OIDC sign-in for completion
+    - name: Sign in to Azure again before tests and clean-up
       id: renew_oidc
       if: ${{ !cancelled() && (success() || failure()) && steps.deploy.outcome != 'skipped' }}
       uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
@@ -159,7 +159,7 @@ runs:
         tenant-id: ${{ steps.auth.outputs.tenantId }}
         subscription-id: ${{ steps.auth.outputs.subscriptionId }}
         enable-AzPSSession: true
-    - name: Assert and complete native test case
+    - name: Run post-deployment tests and clean up if enabled
       id: complete
       if: ${{ !cancelled() && (success() || failure()) && (steps.deploy.outcome == 'success' || steps.deploy.outcome == 'failure') && steps.renew_oidc.outcome == 'success' }}
       shell: pwsh
@@ -183,7 +183,7 @@ runs:
           ResultDirectory = Join-Path $env:RUNNER_TEMP 'avm-bicep-results'
         }
         Invoke-AvmWorkflowE2e @parameters -Confirm:$false
-    - name: Recover unfinished native cleanup
+    - name: Retry deleting leftover test resources (only if an earlier step failed)
       if: ${{ !cancelled() && failure() && steps.deploy.outcome != 'skipped' && fromJSON(inputs.workflowInput).removeDeployment == 'true' && steps.renew_oidc.outcome == 'success' }}
       shell: pwsh
       env:
@@ -196,7 +196,7 @@ runs:
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Validation.ps1')
         Import-AvmWorkflowPackage
         Invoke-AvmWorkflowRecovery -StatePath (Join-Path $env:RUNNER_TEMP 'avm-bicep-state' 'state.json') -SubscriptionId $env:ARM_SUBSCRIPTION_ID -TenantId $env:ARM_TENANT_ID -ClientId $env:ARM_CLIENT_ID -Confirm:$false
-    - name: Retain results and recovery state
+    - name: Upload results and clean-up state for later recovery
       if: always() && steps.auth.outcome == 'success'
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:

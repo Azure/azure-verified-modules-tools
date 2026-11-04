@@ -64,13 +64,13 @@ function Remove-AvmBicepResource {
         }
         'Microsoft.KeyVault/vaults/keys' {
             $resourceName = $ResourceId.Split('/')[-1]
-            Write-Verbose ('[/] Skipping resource [{0}] of type [{1}]. Reason: It is handled by different logic.' -f $resourceName, $Type) -Verbose
+            Write-AvmLog -Level Info -Message "Skipped ${resourceName}: handled separately."
 
             break
         }
         'Microsoft.KeyVault/vaults/accessPolicies' {
             $resourceName = $ResourceId.Split('/')[-1]
-            Write-Verbose ('[/] Skipping resource [{0}] of type [{1}]. Reason: It is handled by different logic.' -f $resourceName, $Type) -Verbose
+            Write-AvmLog -Level Info -Message "Skipped ${resourceName}: handled separately."
             break
         }
         'Microsoft.KeyVault/managedHSMs/keys' {
@@ -94,7 +94,7 @@ function Remove-AvmBicepResource {
         }
         'Microsoft.ServiceBus/namespaces/authorizationRules' {
             if ($ResourceId.Split('/')[-1] -eq 'RootManageSharedAccessKey') {
-                Write-Verbose ('[/] Skipping resource [RootManageSharedAccessKey] of type [{0}]. Reason: The Service Bus''s default authorization key cannot be removed' -f $Type) -Verbose
+                Write-AvmLog -Level Info -Message 'Skipped RootManageSharedAccessKey: the default authorization key cannot be removed.'
             }
             else {
                 if ($PSCmdlet.ShouldProcess("Resource with ID [$ResourceId]", 'Remove')) {
@@ -148,7 +148,7 @@ function Remove-AvmBicepResource {
                 $pimRoleAssignmentRoleDefinitionId = $pimRoleAssignment.RoleDefinitionId
                 $guid = New-Guid
 
-                Write-Verbose 'Waiting for 5 minutes before removing PIM role assignment' -Verbose
+                Write-AvmLog -Level Info -Message 'Waiting 5 minutes before removing the PIM role assignment.'
                 Start-Sleep -Seconds 300
 
                 $removalInputObject = @{
@@ -176,7 +176,7 @@ function Remove-AvmBicepResource {
                 $pimRoleAssignmentRoleDefinitionId = $pimRoleAssignment.RoleDefinitionId
                 $guid = New-Guid
 
-                Write-Verbose 'Waiting for 5 minutes before removing PIM role assignment' -Verbose
+                Write-AvmLog -Level Info -Message 'Waiting 5 minutes before removing the PIM role assignment.'
                 Start-Sleep -Seconds 300
 
                 $removalInputObject = @{
@@ -221,7 +221,7 @@ function Remove-AvmBicepResource {
 
             $backupItems = Get-AzRecoveryServicesBackupItem -BackupManagementType 'AzureVM' -WorkloadType 'AzureVM' -VaultId $ResourceId
             foreach ($backupItem in $backupItems) {
-                Write-Verbose ('Removing Backup item [{0}] from RSV [{1}]' -f $backupItem.Name, $ResourceId) -Verbose
+                Write-AvmLog -Level Info -Message "Removing backup item $($backupItem.Name) from $ResourceId."
 
                 if ($backupItem.DeleteState -eq 'ToBeDeleted') {
                     if ($PSCmdlet.ShouldProcess('Soft-deleted backup data removal', 'Undo')) {
@@ -246,14 +246,14 @@ function Remove-AvmBicepResource {
             $vault = Get-AzDataProtectionBackupVault -ResourceGroupName $resourceGroupName -VaultName $resourceName
 
             if ($vault.ImmutabilityState -ne 'Disabled') {
-                Write-Verbose ('    [-] Disabling immutability on vault [{0}]' -f $resourceName) -Verbose
+                Write-AvmLog -Level Info -Message "Disabling immutability on vault $resourceName."
                 if ($PSCmdlet.ShouldProcess(('Immutability on vault [{0}]' -f $resourceName), 'Update')) {
                     $null = Update-AzDataProtectionBackupVault -ResourceGroupName $resourceGroupName -VaultName $resourceName -ImmutabilityState Disabled
                 }
             }
 
             if ($vault.SoftDeleteState -ne 'Off') {
-                Write-Verbose ('    [-] Disabling soft-deletion on vault [{0}]' -f $resourceName) -Verbose
+                Write-AvmLog -Level Info -Message "Disabling soft deletion on vault $resourceName."
                 if ($PSCmdlet.ShouldProcess(('Soft-delete on vault [{0}]' -f $resourceName), 'Update')) {
                     $null = Update-AzDataProtectionBackupVault -ResourceGroupName $resourceGroupName -VaultName $resourceName -SoftDeleteState Off
                 }
@@ -261,7 +261,7 @@ function Remove-AvmBicepResource {
 
             $softDeletedBackupInstances = Get-AzDataProtectionSoftDeletedBackupInstance -ResourceGroupName $resourceGroupName -VaultName $resourceName
             foreach ($softDeletedBackupInstance in $softDeletedBackupInstances) {
-                Write-Verbose ('    [-] Removing Backup instance soft deletion [{0}] from vault [{1}]' -f $softDeletedBackupInstance.Name, $resourceName) -Verbose
+                Write-AvmLog -Level Info -Message "Undoing soft deletion of backup instance $($softDeletedBackupInstance.Name) on vault $resourceName."
                 if ($PSCmdlet.ShouldProcess(('Soft deletion on backup instance [{0}] from vault [{1}]' -f $softDeletedBackupInstance.Name, $resourceName), 'Undo')) {
                     $null = Undo-AzDataProtectionBackupInstanceDeletion -ResourceGroupName $resourceGroupName -VaultName $resourceName -BackupInstanceName $softDeletedBackupInstance.name
                 }
@@ -269,7 +269,7 @@ function Remove-AvmBicepResource {
 
             $backupInstances = Get-AzDataProtectionBackupInstance -ResourceGroupName $resourceGroupName -VaultName $resourceName
             foreach ($backupInstance in $backupInstances) {
-                Write-Verbose ('    [-] Removing Backup instance [{0}] from vault [{1}]' -f $backupInstance.Name, $resourceName) -Verbose
+                Write-AvmLog -Level Info -Message "Removing backup instance $($backupInstance.Name) from vault $resourceName."
                 if ($PSCmdlet.ShouldProcess(('Backup instance [{0}] from vault [{1}]' -f $backupInstance.Name, $resourceName), 'Remove')) {
                     $null = Remove-AzDataProtectionBackupInstance -ResourceGroupName $resourceGroupName -VaultName $resourceName -Name $backupInstance.name
                 }
@@ -277,13 +277,13 @@ function Remove-AvmBicepResource {
 
             $backupPolicies = Get-AzDataProtectionBackupPolicy -ResourceGroupName $resourceGroupName -VaultName $resourceName
             foreach ($backupPolicy in $backupPolicies) {
-                Write-Verbose ('    [-] Removing Backup policy [{0}] from vault [{1}]' -f $backupPolicy.Name, $resourceName) -Verbose
+                Write-AvmLog -Level Info -Message "Removing backup policy $($backupPolicy.Name) from vault $resourceName."
                 if ($PSCmdlet.ShouldProcess(('Backup instance [{0}] from vault [{1}]' -f $backupPolicy.Name, $resourceName), 'Remove')) {
                     $null = Remove-AzDataProtectionBackupPolicy -ResourceGroupName $resourceGroupName -VaultName $resourceName -Name $backupPolicy.name
                 }
             }
 
-            Write-Verbose ('    [-] Removing Backup vault [{0}]' -f $resourceName) -Verbose
+            Write-AvmLog -Level Info -Message "Removing backup vault $resourceName."
             if ($PSCmdlet.ShouldProcess("Backup vault with ID [$ResourceId]", 'Remove')) {
                 $null = Remove-AzDataProtectionBackupVault -ResourceGroupName $resourceGroupName -VaultName $resourceName
             }
@@ -318,7 +318,7 @@ function Remove-AvmBicepResource {
 
                     if ([DateTime]::UtcNow -lt $replicationCreated.AddHours(1)) {
                         $timeLeft = [int]($replicationCreated.AddHours(1) - [DateTime]::UtcNow).TotalSeconds
-                        Write-Verbose ('    [progress] Waiting {0} minutes to ensure at least 1 hour has passed since replication creation time [{1}] (UTC).' -f [int]($timeLeft / 60), $replicationCreated) -Verbose
+                        Write-AvmLog -Level Info -Message "Waiting $([int]($timeLeft / 60)) minutes for workspace replication to reach one hour."
                         Start-Sleep -Seconds ([int]$timeLeft + 10)
                         $retryCount++
                         continue
@@ -331,13 +331,13 @@ function Remove-AvmBicepResource {
                     }
 
                     if ($workspaceStateContent.properties.replication.provisioningState -eq 'Succeeded') {
-                        Write-Verbose ('    [progress] Workspace replication is in a state that allows disabling.') -Verbose
+                        Write-AvmLog -Level Info -Message 'Workspace replication is ready to disable.'
                         $replicationFullyProvisioned = $true
                         break
                     }
                     else {
                         $replicationFullyProvisioned = $false
-                        Write-Verbose ('    [progress] Waiting {0} seconds for workspace replication to finish provisioning. [{1}/{2}]' -f $retryInterval, $retryCount, $retryLimit) -Verbose
+                        Write-AvmLog -Level Info -Message "Waiting $retryInterval seconds for workspace replication to finish provisioning ($retryCount/$retryLimit)."
                         Start-Sleep -Seconds $retryInterval
                         $retryCount++
                     }
@@ -359,7 +359,7 @@ function Remove-AvmBicepResource {
                         location   = $workspaceStateContent.location
                     } | ConvertTo-Json -Depth 10
                 }
-                Write-Verbose ('[*] Disabling workspace replication for resource [{0}] of type [{1}]' -f $resourceName, $Type) -Verbose
+                Write-AvmLog -Level Info -Message "Disabling workspace replication for $resourceName."
                 if ($PSCmdlet.ShouldProcess("Log Analytics Workspace [$resourceName]", 'Disable replication')) {
                     $disableReplicationResponse = Invoke-AzRestMethod @disableReplicationInputObject
                     if ($disableReplicationResponse.StatusCode -notlike '2*') {
@@ -378,11 +378,11 @@ function Remove-AvmBicepResource {
                         }
 
                         if (-not $workspaceStateContent.properties.replication.enabled -and $workspaceStateContent.properties.replication.provisioningState -eq 'Succeeded') {
-                            Write-Verbose ('    [progress] Workspace replication is disabled.') -Verbose
+                            Write-AvmLog -Level Info -Message 'Workspace replication is disabled.'
                             break
                         }
                         else {
-                            Write-Verbose ('    [progress] Waiting {0} seconds for workspace replication to be disabled. [{1}/{2}]' -f $retryInterval, $retryCount, $retryLimit) -Verbose
+                            Write-AvmLog -Level Info -Message "Waiting $retryInterval seconds for workspace replication to be disabled ($retryCount/$retryLimit)."
                             Start-Sleep -Seconds $retryInterval
                             $retryCount++
                         }
@@ -397,7 +397,7 @@ function Remove-AvmBicepResource {
             }
 
             if ($PSCmdlet.ShouldProcess("Log Analytics Workspace [$resourceName]", 'Remove')) {
-                Write-Verbose ('[*] Purging resource [{0}] of type [{1}]' -f $resourceName, $Type) -Verbose
+                Write-AvmLog -Level Info -Message "Purging workspace $resourceName..."
                 $null = Remove-AzOperationalInsightsWorkspace -ResourceGroupName $resourceGroupName -Name $resourceName -Force -ForceDelete
             }
             break
@@ -442,7 +442,7 @@ function Remove-AvmBicepResource {
                     elseif ($getResponse.StatusCode -eq '200') {
 
                         $templateExists = $true
-                        Write-Verbose ('    [progress] Waiting {0} seconds for Image Template to be removed. [{1}/{2}]' -f $retryInterval, $retryCount, $retryLimit) -Verbose
+                        Write-AvmLog -Level Info -Message "Waiting $retryInterval seconds for the image template to be removed ($retryCount/$retryLimit)."
                         if ($retryCount -lt $retryLimit) {
                             Start-Sleep -Seconds $retryInterval
                         }
@@ -469,13 +469,14 @@ function Remove-AvmBicepResource {
                 Method = 'DELETE'
                 Path   = $purgePath
             }
-            Write-Verbose ('[*] Purging resource [{0}] of type [{1}]' -f $resourceName, $Type) -Verbose
+            Write-AvmLog -Level Info -Message "Purging Machine Learning workspace $resourceName..."
             if ($PSCmdlet.ShouldProcess("Machine Learning Workspace [$resourceName]", 'Purge')) {
                 $purgeResource = Invoke-AzRestMethod @purgeRequestInputObject
                 if ($purgeResource.StatusCode -notlike '2*') {
                     $responseContent = $purgeResource.Content | ConvertFrom-Json
                     throw [AvmProcessException]::new([string](('{0} : {1}' -f $responseContent.error.code, $responseContent.error.message)))
                 }
+                Write-AvmLog -Level Info -Message "Requested purge of Machine Learning workspace $resourceName (HTTP $($purgeResource.StatusCode))."
 
                 $retryCount = 0
                 $retryLimit = 240
@@ -485,7 +486,7 @@ function Remove-AvmBicepResource {
                     if ($retryCount -ge $retryLimit) {
                         throw [AvmProcessException]::new("Machine Learning workspace purge did not finish: $ResourceId")
                     }
-                    Write-Verbose ('    [progress] Waiting {0} seconds for workspace to be purged.' -f $retryInterval) -Verbose
+                    Write-AvmLog -Level Info -Message "Waiting $retryInterval seconds for workspace $resourceName to be purged."
                     Start-Sleep -Seconds $retryInterval
                     $workspace = @(Invoke-AvmBicepCleanupLookup -Command 'Get-AzMLWorkspace' -Parameters @{
                             Name              = $resourceName
@@ -494,6 +495,7 @@ function Remove-AvmBicepResource {
                         })
                     $workspaceExists = @($workspace | Where-Object { $null -ne $_ }).Count -gt 0
                 } while ($workspaceExists)
+                Write-AvmLog -Level Info -Message "Confirmed workspace $resourceName is absent after purge."
             }
             break
         }
@@ -525,7 +527,7 @@ function Remove-AvmBicepResource {
                         GroupName      = $targetManagementGroupId
                         SubscriptionId = $subscriptionId
                     })) {
-                Write-Verbose ('[*] Moving resource [{0}] of type [{1}] to management group: {2}' -f $subscriptionName, $Type, $targetManagementGroupId) -Verbose
+                Write-AvmLog -Level Info -Message "Moving subscription $subscriptionName to management group $targetManagementGroupId."
                 if ($PSCmdlet.ShouldProcess("Subscription [$subscriptionName] to Management Group: $targetManagementGroupId", 'Move')) {
                     $null = New-AzManagementGroupSubscription -GroupName $targetManagementGroupId -SubscriptionId $subscriptionId
                 }
@@ -538,7 +540,7 @@ function Remove-AvmBicepResource {
             }
 
             if ($subscriptionState -eq 'Enabled') {
-                Write-Verbose ('[*] Disabling resource [{0}] of type [{1}]' -f $subscriptionName, $Type) -Verbose
+                Write-AvmLog -Level Info -Message "Disabling subscription $subscriptionName."
                 if ($PSCmdlet.ShouldProcess("Subscription [$subscriptionName]", 'Remove')) {
                     $null = Disable-AzSubscription -SubscriptionId $subscriptionId -Confirm:$false
                 }
@@ -563,7 +565,7 @@ function Remove-AvmBicepResource {
 
                 do {
                     $retryCount++
-                    Write-Verbose ('[*] Removing API Management service [{0}] from resource group [{1}] (attempt [{2}/{3}])' -f $resourceName, $resourceGroupName, $retryCount, $retryLimit) -Verbose
+                    Write-AvmLog -Level Info -Message "Removing API Management service $resourceName from $resourceGroupName (attempt $retryCount/$retryLimit)."
 
                     if ($PSCmdlet.ShouldProcess("API Management service [$resourceName]", 'Remove')) {
                         $deleteOutput = Invoke-AvmBicepCleanupCli -ArgumentList @(
@@ -572,12 +574,12 @@ function Remove-AvmBicepResource {
 
                         if ($deleteOutput.ExitCode -eq 0) {
                             $deleteSucceeded = $true
-                            Write-Verbose ('[progress] Successfully initiated deletion of API Management service [{0}]' -f $resourceName) -Verbose
+                            Write-AvmLog -Level Info -Message "Requested deletion of API Management service $resourceName."
                         }
                         else {
                             $deleteOutputString = $deleteOutput.StdErr
                             if ($deleteOutputString -match 'ServiceLocked|transitioning') {
-                                Write-Verbose ('    [progress] API Management service [{0}] is transitioning. Waiting {1} seconds before retrying. [{2}/{3}]' -f $resourceName, $retryInterval, $retryCount, $retryLimit) -Verbose
+                                Write-AvmLog -Level Info -Message "Waiting $retryInterval seconds for API Management service $resourceName to finish transitioning ($retryCount/$retryLimit)."
                                 Start-Sleep -Seconds $retryInterval
                             }
                             else {
@@ -611,10 +613,10 @@ function Remove-AvmBicepResource {
                     ) -AllowNotFound
                     if (-not $existingService) {
                         $serviceSoftDeleted = $true
-                        Write-Verbose ('[progress] API Management service [{0}] has been soft-deleted.' -f $resourceName) -Verbose
+                        Write-AvmLog -Level Info -Message "Confirmed API Management service $resourceName is soft-deleted."
                     }
                     else {
-                        Write-Verbose ('    [progress] Waiting {0} seconds for API Management service [{1}] to be soft-deleted. [{2}/{3}]' -f $retryInterval, $resourceName, $retryCount, $retryLimit) -Verbose
+                        Write-AvmLog -Level Info -Message "Waiting $retryInterval seconds for API Management service $resourceName to be soft-deleted ($retryCount/$retryLimit)."
                         Start-Sleep -Seconds $retryInterval
                     }
                 } while (-not $serviceSoftDeleted -and $retryCount -lt $retryLimit)
@@ -628,20 +630,21 @@ function Remove-AvmBicepResource {
                     'apim', 'deletedservice', 'show', '--service-name', $resourceName, '--location', $apimLocation
                 ) -AllowNotFound
                 if ($softDeletedService) {
-                    Write-Verbose ('[*] Purging soft-deleted API Management service [{0}] in location [{1}]' -f $resourceName, $apimLocation) -Verbose
+                    Write-AvmLog -Level Info -Message "Purging API Management service $resourceName in $apimLocation..."
                     if ($PSCmdlet.ShouldProcess("API Management service [$resourceName]", 'Purge')) {
                         $null = Invoke-AvmBicepCleanupCli -ArgumentList @(
                             'apim', 'deletedservice', 'purge', '--service-name', $resourceName, '--location', $apimLocation
                         )
+                        Write-AvmLog -Level Info -Message "Requested purge of API Management service $resourceName."
                     }
                 }
                 else {
-                    Write-Verbose ('[/] No soft-deleted API Management service [{0}] found in location [{1}]. Skipping purge.' -f $resourceName, $apimLocation) -Verbose
+                    Write-AvmLog -Level Info -Message "Skipped purge of API Management service ${resourceName}: no soft-deleted service found in $apimLocation."
                 }
             }
             else {
 
-                Write-Verbose ('[/] API Management service [{0}] not found in resource group [{1}]. Checking for soft-deleted instance.' -f $resourceName, $resourceGroupName) -Verbose
+                Write-AvmLog -Level Info -Message "Checking for a soft-deleted API Management service ${resourceName}: not found in $resourceGroupName."
                 $softDeletedServices = @(Get-AvmBicepCleanupRestCollection -Path (
                         "/subscriptions/$subscriptionId/providers/Microsoft.ApiManagement/deletedservices?api-version=2021-08-01"
                     ))
@@ -650,11 +653,12 @@ function Remove-AvmBicepResource {
                         Where-Object { $_.properties.serviceId -ieq $ResourceId }
                     if ($matchingDeleted) {
                         $apimLocation = $matchingDeleted.location
-                        Write-Verbose ('[*] Purging soft-deleted API Management service [{0}] in location [{1}]' -f $resourceName, $apimLocation) -Verbose
+                        Write-AvmLog -Level Info -Message "Purging API Management service $resourceName in $apimLocation..."
                         if ($PSCmdlet.ShouldProcess("API Management service [$resourceName]", 'Purge')) {
                             $null = Invoke-AvmBicepCleanupCli -ArgumentList @(
                                 'apim', 'deletedservice', 'purge', '--service-name', $resourceName, '--location', $apimLocation
                             )
+                            Write-AvmLog -Level Info -Message "Requested purge of API Management service $resourceName."
                         }
                     }
                     else {
@@ -679,7 +683,7 @@ function Remove-AvmBicepResource {
                     }
                     if ($gateway) {
                         $retryCount++
-                        Write-Verbose ("Express Route Gateway [$resourceName] still deleting. Waiting 30 seconds. [{0}/{1}]" -f $retryCount, $maxRetries) -Verbose
+                        Write-AvmLog -Level Info -Message "Waiting 30 seconds for ExpressRoute gateway $resourceName to be deleted ($retryCount/$maxRetries)."
                         Start-Sleep -Seconds 30
                     }
                 } while ($gateway -and $retryCount -lt $maxRetries)

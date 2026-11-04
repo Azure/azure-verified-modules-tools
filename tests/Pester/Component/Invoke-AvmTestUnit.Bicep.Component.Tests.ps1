@@ -135,6 +135,30 @@ Describe 'Component: Bicep Pester unit tier' -Tag 'Component' {
             $emptyArtifact.unitFiles | Should -Be 0
             $emptyArtifact.PSObject.Properties.Name | Should -Not -Contain 'authoring'
 
+            $script:reportedUnitResult = $script:noSuiteResult | Select-Object *
+            $script:reportedUnitResult.Status = 'fail'
+            $script:reportedUnitResult.Issues = @(
+                [pscustomobject]@{
+                    Code = 'avm.bicep.json-stale'; Severity = 'error'; File = 'main.json'; Line = 1
+                    Message = "Expected 'sensitive-expected', but got 'sensitive-actual'."
+                }
+                [pscustomobject]@{
+                    Code = 'avm.bicep.example-warning'; Severity = 'warning'; File = 'main.bicep'; Line = 2
+                    Message = 'Quota is 20% full.'
+                }
+                [pscustomobject]@{
+                    Code = 'avm.bicep.example-info'; Severity = 'info'; File = 'main.bicep'; Line = 3
+                    Message = 'Advisory information.'
+                }
+            )
+            $env:MODULE_PATH = 'avm/res/mock/reported-issues'
+            Mock Invoke-AvmTestUnit { $script:reportedUnitResult }
+            $information = @(. ([scriptblock]::Create($unitRun)) 6>&1 | ForEach-Object { [string]$_ })
+            $information | Should -Contain '::error::[avm.bicep.json-stale] error main.json: Expected <value>, but got <value>.'
+            $information | Should -Contain '::warning::[avm.bicep.example-warning] warning main.bicep: Quota is 20%25 full.'
+            $information | Should -Contain '::notice::[avm.bicep.example-info] info main.bicep: Advisory information.'
+            ($information -join "`n") | Should -Not -Match 'sensitive-expected|sensitive-actual'
+
             $script:missingReceiptResult = $script:realUnitResult | Select-Object * -ExcludeProperty Authoring
             $env:MODULE_PATH = 'avm/res/mock/missing-receipt'
             Mock Invoke-AvmTestUnit { $script:missingReceiptResult }
@@ -154,6 +178,58 @@ Describe 'Component: Bicep Pester unit tier' -Tag 'Component' {
                 [Environment]::SetEnvironmentVariable($name,
                     $(if ($null -eq $saved[$name]) { [NullString]::Value } else { $saved[$name] }), 'Process')
             }
+        }
+    }
+
+    It 'reports every PR check issue and preserves failure status' {
+        Import-Module -FullyQualifiedName @{ ModuleName = 'powershell-yaml'; RequiredVersion = '0.4.12' }
+        $workflow = ConvertFrom-Yaml (Get-Content -LiteralPath (
+                Join-Path $script:repoRoot '.github' 'workflows' 'bicep-module-runtime.yml') -Raw)
+        $prRun = @($workflow.jobs.'pr-check'.steps | Where-Object name -EQ 'Run PR check')[0].run
+        $savedModule = [Environment]::GetEnvironmentVariable('AVM_AUTHORING_MODULE', 'Process')
+        try {
+            $env:AVM_AUTHORING_MODULE = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Avm.Authoring.psd1'
+            $script:prCheckResult = [pscustomobject]@{
+                Steps = @([pscustomobject]@{
+                        Result = [pscustomobject]@{
+                            Issues = @(
+                                [pscustomobject]@{
+                                    Code = 'avm.bicep.json-stale'; Severity = 'error'; File = 'main.json'
+                                    Message = 'Compiled template is stale.'
+                                }
+                                [pscustomobject]@{
+                                    Code = 'avm.bicep.api-version'; Severity = 'warning'; File = 'main.bicep'
+                                    Message = "API version 20% old.`n::error::not a command"
+                                }
+                                [pscustomobject]@{
+                                    Code = 'avm.bicep.example-info'; Severity = 'info'; File = 'main.bicep'
+                                    Message = 'Advisory information.'
+                                }
+                            )
+                        }
+                    })
+            }
+            Mock Invoke-Avm { $script:prCheckResult }
+            $information = @(. ([scriptblock]::Create($prRun)) 6>&1 | ForEach-Object { [string]$_ })
+            $information | Should -Contain '::error::[avm.bicep.json-stale] error main.json: Compiled template is stale.'
+            $information | Should -Contain '::warning::[avm.bicep.api-version] warning main.bicep: API version 20%25 old.%0A::error::not a command'
+            ($information -join "`n") | Should -Not -Match 'avm\.bicep\.example-info'
+
+            $script:prCheckException = [System.InvalidOperationException]::new('PR check failed')
+            $script:prCheckException | Add-Member -NotePropertyName Result -NotePropertyValue $script:prCheckResult
+            Mock Invoke-Avm { throw $script:prCheckException }
+            $failure = $null
+            $information = @(
+                try { . ([scriptblock]::Create($prRun)) 6>&1 }
+                catch { $failure = $_ }
+            ) | ForEach-Object { [string]$_ }
+            $failure.Exception.Message | Should -BeExactly 'PR check failed'
+            $information | Should -Contain '::error::[avm.bicep.json-stale] error main.json: Compiled template is stale.'
+            $information | Should -Contain '::warning::[avm.bicep.api-version] warning main.bicep: API version 20%25 old.%0A::error::not a command'
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('AVM_AUTHORING_MODULE',
+                $(if ($null -eq $savedModule) { [NullString]::Value } else { $savedModule }), 'Process')
         }
     }
 

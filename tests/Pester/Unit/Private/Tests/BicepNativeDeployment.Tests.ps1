@@ -334,6 +334,7 @@ Describe 'Bicep native deployment retries' {
                     throw [System.InvalidOperationException]::new(
                         "10:20:30 - The deployment '$DeploymentName' failed with error(s). $($Summary)(Code: DeploymentFailed)")
                 }
+
                 @{
                     Id = "/subscriptions/$($script:state.subscriptionId)/providers/Microsoft.Resources/deployments/$DeploymentName"
                     ProvisioningState = 'Succeeded'
@@ -343,6 +344,56 @@ Describe 'Bicep native deployment retries' {
             $result.Status | Should -Be 'fail'
             $script:state.deployments[0].status | Should -Be 'Failed'
             $result.RetryMode | Should -Be ''
+            Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
+        }
+    }
+
+    It 'confirms an unrecognized Az failure from the exact failed ARM record without resubmitting' {
+        InModuleScope Avm.Authoring {
+            Mock Invoke-AvmBicepNativeArmOperation { throw [InvalidOperationException]::new('Az 15.6 deployment failure') }
+            Mock Test-AvmBicepNestedDeploymentReadFailure { $false }
+            Mock Write-AvmBicepDeploymentDiagnostic { 'Failed' }
+            $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions
+            $result.Outcome | Should -BeExactly 'Failed'
+            $result.RetryMode | Should -BeExactly ''
+            Should -Invoke Write-AvmBicepDeploymentDiagnostic -Exactly 1 -ParameterFilter { $ReadDeployment }
+            Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
+        }
+    }
+
+    It 'reports the original failure at <Scope> scope using its captured context' -ForEach @(
+        @{ Scope = 'mg'; Kind = 'Forbidden'; Read = $false }
+        @{ Scope = 'sub'; Kind = 'Timeout'; Read = $false }
+        @{ Scope = 'mg'; Kind = 'Other'; Read = $true }
+    ) {
+        InModuleScope Avm.Authoring -Parameters $_ {
+            param($Scope, $Kind, $Read)
+            $script:inputOptions.Scope = $Scope
+            $script:inputOptions.ManagementGroupId = 'test'
+            $script:submissionKind = $Kind
+            Mock Invoke-AvmBicepNativeArmOperation {
+                switch ($script:submissionKind) {
+                    'Forbidden' { throw [Net.Http.HttpRequestException]::new('Forbidden submission.', $null, [Net.HttpStatusCode]::Forbidden) }
+                    'Timeout' { throw [TimeoutException]::new('Timed out submission.') }
+                    default { throw [InvalidOperationException]::new('Azure submission failed.') }
+                }
+            }
+            Mock Wait-AvmBicepNativeDeployment { throw [TimeoutException]::new('Observation failed.') }
+            Mock Write-AvmBicepDeploymentDiagnostic {
+                $script:diagnosticCall = @{
+                    Failure = $Failure; Read = [bool]$ReadDeployment; Values = $SensitiveValues; Profile = $DefaultProfile
+                }
+                ''
+            }
+            $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' `
+                -DeploymentInput $script:inputOptions -SensitiveValues @('fixture-secret')
+            $result.Status | Should -Be 'fail'
+            $result.ErrorKind | Should -Be $Kind
+            Should -Invoke Write-AvmBicepDeploymentDiagnostic -Exactly 1
+            $script:diagnosticCall.Failure.Exception.Message | Should -Match 'submission'
+            $script:diagnosticCall.Read | Should -Be $Read
+            $script:diagnosticCall.Values | Should -Contain 'fixture-secret'
+            $script:diagnosticCall.Profile.Tenant.Id | Should -Be '00000000-0000-0000-0000-000000000002'
             Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
         }
     }
@@ -375,6 +426,7 @@ Describe 'Bicep native deployment retries' {
                 Mock Get-AzContext { $script:ambientProfile }
                 Mock Invoke-AvmBicepNativeArmOperation { throw $script:submissionFailure }
                 Mock Get-AvmBicepDeploymentRetryKind { throw 'Authorization recovery must not classify resource failures.' }
+                Mock Write-AvmBicepDeploymentDiagnostic { '' }
                 Mock Invoke-AzRestMethod {
                     $id = $script:state.deployments[-1].id
                     $mode = if ($script:recoverySequence.Count -gt 0) { $script:recoverySequence.Dequeue() } else { $script:recoveryMode }

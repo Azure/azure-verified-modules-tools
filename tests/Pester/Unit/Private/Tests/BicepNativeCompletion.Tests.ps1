@@ -125,6 +125,7 @@ Describe 'Bicep native completion decisions' {
             Mock Invoke-AvmBicepAzureContext { & $ScriptBlock }
             Mock Get-AzContext { @{ Environment = @{ Name = 'AzureCloud' } } }
             Mock Assert-AvmBicepAzureIdentity {}
+            Mock Write-AvmLog {}
             Mock Get-AvmBicepPendingDeployment { [pscustomobject]@{ Pending = @(); Issues = @() } }
             Mock Invoke-AzRestMethod {
                 @{ StatusCode = 200; Content = (@{
@@ -156,6 +157,8 @@ Describe 'Bicep native completion decisions' {
             Should -Invoke Save-AvmBicepCleanupState -Exactly 2
             Should -Invoke Invoke-AvmBicepTestE2eAssertion -Exactly 1 -ParameterFilter { $InProcess }
             Should -Invoke Invoke-AvmBicepE2ePostHook -Exactly 1 -ParameterFilter { $InProcess }
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter { $Message -eq 'Deleting test resources.' }
+            Should -Invoke Write-AvmLog -Exactly 0 -ParameterFilter { $Message -like '*post.ps1*' }
             $result.CleanupPending.Count | Should -Be 0
         }
     }

@@ -99,21 +99,25 @@ function Remove-AvmBicepCleanupResourceBatch {
             }
             else { $State['subscriptionId'] }
             if (-not $resource['removed']) {
+                $resourceName = $resource['id'].TrimEnd('/').Split('/')[-1]
                 $removedParent = @($byId.Values | Where-Object {
                         $_['removed'] -and $resource['id'].StartsWith(
                             $_['id'] + '/', [System.StringComparison]::OrdinalIgnoreCase)
                     }).Count -gt 0
                 if ($removedParent) {
                     $resource['removed'] = $true
+                    Write-AvmLog -Level Info -Message "Skipped ${resourceName}: deletion is covered by its parent resource."
                 }
                 else {
                     try {
+                        Write-AvmLog -Level Info -Message "Deleting $resourceName ($($resource['type']))..."
                         Invoke-AvmBicepAzureContext -SubscriptionId $subscription -TenantId $State['tenantId'] -ScriptBlock {
                             Assert-AvmBicepCleanupGroupOwnership -State $State -ResourceId $resource['id']
                             Remove-AvmBicepResource -ResourceId $resource['id'] -Type $resource['type'] `
                                 -SubscriptionCleanupManagementGroupId $subscriptionCleanupManagementGroupId -Confirm:$false
                         } -Confirm:$false
                         $resource['removed'] = $true
+                        Write-AvmLog -Level Info -Message "Finished handling deletion of $resourceName ($($resource['type']))."
                     }
                     catch {
                         if ((Get-AvmBicepDeploymentErrorKind -ErrorRecord $_) -eq 'Cancellation' -or
@@ -122,6 +126,7 @@ function Remove-AvmBicepCleanupResourceBatch {
                         }
                         if ((Get-AvmBicepAzureErrorStatus -ErrorRecord $_) -eq 404) {
                             $resource['removed'] = $true
+                            Write-AvmLog -Level Info -Message "Skipped ${resourceName}: already absent."
                         }
                         else {
                             $issues[$resource['id']] = [pscustomobject]@{

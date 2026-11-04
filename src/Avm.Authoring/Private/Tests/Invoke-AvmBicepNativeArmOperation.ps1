@@ -26,7 +26,9 @@ function Invoke-AvmBicepNativeArmOperation {
         [string] $ManagementGroupId,
 
         [ValidateNotNull()]
-        [object] $DefaultProfile
+        [object] $DefaultProfile,
+
+        [System.Collections.IDictionary] $SubmissionState
     )
 
     Set-StrictMode -Version 3.0
@@ -72,8 +74,21 @@ function Invoke-AvmBicepNativeArmOperation {
         }
     }
     if (-not $PSCmdlet.ShouldProcess($DeploymentName, "$Operation native ARM deployment at $Scope scope")) { return }
+    Write-AvmLog -Level Info -Message (
+        "Running $command for deployment '$DeploymentName' at '$Scope' scope with template '$TemplatePath' and location '$MetadataLocation'. " +
+        'Template parameter values are not logged.')
     if ($Operation -eq 'Create') {
-        return & $command @arguments
+        $deploymentCommand = Get-Command -Name $command -ErrorAction Stop
+        if ($null -ne $SubmissionState) { $SubmissionState['Invoked'] = $true }
+        try {
+            return & $deploymentCommand @arguments
+        }
+        catch [System.Management.Automation.ParameterBindingException] {
+            if ($null -ne $SubmissionState -and $_.InvocationInfo.MyCommand -eq $deploymentCommand) {
+                $SubmissionState['Invoked'] = $false
+            }
+            throw
+        }
     }
     $response = @(& $command @arguments)
     $errors = @($response | Where-Object {

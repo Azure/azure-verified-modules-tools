@@ -83,7 +83,7 @@ Describe 'Prepared Bicep runtime selection' {
                 $workflow = ConvertFrom-Yaml (Get-Content -Raw (Join-Path $root '.github' 'workflows' "$name.yml"))
                 foreach ($job in $workflow.jobs.Values) {
                     if (-not $job.Contains('steps')) { continue }
-                    foreach ($step in $job.steps | Where-Object name -EQ 'Select prepared authoring runtime') {
+                    foreach ($step in $job.steps | Where-Object name -In @('Select prepared authoring runtime', 'Verify downloaded AVM tools')) {
                         $step.run
                     }
                 }

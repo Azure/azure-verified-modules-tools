@@ -26,10 +26,10 @@ function Get-AvmBicepAzureRequirement {
                 'Test-AzSubscriptionDeployment'        = @('Name', 'Location', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt')
                 'Test-AzManagementGroupDeployment'     = @('Name', 'Location', 'ManagementGroupId', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt')
                 'Test-AzTenantDeployment'              = @('Name', 'Location', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt')
-                'New-AzResourceGroupDeployment'        = @('Name', 'ResourceGroupName', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt', 'Mode', 'Force')
-                'New-AzSubscriptionDeployment'         = @('Name', 'Location', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt')
-                'New-AzManagementGroupDeployment'      = @('Name', 'Location', 'ManagementGroupId', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt')
-                'New-AzTenantDeployment'               = @('Name', 'Location', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt')
+                'New-AzResourceGroupDeployment'        = @('Name', 'ResourceGroupName', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt', 'Mode', 'Force', 'AsJob')
+                'New-AzSubscriptionDeployment'         = @('Name', 'Location', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt', 'AsJob')
+                'New-AzManagementGroupDeployment'      = @('Name', 'Location', 'ManagementGroupId', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt', 'AsJob')
+                'New-AzTenantDeployment'               = @('Name', 'Location', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt', 'AsJob')
                 'Remove-AzResourceGroup'               = @('Name', 'Force')
                 'Get-AzResourceLock'                   = @('Scope', 'LockName')
                 'Remove-AzResourceLock'                = @('LockId', 'Force')
@@ -40,6 +40,11 @@ function Get-AvmBicepAzureRequirement {
                 'Get-AzManagementGroupSubscription'    = @('GroupName', 'SubscriptionId')
                 'New-AzManagementGroupSubscription'    = @('GroupName', 'SubscriptionId')
                 'Remove-AzManagementGroup'             = @('GroupName')
+            } + @{
+                'Get-AzResourceGroupDeploymentWhatIfResult'   = @('Name', 'ResourceGroupName', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt', 'Mode', 'ResultFormat')
+                'Get-AzSubscriptionDeploymentWhatIfResult'    = @('Name', 'Location', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt', 'ResultFormat')
+                'Get-AzManagementGroupDeploymentWhatIfResult' = @('Name', 'Location', 'ManagementGroupId', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt', 'ResultFormat')
+                'Get-AzTenantDeploymentWhatIfResult'          = @('Name', 'Location', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt', 'ResultFormat')
             }
         }
         @{

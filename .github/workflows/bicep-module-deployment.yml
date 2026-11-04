@@ -28,7 +28,7 @@ permissions: {}
 
 jobs:
   job_module_deploy_validation:
-    name: 'Deploy [${{ fromJSON(inputs.testCase).name }}] on [${{ fromJSON(inputs.testCase).subscriptionName }}]'
+    name: 'Run E2E test [${{ fromJSON(inputs.testCase).name }}] on [${{ fromJSON(inputs.testCase).subscriptionName }}]'
     environment: avm-validation
     runs-on: ubuntu-latest
     permissions:
@@ -38,7 +38,7 @@ jobs:
       group: ${{ fromJSON(inputs.testCase).concurrencyGroup }}
       queue: max
     steps:
-      - name: Report skipped deployment
+      - name: Skip test (not selected to run)
         if: fromJSON(inputs.testCase).e2eIgnore
         shell: pwsh
         env:
@@ -52,7 +52,7 @@ jobs:
           TARGET_COMMIT: ${{ inputs.targetCommit || github.sha }}
         run: |
           if ($env:TOOLS_REF -cnotmatch '^[0-9a-f]{40}$' -or $env:TARGET_COMMIT -cnotmatch '^[0-9a-f]{40}$') { throw 'Workflow revisions must be full immutable commit SHAs.' }
-      - name: Check out caller
+      - name: Check out module repository
         if: ${{ !fromJSON(inputs.testCase).e2eIgnore }}
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -71,7 +71,7 @@ jobs:
             .github/actions
             scripts/bicep-workflows
             repository-management/shared
-      - name: Run native deployment lifecycle
+      - name: Deploy test and run post-deployment checks
         if: ${{ !fromJSON(inputs.testCase).e2eIgnore }}
         uses: ./.avm-tools/.github/actions/bicep-deployment
         with:

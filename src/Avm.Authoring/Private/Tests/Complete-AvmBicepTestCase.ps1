@@ -82,6 +82,7 @@ function Complete-AvmBicepTestCase {
         $interrupted = $false
         try {
             if ($succeeded) {
+                Write-AvmLog -Level Info -Message "Running post-deployment tests for '$($Item.Case.RelativeDirectory)' using the recorded deployment outputs."
                 $assertion = Invoke-AvmBicepAzureContext -SubscriptionId $SubscriptionId -TenantId $TenantId -ScriptBlock {
                     $response = Invoke-AvmBicepRead -Activity 'Read assertion deployment outputs' -Read {
                         Invoke-AzRestMethod -Method GET -Path ($deployment['id'] + '?api-version=2021-04-01') -ErrorAction Stop
@@ -138,6 +139,7 @@ function Complete-AvmBicepTestCase {
                 }
                 finally {
                     if (-not $interrupted) {
+                        Write-AvmLog -Level Info -Message 'Deleting test resources.'
                         try {
                             $cleanup = Invoke-AvmBicepCleanup -StatePath $StatePath `
                                 -SubscriptionId $SubscriptionId -TenantId $TenantId -Confirm:$false
