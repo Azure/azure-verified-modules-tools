@@ -11,7 +11,7 @@ function Get-AvmBicepResourceLock {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    if ($Type -ieq 'Microsoft.Management/managementGroups') {
+    if ($Type -iin @('Microsoft.Management/managementGroups', 'Microsoft.Authorization/roleAssignments')) {
         return @()
     }
 

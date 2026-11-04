@@ -1752,7 +1752,9 @@ post-deployment test results or explicitly report their absence, and distinguish
 requests from confirmed absence.
 For extension-resource cleanup, enumerate and remove descendant locks through
 their exact ARM lock paths and API version rather than resolving the parent
-resource provider as the lock provider.
+resource provider as the lock provider. Role assignments inherit locks from
+their scope; do not query locks beneath role assignments. Recorded lock
+resources themselves remain explicit removal targets at their parent scope.
 
 The default policy assigns narrowly targeted `InternalServerError` leaves for
 application gateways, private endpoints and PostgreSQL flexible servers to

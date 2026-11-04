@@ -309,20 +309,17 @@ Describe 'Bicep workflow cleanup group absence' {
 }
 
 Describe 'Bicep workflow cleanup locks and failures' {
-    It 'uses the lock provider path for resource-scoped role assignments before deleting the exact assignment' {
+    It 'deletes the exact resource-scoped role assignment without querying nested locks' {
         InModuleScope Avm.Authoring {
             $script:target = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Network/privateEndpoints/endpoint/providers/Microsoft.Authorization/roleAssignments/11111111-1111-4111-8111-111111111111'
             Mock Get-AzResourceLock { throw 'The Az lock command must not resolve the parent provider.' }
             Mock Invoke-AzRestMethod {
-                if ($Method -eq 'GET') { return @{ StatusCode = 200; Content = '{"value":[]}' } }
+                if ($Method -eq 'GET') { throw 'Role assignments cannot have nested locks.' }
                 return @{ StatusCode = 204 }
             }
             Remove-AvmBicepResource -ResourceId $script:target -Type 'Microsoft.Authorization/roleAssignments'
             Should -Invoke Get-AzResourceLock -Exactly 0
-            Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter {
-                $Method -eq 'GET' -and
-                $Path -ceq "$($script:target)/providers/Microsoft.Authorization/locks?api-version=2016-09-01"
-            }
+            Should -Invoke Invoke-AzRestMethod -Exactly 0 -ParameterFilter { $Method -eq 'GET' }
             Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter {
                 $Method -eq 'DELETE' -and $Path -ceq "$($script:target)?api-version=2022-04-01"
             }
@@ -331,7 +328,7 @@ Describe 'Bicep workflow cleanup locks and failures' {
 
     It 'removes only extension-resource descendant locks and confirms they are absent' {
         InModuleScope Avm.Authoring {
-            $script:target = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Network/privateEndpoints/endpoint/providers/Microsoft.Authorization/roleAssignments/11111111-1111-4111-8111-111111111111'
+            $script:target = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Network/privateEndpoints/endpoint/providers/Microsoft.Authorization/policyAssignments/policy'
             $script:lockId = "$script:target/providers/Microsoft.Authorization/locks/owned"
             $script:removed = $false
             Mock Write-AvmLog {}
@@ -346,7 +343,7 @@ Describe 'Bicep workflow cleanup locks and failures' {
                 }
                 @{ StatusCode = 200; Content = (@{ value = @($items) } | ConvertTo-Json -Depth 10 -Compress) }
             }
-            Remove-AvmBicepResourceLock -ResourceId $script:target -Type 'Microsoft.Authorization/roleAssignments'
+            Remove-AvmBicepResourceLock -ResourceId $script:target -Type 'Microsoft.Authorization/policyAssignments'
             Should -Invoke Remove-AzResourceLock -Exactly 0
             Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter {
                 $Method -eq 'DELETE' -and $Path -ceq "$($script:lockId)?api-version=2016-09-01"
@@ -361,7 +358,7 @@ Describe 'Bicep workflow cleanup locks and failures' {
     ) {
         InModuleScope Avm.Authoring -Parameters @{ Scenario = $Scenario } {
             param($Scenario)
-            $script:target = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Network/privateEndpoints/endpoint/providers/Microsoft.Authorization/roleAssignments/11111111-1111-4111-8111-111111111111'
+            $script:target = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Network/privateEndpoints/endpoint/providers/Microsoft.Authorization/policyAssignments/policy'
             $script:scenario = $Scenario
             Mock Invoke-AzRestMethod {
                 if ($Path -like '*page=2') {
@@ -375,8 +372,31 @@ Describe 'Bicep workflow cleanup locks and failures' {
                 }
                 @{ StatusCode = 200; Content = ($body | ConvertTo-Json -Depth 10 -Compress) }
             }
-            { Get-AvmBicepResourceLock -ResourceId $script:target -Type 'Microsoft.Authorization/roleAssignments' } | Should -Throw
+            { Get-AvmBicepResourceLock -ResourceId $script:target -Type 'Microsoft.Authorization/policyAssignments' } | Should -Throw
             Should -Invoke Invoke-AzRestMethod -Exactly 0 -ParameterFilter { $Method -eq 'DELETE' }
+        }
+    }
+
+    It 'removes the exact recorded lock by querying its parent scope' {
+        InModuleScope Avm.Authoring {
+            $script:parent = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Network/privateEndpoints/endpoint'
+            $script:target = "$script:parent/providers/Microsoft.Authorization/locks/owned"
+            $script:removed = $false
+            Mock Write-AvmLog {}
+            Mock Invoke-AzRestMethod { throw 'An ordinary resource lock must use its parent scope.' }
+            Mock Get-AzResourceLock {
+                if (-not $script:removed) {
+                    [pscustomobject]@{ LockId = $script:target }
+                    [pscustomobject]@{ LockId = "$script:parent/providers/Microsoft.Authorization/locks/foreign" }
+                }
+            }
+            Mock Remove-AzResourceLock { $script:removed = $true }
+            Remove-AvmBicepResource -ResourceId $script:target -Type 'Microsoft.Authorization/locks'
+            Should -Invoke Invoke-AzRestMethod -Exactly 0
+            Should -Invoke Get-AzResourceLock -ParameterFilter {
+                $Scope -ceq $script:parent -and $LockName -ceq 'owned'
+            }
+            Should -Invoke Remove-AzResourceLock -Exactly 1 -ParameterFilter { $LockId -ceq $script:target }
         }
     }
 

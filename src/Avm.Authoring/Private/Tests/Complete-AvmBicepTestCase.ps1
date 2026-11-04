@@ -115,7 +115,6 @@ function Complete-AvmBicepTestCase {
         }
         finally {
             if (-not $completionOptions.KeepResources -and -not $interrupted) {
-                Write-AvmLog -Level Info -Message "Running post.ps1, then deleting test resources for '$($Item.Case.RelativeDirectory)'."
                 try {
                     if ($null -ne $deployment) {
                         $post = Invoke-AvmBicepAzureContext -SubscriptionId $SubscriptionId -TenantId $TenantId -ScriptBlock {
@@ -140,6 +139,7 @@ function Complete-AvmBicepTestCase {
                 }
                 finally {
                     if (-not $interrupted) {
+                        Write-AvmLog -Level Info -Message 'Deleting test resources.'
                         try {
                             $cleanup = Invoke-AvmBicepCleanup -StatePath $StatePath `
                                 -SubscriptionId $SubscriptionId -TenantId $TenantId -Confirm:$false

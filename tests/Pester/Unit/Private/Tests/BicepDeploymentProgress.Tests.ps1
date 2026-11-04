@@ -94,6 +94,24 @@ Describe 'Bicep deployment progress logging' {
         }
     }
 
+    It 'renders deployment identity and elapsed time without key-value dumps' {
+        InModuleScope Avm.Authoring {
+            Mock Invoke-AzRestMethod {
+                @{ StatusCode = 200; Content = (@{
+                            id = $script:id; name = 'root'; properties = @{
+                                provisioningState = 'Succeeded'; duration = 'PT1M26S'
+                                correlationId = '12345678-0000-0000-0000-000000000000'; outputs = @{}
+                            }
+                        } | ConvertTo-Json -Depth 10 -Compress) }
+            }
+            Write-AvmBicepDeploymentSummary -DeploymentId $script:id -Scope sub -Location westus -Observed @{}
+            ($script:messages -join ' ') | Should -Match 'Deployment root succeeded after 1m26s\.'
+            ($script:messages -join ' ') | Should -Match ([regex]::Escape($script:id))
+            ($script:messages -join ' ') | Should -Match 'Scope: sub\. Location: westus\. Correlation ID: 12345678-0000-0000-0000-000000000000\.'
+            ($script:messages -join ' ') | Should -Not -Match 'name=|id=|state=|duration=|PT1M26S'
+        }
+    }
+
     It 'reports each state change once and follows only same-subscription nested deployments' {
         InModuleScope Avm.Authoring {
             $child = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Resources/deployments/nested'
@@ -266,8 +284,7 @@ Describe 'Bicep deployment progress logging' {
             }
             Write-AvmBicepDeploymentSummary -DeploymentId $script:id -Scope sub -Location westus -Observed @{}
             $text = $script:messages -join ' '
-            $text | Should -Match 'name=root'
-            $text | Should -Match 'state=Succeeded'
+            $text | Should -Match 'Deployment root succeeded after 2m0s\.'
             $text | Should -Match 'endpoint \(String\): "https://example.test"'
             $text | Should -Match 'count \(Int\): 0'
             $script:messages.Clear()

@@ -23,12 +23,30 @@ function Write-AvmBicepDeploymentSummary {
             throw [AvmProcessException]::new('Deployment summary did not identify the submitted deployment.')
         }
         $name = Get-AvmPropertyValue -InputObject $document -Name 'name' -NoEnumerate
-        $state = Get-AvmPropertyValue -InputObject $properties -Name 'provisioningState' -NoEnumerate
-        $duration = Get-AvmPropertyValue -InputObject $properties -Name 'duration' -NoEnumerate
+        $state = [string](Get-AvmPropertyValue -InputObject $properties -Name 'provisioningState' -NoEnumerate)
+        $duration = [string](Get-AvmPropertyValue -InputObject $properties -Name 'duration' -NoEnumerate)
         $correlation = Get-AvmPropertyValue -InputObject $properties -Name 'correlationId' -NoEnumerate
+        $elapsed = ''
+        if ($duration) {
+            try {
+                $seconds = [long][math]::Round([System.Xml.XmlConvert]::ToTimeSpan($duration).TotalSeconds)
+                if ($seconds -ge 0) {
+                    $hours = [long][math]::Floor($seconds / 3600)
+                    $minutes = [long][math]::Floor(($seconds % 3600) / 60)
+                    $remainder = $seconds % 60
+                    $elapsed = ' after ' + $(if ($hours -gt 0) { "${hours}h${minutes}m${remainder}s" }
+                        elseif ($minutes -gt 0) { "${minutes}m${remainder}s" }
+                        else { "${remainder}s" })
+                }
+            }
+            catch [System.FormatException] {
+                Write-AvmLog -Level Warning -Message "Could not parse deployment duration for $name."
+            }
+        }
+        $stateText = if ($state) { $state.ToLowerInvariant() } else { 'finished with unknown state' }
+        Write-AvmLog -Level Info -Message "Deployment $name $stateText$elapsed."
         Write-AvmLog -Level Info -Message (
-            "Finished deployment: name=$name id=$DeploymentId scope=$Scope location=$Location " +
-            "state=$state duration=$duration correlationId=$correlation")
+            "Deployment ID: $DeploymentId. Scope: $Scope. Location: $Location. Correlation ID: $correlation.")
         Write-AvmLog -Level Info -Message 'Listing deployment resources.'
         $resources = @($Observed.Keys | Where-Object { $_ -is [string] -and $_.StartsWith('resource:') } |
                 ForEach-Object { $Observed[$_] } | Sort-Object Type, Name)
