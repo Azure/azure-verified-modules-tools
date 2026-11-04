@@ -85,7 +85,7 @@ jobs:
           privateKey: ${{ secrets.AVM_APP_PRIVATE_KEY }}
 
   sync-repository:
-    name: Sync ${{ matrix.repoName }}
+    name: 'Manage repository and update files: ${{ matrix.repoName }}'
     needs: generate-matrix
     if: needs.generate-matrix.result == 'success'
     permissions:
@@ -177,7 +177,7 @@ jobs:
           subscription-id: ${{ steps.state-backend.outputs.subscription-id }}
           client-id: ${{ steps.state-backend.outputs.client-id }}
 
-      - name: Prepare repository candidate
+      - name: Run Terraform, reconcile repository settings and prepare file updates
         run: |
 
           $triggerType = "${{ github.event_name }}"
