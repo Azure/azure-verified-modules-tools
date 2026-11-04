@@ -144,7 +144,7 @@ jobs:
           }
 
   check:
-    name: '[AVM] ${{ matrix.modulePath }}'
+    name: '${{ matrix.modulePath }}'
     needs: [bootstrap, initialize]
     if: ${{ !inputs.initializeOnly && needs.initialize.outputs.hasModules == 'true' }}
     permissions:

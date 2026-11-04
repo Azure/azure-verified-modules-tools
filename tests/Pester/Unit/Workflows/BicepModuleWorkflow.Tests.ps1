@@ -358,7 +358,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $runtime = $script:workflows['bicep-module-runtime']
 
         @($prCheck.jobs.Keys | Sort-Object) | Should -Be @('bootstrap', 'check', 'initialize')
-        $prCheck.jobs.check.name | Should -BeExactly '[AVM] ${{ matrix.modulePath }}'
+        $prCheck.jobs.check.name | Should -BeExactly '${{ matrix.modulePath }}'
         $prCheck.jobs.check.strategy.matrix | Should -BeExactly '${{ fromJSON(needs.initialize.outputs.moduleMatrix) }}'
         $prCheck.jobs.check.uses | Should -BeExactly './.github/workflows/bicep-module-runtime.yml'
         $prCheck.jobs.check.with.modulePath | Should -BeExactly '${{ matrix.modulePath }}'
