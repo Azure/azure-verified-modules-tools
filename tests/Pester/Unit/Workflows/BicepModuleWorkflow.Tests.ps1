@@ -420,7 +420,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $leaf.concurrency.group | Should -BeExactly '${{ fromJSON(inputs.testCase).ConcurrencyGroup }}'
         $leaf.concurrency.queue | Should -BeExactly 'max'
         $leaf.environment | Should -BeExactly 'avm-validation'
-        foreach ($phase in @('Deploy native test case', 'Assert and complete native test case', 'Recover unfinished native cleanup')) {
+        foreach ($phase in @('Validate and deploy the E2E test case', 'Run assertions, post hook and cleanup', 'Recover unfinished cleanup from saved state')) {
             @($leaf.steps | Where-Object { $_['name'] -ceq $phase }).Count | Should -Be 1
         }
     }
@@ -439,13 +439,16 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $steps = $script:workflows['bicep-module-runtime-deployment'].jobs.deploy.steps
         $deploy = $steps | Where-Object { $_['id'] -eq 'deploy' }
         $renew = $steps | Where-Object { $_['id'] -eq 'renew_oidc' }
-        $complete = $steps | Where-Object { $_['name'] -eq 'Assert and complete native test case' }
-        $recover = $steps | Where-Object { $_['name'] -eq 'Recover unfinished native cleanup' }
+        $complete = $steps | Where-Object { $_['name'] -eq 'Run assertions, post hook and cleanup' }
+        $recover = $steps | Where-Object { $_['name'] -eq 'Recover unfinished cleanup from saved state' }
 
         $renew | Should -Not -BeNullOrEmpty
         $deploy.env.METADATA_LOCATION | Should -BeExactly 'WestEurope'
         $deploy.env.RESOURCE_GROUP_PREFIX | Should -BeExactly 'avm'
         $deploy.env.RESOURCE_LOCATION | Should -BeExactly '${{ fromJSON(inputs.workflowInput).customLocation }}'
+        $deploy.env.NAME_PREFIX | Should -BeExactly '${{ steps.context.outputs.NamePrefix }}'
+        $deploy.run | Should -Match '\[string\]::IsNullOrWhiteSpace\(\$env:NAME_PREFIX\)'
+        $deploy.run | Should -Match '\$env:localToken_namePrefix = \$env:NAME_PREFIX'
         $deploy.run | Should -Match "'test', 'e2e'"
         $deploy.run | Should -Match ([regex]::Escape("'--location', `$env:METADATA_LOCATION"))
         $deploy.run | Should -Match ([regex]::Escape("'--resource-group-prefix', `$env:RESOURCE_GROUP_PREFIX"))

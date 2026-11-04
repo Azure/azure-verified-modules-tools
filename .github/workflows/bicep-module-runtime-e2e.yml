@@ -78,7 +78,7 @@ jobs:
       - name: Install Avm.Authoring
         if: env.AVM_AUTHORING_MODULE == 'Avm.Authoring'
         uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
-      - name: Select deployments
+      - name: Select test cases and subscriptions
         id: select
         shell: pwsh
         env:
@@ -96,11 +96,13 @@ jobs:
             throw 'The installed Avm.Authoring package does not provide BicepWorkflowE2eRuntime = 1.'
           }
           $testFiles = @(ConvertFrom-Json -InputObject $env:TEST_FILES -AsHashtable)
+          Write-Host "Selecting E2E test cases and subscriptions for '$env:MODULE_PATH' with Get-AvmBicepE2eDeploymentMatrix."
           $matrix = @(Get-AvmBicepE2eDeploymentMatrix -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH `
               -TestFiles $testFiles -PoolJson $env:TEST_SUBSCRIPTION_IDS -FallbackSubscriptionId $env:VALIDATE_SUBSCRIPTION_ID `
               -ModuleClientIds $env:VALIDATE_MODULE_CLIENT_IDS -TenantId $env:VALIDATE_TENANT_ID `
               -RandomSeed ([int](([long]$env:GITHUB_RUN_ID + [long]$env:GITHUB_RUN_ATTEMPT) % [int]::MaxValue)) `
               -DisplaySubscriptionNames:($env:TEST_SUBSCRIPTION_IDS -ne '') -SkipModuleVersionCheck)
+          Write-Host "Selected $($matrix.Count) E2E test case(s)."
           $value = ConvertTo-Json -InputObject $matrix -Depth 20 -Compress
           "deploymentMatrix=$value" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 

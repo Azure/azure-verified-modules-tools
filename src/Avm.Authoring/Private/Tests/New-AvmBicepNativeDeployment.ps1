@@ -9,6 +9,7 @@ function New-AvmBicepNativeDeployment {
         [ValidateSet('Initial', 'InPlace', 'Fresh')] [string] $Mode = 'Initial',
         [string] $NamingId,
         [string] $ResourceLocation,
+        [AllowEmptyCollection()] [string[]] $SensitiveValues = @(),
         [switch] $ClassifyRetry,
         [ValidateScript({ $_.Kind -eq [System.DateTimeKind]::Utc })]
         [datetime] $RecoveryDeadlineUtc
@@ -131,6 +132,22 @@ function New-AvmBicepNativeDeployment {
                 }
                 Write-AvmLog -Level Warning -Message "Status recovery for '$name' did not confirm success; outcome '$($entry['status'])'."
             }
+        }
+    }
+    if ($entry['status'] -ne 'Succeeded') {
+        $readDiagnostics = $entry['status'] -eq 'Failed'
+        if ($kind -eq 'Other' -and $entry['status'] -eq 'Unknown' -and
+            -not $submissionReturned -and $null -eq $recoveryFailure) {
+            $readDiagnostics = $true
+        }
+        $diagnosticOptions = @{
+            DeploymentId = $id; Failure = $failure; SensitiveValues = $SensitiveValues
+        }
+        if ($readDiagnostics) { $diagnosticOptions.ReadDeployment = $true }
+        if ($DeploymentInput.Scope -in @('mg', 'sub')) { $diagnosticOptions.DefaultProfile = $submissionProfile }
+        $diagnosticOutcome = Write-AvmBicepDeploymentDiagnostic @diagnosticOptions
+        if ($kind -eq 'Other' -and $entry['status'] -eq 'Unknown' -and $diagnosticOutcome -ceq 'Failed') {
+            $entry['status'] = 'Failed'
         }
     }
     $retryMode = ''

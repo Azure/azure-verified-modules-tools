@@ -1548,7 +1548,12 @@ over the underscore-preserving `CI__` alias within one source. Keep typed
 numbers, booleans, arrays, objects, secure values and vault references intact.
 Tokens are replaced in temporary templates and recursively in in-memory
 parameters, never in authored source. Scope tokens belong to explicit
-target inputs. `keys` and `count` remain valid authored names.
+target inputs. `keys` and `count` remain valid authored names. The default
+native `namePrefix` is five lowercase alphanumeric characters derived from the
+run ID; explicit prefixes and the ten-hex `avmE2eSuffix` token are unchanged.
+The short prefix is not an ownership proof and can collide; deployment-tracked
+cleanup, group ownership and the scoped cleanup guard retain their independent
+checks. Reviewed isolated workflows retain their explicit longer suffix.
 
 Subscription pools use a seeded, order-independent permutation and
 round-robin case assignment within the selected tag, rather than the registry's
@@ -1708,6 +1713,14 @@ valid outputs. Failed, missing, malformed or unreadable recovery never permits
 replay or regional classification. Cancellation remains terminal and takes
 precedence over HTTP 403, which takes precedence over timeout or transport.
 Keep original and recovery errors in memory without logging raw Azure payloads.
+For failed submissions, report bounded Azure error codes, messages and targets
+from the deployment and failed operation status messages, including nested
+details, plus a valid deployment correlation ID when available. Redact supplied
+parameter and CI-secret values and recognizable credentials, connection-string
+fields, bearer tokens and SAS signatures before logging. Never render raw
+response objects or parameter values. Diagnostic read failure is explicit and
+does not authorize retry or change cleanup safety. This change to the prior
+diagnostic confidentiality boundary requires SFI sign-off before merge.
 An unclassified submission exception may be recovered only by an exact Failed
 root record and complete eligible operation evidence; a malformed returned
 identity or unreadable classification must never enable replay.

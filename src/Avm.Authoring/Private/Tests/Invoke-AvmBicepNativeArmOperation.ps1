@@ -72,6 +72,9 @@ function Invoke-AvmBicepNativeArmOperation {
         }
     }
     if (-not $PSCmdlet.ShouldProcess($DeploymentName, "$Operation native ARM deployment at $Scope scope")) { return }
+    Write-AvmLog -Level Info -Message (
+        "Running $command for deployment '$DeploymentName' at '$Scope' scope with template '$TemplatePath'. " +
+        'Template parameter values are not logged.')
     if ($Operation -eq 'Create') {
         return & $command @arguments
     }

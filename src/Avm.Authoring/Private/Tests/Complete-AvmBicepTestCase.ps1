@@ -82,6 +82,7 @@ function Complete-AvmBicepTestCase {
         $interrupted = $false
         try {
             if ($succeeded) {
+                Write-AvmLog -Level Info -Message "Reading deployment outputs and running assertions for '$($Item.Case.RelativeDirectory)'."
                 $assertion = Invoke-AvmBicepAzureContext -SubscriptionId $SubscriptionId -TenantId $TenantId -ScriptBlock {
                     $response = Invoke-AvmBicepRead -Activity 'Read assertion deployment outputs' -Read {
                         Invoke-AzRestMethod -Method GET -Path ($deployment['id'] + '?api-version=2021-04-01') -ErrorAction Stop
@@ -114,6 +115,7 @@ function Complete-AvmBicepTestCase {
         }
         finally {
             if (-not $completionOptions.KeepResources -and -not $interrupted) {
+                Write-AvmLog -Level Info -Message "Running the post hook and cleaning recorded resources for '$($Item.Case.RelativeDirectory)'."
                 try {
                     if ($null -ne $deployment) {
                         $post = Invoke-AvmBicepAzureContext -SubscriptionId $SubscriptionId -TenantId $TenantId -ScriptBlock {

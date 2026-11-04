@@ -89,7 +89,7 @@ jobs:
         if: >-
           !fromJSON(inputs.testCase).E2eIgnore && env.AVM_AUTHORING_MODULE == 'Avm.Authoring'
         uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
-      - name: Initialize deployment context
+      - name: Verify test selection and prepare Azure dependencies
         id: context
         if: ${{ !fromJSON(inputs.testCase).E2eIgnore }}
         shell: pwsh
@@ -105,6 +105,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
+          Write-Host 'Checking the authoring runtime and its Azure PowerShell dependencies.'
           if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
             for ($attempt = 1; $attempt -le 3; $attempt++) {
               try {
@@ -164,6 +165,7 @@ jobs:
             if (-not $installed) { throw $lastFailure }
           }
           $testCase = ConvertFrom-Json -InputObject $env:TEST_CASE -AsHashtable
+          Write-Host "Revalidating the test case and selected identity for '$env:MODULE_PATH' with Get-AvmBicepE2eTestContext."
           $context = Get-AvmBicepE2eTestContext -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH `
               -TestCase $testCase -PoolJson $env:TEST_SUBSCRIPTION_IDS -FallbackSubscriptionId $env:VALIDATE_SUBSCRIPTION_ID `
               -ModuleClientIds $env:VALIDATE_MODULE_CLIENT_IDS -TenantId $env:VALIDATE_TENANT_ID `
@@ -180,7 +182,7 @@ jobs:
           tenant-id: ${{ steps.context.outputs.TenantId }}
           subscription-id: ${{ steps.context.outputs.SubscriptionId }}
           enable-AzPSSession: true
-      - name: Deploy native test case
+      - name: Validate and deploy the E2E test case
         id: deploy
         if: ${{ !fromJSON(inputs.testCase).E2eIgnore }}
         shell: pwsh
@@ -190,6 +192,7 @@ jobs:
           SUBSCRIPTION_ID: ${{ steps.context.outputs.SubscriptionId }}
           TENANT_ID: ${{ steps.context.outputs.TenantId }}
           REQUIRE_ISOLATION: ${{ steps.context.outputs.RequireResourceIsolation }}
+          NAME_PREFIX: ${{ steps.context.outputs.NamePrefix }}
           METADATA_LOCATION: WestEurope
           RESOURCE_GROUP_PREFIX: avm
           RESOURCE_LOCATION: ${{ fromJSON(inputs.workflowInput).customLocation }}
@@ -202,6 +205,9 @@ jobs:
           Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
           $null = New-Item -ItemType Directory -Path (Split-Path $env:STATE_PATH) -Force
           Set-Location (Join-Path $env:GITHUB_WORKSPACE $env:MODULE_PATH)
+          if (-not [string]::IsNullOrWhiteSpace($env:NAME_PREFIX)) {
+            $env:localToken_namePrefix = $env:NAME_PREFIX
+          }
           $arguments = @(
             'test', 'e2e', '--ecosystem', 'bicep', '--example', $env:EXAMPLE, '--recurse',
             '--subscription-id', $env:SUBSCRIPTION_ID, '--tenant-id', $env:TENANT_ID, '--phase', 'Deploy',
@@ -215,6 +221,7 @@ jobs:
           if (-not [string]::IsNullOrWhiteSpace($env:SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_ID)) {
             $arguments += '--subscription-cleanup-management-group-id', $env:SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_ID
           }
+          Write-Host "Running avm test e2e --ecosystem bicep --example '$env:EXAMPLE' --phase Deploy for '$env:MODULE_PATH'; metadata location '$env:METADATA_LOCATION', isolation '$env:REQUIRE_ISOLATION'."
           avm -SkipModuleVersionCheck @arguments
       - name: Renew OIDC sign-in for completion
         id: renew_oidc
@@ -225,7 +232,7 @@ jobs:
           tenant-id: ${{ steps.context.outputs.TenantId }}
           subscription-id: ${{ steps.context.outputs.SubscriptionId }}
           enable-AzPSSession: true
-      - name: Assert and complete native test case
+      - name: Run assertions, post hook and cleanup
         if: ${{ !cancelled() && (success() || failure()) && (steps.deploy.outcome == 'success' || steps.deploy.outcome == 'failure') && steps.renew_oidc.outcome == 'success' }}
         shell: pwsh
         env:
@@ -237,9 +244,10 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
           Set-Location (Join-Path $env:GITHUB_WORKSPACE $env:MODULE_PATH)
+          Write-Host "Running avm test e2e --ecosystem bicep --phase Complete for '$env:MODULE_PATH' using the saved cleanup state."
           avm -SkipModuleVersionCheck test e2e --ecosystem bicep --subscription-id $env:SUBSCRIPTION_ID `
             --tenant-id $env:TENANT_ID --phase Complete --cleanup-state-path $env:STATE_PATH --confirm=false
-      - name: Recover unfinished native cleanup
+      - name: Recover unfinished cleanup from saved state
         if: ${{ !cancelled() && failure() && steps.deploy.outcome != 'skipped' && fromJSON(inputs.workflowInput).removeDeployment == 'true' && steps.renew_oidc.outcome == 'success' }}
         shell: pwsh
         env:
@@ -249,6 +257,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
+          Write-Host 'Running avm test cleanup using the saved cleanup state and selected subscription.'
           avm -SkipModuleVersionCheck test cleanup --state-path $env:STATE_PATH --subscription-id $env:SUBSCRIPTION_ID `
             --tenant-id $env:TENANT_ID --confirm=false
       - name: Retain recovery state

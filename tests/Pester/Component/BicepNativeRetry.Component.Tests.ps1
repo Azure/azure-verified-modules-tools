@@ -68,7 +68,12 @@ Describe 'Component: Bicep native management-group authorization recovery' -Tag 
         ($result.Issues.Message -join ' ') | Should -Match 'HTTP 403'
         ($result.Issues.Message -join ' ') | Should -Not -Match 'private-fixture-detail'
         @($script:fixture.NativeInputs | Where-Object Operation -eq 'Create').Count | Should -Be 1
-        $script:fixture.Calls | Should -Not -Contain 'discover'
+        if ($Recovery -eq 'Failed') {
+            $script:fixture.Calls | Should -Contain 'discover'
+        }
+        else {
+            $script:fixture.Calls | Should -Not -Contain 'discover'
+        }
         $script:fixture.Calls | Should -Not -Contain 'pester'
         @($script:fixture.Calls | Where-Object { $_ -match '^(delete-record|remove|purge):' }).Count | Should -Be 0
         $stored = Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json
@@ -84,6 +89,25 @@ Describe 'Component: Bicep native management-group authorization recovery' -Tag 
         @($script:fixture.NativeInputs | Where-Object Operation -eq 'Create').Count | Should -Be 0
         $script:fixture.RestInputs.Count | Should -Be 0
         (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).deployments.Count | Should -Be 0
+    }
+
+    It 'logs the validation cause without exposing resolved parameter values' {
+        $script:fixture.Parameters['fixtureInput'] = @{ type = 'string' }
+        $script:options.Parameters = @{ fixtureInput = 'private-fixture-value' }
+        $script:fixture.ValidationError = [InvalidOperationException]::new(
+            'Validation failed for private-fixture-value: the target name is too long.')
+        InModuleScope Avm.Authoring {
+            $script:diagnosticMessages = [Collections.Generic.List[string]]::new()
+            Mock Write-AvmLog { $script:diagnosticMessages.Add($Message) }
+        }
+        $result = Invoke-AvmTestE2e @script:options -Phase Deploy
+        $result.Status | Should -Be 'fail'
+        InModuleScope Avm.Authoring {
+            $text = $script:diagnosticMessages -join ' '
+            $text | Should -Match 'the target name is too long'
+            $text | Should -Not -Match 'private-fixture-value'
+        }
+        @($script:fixture.NativeInputs | Where-Object Operation -eq 'Create').Count | Should -Be 0
     }
 }
 AfterAll { Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue }

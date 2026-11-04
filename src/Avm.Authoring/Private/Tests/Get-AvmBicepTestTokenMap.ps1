@@ -102,7 +102,15 @@ function Get-AvmBicepTestTokenMap {
         $values.Add($name, $value)
     }
     if (-not [string]::IsNullOrWhiteSpace($RunId) -and -not $values.ContainsKey('namePrefix')) {
-        $values.Add('namePrefix', 'avm' + $RunId.Substring(0, 10))
+        $digits = '0123456789abcdefghijklmnopqrstuvwxyz'
+        $number = [convert]::ToUInt32($RunId.Substring(0, 8), 16) % 43670016
+        $prefix = [string]('abcdefghijklmnopqrstuvwxyz'[[int][math]::Floor($number / 1679616)])
+        $number = $number % 1679616
+        foreach ($divisor in @(46656, 1296, 36, 1)) {
+            $prefix += $digits[[int][math]::Floor($number / $divisor)]
+            $number = $number % $divisor
+        }
+        $values.Add('namePrefix', $prefix)
     }
     return $values
 }

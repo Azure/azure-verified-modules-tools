@@ -196,7 +196,7 @@ Describe 'Bicep native original-root read recovery' {
     It 'retains original and recovery errors without replay after <Failure>' -ForEach @(
         @{ Failure = 'wrong root'; Reads = 1 }, @{ Failure = 'malformed output'; Reads = 1 }
         @{ Failure = 'mixed error'; Reads = 1 }, @{ Failure = 'missing'; Reads = 1 }, @{ Failure = 'Unknown'; Reads = 1 }
-        @{ Failure = 'timeout'; Reads = 3 }, @{ Failure = 'classification'; Reads = 1 }
+        @{ Failure = 'timeout'; Reads = 3 }, @{ Failure = 'classification'; Reads = 3 }
     ) {
         InModuleScope Avm.Authoring -Parameters @{ Failure = $Failure; Reads = $Reads } {
             param($Failure, $Reads)
