@@ -99,25 +99,25 @@ function Remove-AvmBicepCleanupResourceBatch {
             }
             else { $State['subscriptionId'] }
             if (-not $resource['removed']) {
+                $resourceName = $resource['id'].TrimEnd('/').Split('/')[-1]
                 $removedParent = @($byId.Values | Where-Object {
                         $_['removed'] -and $resource['id'].StartsWith(
                             $_['id'] + '/', [System.StringComparison]::OrdinalIgnoreCase)
                     }).Count -gt 0
                 if ($removedParent) {
                     $resource['removed'] = $true
-                    Write-AvmLog -Level Info -Message "Resource removal covered by its removed parent: $($resource['id'])."
+                    Write-AvmLog -Level Info -Message "Skipped ${resourceName}: deletion is covered by its parent resource."
                 }
                 else {
                     try {
-                        Write-AvmLog -Level Info -Message (
-                            "Running Remove-AvmBicepResource for '$($resource['id'])' with type '$($resource['type'])'.")
+                        Write-AvmLog -Level Info -Message "Deleting $resourceName ($($resource['type']))..."
                         Invoke-AvmBicepAzureContext -SubscriptionId $subscription -TenantId $State['tenantId'] -ScriptBlock {
                             Assert-AvmBicepCleanupGroupOwnership -State $State -ResourceId $resource['id']
                             Remove-AvmBicepResource -ResourceId $resource['id'] -Type $resource['type'] `
                                 -SubscriptionCleanupManagementGroupId $subscriptionCleanupManagementGroupId -Confirm:$false
                         } -Confirm:$false
                         $resource['removed'] = $true
-                        Write-AvmLog -Level Info -Message "Resource removal request succeeded: $($resource['id'])."
+                        Write-AvmLog -Level Info -Message "Finished handling deletion of $resourceName ($($resource['type']))."
                     }
                     catch {
                         if ((Get-AvmBicepDeploymentErrorKind -ErrorRecord $_) -eq 'Cancellation' -or
@@ -126,7 +126,7 @@ function Remove-AvmBicepCleanupResourceBatch {
                         }
                         if ((Get-AvmBicepAzureErrorStatus -ErrorRecord $_) -eq 404) {
                             $resource['removed'] = $true
-                            Write-AvmLog -Level Info -Message "Resource already absent: $($resource['id'])."
+                            Write-AvmLog -Level Info -Message "Skipped ${resourceName}: already absent."
                         }
                         else {
                             $issues[$resource['id']] = [pscustomobject]@{
@@ -140,8 +140,6 @@ function Remove-AvmBicepCleanupResourceBatch {
                 Save-AvmBicepCleanupState -State $State -Path $StatePath -Confirm:$false
             }
             try {
-                Write-AvmLog -Level Info -Message (
-                    "Running Remove-AvmBicepResourceRemainder for '$($resource['id'])' with type '$($resource['type'])'.")
                 Invoke-AvmBicepAzureContext -SubscriptionId $subscription -TenantId $State['tenantId'] -ScriptBlock {
                     Assert-AvmBicepCleanupGroupOwnership -State $State -ResourceId $resource['id']
                     Remove-AvmBicepResourceRemainder -ResourceId $resource['id'] -Type $resource['type'] `
@@ -152,7 +150,6 @@ function Remove-AvmBicepCleanupResourceBatch {
                 if ($resource['removed']) {
                     $resource['postProcessed'] = $true
                     $null = $issues.Remove($resource['id'])
-                    Write-AvmLog -Level Info -Message "Post-removal processing succeeded: $($resource['id'])."
                 }
             }
             catch {

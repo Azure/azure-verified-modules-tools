@@ -41,14 +41,18 @@ function Write-AvmBicepWhatIf {
         $result = & $command @arguments
         $changes = @(Get-AvmPropertyValue -InputObject $result -Name 'Changes' | Where-Object { $null -ne $_ })
         Write-AvmLog -Level Info -Message "Found $($changes.Count) resource changes in What-If."
+        $counts = @{ Create = 0; Modify = 0; Deploy = 0; Delete = 0 }
         foreach ($change in $changes) {
             $id = [string](Get-AvmPropertyValue -InputObject $change -Name 'FullyQualifiedResourceId' -NoEnumerate)
             $kind = [string](Get-AvmPropertyValue -InputObject $change -Name 'ChangeType' -NoEnumerate)
             if ([string]::IsNullOrWhiteSpace($id) -or [string]::IsNullOrWhiteSpace($kind)) {
                 throw [AvmProcessException]::new('What-If returned a change without a resource ID or change type.')
             }
+            if ($counts.ContainsKey($kind)) { $counts[$kind]++ }
             Write-AvmLog -Level Info -Message "  $kind $id"
         }
+        Write-AvmLog -Level Info -Message (
+            "Plan: $($counts.Create) to create, $($counts.Modify + $counts.Deploy) to change, $($counts.Delete) to delete.")
     }
     catch {
         if ((Get-AvmBicepDeploymentErrorKind -ErrorRecord $_) -eq 'Cancellation') { throw }

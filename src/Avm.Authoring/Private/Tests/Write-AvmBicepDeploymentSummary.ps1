@@ -30,7 +30,9 @@ function Write-AvmBicepDeploymentSummary {
             "Finished deployment: name=$name id=$DeploymentId scope=$Scope location=$Location " +
             "state=$state duration=$duration correlationId=$correlation")
         Write-AvmLog -Level Info -Message 'Listing deployment resources.'
-        foreach ($resource in @($Observed.Values | Where-Object { $_ -isnot [string] } | Sort-Object Type, Name)) {
+        $resources = @($Observed.Keys | Where-Object { $_ -is [string] -and $_.StartsWith('resource:') } |
+                ForEach-Object { $Observed[$_] } | Sort-Object Type, Name)
+        foreach ($resource in $resources) {
             Write-AvmLog -Level Info -Message "  $($resource.Type) $($resource.Name) $($resource.State) $($resource.Duration) $($resource.Id)"
         }
         $outputs = Get-AvmPropertyValue -InputObject $properties -Name 'outputs' -NoEnumerate
@@ -38,7 +40,12 @@ function Write-AvmBicepDeploymentSummary {
             throw [AvmProcessException]::new('Deployment summary outputs were malformed.')
         }
         if ($null -eq $outputs) { $outputs = @{} }
-        Write-AvmLog -Level Info -Message 'Listing deployment outputs.'
+        if ($outputs.Count -eq 0) {
+            Write-AvmLog -Level Info -Message 'No outputs.'
+        }
+        else {
+            Write-AvmLog -Level Info -Message 'Listing deployment outputs.'
+        }
         foreach ($outputName in @($outputs.Keys | Sort-Object)) {
             $output = $outputs[$outputName]
             $type = [string](Get-AvmPropertyValue -InputObject $output -Name 'type' -NoEnumerate)

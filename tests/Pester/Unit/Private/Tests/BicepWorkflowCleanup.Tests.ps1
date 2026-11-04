@@ -105,6 +105,38 @@ Describe 'Bicep workflow cleanup resource identity' {
             @(Get-AvmBicepResourceRemovalOrder -ResourcesToOrder @()).Count | Should -Be 0
         }
     }
+
+    It 'removes private endpoints and private link services before their load balancers' {
+        InModuleScope Avm.Authoring {
+            $resources = @(
+                @{ resourceId = '/loadBalancer'; type = 'Microsoft.Network/loadBalancers' }
+                @{ resourceId = '/privateLink'; type = 'Microsoft.Network/privateLinkServices' }
+                @{ resourceId = '/endpoint'; type = 'Microsoft.Network/privateEndpoints' }
+            )
+            $actual = @(Get-AvmBicepResourceRemovalOrder -ResourcesToOrder $resources)
+            ($actual.resourceId -join ',') | Should -BeExactly '/endpoint,/privateLink,/loadBalancer'
+        }
+    }
+
+    It 'preserves the legacy cleanup priority for <Earlier> before <Later>' -ForEach @(
+        @{ Earlier = 'Microsoft.VirtualMachineImages/imageTemplates'; Later = 'Microsoft.ManagedIdentity/userAssignedIdentities' }
+        @{ Earlier = 'Microsoft.DevOpsInfrastructure/pools'; Later = 'Microsoft.Authorization/roleAssignments' }
+        @{ Earlier = 'Microsoft.Network/virtualHubs/routingIntent'; Later = 'Microsoft.Network/azureFirewalls' }
+        @{ Earlier = 'Microsoft.Network/azureFirewalls'; Later = 'Microsoft.Network/virtualHubs' }
+        @{ Earlier = 'Microsoft.Network/virtualHubs'; Later = 'Microsoft.Network/virtualWans' }
+        @{ Earlier = 'Microsoft.OperationsManagement/solutions'; Later = 'Microsoft.OperationalInsights/workspaces' }
+        @{ Earlier = 'Microsoft.Compute/virtualMachines'; Later = 'Microsoft.ManagedIdentity/userAssignedIdentities' }
+        @{ Earlier = 'Microsoft.NetApp/netAppAccounts/capacityPools/volumes'; Later = 'Microsoft.NetApp/netAppAccounts/capacityPools' }
+        @{ Earlier = 'Microsoft.DataProtection/backupVaults'; Later = 'Microsoft.Resources/resourceGroups' }
+        @{ Earlier = 'Microsoft.Resources/resourceGroups'; Later = 'Microsoft.Subscription/aliases' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Earlier = $Earlier; Later = $Later } {
+            param($Earlier, $Later)
+            $resources = @(@{ resourceId = '/later'; type = $Later }, @{ resourceId = '/earlier'; type = $Earlier })
+            $actual = @(Get-AvmBicepResourceRemovalOrder -ResourcesToOrder $resources)
+            ($actual.resourceId -join ',') | Should -BeExactly '/earlier,/later'
+        }
+    }
 }
 
 Describe 'Bicep workflow cleanup group absence' {
@@ -277,6 +309,77 @@ Describe 'Bicep workflow cleanup group absence' {
 }
 
 Describe 'Bicep workflow cleanup locks and failures' {
+    It 'uses the lock provider path for resource-scoped role assignments before deleting the exact assignment' {
+        InModuleScope Avm.Authoring {
+            $script:target = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Network/privateEndpoints/endpoint/providers/Microsoft.Authorization/roleAssignments/11111111-1111-4111-8111-111111111111'
+            Mock Get-AzResourceLock { throw 'The Az lock command must not resolve the parent provider.' }
+            Mock Invoke-AzRestMethod {
+                if ($Method -eq 'GET') { return @{ StatusCode = 200; Content = '{"value":[]}' } }
+                return @{ StatusCode = 204 }
+            }
+            Remove-AvmBicepResource -ResourceId $script:target -Type 'Microsoft.Authorization/roleAssignments'
+            Should -Invoke Get-AzResourceLock -Exactly 0
+            Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter {
+                $Method -eq 'GET' -and
+                $Path -ceq "$($script:target)/providers/Microsoft.Authorization/locks?api-version=2016-09-01"
+            }
+            Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter {
+                $Method -eq 'DELETE' -and $Path -ceq "$($script:target)?api-version=2022-04-01"
+            }
+        }
+    }
+
+    It 'removes only extension-resource descendant locks and confirms they are absent' {
+        InModuleScope Avm.Authoring {
+            $script:target = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Network/privateEndpoints/endpoint/providers/Microsoft.Authorization/roleAssignments/11111111-1111-4111-8111-111111111111'
+            $script:lockId = "$script:target/providers/Microsoft.Authorization/locks/owned"
+            $script:removed = $false
+            Mock Write-AvmLog {}
+            Mock Remove-AzResourceLock { throw 'The Az lock command must not resolve the parent provider.' }
+            Mock Invoke-AzRestMethod {
+                if ($Method -eq 'DELETE') {
+                    $script:removed = $true
+                    return @{ StatusCode = 204 }
+                }
+                $items = if ($script:removed) { @() } else {
+                    @(@{ id = $script:lockId }, @{ id = "$($script:target)-foreign/providers/Microsoft.Authorization/locks/foreign" })
+                }
+                @{ StatusCode = 200; Content = (@{ value = @($items) } | ConvertTo-Json -Depth 10 -Compress) }
+            }
+            Remove-AvmBicepResourceLock -ResourceId $script:target -Type 'Microsoft.Authorization/roleAssignments'
+            Should -Invoke Remove-AzResourceLock -Exactly 0
+            Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter {
+                $Method -eq 'DELETE' -and $Path -ceq "$($script:lockId)?api-version=2016-09-01"
+            }
+            Should -Invoke Invoke-AzRestMethod -Exactly 2 -ParameterFilter { $Method -eq 'GET' }
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter { $Level -eq 'Warning' }
+        }
+    }
+
+    It 'refuses a missing later extension-lock page and a non-lock descendant ID' -ForEach @(
+        @{ Scenario = 'missing page' }, @{ Scenario = 'non-lock ID' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Scenario = $Scenario } {
+            param($Scenario)
+            $script:target = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Network/privateEndpoints/endpoint/providers/Microsoft.Authorization/roleAssignments/11111111-1111-4111-8111-111111111111'
+            $script:scenario = $Scenario
+            Mock Invoke-AzRestMethod {
+                if ($Path -like '*page=2') {
+                    return @{ StatusCode = 404; Content = '{"error":{"code":"ResourceNotFound"}}' }
+                }
+                $body = if ($script:scenario -eq 'missing page') {
+                    @{ value = @(); nextLink = "$script:target/providers/Microsoft.Authorization/locks?page=2" }
+                }
+                else {
+                    @{ value = @(@{ id = "$script:target/providers/Microsoft.Authorization/policyAssignments/not-a-lock" }) }
+                }
+                @{ StatusCode = 200; Content = ($body | ConvertTo-Json -Depth 10 -Compress) }
+            }
+            { Get-AvmBicepResourceLock -ResourceId $script:target -Type 'Microsoft.Authorization/roleAssignments' } | Should -Throw
+            Should -Invoke Invoke-AzRestMethod -Exactly 0 -ParameterFilter { $Method -eq 'DELETE' }
+        }
+    }
+
     It 'never returns inherited or similarly prefixed foreign locks' {
         InModuleScope Avm.Authoring {
             $script:target = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/target'
@@ -919,6 +1022,20 @@ Describe 'Bicep workflow cleanup post-removal' {
             Mock Remove-AzKeyVault { throw 'DeletedVaultPurge authorization denied' }
             { Remove-AvmBicepResourceRemainder -ResourceId $script:vault -Type 'Microsoft.KeyVault/vaults' -PostRemovalRetryLimit 1 } |
                 Should -Throw -ExpectedMessage '*authorization denied*'
+        }
+    }
+
+    It 'logs the Key Vault purge request without claiming confirmed deletion' {
+        InModuleScope Avm.Authoring {
+            $script:vault = "$script:cleanupGroup/providers/Microsoft.KeyVault/vaults/vault"
+            Mock Get-AzKeyVault {
+                [pscustomobject]@{ ResourceId = $script:vault; Id = $script:vault; EnablePurgeProtection = $false; Location = 'eastus' }
+            }
+            Mock Remove-AzKeyVault {}
+            Remove-AvmBicepResourceRemainder -ResourceId $script:vault -Type 'Microsoft.KeyVault/vaults'
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter { $Message -eq 'Purging Key Vault vault...' }
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter { $Message -eq 'Requested purge of Key Vault vault.' }
+            Should -Invoke Write-AvmLog -Exactly 0 -ParameterFilter { $Message -match 'Purged' }
         }
     }
 

@@ -64,7 +64,21 @@ Describe 'Bicep deployment progress logging' {
             Write-AvmBicepWhatIf -DeploymentInput $options
             Should -Invoke $Command -Exactly 1 -ParameterFilter { $ResultFormat -eq 'ResourceIdOnly' }
             ($script:messages -join ' ') | Should -Match 'Create /subscriptions/example/providers/Microsoft.KeyVault/vaults/test'
+            ($script:messages -join ' ') | Should -Match 'Plan: 1 to create, 0 to change, 0 to delete\.'
             ($script:messages -join ' ') | Should -Not -Match 'hidden'
+        }
+    }
+
+    It 'counts What-If creates, changes and deletes without counting unchanged resources' {
+        InModuleScope Avm.Authoring {
+            Mock Get-AzSubscriptionDeploymentWhatIfResult {
+                @{ Changes = @('Create', 'Modify', 'Deploy', 'Delete', 'NoChange') | ForEach-Object {
+                        @{ FullyQualifiedResourceId = "/subscriptions/example/$_"; ChangeType = $_ }
+                    } }
+            }
+            $options = @{ Scope = 'sub'; DeploymentName = 'test'; TemplatePath = 'fixture'; MetadataLocation = 'westus'; Parameters = @{} }
+            Write-AvmBicepWhatIf -DeploymentInput $options
+            ($script:messages -join ' ') | Should -Match 'Plan: 1 to create, 2 to change, 1 to delete\.'
         }
     }
 
@@ -103,10 +117,121 @@ Describe 'Bicep deployment progress logging' {
             Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed
             $script:state = 'Succeeded'
             Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed
-            @($script:messages | Where-Object { $_ -match 'name=vault' }).Count | Should -Be 2
-            ($script:messages -join ' ') | Should -Match 'type=Microsoft.KeyVault/vaults name=vault state=Succeeded duration=PT5S'
+            @($script:messages | Where-Object { $_ -match '^vault \(Microsoft.KeyVault/vaults\)' }).Count | Should -Be 2
+            ($script:messages -join ' ') | Should -Match 'vault \(Microsoft.KeyVault/vaults\): Creating\.\.\.'
+            ($script:messages -join ' ') | Should -Match 'vault \(Microsoft.KeyVault/vaults\): Created after 5s'
+            ($script:messages -join ' ') | Should -Not -Match 'state=|duration=|PT5S'
             Should -Invoke Invoke-AzRestMethod -Exactly 0 -ParameterFilter { $Path -like "$foreign/*" }
             Should -Invoke Invoke-AzRestMethod -Exactly 3 -ParameterFilter { $Path -like "$child/*" }
+        }
+    }
+
+    It 'treats only an initial DeploymentNotFound as a single waiting message' {
+        InModuleScope Avm.Authoring {
+            $script:stage = 'waiting'
+            Mock Invoke-AzRestMethod {
+                if ($script:stage -eq 'waiting') {
+                    @{ StatusCode = 404; Content = '{"error":{"code":"DeploymentNotFound"}}' }
+                }
+                else {
+                    @{ StatusCode = 200; Content = '{"value":[]}' }
+                }
+            }
+            $observed = @{}
+            Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed
+            Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed
+            @($script:messages | Where-Object { $_ -eq 'Waiting for the deployment to start.' }).Count | Should -Be 1
+            ($script:messages -join ' ') | Should -Not -Match 'progress is incomplete'
+            $script:stage = 'started'
+            Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed
+            $script:stage = 'waiting'
+            Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed
+            ($script:messages -join ' ') | Should -Match 'progress is incomplete.*DeploymentNotFound'
+        }
+    }
+
+    It 'orders and deduplicates nested resource observations without replaying older states' {
+        InModuleScope Avm.Authoring {
+            $child = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Resources/deployments/nested'
+            $vault = '/subscriptions/00000000-0000-0000-0000-000000000001/providers/Microsoft.KeyVault/vaults/vault'
+            $script:stage = 1
+            Mock Invoke-AzRestMethod {
+                $body = if ($Path -like "$child/operations?*") {
+                    $state = if ($script:stage -in @(1, 3)) { 'Running' } else { 'Succeeded' }
+                    $time = if ($script:stage -ge 3) { '2026-01-01T00:00:03Z' } else { '2026-01-01T00:00:01Z' }
+                    @{ value = @(@{ operationId = 'nested-operation'; properties = @{
+                                    provisioningState = $state; timestamp = $time; duration = 'PT1M2S'
+                                    targetResource = @{ id = $vault; resourceType = 'Microsoft.KeyVault/vaults'; resourceName = 'vault' }
+                                } }) }
+                }
+                else {
+                    @{ value = @(
+                            @{ properties = @{ provisioningState = 'Running'; timestamp = '2026-01-01T00:00:02Z'
+                                    targetResource = @{ id = $child; resourceType = 'Microsoft.Resources/deployments'; resourceName = 'nested' } } },
+                            @{ operationId = 'old-operation'; properties = @{
+                                    provisioningState = 'Succeeded'; timestamp = '2026-01-01T00:00:00Z'; duration = 'PT10S'
+                                    targetResource = @{ id = $vault; resourceType = 'Microsoft.KeyVault/vaults'; resourceName = 'vault' }
+                                } }
+                        ) }
+                }
+                @{ StatusCode = 200; Content = ($body | ConvertTo-Json -Depth 20 -Compress) }
+            }
+            $observed = @{}
+            Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed
+            $script:messages[0] | Should -BeExactly 'vault (Microsoft.KeyVault/vaults): Creating...'
+            $script:stage = 2
+            Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed
+            Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed
+            $script:stage = 3
+            Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed
+            $script:stage = 4
+            Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed
+            @($script:messages | Where-Object { $_ -like 'vault (*' }).Count | Should -Be 2
+            ($script:messages -join ' ') | Should -Match 'vault \(Microsoft.KeyVault/vaults\): Created after 62s'
+            @($observed.Keys | Where-Object { $_ -eq ('resource:' + $vault.ToLowerInvariant()) }).Count | Should -Be 1
+            Mock Invoke-AzRestMethod {
+                @{ StatusCode = 200; Content = (@{
+                            id = $script:id; name = 'root'; properties = @{ outputs = @{} }
+                        } | ConvertTo-Json -Depth 10 -Compress) }
+            }
+            $script:messages.Clear()
+            Write-AvmBicepDeploymentSummary -DeploymentId $script:id -Scope sub -Location westus -Observed $observed
+            @($script:messages | Where-Object { $_ -match 'Microsoft.KeyVault/vaults vault' }).Count | Should -Be 1
+            ($script:messages -join ' ') | Should -Match 'No outputs\.'
+        }
+    }
+
+    It 'prints each assertion result and reports absent assertions' {
+        InModuleScope Avm.Authoring {
+            $item = [pscustomobject]@{
+                Case = [pscustomobject]@{ RelativeDirectory = 'case'; RelativePath = 'case/main.test.bicep'; Path = 'case/main.test.bicep' }
+                AssertionFiles = @()
+            }
+            $issues = [Collections.Generic.List[object]]::new()
+            $empty = Invoke-AvmBicepTestE2eAssertion -Item $item -DeploymentName 'fixture' `
+                -DeploymentOutput '' -RepositoryRoot '.' -Issues $issues
+            $empty.Status | Should -Be 'not-present'
+            ($script:messages -join ' ') | Should -Match 'No post-deployment tests found\.'
+            $script:messages.Clear()
+            $item.AssertionFiles = @('assert.Tests.ps1')
+            Mock Invoke-AvmBicepPesterSuite {
+                @{ Total = 2; Passed = 1; Failed = 1; Skipped = 0; Inconclusive = 0; Filtered = 0; Issues = @()
+                    Tests = @(@{ Name = 'checks one'; Result = 'Passed' }, @{ Name = 'checks two'; Result = 'Failed' }) }
+            }
+            $result = Invoke-AvmBicepTestE2eAssertion -Item $item -DeploymentName 'fixture' `
+                -DeploymentOutput '{"properties":{"outputs":{}}}' -RepositoryRoot '.' -Issues $issues
+            $result.Status | Should -Be 'fail'
+            ($script:messages -join ' ') | Should -Match "checks one.*Passed"
+            ($script:messages -join ' ') | Should -Match "checks two.*Failed"
+            $script:messages.Clear()
+            $issues.Clear()
+            Mock Invoke-AvmBicepPesterSuite {
+                @{ Total = 0; Passed = 0; Failed = 0; Skipped = 0; Inconclusive = 0; Filtered = 0; Issues = @(); Tests = @() }
+            }
+            $result = Invoke-AvmBicepTestE2eAssertion -Item $item -DeploymentName 'fixture' `
+                -DeploymentOutput '{"properties":{"outputs":{}}}' -RepositoryRoot '.' -Issues $issues
+            $result.Status | Should -Be 'fail'
+            ($script:messages -join ' ') | Should -Match 'No post-deployment tests found\.'
         }
     }
 

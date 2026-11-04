@@ -1741,14 +1741,18 @@ runs. A confirmed failure before the deployment cmdlet is invoked is recorded
 as `NotSubmitted` and excluded from cleanup discovery. An in-place retry that
 fails before invocation retains its earlier failed deployment record. Once
 invocation may have begun, its outcome remains ambiguous until Azure confirms
-otherwise. Show each changed resource state, timestamp and duration without
-printing operation bodies. Bound nesting and pagination, validate nested
+otherwise. Show deduplicated resource state changes in observation order, with
+compact durations, without printing operation bodies. Treat an initial
+`DeploymentNotFound` progress response as waiting, not a warning. Bound nesting and pagination, validate nested
 deployment IDs and follow only the original subscription or management scope.
 Progress reads do not affect submission, observation, recovery or cleanup
 authority. Show the final exact deployment identity, state, location, duration,
 correlation ID, observed resource states and outputs. List individual
-post-deployment test results and distinguish successful removal or purge
+post-deployment test results or explicitly report their absence, and distinguish successful removal or purge
 requests from confirmed absence.
+For extension-resource cleanup, enumerate and remove descendant locks through
+their exact ARM lock paths and API version rather than resolving the parent
+resource provider as the lock provider.
 
 The default policy assigns narrowly targeted `InternalServerError` leaves for
 application gateways, private endpoints and PostgreSQL flexible servers to

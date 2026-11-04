@@ -24,7 +24,18 @@ function Remove-AvmBicepResourceLock {
         return
     }
     foreach ($lock in $locks) {
-        $null = Remove-AzResourceLock -LockId $lock.LockId -Force -ErrorAction Stop
+        $useRest = Get-AvmPropertyValue -InputObject $lock -Name 'UseRest' -NoEnumerate
+        if ($useRest -eq $true) {
+            $response = Invoke-AzRestMethod -Method DELETE -Path "$($lock.LockId)?api-version=2016-09-01" -ErrorAction Stop
+            $status = Get-AvmPropertyValue -InputObject $response -Name 'StatusCode' -NoEnumerate
+            if (($status -isnot [int] -and $status -isnot [System.Net.HttpStatusCode]) -or
+                [int]$status -notin @(200, 202, 204, 404)) {
+                throw [AvmProcessException]::new('Azure did not accept removal of the recorded resource lock.')
+            }
+        }
+        else {
+            $null = Remove-AzResourceLock -LockId $lock.LockId -Force -ErrorAction Stop
+        }
     }
     for ($attempt = 0; $attempt -lt $RetryLimit; $attempt++) {
         $remaining = @(Get-AvmBicepResourceLock -ResourceId $ResourceId -Type $Type)

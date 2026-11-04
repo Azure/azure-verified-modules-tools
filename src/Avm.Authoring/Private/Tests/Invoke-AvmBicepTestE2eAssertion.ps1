@@ -37,6 +37,7 @@ function Invoke-AvmBicepTestE2eAssertion {
         RunsFiltered     = 0
     }
     if ($Item.AssertionFiles.Count -eq 0) {
+        Write-AvmLog -Level Info -Message 'No post-deployment tests found.'
         return [pscustomobject]$result
     }
     try {
@@ -88,6 +89,9 @@ function Invoke-AvmBicepTestE2eAssertion {
         Write-AvmLog -Level Warning -Message 'Individual assertion results were not available.'
     }
     else {
+        if (@($tests).Count -eq 0) {
+            Write-AvmLog -Level Info -Message 'No post-deployment tests found.'
+        }
         foreach ($test in $tests) {
             $name = Protect-AvmBicepDiagnosticText -Text ([string]$test.Name)
             $testResult = [string]$test.Result
