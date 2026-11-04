@@ -29,7 +29,14 @@ function Test-AvmBicepDedicatedIdentityStateMove {
     )
 
     $change = $Resource['change']
-    $movable = @{ "$ModuleAddress.azapi_resource.validation_federated_credential[0]" = "$ModuleAddress.azapi_resource.validation_federated_credential" }
+    $movable = @{
+        "$ModuleAddress.azapi_resource.federated_credentials[`"module-avm-validation`"]" =
+            "$ModuleAddress.azapi_resource.identity_federated_credentials[`"avm-validation`"]"
+        "$ModuleAddress.azapi_resource.federated_credentials[`"validation`"]" =
+            "$ModuleAddress.azapi_resource.validation_federated_credential[0]"
+        "$ModuleAddress.azapi_resource.federated_credentials[`"bicep-registry`"]" =
+            "$ModuleAddress.azapi_resource.bicep_registry_federated_credential[0]"
+    }
     if (-not $ExistingIdentities.Contains($ModulePath)) {
         $movable["$ModuleAddress.azapi_resource.identity[0]"] = "$ModuleAddress.azapi_resource.identity"
     }
@@ -60,6 +67,7 @@ function Assert-AvmBicepIdentityPlan {
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Modules,
         [AllowEmptyCollection()] [System.Collections.IDictionary] $ExistingIdentities = @{},
         [Parameter(Mandatory)] [object] $Context,
+        [Parameter(Mandatory)] [string] $JobWorkflowPath,
         [switch] $PassThru
     )
 
@@ -98,8 +106,8 @@ function Assert-AvmBicepIdentityPlan {
         $expectedProvider = $null
         if ($resource['mode'] -ceq 'managed' -and $resource['type'] -ceq 'azapi_resource' -and
             $suffix -cin @(
-                'azapi_resource.identity[0]', 'azapi_resource.identity_federated_credentials["avm-validation"]',
-                'azapi_resource.validation_federated_credential[0]', 'azapi_resource.bicep_registry_federated_credential[0]'
+                'azapi_resource.identity[0]', 'azapi_resource.federated_credentials["module-avm-validation"]',
+                'azapi_resource.federated_credentials["validation"]', 'azapi_resource.federated_credentials["bicep-registry"]'
             )) {
             $expectedProvider = 'registry.terraform.io/azure/azapi'
         }
@@ -208,7 +216,7 @@ function Assert-AvmBicepIdentityPlan {
             -RepositoryId $Context.RepositoryId -RepositoryOwnerId $Context.OrganizationId `
             -RepositorySyncRepositoryId $Context.ToolsRepositoryId -EntraGroupNames $Modules[$path] `
             -ModuleAddress $address -IdentityName $name -Environments @('avm-validation') `
-            -JobWorkflowRef 'Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml@refs/heads/main' `
+            -JobWorkflowPath $JobWorkflowPath `
             -WorkflowRef "Azure/bicep-registry-modules/.github/workflows/$($path.Replace('/', '.')).yml@refs/heads/main" -ExistingIdentity $existingIdentity `
             -BicepRegistryFederation -PassThru
         if ($null -ne $previous) {
@@ -266,6 +274,7 @@ function Invoke-AvmBicepModuleIdentitySync {
     }
     $paths = Get-AvmBicepModulePath -BicepRoot $BicepRoot
     $modules = Resolve-AvmBicepModuleSettings -ModulePaths $paths -Configuration $Configuration
+    $jobWorkflowPath = Resolve-AvmBicepModuleJobWorkflowPath -Configuration $Configuration
     $configuredExistingIdentities = Resolve-AvmBicepModuleExistingIdentities -ModulePaths $paths -Configuration $Configuration
     $existingIdentities = [ordered]@{}
     foreach ($path in $configuredExistingIdentities.Keys) {
@@ -308,6 +317,7 @@ function Invoke-AvmBicepModuleIdentitySync {
         github_repository_id = $context.RepositoryId
         github_organization_id = $context.OrganizationId
         repository_sync_repository_id = $context.ToolsRepositoryId
+        github_job_workflow_path = $jobWorkflowPath
     }
     try {
         [IO.File]::WriteAllText($inputPath, (ConvertTo-Json -InputObject $parameters -Depth 10), [Text.UTF8Encoding]::new($false))
@@ -320,7 +330,7 @@ function Invoke-AvmBicepModuleIdentitySync {
         )
         $plan = Invoke-RepositorySyncTerraform -Root $TerraformRoot -Environment $environment `
             -Arguments @('show', '-json', $planPath) -Json
-        $previousIdentities = Assert-AvmBicepIdentityPlan -Plan $plan -Settings $settings -Modules $modules -ExistingIdentities $existingIdentities -Context $context -PassThru
+        $previousIdentities = Assert-AvmBicepIdentityPlan -Plan $plan -Settings $settings -Modules $modules -ExistingIdentities $existingIdentities -Context $context -JobWorkflowPath $jobWorkflowPath -PassThru
         $changes = @($plan['resource_changes'] | Where-Object { $_['mode'] -ceq 'managed' })
         $creates = @($changes | Where-Object { $_['change']['actions'] -contains 'create' }).Count
         $updates = @($changes | Where-Object { $_['change']['actions'] -contains 'update' }).Count

@@ -142,14 +142,16 @@ task 'test-tenant-terraform' {
                     }
                     . (Join-Path $script:repoRoot 'repository-management' 'repository-sync' 'scripts' 'lib' 'RepositoryConfig.ps1')
                     $repositoryConfig = Get-Content -LiteralPath (Join-Path $script:repoRoot 'repository-management' 'repository-config' 'config.json') -Raw | ConvertFrom-Json
-                    $groupNames = (Resolve-RepositorySettings -repositoryConfig $repositoryConfig -repoId 'avm-ptn-example-repo').EntraGroups
+                    $repositorySettings = Resolve-RepositorySettings -repositoryConfig $repositoryConfig -repoId 'avm-ptn-example-repo'
+                    $groupNames = $repositorySettings.EntraGroups
                     $repository = [pscustomobject]@{
                         full_name = 'Azure/terraform-azurerm-avm-ptn-example-repo'
                         id = 1234
                         owner = [pscustomobject]@{ id = 6844498 }
                     }
                     Assert-AvmRepositorySyncPlan -Plan $candidatePlan -Settings (Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)) `
-                        -Repository $repository -RepositorySyncRepositoryId '1239632211' -EntraGroupNames $groupNames
+                        -Repository $repository -RepositorySyncRepositoryId '1239632211' -EntraGroupNames $groupNames `
+                        -JobWorkflowPath $repositorySettings.WorkloadIdentityFederationSubjectClaimOverrides['jobWorkflowPath']
                     $applied = @($events | Where-Object {
                         $_['type'] -ceq 'test_state' -and $_['@testrun'] -ceq 'single_apply_populates_identity_and_consumer_settings'
                     })
@@ -174,6 +176,10 @@ task 'test-tenant-terraform' {
                     . (Join-Path $script:repoRoot 'tests' 'fixtures' 'TestTenant.ps1')
                     . (Join-Path $script:repoRoot 'tests' 'fixtures' 'BicepIdentities.ps1')
                     $settings = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)
+                    $repositoryConfig = Get-Content -LiteralPath (Join-Path $script:repoRoot 'repository-management' 'repository-config' 'config.json') -Raw | ConvertFrom-Json
+                    $terraformJobWorkflowPath = (Resolve-RepositorySettings -repositoryConfig $repositoryConfig -repoId 'avm-ptn-example-repo').WorkloadIdentityFederationSubjectClaimOverrides['jobWorkflowPath']
+                    $bicepConfig = ConvertFrom-AvmTestTenantJson -Json (Get-Content -LiteralPath (Join-Path $script:repoRoot 'repository-management' 'bicep-config' 'config.json') -Raw)
+                    $bicepJobWorkflowPath = Resolve-AvmBicepModuleJobWorkflowPath -Configuration $bicepConfig
                     foreach ($ecosystem in @('terraform', 'bicep')) {
                         $plans = @($events | Where-Object {
                             $_['type'] -ceq 'test_plan' -and $_['@testrun'] -ceq "rename_legacy_${ecosystem}_identity"
@@ -192,14 +198,14 @@ task 'test-tenant-terraform' {
                         if ($ecosystem -ceq 'bicep') {
                             $previous = Assert-AvmBicepIdentityPlan -Plan $candidatePlan -Settings $settings `
                                 -Modules @{ 'avm/res/fabric/capacity' = @('repository-readers', 'repository-owners') } `
-                                -Context (New-AvmTestBicepIdentityContext) -PassThru
+                                -Context (New-AvmTestBicepIdentityContext) -JobWorkflowPath $bicepJobWorkflowPath -PassThru
                             $previous = $previous['avm/res/fabric/capacity']
                         }
                         else {
                             $previous = Assert-AvmBamiIdentityPlan -Plan $candidatePlan -Settings $settings `
                                 -Repository 'Azure/terraform-azurerm-avm-ptn-azuremonitorwindowsagent' -RepositoryId '1234' `
                                 -RepositoryOwnerId '6844498' -RepositorySyncRepositoryId '1239632211' `
-                                -EntraGroupNames @('repository-readers', 'repository-owners') -PassThru
+                                -EntraGroupNames @('repository-readers', 'repository-owners') -JobWorkflowPath $terraformJobWorkflowPath -PassThru
                         }
                         if ($previous.client_id -cne '10000000-0000-4000-8000-000000000106') {
                             throw [System.IO.InvalidDataException]::new('The guard must recover the actual previous identity from the mocked rename plan.')
@@ -222,7 +228,7 @@ task 'test-tenant-terraform' {
                     Assert-AvmBamiIdentityPlan -Plan $candidatePlan -Settings $settings `
                         -Repository 'Azure/terraform-azurerm-avm-ptn-azuremonitorwindowsagent' -RepositoryId '1234' `
                         -RepositoryOwnerId '6844498' -RepositorySyncRepositoryId '1239632211' `
-                        -EntraGroupNames @('repository-readers', 'repository-owners')
+                        -EntraGroupNames @('repository-readers', 'repository-owners') -JobWorkflowPath $terraformJobWorkflowPath
                     Write-Build Green '  windows identity recreation passes its production ownership guard'
                 }
                 if ($directoryName -ceq 'bicep-identities') {
@@ -231,6 +237,8 @@ task 'test-tenant-terraform' {
                     . (Join-Path $script:repoRoot 'repository-management' 'bicep-test-tenant-sync' 'scripts' 'lib' 'ModuleIdentitySync.ps1')
                     . (Join-Path $script:repoRoot 'tests' 'fixtures' 'TestTenant.ps1')
                     . (Join-Path $script:repoRoot 'tests' 'fixtures' 'BicepIdentities.ps1')
+                    $bicepConfig = ConvertFrom-AvmTestTenantJson -Json (Get-Content -LiteralPath (Join-Path $script:repoRoot 'repository-management' 'bicep-config' 'config.json') -Raw)
+                    $bicepJobWorkflowPath = Resolve-AvmBicepModuleJobWorkflowPath -Configuration $bicepConfig
                     $plans = @($events | Where-Object {
                         $_['type'] -ceq 'test_plan' -and $_['@testrun'] -ceq 'module_plan_binds_identities_groups_and_workflows'
                     })
@@ -254,7 +262,7 @@ task 'test-tenant-terraform' {
                     )
                     $modules = Resolve-AvmBicepModuleSettings -ModulePaths @('avm/res/fabric/capacity', 'avm/res/storage/storage-account') -Configuration $configuration
                     $settings = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)
-                    Assert-AvmBicepIdentityPlan -Plan $candidatePlan -Settings $settings -Modules $modules -Context (New-AvmTestBicepIdentityContext)
+                    Assert-AvmBicepIdentityPlan -Plan $candidatePlan -Settings $settings -Modules $modules -Context (New-AvmTestBicepIdentityContext) -JobWorkflowPath $bicepJobWorkflowPath
                     $applied = @($events | Where-Object {
                         $_['type'] -ceq 'test_state' -and $_['@testrun'] -ceq 'one_apply_returns_the_complete_module_mapping'
                     })
@@ -276,7 +284,7 @@ task 'test-tenant-terraform' {
                         $groupContracts["module.bicep[`"$path`"]"] = $stable[0]['test_plan']['output_changes']['test_group_contract']['after'][$path]
                     }
                     $stablePlan = ConvertFrom-AvmTestTerraformPlan -Plan $stable[0]['test_plan'] -GroupContracts $groupContracts
-                    Assert-AvmBicepIdentityPlan -Plan $stablePlan -Settings $settings -Modules $modules -Context (New-AvmTestBicepIdentityContext)
+                    Assert-AvmBicepIdentityPlan -Plan $stablePlan -Settings $settings -Modules $modules -Context (New-AvmTestBicepIdentityContext) -JobWorkflowPath $bicepJobWorkflowPath
                     Write-Build Green '  Bicep mock plan passes the ownership guard; one apply produces the complete dedicated mapping'
                 }
             }

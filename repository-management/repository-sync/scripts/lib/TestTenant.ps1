@@ -143,18 +143,28 @@ function Get-AvmBamiModuleFederationExpression {
         [Parameter(Mandatory)] [string] $RepositoryOwnerId,
         [Parameter(Mandatory)] [string] $RepositoryId,
         [Parameter(Mandatory)] [string] $Environment,
+        [Parameter(Mandatory)] [string] $JobWorkflowPath,
         [string] $WorkflowRef
     )
 
-    $subject = "repository_owner_id:$RepositoryOwnerId`:repository_id:$RepositoryId`:environment:$Environment`:job_workflow_ref:Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@*"
+    $subject = "repository_owner_id:$RepositoryOwnerId`:repository_id:$RepositoryId`:environment:$Environment`:job_workflow_ref:$JobWorkflowPath@*"
     if ($WorkflowRef) {
         $subject += ":workflow_ref:$WorkflowRef"
     }
+    return Get-AvmBamiFederationExpression -SubjectPattern $subject -RepositoryOwnerId $RepositoryOwnerId -RepositoryId $RepositoryId
+}
+
+function Get-AvmBamiFederationExpression {
+    param(
+        [Parameter(Mandatory)] [string] $SubjectPattern,
+        [Parameter(Mandatory)] [string] $RepositoryOwnerId,
+        [Parameter(Mandatory)] [string] $RepositoryId
+    )
+
     return @(
-        "claims['sub'] matches '$subject'",
+        "claims['sub'] matches '$SubjectPattern'",
         "claims['repository_id'] eq '$RepositoryId'",
-        "claims['repository_owner_id'] eq '$RepositoryOwnerId'",
-        "claims['job_workflow_ref'] matches 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@*'"
+        "claims['repository_owner_id'] eq '$RepositoryOwnerId'"
     ) -join ' and '
 }
 
@@ -163,13 +173,14 @@ function Get-AvmBamiLegacyModuleSubjectPattern {
         [Parameter(Mandatory)] [string] $RepositoryOwnerId,
         [Parameter(Mandatory)] [string] $RepositoryId,
         [Parameter(Mandatory)] [string] $Environment,
+        [Parameter(Mandatory)] [string] $JobWorkflowPath,
         [string] $WorkflowRef
     )
 
     $prefix = "repository_owner_id:$RepositoryOwnerId`:repository_id:$RepositoryId`:environment:$Environment`:job_workflow_ref:"
     $suffix = if ($WorkflowRef) { ":workflow_ref:$WorkflowRef" } else { '' }
     return '\A' + [regex]::Escape($prefix) +
-        'Azure/azure-verified-modules-tools/\.github/workflows/terraform-module\.yml@(?:refs/[^\s:]+|[0-9a-fA-F]{40})' +
+        [regex]::Escape($JobWorkflowPath) + '@(?:refs/[^\s:]+|[0-9a-fA-F]{40})' +
         [regex]::Escape($suffix) + '\z'
 }
 
@@ -213,7 +224,7 @@ function Assert-AvmExternalBamiIdentityPlan {
         [Parameter(Mandatory)] [string] $RepositorySyncRepositoryId,
         [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $EntraGroupNames,
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Identity,
-        [string] $JobWorkflowRef,
+        [Parameter(Mandatory)] [string] $JobWorkflowPath,
         [string] $ModuleAddress = 'module.azure',
         [string] $WorkflowRef,
         [switch] $BicepRegistryFederation,
@@ -251,13 +262,13 @@ function Assert-AvmExternalBamiIdentityPlan {
     $managed = @($resources | Where-Object { $_['mode'] -ceq 'managed' })
     $allowed = @()
     if ($Identity['manage_entra_groups']) {
-        $allowed += "$ModuleAddress.azapi_resource.validation_federated_credential[0]"
+        $allowed += "$ModuleAddress.azapi_resource.federated_credentials[`"validation`"]"
     }
     foreach ($environment in $Environments) {
-        $allowed += "$ModuleAddress.azapi_resource.identity_federated_credentials[`"$environment`"]"
+        $allowed += "$ModuleAddress.azapi_resource.federated_credentials[`"module-$environment`"]"
     }
     if ($BicepRegistryFederation) {
-        $allowed += "$ModuleAddress.azapi_resource.bicep_registry_federated_credential[0]"
+        $allowed += "$ModuleAddress.azapi_resource.federated_credentials[`"bicep-registry`"]"
     }
     if ($Identity['manage_entra_groups']) {
         foreach ($group in $EntraGroupNames) {
@@ -303,33 +314,32 @@ function Assert-AvmExternalBamiIdentityPlan {
     }
 
     foreach ($environment in $Environments) {
-        $address = "$ModuleAddress.azapi_resource.identity_federated_credentials[`"$environment`"]"
+        $address = "$ModuleAddress.azapi_resource.federated_credentials[`"module-$environment`"]"
         $expectedName = $WorkflowRef ? "$federationName-module-$environment" : "$federationName-$environment"
-        if ($JobWorkflowRef) {
-            $subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:${environment}:job_workflow_ref:$JobWorkflowRef"
-            if ($WorkflowRef) { $subject += ":workflow_ref:$WorkflowRef" }
-            Assert-AvmExternalFederatedCredential -Resource @($managed | Where-Object { $_['address'] -ceq $address })[0] `
-                -Name $expectedName -ParentId $Identity['resource_id'] -Subject $subject
-            continue
-        }
         $credential = @($managed | Where-Object { $_['address'] -ceq $address })[0]
         if ($credential['values']['name'] -cne $expectedName -or $expectedName.Length -gt 120 -or
             $credential['values']['parent_id'] -ine $Identity['resource_id'] -or
             -not (Test-AvmBamiModuleFederation -Values $credential['values'] -Expression (
                 Get-AvmBamiModuleFederationExpression -RepositoryOwnerId $RepositoryOwnerId `
-                    -RepositoryId $RepositoryId -Environment $environment -WorkflowRef $WorkflowRef))) {
-            throw [System.InvalidOperationException]::new('External identity federation must retain the canonical Tools repository workflow boundary.')
+                    -RepositoryId $RepositoryId -Environment $environment -JobWorkflowPath $JobWorkflowPath -WorkflowRef $WorkflowRef))) {
+            throw [System.InvalidOperationException]::new('External identity federation must retain the configured reusable workflow boundary.')
         }
     }
     if ($Identity['manage_entra_groups']) {
-        Assert-AvmExternalFederatedCredential -Resource @($managed | Where-Object { $_['address'] -ceq "$ModuleAddress.azapi_resource.validation_federated_credential[0]" })[0] `
-            -Name "$federationName-avm-validation" -ParentId $Identity['resource_id'] `
-            -Subject "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
+        $validationExpression = Get-AvmBamiFederationExpression `
+            -SubjectPattern "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation" `
+            -RepositoryOwnerId $RepositoryOwnerId -RepositoryId $RepositorySyncRepositoryId
+        Assert-AvmExternalFederatedCredential -Resource @($managed | Where-Object {
+                $_['address'] -ceq "$ModuleAddress.azapi_resource.federated_credentials[`"validation`"]"
+            })[0] -Name "$federationName-avm-validation" -ParentId $Identity['resource_id'] -Expression $validationExpression
     }
     if ($BicepRegistryFederation) {
-        Assert-AvmExternalFederatedCredential -Resource @($managed | Where-Object { $_['address'] -ceq "$ModuleAddress.azapi_resource.bicep_registry_federated_credential[0]" })[0] `
-            -Name "$federationName-registry-avm-validation" -ParentId $Identity['resource_id'] `
-            -Subject "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:avm-validation"
+        $registryExpression = Get-AvmBamiFederationExpression `
+            -SubjectPattern "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:avm-validation" `
+            -RepositoryOwnerId $RepositoryOwnerId -RepositoryId $RepositoryId
+        Assert-AvmExternalFederatedCredential -Resource @($managed | Where-Object {
+                $_['address'] -ceq "$ModuleAddress.azapi_resource.federated_credentials[`"bicep-registry`"]"
+            })[0] -Name "$federationName-registry-avm-validation" -ParentId $Identity['resource_id'] -Expression $registryExpression
     }
 }
 
@@ -339,16 +349,17 @@ function Assert-AvmExternalFederatedCredential {
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Resource,
         [Parameter(Mandatory)] [string] $Name,
         [Parameter(Mandatory)] [string] $ParentId,
-        [Parameter(Mandatory)] [string] $Subject
+        [Parameter(Mandatory)] [string] $Expression
     )
 
     $properties = $Resource['values']['body']['properties']
-    if ($Resource['type'] -cne 'azapi_resource' -or $Resource['values']['type'] -cne 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview' -or
+    if ($Resource['type'] -cne 'azapi_resource' -or $Resource['values']['type'] -cne 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview' -or
         $Resource['values']['name'] -cne $Name -or $Name.Length -gt 120 -or $Resource['values']['parent_id'] -ine $ParentId -or
         $properties['issuer'] -cne 'https://token.actions.githubusercontent.com' -or
         @($properties['audiences']).Count -ne 1 -or @($properties['audiences'])[0] -cne 'api://AzureADTokenExchange' -or
-        $properties['subject'] -cne $Subject) {
-        throw [System.InvalidOperationException]::new('External identity federation must retain an exact disjoint child name and OIDC subject.')
+        $properties['claimsMatchingExpression']['languageVersion'] -ne 1 -or
+        $properties['claimsMatchingExpression']['value'] -cne $Expression) {
+        throw [System.InvalidOperationException]::new('External identity federation must retain an exact disjoint child name and OIDC claim expression.')
     }
 }
 
@@ -361,7 +372,7 @@ function Assert-AvmBamiIdentityPlan {
         [Parameter(Mandatory)] [string] $RepositoryId,
         [Parameter(Mandatory)] [string] $RepositoryOwnerId,
         [Parameter(Mandatory)] [string] $RepositorySyncRepositoryId,
-        [string] $JobWorkflowRef,
+        [Parameter(Mandatory)] [string] $JobWorkflowPath,
         [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $EntraGroupNames,
         [ValidatePattern('^module\.(azure|bami\[0\]|bicep\["avm/(res|ptn|utl)/[a-z0-9-]+/[a-z0-9-]+"\])$')]
         [string] $ModuleAddress = 'module.azure',
@@ -379,7 +390,7 @@ function Assert-AvmBamiIdentityPlan {
     if ($null -ne $ExistingIdentity) {
         Assert-AvmExternalBamiIdentityPlan -Plan $Plan -Settings $Settings -Repository $Repository `
             -RepositoryId $RepositoryId -RepositoryOwnerId $RepositoryOwnerId `
-            -RepositorySyncRepositoryId $RepositorySyncRepositoryId -JobWorkflowRef $JobWorkflowRef `
+            -RepositorySyncRepositoryId $RepositorySyncRepositoryId -JobWorkflowPath $JobWorkflowPath `
             -EntraGroupNames $EntraGroupNames -ModuleAddress $ModuleAddress -Identity $ExistingIdentity `
             -WorkflowRef $WorkflowRef -BicepRegistryFederation:$BicepRegistryFederation -Environments $Environments
         return
@@ -403,8 +414,8 @@ function Assert-AvmBamiIdentityPlan {
     }
     $resources = @(Get-AvmTerraformPlannedResource -Module $Plan['planned_values']['root_module'])
     $identityAddress = "$ModuleAddress.azapi_resource.identity[0]"
-    $validationCredentialAddress = "$ModuleAddress.azapi_resource.validation_federated_credential[0]"
-    $registryCredentialAddress = "$ModuleAddress.azapi_resource.bicep_registry_federated_credential[0]"
+    $validationCredentialAddress = "$ModuleAddress.azapi_resource.federated_credentials[`"validation`"]"
+    $registryCredentialAddress = "$ModuleAddress.azapi_resource.federated_credentials[`"bicep-registry`"]"
     $membershipNames = @{}
     foreach ($groupName in $EntraGroupNames) {
         $key = ConvertTo-Json -InputObject $groupName -Compress
@@ -413,9 +424,20 @@ function Assert-AvmBamiIdentityPlan {
     $allowed = @($identityAddress, $validationCredentialAddress)
     if ($BicepRegistryFederation) { $allowed += $registryCredentialAddress }
     foreach ($environment in $Environments) {
-        $allowed += "$ModuleAddress.azapi_resource.identity_federated_credentials[`"$environment`"]"
+        $allowed += "$ModuleAddress.azapi_resource.federated_credentials[`"module-$environment`"]"
     }
     $allowed += @($membershipNames.Keys)
+    $approvedFederationMoves = @{}
+    foreach ($environment in $Environments) {
+        $approvedFederationMoves["$ModuleAddress.azapi_resource.federated_credentials[`"module-$environment`"]"] =
+            "$ModuleAddress.azapi_resource.identity_federated_credentials[`"$environment`"]"
+    }
+    $approvedFederationMoves[$validationCredentialAddress] =
+        "$ModuleAddress.azapi_resource.validation_federated_credential[0]"
+    if ($BicepRegistryFederation) {
+        $approvedFederationMoves[$registryCredentialAddress] =
+            "$ModuleAddress.azapi_resource.bicep_registry_federated_credential[0]"
+    }
     $managed = @($resources | Where-Object { $_['mode'] -ceq 'managed' })
     $addresses = @($managed | ForEach-Object { $_['address'] } | Select-Object -Unique)
     if ($managed.Count -ne $allowed.Count -or $addresses.Count -ne $allowed.Count -or
@@ -462,6 +484,9 @@ function Assert-AvmBamiIdentityPlan {
             ($change.Contains('previous_address') -and $change['previous_address'] -cne $address -and
                 -not ($address -cin @($identityAddress, $validationCredentialAddress) -and
                     $change['previous_address'] -ceq $address.Substring(0, $address.Length - 3) -and
+                    ($actions -join ',') -ceq 'no-op') -and
+                -not ($approvedFederationMoves.ContainsKey($address) -and
+                    $change['previous_address'] -ceq $approvedFederationMoves[$address] -and
                     ($actions -join ',') -ceq 'no-op')) -or
             $null -ne $change['change']['importing'] -or ($actions -join ',') -cnotin $permittedActions) {
             throw [System.InvalidOperationException]::new('Candidate identity plans must not delete or replace required resources, or omit their changes.')
@@ -614,28 +639,36 @@ function Assert-AvmBamiIdentityPlan {
     }
     $federation = [ordered]@{}
     foreach ($environment in $Environments) {
-        $address = "$ModuleAddress.azapi_resource.identity_federated_credentials[`"$environment`"]"
+        $address = "$ModuleAddress.azapi_resource.federated_credentials[`"module-$environment`"]"
         $federation[$address] = @{
+            Kind = 'module'
             Name = if ($WorkflowRef) { "$name-module-$environment" } else { "$name-$environment" }
             Expression = Get-AvmBamiModuleFederationExpression -RepositoryOwnerId $RepositoryOwnerId `
-                -RepositoryId $RepositoryId -Environment $environment -WorkflowRef $WorkflowRef
+                -RepositoryId $RepositoryId -Environment $environment -JobWorkflowPath $JobWorkflowPath -WorkflowRef $WorkflowRef
             LegacySubjectPattern = Get-AvmBamiLegacyModuleSubjectPattern -RepositoryOwnerId $RepositoryOwnerId `
-                -RepositoryId $RepositoryId -Environment $environment -WorkflowRef $WorkflowRef
-        }
-        if ($JobWorkflowRef) {
-            $subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:${environment}:job_workflow_ref:$JobWorkflowRef"
-            if ($WorkflowRef) { $subject += ":workflow_ref:$WorkflowRef" }
-            $federation[$address]['Subject'] = $subject
+                -RepositoryId $RepositoryId -Environment $environment -JobWorkflowPath $JobWorkflowPath -WorkflowRef $WorkflowRef
         }
     }
     $federation[$validationCredentialAddress] = @{
+        Kind = 'validation'
         Name = "$name-avm-validation"
-        Subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
+        Expression = Get-AvmBamiFederationExpression `
+            -SubjectPattern "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation" `
+            -RepositoryOwnerId $RepositoryOwnerId -RepositoryId $RepositorySyncRepositoryId
+        LegacySubjectPattern = '\A' + [regex]::Escape(
+            "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
+        ) + '\z'
     }
     if ($BicepRegistryFederation) {
         $federation[$registryCredentialAddress] = @{
+            Kind = 'registry'
             Name = "$name-registry-avm-validation"
-            Subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:avm-validation"
+            Expression = Get-AvmBamiFederationExpression `
+                -SubjectPattern "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:avm-validation" `
+                -RepositoryOwnerId $RepositoryOwnerId -RepositoryId $RepositoryId
+            LegacySubjectPattern = '\A' + [regex]::Escape(
+                "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:avm-validation"
+            ) + '\z'
         }
     }
     $previousModuleCredentials = 0
@@ -658,32 +691,22 @@ function Assert-AvmBamiIdentityPlan {
             @{ Values = $credentialChange['after']; Name = $federation[$address].Name; Parent = $identityId; Previous = $false }
         )
         if ($null -ne $beforeCredential) {
-            if ($address -cnotin @($validationCredentialAddress, $registryCredentialAddress)) { $previousModuleCredentials++ }
+            if ($federation[$address].Kind -ceq 'module') { $previousModuleCredentials++ }
             $oldName = if ($renaming) { $previousName + $federation[$address].Name.Substring($name.Length) } else { $federation[$address].Name }
             $sides += @{ Values = $beforeCredential; Name = $oldName; Parent = $previousIdentityId; Previous = $true }
         }
         foreach ($side in $sides) {
             $values = $side.Values
-            $isModuleCredential = -not $JobWorkflowRef -and $address -cnotin @($validationCredentialAddress, $registryCredentialAddress)
-            $isValidModuleFederation = $isModuleCredential -and (Test-AvmBamiModuleFederation -Values $values `
+            $isValidModuleFederation = Test-AvmBamiModuleFederation -Values $values `
                 -Expression $federation[$address].Expression `
-                -LegacySubjectPattern $federation[$address].LegacySubjectPattern -AllowLegacy:$side.Previous)
-            $isValidExactFederation = -not $isModuleCredential -and
-                $values -is [System.Collections.IDictionary] -and $values['body'] -is [System.Collections.IDictionary] -and
-                $values['body']['properties'] -is [System.Collections.IDictionary] -and
-                $values['type'] -ceq 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview' -and
-                $values['body']['properties'].Count -eq 3 -and
-                $values['body']['properties']['issuer'] -ceq 'https://token.actions.githubusercontent.com' -and
-                @($values['body']['properties']['audiences']).Count -eq 1 -and
-                @($values['body']['properties']['audiences'])[0] -ceq 'api://AzureADTokenExchange' -and
-                $values['body']['properties']['subject'] -ceq $federation[$address].Subject
+                -LegacySubjectPattern $federation[$address].LegacySubjectPattern -AllowLegacy:$side.Previous
             if ($values -isnot [System.Collections.IDictionary] -or
                 $values['name'] -cne $side.Name -or $side.Name.Length -gt 120 -or
                 ($null -ne $values['id'] -and $values['id'] -ine "$($side.Parent)/federatedIdentityCredentials/$($side.Name)") -or
                 ($null -ne $values['parent_id'] -and $values['parent_id'] -ine $side.Parent) -or
                 ($null -eq $values['parent_id'] -and ($side.Previous -or
                     -not (Test-AvmTerraformPlanUnknownField -Change $credentialChange -Path 'parent_id'))) -or
-                -not ($isValidModuleFederation -or $isValidExactFederation)) {
+                -not $isValidModuleFederation) {
                 throw [System.InvalidOperationException]::new('Candidate federation, including validation federation, must retain the exact repository, environment, workflow, and identity binding.')
             }
         }
@@ -882,7 +905,7 @@ function Assert-AvmRetiredRepositoryIdentityPlan {
             if ([guid]::TryParseExact([string]$before['group_object_id'], 'D', [ref]$group) -and $group -ne [guid]::Empty) { continue }
         }
         if ($change['type'] -ceq 'azapi_resource' -and
-            $change['address'] -cmatch '^module\.azure\[0\]\.azapi_resource\.(identity_federated_credentials\["(pr-check|integration-test|examples-test|avm-validation)"\]|validation_federated_credential(\[0\])?)$' -and
+            $change['address'] -cmatch '^module\.azure\[0\]\.azapi_resource\.(identity_federated_credentials\["(pr-check|integration-test|examples-test|avm-validation)"\]|validation_federated_credential(\[0\])?|federated_credentials\["(module-(pr-check|integration-test|examples-test|avm-validation)|validation)"\])$' -and
             $before['type'] -cin @(
                 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview',
                 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview'
@@ -908,6 +931,7 @@ function Assert-AvmRepositorySyncPlan {
         [string] $RepositorySyncRepositoryId,
         [string[]] $EntraGroupNames = @(),
         [AllowNull()] [System.Collections.IDictionary] $ExistingIdentity,
+        [Parameter(Mandatory)] [string] $JobWorkflowPath,
         [string[]] $ResourceTypesThatCannotBeDestroyed = @('github_repository')
     )
 
@@ -992,5 +1016,6 @@ function Assert-AvmRepositorySyncPlan {
     Assert-AvmBamiIdentityPlan -Plan $identityPlan -Settings $Settings -Repository $Repository.full_name `
         -RepositoryId ([string]$Repository.id) -RepositoryOwnerId ([string]$Repository.owner.id) `
         -RepositorySyncRepositoryId $RepositorySyncRepositoryId `
-        -EntraGroupNames $EntraGroupNames -ExistingIdentity $ExistingIdentity -ModuleAddress 'module.bami[0]'
+        -EntraGroupNames $EntraGroupNames -ExistingIdentity $ExistingIdentity -JobWorkflowPath $JobWorkflowPath `
+        -ModuleAddress 'module.bami[0]'
 }

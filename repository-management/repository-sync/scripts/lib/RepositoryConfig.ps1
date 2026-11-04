@@ -104,6 +104,31 @@ function Resolve-RepositorySettings {
     }
     $repositoryTopics = @($repositoryTopics | Select-Object -Unique)
 
+    $supportedFederationSettings = @{
+        jobWorkflowPath = "github_job_workflow_path"
+    }
+    $workloadIdentityFederationSubjectClaimOverrides = @{}
+    foreach ($entry in @(Get-AvmOrderedGroup -Groups $repositoryConfig.repositoryGroups -SelectorProperty 'repositories' -Item $repoId)) {
+        $repositoryGroup = $entry.Group
+        if (-not $repositoryGroup['workloadIdentityFederationSubjectClaimOverrides']) {
+            continue
+        }
+        $overrides = ConvertTo-AvmSettingDictionary -Value $repositoryGroup['workloadIdentityFederationSubjectClaimOverrides']
+        foreach ($setting in $overrides.Keys) {
+            if (-not $supportedFederationSettings.ContainsKey($setting)) {
+                throw "Repository group '$($repositoryGroup.name)' sets unsupported workloadIdentityFederationSubjectClaimOverrides key '$setting'. Supported keys: $($supportedFederationSettings.Keys -join ', ')."
+            }
+            $workloadIdentityFederationSubjectClaimOverrides[$setting] = $overrides[$setting]
+        }
+    }
+    if ($workloadIdentityFederationSubjectClaimOverrides.ContainsKey('jobWorkflowPath')) {
+        $jobWorkflowPath = $workloadIdentityFederationSubjectClaimOverrides['jobWorkflowPath']
+        $jobWorkflowPathPattern = '^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+/\.github/workflows/[A-Za-z0-9][A-Za-z0-9_.-]*\.ya?ml$'
+        if ($jobWorkflowPath -notmatch $jobWorkflowPathPattern) {
+            throw "workloadIdentityFederationSubjectClaimOverrides.jobWorkflowPath must use the form 'owner/repository/.github/workflows/workflow.yml' without a Git ref, but was '$jobWorkflowPath'."
+        }
+    }
+
     return @{
         RepositoryGroups                                = $repositoryGroups
         RepositoryGroupNames                            = $repositoryGroupNames
@@ -112,6 +137,7 @@ function Resolve-RepositorySettings {
         CodeOwnersDefaultTeams                          = $codeOwnersDefaultTeams
         CodeOwnersFileProtectionTeams                   = $codeOwnersFileProtectionTeams
         Topics                                          = $repositoryTopics
+        WorkloadIdentityFederationSubjectClaimOverrides = $workloadIdentityFederationSubjectClaimOverrides
         TestTenant                                      = Resolve-AvmGroupTestTenant -Groups $repositoryConfig.repositoryGroups -SelectorProperty 'repositories' -Item $repoId
         EntraGroups                                     = Resolve-AvmRepositoryEntraGroups -Groups $repositoryConfig.repositoryGroups -RepositoryId $repoId
         ExistingIdentity                                = Resolve-AvmGroupExistingIdentity -Groups $repositoryConfig.repositoryGroups -SelectorProperty 'repositories' -Item $repoId

@@ -168,6 +168,9 @@ if ($null -ne $existingIdentity) {
 if ($null -ne $repositorySyncContext) {
     $terraformVariables["repository_sync_repository_id"] = $repositorySyncContext.RepositoryId
 }
+if ($settings.WorkloadIdentityFederationSubjectClaimOverrides.ContainsKey("jobWorkflowPath")) {
+    $terraformVariables["github_job_workflow_path"] = $settings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowPath"]
+}
 
 $terraformVariables | ConvertTo-Json -Depth 100 |
     Set-Content -LiteralPath (Join-Path $terraformModulePath 'terraform.tfvars.json') -Encoding utf8NoBOM
@@ -201,6 +204,9 @@ $issueLog = @(Invoke-RepositorySyncLogGroup -Name 'Terraform repository configur
     if ($null -ne $repositorySyncContext) {
         $planParameters.repository = $repositorySyncContext.Repository
         $planParameters.repositorySyncRepositoryId = $repositorySyncContext.RepositoryId
+    }
+    if ($settings.WorkloadIdentityFederationSubjectClaimOverrides.ContainsKey('jobWorkflowPath')) {
+        $planParameters.jobWorkflowPath = $settings.WorkloadIdentityFederationSubjectClaimOverrides['jobWorkflowPath']
     }
     if (-not $repositoryCreationModeEnabled) {
         $planParameters.stateStorageAccountName = $stateStorageAccountName

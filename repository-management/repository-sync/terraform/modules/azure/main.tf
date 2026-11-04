@@ -78,61 +78,21 @@ data "azapi_resource" "existing_identity" {
   }
 }
 
-resource "azapi_resource" "identity_federated_credentials" {
-  for_each = var.github_repository_environment_names
+resource "azapi_resource" "federated_credentials" {
+  for_each = local.federated_credentials
 
-  type      = var.github_job_workflow_ref == null ? "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview" : "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview"
-  name      = var.github_workflow_ref == null ? "${local.federation_identity_name}-${each.value}" : "${local.federation_identity_name}-module-${each.value}"
+  type      = "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview"
+  name      = each.value.name
   parent_id = local.identity_resource_id
   locks     = [local.identity_resource_id]
   body = {
-    properties = merge({
+    properties = {
       audiences = ["api://AzureADTokenExchange"]
       issuer    = "https://token.actions.githubusercontent.com"
-    }, var.github_job_workflow_ref == null ? {
       claimsMatchingExpression = {
         languageVersion = 1
-        value = join(" and ", compact([
-          "claims['sub'] matches 'repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:${each.value}:job_workflow_ref:Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@*${var.github_workflow_ref == null ? "" : ":workflow_ref:${var.github_workflow_ref}"}'",
-          "claims['repository_id'] eq '${var.github_repository_id}'",
-          "claims['repository_owner_id'] eq '${var.github_organization_id}'",
-          "claims['job_workflow_ref'] matches 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@*'"
-        ]))
+        value           = join(" and ", local.federated_credential_claim_clauses[each.key])
       }
-    } : {
-      subject = "repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:${each.value}:job_workflow_ref:${var.github_job_workflow_ref}${var.github_workflow_ref == null ? "" : ":workflow_ref:${var.github_workflow_ref}"}"
-    })
-  }
-}
-
-resource "azapi_resource" "validation_federated_credential" {
-  count = var.existing_identity == null || var.existing_identity.manage_entra_groups ? 1 : 0
-
-  type      = "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview"
-  name      = "${local.federation_identity_name}-avm-validation"
-  parent_id = local.identity_resource_id
-  locks     = [local.identity_resource_id]
-  body = {
-    properties = {
-      audiences = ["api://AzureADTokenExchange"]
-      issuer    = "https://token.actions.githubusercontent.com"
-      subject   = "repository_owner_id:${var.github_organization_id}:repository_id:${var.repository_sync_repository_id}:environment:avm-validation"
-    }
-  }
-}
-
-resource "azapi_resource" "bicep_registry_federated_credential" {
-  count = var.bicep_registry_federation_enabled ? 1 : 0
-
-  type      = "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview"
-  name      = "${local.federation_identity_name}-registry-avm-validation"
-  parent_id = local.identity_resource_id
-  locks     = [local.identity_resource_id]
-  body = {
-    properties = {
-      audiences = ["api://AzureADTokenExchange"]
-      issuer    = "https://token.actions.githubusercontent.com"
-      subject   = "repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:avm-validation"
     }
   }
 }
@@ -182,4 +142,39 @@ moved {
 moved {
   from = azapi_resource.validation_federated_credential
   to   = azapi_resource.validation_federated_credential[0]
+}
+
+moved {
+  from = azapi_resource.identity_federated_credentials["pr-check"]
+  to   = azapi_resource.federated_credentials["module-pr-check"]
+}
+
+moved {
+  from = azapi_resource.identity_federated_credentials["integration-test"]
+  to   = azapi_resource.federated_credentials["module-integration-test"]
+}
+
+moved {
+  from = azapi_resource.identity_federated_credentials["examples-test"]
+  to   = azapi_resource.federated_credentials["module-examples-test"]
+}
+
+moved {
+  from = azapi_resource.identity_federated_credentials["examples-test-execution"]
+  to   = azapi_resource.federated_credentials["module-examples-test-execution"]
+}
+
+moved {
+  from = azapi_resource.identity_federated_credentials["avm-validation"]
+  to   = azapi_resource.federated_credentials["module-avm-validation"]
+}
+
+moved {
+  from = azapi_resource.validation_federated_credential[0]
+  to   = azapi_resource.federated_credentials["validation"]
+}
+
+moved {
+  from = azapi_resource.bicep_registry_federated_credential[0]
+  to   = azapi_resource.federated_credentials["bicep-registry"]
 }

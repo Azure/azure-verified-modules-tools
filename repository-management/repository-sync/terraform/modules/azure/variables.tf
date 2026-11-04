@@ -142,10 +142,14 @@ variable "is_protected_repo" {
   description = "Whether the repository is protected and requires pull request approval."
 }
 
-variable "github_job_workflow_ref" {
+variable "github_job_workflow_path" {
   type        = string
-  description = "Exact reusable workflow reference for callers retaining subject-based federation."
-  default     = null
+  description = "Configured reusable workflow path, excluding its mutable Git reference, used for module federation."
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+/\\.github/workflows/[A-Za-z0-9][A-Za-z0-9_.-]*\\.ya?ml$", var.github_job_workflow_path))
+    error_message = "The reusable workflow path must be owner/repository/.github/workflows/name.yml with no Git ref, expression, tag, or commit SHA."
+  }
 }
 
 variable "github_organization_id" {

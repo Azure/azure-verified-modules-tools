@@ -222,6 +222,21 @@ variable "repository_sync_repository_id" {
   }
 }
 
+variable "github_job_workflow_path" {
+  type        = string
+  description = "Configured reusable workflow path, excluding its mutable Git reference, for module federation."
+  default     = null
+
+  validation {
+    condition = (
+      var.repository_creation_mode_enabled ||
+      var.bami_test_settings == null ||
+      can(regex("^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+/\\.github/workflows/[A-Za-z0-9][A-Za-z0-9_.-]*\\.ya?ml$", var.github_job_workflow_path))
+    )
+    error_message = "Normal repository sync requires a configured owner/repository/.github/workflows/name.yml reusable workflow path without a Git ref."
+  }
+}
+
 variable "github_avm_app_id" {
   type        = string
   description = "The GitHub App ID for the AVM."

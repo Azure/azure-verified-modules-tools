@@ -27,6 +27,9 @@ Describe 'Repository sync unified driver' -Tag Component {
             repositoryGroups = @(@{
                 name = 'default'; order = -1; repositories = @('*'); testTenant = 'bami'
                 entraGroups = @('avm-test-entra-readers', 'avm-test-management-group-owners')
+                workloadIdentityFederationSubjectClaimOverrides = @{
+                    jobWorkflowPath = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml'
+                }
             })
         }
         $script:config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $script:configPath
@@ -147,6 +150,7 @@ Describe 'Repository sync unified driver' -Tag Component {
         $variables.bami_test_settings.ContainsKey('client_id') | Should -BeFalse
         $variables.bami_test_settings.Count | Should -Be 8
         $variables.repository_sync_repository_id | Should -Be '1239632211'
+        $variables.github_job_workflow_path | Should -Be 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml'
         $variables.ContainsKey('state_layout') | Should -BeFalse
         $variables.entra_group_names | Should -Be @('avm-test-entra-readers', 'avm-test-management-group-owners')
         $expected = $PlanOnly
@@ -165,6 +169,9 @@ Describe 'Repository sync unified driver' -Tag Component {
             $stateClientId -ceq '66666666-6666-4666-8666-666666666666' -and
             $stateStorageAccountName -ceq 'tmestorage' -and $stateContainerName -ceq 'tme-state' -and
             $environment.ARM_CLIENT_ID -ceq '10000000-0000-4000-8000-000000000002'
+        }
+        Should -Invoke Invoke-TerraformPlanAndApply -Exactly 1 -ParameterFilter {
+            $jobWorkflowPath -ceq 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml'
         }
     }
 

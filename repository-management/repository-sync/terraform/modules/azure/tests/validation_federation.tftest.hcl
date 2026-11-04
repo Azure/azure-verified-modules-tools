@@ -40,7 +40,7 @@ variables {
   github_repository_environment_names = ["pr-check", "integration-test", "examples-test", "examples-test-execution"]
   location                            = "eastus2"
   is_protected_repo                   = true
-  github_job_workflow_ref             = "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main"
+  github_job_workflow_path            = "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml"
   github_organization_id              = "6844498"
   github_repository_id                = "1234"
   repository_sync_repository_id       = "1239632211"
@@ -51,23 +51,26 @@ variables {
   }
 }
 
-run "execution_federation_preserves_existing_environment_trust" {
+run "execution_federation_uses_the_configured_workflow_path" {
   command = plan
 
   assert {
     condition = (
-      toset(keys(azapi_resource.identity_federated_credentials)) == toset(["pr-check", "integration-test", "examples-test", "examples-test-execution"]) &&
+      toset(keys({ for key, credential in azapi_resource.federated_credentials : key => credential if startswith(key, "module-") })) == toset(["module-pr-check", "module-integration-test", "module-examples-test", "module-examples-test-execution"]) &&
       alltrue([for environment in var.github_repository_environment_names :
-        azapi_resource.identity_federated_credentials[environment].body.properties.subject ==
-        "repository_owner_id:6844498:repository_id:1234:environment:${environment}:job_workflow_ref:${var.github_job_workflow_ref}" &&
-        azapi_resource.identity_federated_credentials[environment].body.properties.issuer == "https://token.actions.githubusercontent.com" &&
-        tolist(azapi_resource.identity_federated_credentials[environment].body.properties.audiences) == tolist(["api://AzureADTokenExchange"]) &&
-        azapi_resource.identity_federated_credentials[environment].name == "${local.owner_repo_name}-${environment}" &&
-        azapi_resource.identity_federated_credentials[environment].parent_id == azapi_resource.identity[0].id &&
-        toset(azapi_resource.identity_federated_credentials[environment].locks) == toset([azapi_resource.identity[0].id])
+        azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].type ==
+        "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview" &&
+        azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].body.properties.claimsMatchingExpression.languageVersion == 1 &&
+        azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].body.properties.claimsMatchingExpression.value ==
+        "claims['sub'] matches 'repository_owner_id:6844498:repository_id:1234:environment:${environment}:job_workflow_ref:${var.github_job_workflow_path}@*' and claims['repository_id'] eq '1234' and claims['repository_owner_id'] eq '6844498'" &&
+        azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].body.properties.issuer == "https://token.actions.githubusercontent.com" &&
+        tolist(azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].body.properties.audiences) == tolist(["api://AzureADTokenExchange"]) &&
+        azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].name == "${local.owner_repo_name}-${trimprefix(environment, "module-")}" &&
+        azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].parent_id == azapi_resource.identity[0].id &&
+        toset(azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].locks) == toset([azapi_resource.identity[0].id])
       ])
     )
-    error_message = "The new execution credential and all three existing credentials must bind only the same repository, reusable workflow, audience, issuer and dedicated identity."
+    error_message = "Every execution credential must bind only the configured workflow path, repository IDs, environment, audience, issuer and dedicated identity."
   }
 }
 
@@ -76,12 +79,13 @@ run "validation_trust_stays_on_the_same_test_identity" {
 
   assert {
     condition = (
-      azapi_resource.validation_federated_credential[0].body.properties.subject ==
-      "repository_owner_id:${var.github_organization_id}:repository_id:${var.repository_sync_repository_id}:environment:avm-validation" &&
-      azapi_resource.validation_federated_credential[0].body.properties.issuer ==
+      azapi_resource.federated_credentials["validation"].body.properties.claimsMatchingExpression.languageVersion == 1 &&
+      azapi_resource.federated_credentials["validation"].body.properties.claimsMatchingExpression.value ==
+      "claims['sub'] matches 'repository_owner_id:${var.github_organization_id}:repository_id:${var.repository_sync_repository_id}:environment:avm-validation' and claims['repository_id'] eq '${var.repository_sync_repository_id}' and claims['repository_owner_id'] eq '${var.github_organization_id}'" &&
+      azapi_resource.federated_credentials["validation"].body.properties.issuer ==
       "https://token.actions.githubusercontent.com" &&
-      length(azapi_resource.validation_federated_credential[0].body.properties.audiences) == 1 &&
-      azapi_resource.validation_federated_credential[0].body.properties.audiences[0] ==
+      length(azapi_resource.federated_credentials["validation"].body.properties.audiences) == 1 &&
+      azapi_resource.federated_credentials["validation"].body.properties.audiences[0] ==
       "api://AzureADTokenExchange"
     )
     error_message = "Validation must trust only the tools repository's avm-validation environment."
@@ -89,10 +93,10 @@ run "validation_trust_stays_on_the_same_test_identity" {
 
   assert {
     condition = (
-      azapi_resource.validation_federated_credential[0].name == "${local.owner_repo_name}-avm-validation" &&
-      azapi_resource.validation_federated_credential[0].parent_id == azapi_resource.identity[0].id &&
-      length(azapi_resource.validation_federated_credential[0].locks) == 1 &&
-      azapi_resource.validation_federated_credential[0].locks[0] == azapi_resource.identity[0].id
+      azapi_resource.federated_credentials["validation"].name == "${local.owner_repo_name}-avm-validation" &&
+      azapi_resource.federated_credentials["validation"].parent_id == azapi_resource.identity[0].id &&
+      length(azapi_resource.federated_credentials["validation"].locks) == 1 &&
+      azapi_resource.federated_credentials["validation"].locks[0] == azapi_resource.identity[0].id
     )
     error_message = "Validation federation must remain on the existing module test identity."
   }
@@ -107,8 +111,8 @@ run "validation_subject_follows_the_verified_context_inputs" {
   }
   assert {
     condition = (
-      azapi_resource.validation_federated_credential[0].body.properties.subject ==
-      "repository_owner_id:7654321:repository_id:987654321:environment:avm-validation"
+      azapi_resource.federated_credentials["validation"].body.properties.claimsMatchingExpression.value ==
+      "claims['sub'] matches 'repository_owner_id:7654321:repository_id:987654321:environment:avm-validation' and claims['repository_id'] eq '987654321' and claims['repository_owner_id'] eq '7654321'"
     )
     error_message = "Validation subject must be built from the supplied organization and tools repository IDs."
   }
@@ -152,10 +156,11 @@ run "identity_names_preserve_the_stem_except_the_reserved_windows_substring" {
   assert {
     condition = (
       azapi_resource.identity[0].name == "id-test-terraform-azapi-avm-res-compute-w5s-terraform" &&
-      alltrue([for environment, credential in azapi_resource.identity_federated_credentials :
-        credential.name == "id-test-terraform-azapi-avm-res-compute-w5s-terraform-${environment}"
+      alltrue([for environment, credential in azapi_resource.federated_credentials :
+        credential.name == "id-test-terraform-azapi-avm-res-compute-w5s-terraform-${trimprefix(environment, "module-")}"
+        if startswith(environment, "module-")
       ]) &&
-      azapi_resource.validation_federated_credential[0].name == "id-test-terraform-azapi-avm-res-compute-w5s-terraform-avm-validation"
+      azapi_resource.federated_credentials["validation"].name == "id-test-terraform-azapi-avm-res-compute-w5s-terraform-avm-validation"
     )
     error_message = "The owner and leading terraform- are removed, and only the reserved windows substring is abbreviated in identity and credential names."
   }
@@ -199,7 +204,7 @@ run "full_identity_and_credential_names_accept_their_exact_bounds" {
   assert {
     condition = (
       length(azapi_resource.identity[0].name) == 90 &&
-      alltrue([for credential in azapi_resource.identity_federated_credentials : length(credential.name) == 120])
+      alltrue([for key, credential in azapi_resource.federated_credentials : length(credential.name) == 120 if startswith(key, "module-")])
     )
     error_message = "Complete identity and federation names must retain every character at their respective bounds."
   }
@@ -249,7 +254,7 @@ run "caller_bound_credential_accepts_exactly_120_characters" {
   }
 
   assert {
-    condition     = alltrue([for credential in azapi_resource.identity_federated_credentials : length(credential.name) == 120])
+    condition     = alltrue([for key, credential in azapi_resource.federated_credentials : length(credential.name) == 120 if startswith(key, "module-")])
     error_message = "The module- discriminator must be counted in caller-bound credential names."
   }
 }

@@ -167,11 +167,15 @@ select the canonical root's client for both Azure CLI and PowerShell; child
 modules share that entry. Existing opt-in labels and internal-fork controls
 remain unchanged, including generic pull-request runs.
 
-The existing `<identity>-module-avm-validation` staged credential remains
-unchanged:
+The `<identity>-module-avm-validation` credential uses the flexible federation
+API. Its reusable workflow path comes from `bicep-config/config.json` without
+a Git ref; the `@*` pattern allows the caller's reviewed workflow pin while
+requiring that exact path:
 
 ```text
-repository_owner_id:{Azure ID}:repository_id:{registry ID}:environment:avm-validation:job_workflow_ref:Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml@refs/heads/main:workflow_ref:Azure/bicep-registry-modules/.github/workflows/{module.path}.yml@refs/heads/main
+claims['sub'] matches 'repository_owner_id:{Azure ID}:repository_id:{registry ID}:environment:avm-validation:job_workflow_ref:{configured workflow path}@*:workflow_ref:Azure/bicep-registry-modules/.github/workflows/{module.path}.yml@refs/heads/main'
+and claims['repository_id'] eq '{registry ID}'
+and claims['repository_owner_id'] eq '{Azure ID}'
 ```
 
 The distinct `<identity>-avm-validation` credential still binds the Tools

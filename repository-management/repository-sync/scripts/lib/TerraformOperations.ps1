@@ -279,7 +279,8 @@ function Invoke-TerraformPlanAndApply {
         [AllowNull()] [object] $repository,
         [string] $repositorySyncRepositoryId,
         [string[]] $entraGroupNames = @(),
-        [AllowNull()] [System.Collections.IDictionary] $existingIdentity
+        [AllowNull()] [System.Collections.IDictionary] $existingIdentity,
+        [string] $jobWorkflowPath
     )
 
     if (-not $PSCmdlet.ShouldProcess($orgAndRepoName, 'Plan repository configuration and test identity')) {
@@ -307,6 +308,7 @@ function Invoke-TerraformPlanAndApply {
     Assert-AvmRepositorySyncPlan -Plan $plan -Settings $bamiSettings -Repository $repository `
         -RepositorySyncRepositoryId $repositorySyncRepositoryId -EntraGroupNames $entraGroupNames `
         -ExistingIdentity $existingIdentity `
+        -JobWorkflowPath $jobWorkflowPath `
         -ResourceTypesThatCannotBeDestroyed $resourceTypesThatCannotBeDestroyed
     if (-not $planOnly -and $PSCmdlet.ShouldProcess($orgAndRepoName, 'Apply the verified saved repository plan')) {
         Invoke-RepositorySyncTerraform -Root $terraformModulePath -Environment $environment -LockRecovery $lockRecovery -Arguments @(

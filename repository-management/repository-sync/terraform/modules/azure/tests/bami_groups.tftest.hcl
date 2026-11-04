@@ -97,7 +97,7 @@ variables {
   github_repository_environment_names = ["pr-check", "integration-test", "examples-test", "examples-test-execution"]
   location                            = "eastus2"
   is_protected_repo                   = true
-  github_job_workflow_ref             = "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main"
+  github_job_workflow_path            = "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml"
   github_organization_id              = "6844498"
   github_repository_id                = "1234"
   repository_sync_repository_id       = "1239632211"
@@ -114,7 +114,7 @@ run "configured_names_create_only_individual_group_edges" {
   command = plan
 
   assert {
-    condition     = length(azapi_resource.bicep_registry_federated_credential) == 0
+    condition     = !contains(keys(azapi_resource.federated_credentials), "bicep-registry")
     error_message = "Terraform repository identities must not gain the registry-only federation subject."
   }
 
@@ -187,7 +187,7 @@ run "shared_identity_validation_credential_has_one_owner" {
   }
 
   assert {
-    condition     = length(azapi_resource.validation_federated_credential) == 0
+    condition     = !contains(keys(azapi_resource.federated_credentials), "validation")
     error_message = "Only the group-edge owner of a shared identity may manage its validation credential."
   }
 }
@@ -362,25 +362,25 @@ run "seed_legacy_terraform_identity" {
   }
 
   override_resource {
-    target = azapi_resource.identity_federated_credentials["pr-check"]
+    target = azapi_resource.federated_credentials["module-pr-check"]
     values = {
       id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-pr-check"
     }
   }
   override_resource {
-    target = azapi_resource.identity_federated_credentials["integration-test"]
+    target = azapi_resource.federated_credentials["module-integration-test"]
     values = {
       id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-integration-test"
     }
   }
   override_resource {
-    target = azapi_resource.identity_federated_credentials["examples-test"]
+    target = azapi_resource.federated_credentials["module-examples-test"]
     values = {
       id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-examples-test"
     }
   }
   override_resource {
-    target = azapi_resource.validation_federated_credential[0]
+    target = azapi_resource.federated_credentials["validation"]
     values = {
       id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-avm-validation"
     }
@@ -414,10 +414,10 @@ run "rename_legacy_terraform_identity" {
   plan_options {
     replace = [
       azapi_resource.identity[0],
-      azapi_resource.identity_federated_credentials["pr-check"],
-      azapi_resource.identity_federated_credentials["integration-test"],
-      azapi_resource.identity_federated_credentials["examples-test"],
-      azapi_resource.validation_federated_credential[0],
+      azapi_resource.federated_credentials["module-pr-check"],
+      azapi_resource.federated_credentials["module-integration-test"],
+      azapi_resource.federated_credentials["module-examples-test"],
+      azapi_resource.federated_credentials["validation"],
       azuread_group_member.test_permissions["repository-readers"],
       azuread_group_member.test_permissions["repository-owners"]
     ]
@@ -461,9 +461,10 @@ run "recreate_windows_identity_after_its_legacy_resources_were_deleted" {
   assert {
     condition = (
       azapi_resource.identity[0].name == "id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent" &&
-      alltrue([for environment, credential in azapi_resource.identity_federated_credentials :
-        credential.name == "id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent-${environment}" &&
+      alltrue([for environment, credential in azapi_resource.federated_credentials :
+        credential.name == "id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent-${trimprefix(environment, "module-")}" &&
         credential.parent_id == azapi_resource.identity[0].id
+        if startswith(environment, "module-")
       ])
     )
     error_message = "A fresh plan after legacy deletion must recreate only the corrected identity and its bound credentials."
@@ -480,7 +481,7 @@ run "seed_legacy_bicep_identity" {
     github_repository_id                = "447791597"
     github_repository_environment_names = ["avm-validation"]
     github_workflow_ref                 = "Azure/bicep-registry-modules/.github/workflows/avm.res.fabric.capacity.yml@refs/heads/main"
-    github_job_workflow_ref             = "Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml@refs/heads/main"
+    github_job_workflow_path            = "Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml"
   }
 
   override_resource {
@@ -498,13 +499,13 @@ run "seed_legacy_bicep_identity" {
     }
   }
   override_resource {
-    target = azapi_resource.identity_federated_credentials["avm-validation"]
+    target = azapi_resource.federated_credentials["module-avm-validation"]
     values = {
       id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-bicep-avm-res-fabric-capacity-32f81a9a/federatedIdentityCredentials/id-avm-bicep-avm-res-fabric-capacity-32f81a9a-module-avm-validation"
     }
   }
   override_resource {
-    target = azapi_resource.validation_federated_credential[0]
+    target = azapi_resource.federated_credentials["validation"]
     values = {
       id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-bicep-avm-res-fabric-capacity-32f81a9a/federatedIdentityCredentials/id-avm-bicep-avm-res-fabric-capacity-32f81a9a-avm-validation"
     }
@@ -522,14 +523,14 @@ run "rename_legacy_bicep_identity" {
     github_repository_id                = "447791597"
     github_repository_environment_names = ["avm-validation"]
     github_workflow_ref                 = "Azure/bicep-registry-modules/.github/workflows/avm.res.fabric.capacity.yml@refs/heads/main"
-    github_job_workflow_ref             = "Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml@refs/heads/main"
+    github_job_workflow_path            = "Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml"
   }
 
   plan_options {
     replace = [
       azapi_resource.identity[0],
-      azapi_resource.identity_federated_credentials["avm-validation"],
-      azapi_resource.validation_federated_credential[0],
+      azapi_resource.federated_credentials["module-avm-validation"],
+      azapi_resource.federated_credentials["validation"],
       azuread_group_member.test_permissions["repository-readers"],
       azuread_group_member.test_permissions["repository-owners"]
     ]
@@ -554,10 +555,10 @@ run "rename_legacy_bicep_identity" {
     condition = (
       azapi_resource.identity[0].name == "id-test-bicep-avm-res-fabric-capacity" &&
       output.client_id == "10000000-0000-4000-8000-000000000006" &&
-      azapi_resource.identity_federated_credentials["avm-validation"].name ==
+      azapi_resource.federated_credentials["module-avm-validation"].name ==
       "id-test-bicep-avm-res-fabric-capacity-module-avm-validation" &&
-      azapi_resource.bicep_registry_federated_credential[0].body.properties.subject ==
-      "repository_owner_id:6844498:repository_id:447791597:environment:avm-validation"
+      azapi_resource.federated_credentials["bicep-registry"].body.properties.claimsMatchingExpression.value ==
+      "claims['sub'] matches 'repository_owner_id:6844498:repository_id:447791597:environment:avm-validation' and claims['repository_id'] eq '447791597' and claims['repository_owner_id'] eq '6844498'"
     )
     error_message = "Renaming must preserve staged caller-bound federation and add the current three-claim registry subject separately."
   }

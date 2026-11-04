@@ -59,7 +59,7 @@ function Resolve-AvmBicepModuleSettings {
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Configuration
     )
 
-    if ($ModulePaths.Count -eq 0 -or $Configuration.Count -ne 1 -or
+    if ($ModulePaths.Count -eq 0 -or
         $Configuration['moduleGroups'] -isnot [System.Collections.IList] -or $Configuration['moduleGroups'].Count -eq 0) {
         throw [System.ArgumentException]::new('Bicep configuration requires moduleGroups and a nonempty module inventory.')
     }
@@ -90,6 +90,21 @@ function Resolve-AvmBicepModuleSettings {
         $result[$path] = Resolve-AvmGroupEntraGroups -Groups $groups -SelectorProperty 'modules' -Item $path
     }
     return $result
+}
+
+function Resolve-AvmBicepModuleJobWorkflowPath {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)] [System.Collections.IDictionary] $Configuration)
+
+    $path = $Configuration['moduleJobWorkflowPath']
+    if ($path -isnot [string] -or
+        $path -cnotmatch '^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+/\.github/workflows/[A-Za-z0-9][A-Za-z0-9_.-]*\.ya?ml$') {
+        throw [System.ArgumentException]::new(
+            'Bicep configuration requires moduleJobWorkflowPath in owner/repository/.github/workflows/name.yml form without a Git ref.'
+        )
+    }
+    return $path
 }
 
 function Resolve-AvmBicepModuleExistingIdentities {

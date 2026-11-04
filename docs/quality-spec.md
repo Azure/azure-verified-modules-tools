@@ -2785,12 +2785,17 @@ This section is the implementation-level expression of the **Security stance** p
 - Module federation uses the UAMI flexible federated-credential API
   `2025-01-31-preview` and a canonical claims-matching expression, never a
   `subject`. It must bind the exact GitHub repository owner ID, repository ID,
-  environment, issuer, audience, and an exact `job_workflow_ref` repository
-  boundary of `Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@*`.
+  environment, issuer, audience, and a configured `job_workflow_ref`
+  repository workflow path with an `@*` reference boundary. The repository
+  configuration stores only the full
+  `owner/repository/.github/workflows/name.yml` path, never a Git ref, tag,
+  commit SHA, expression, or path traversal.
   The optional caller-workflow suffix remains exact when configured. The
   expression is deterministic and validated by the saved-plan guard; callers
-  cannot supply an alternate wildcard expression. Validation and registry
-  credentials remain exact-subject credentials.
+  cannot supply an alternate workflow path or wildcard expression. The
+  expression has one canonical `sub` clause plus separate immutable repository
+  owner and repository ID clauses; do not duplicate `job_workflow_ref` outside
+  `sub`. Validation and registry credentials remain exact-subject credentials.
 - A relevant module credential may transition only from its existing exact
   Tools-repository legacy subject to the canonical flexible expression, or
   from that same canonical expression to itself. Previous workflow references

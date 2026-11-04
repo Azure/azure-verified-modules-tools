@@ -12,7 +12,7 @@ module "bicep" {
   github_organization_id              = var.github_organization_id
   github_repository_id                = var.github_repository_id
   repository_sync_repository_id       = var.repository_sync_repository_id
-  github_job_workflow_ref             = local.job_workflow_ref
+  github_job_workflow_path            = var.github_job_workflow_path
   github_workflow_ref                 = "Azure/bicep-registry-modules/.github/workflows/${replace(each.key, "/", ".")}.yml@refs/heads/main"
   location                            = var.location
   is_protected_repo                   = true
