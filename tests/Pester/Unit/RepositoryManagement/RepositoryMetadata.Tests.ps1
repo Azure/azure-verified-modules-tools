@@ -40,10 +40,15 @@ Describe "Repository merge methods" {
     }
 
     It "limits the AVM App bypass to pull requests" {
-        $script:rulesetsTerraform | Should -Match (
+        $mainRuleset = [regex]::Match(
+            $script:rulesetsTerraform,
+            '(?ms)^resource "github_repository_ruleset" "main" \{.*?^\}'
+        ).Value
+        $mainRuleset | Should -Not -BeNullOrEmpty
+        $mainRuleset | Should -Match (
             'bypass_mode\s*=\s*"pull_request"'
         )
-        $script:rulesetsTerraform | Should -Not -Match (
+        $mainRuleset | Should -Not -Match (
             'bypass_mode\s*=\s*"always"'
         )
     }

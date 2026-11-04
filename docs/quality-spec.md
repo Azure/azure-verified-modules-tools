@@ -2885,10 +2885,16 @@ This section is the implementation-level expression of the **Security stance** p
 
 ### Repository-sync tag protection
 
-- Managed Terraform module repositories permit new version tags only in the
+- By default, managed Terraform module repositories permit new version tags in the
   `v0.*.*` family, using the GitHub ref pattern `refs/tags/v0.[0-9]*.[0-9]*`.
-  The existing `Only allow v tags` ruleset denies creation and updates of all
-  other tags, including v1 and later majors, without bypass actors.
+  The separate `Restrict v1+ release tags` ruleset denies creation of other
+  version tags. Only the configured team with slug
+  `azure-verified-modules-engineering-owners` may bypass that restriction,
+  using its resolved GitHub team ID and `always` bypass mode. If the team is
+  absent from configuration, the restriction has no bypass actors.
+- The existing `Only allow v tags` ruleset continues to deny creation and
+  updates of non-version tags without bypass actors. Repository-sync cleanup
+  recognizes all four managed rulesets, including the v1+ restriction.
 - Preserve update, deletion and non-fast-forward protection for every version
   tag, including existing v1 and later tags. Repository creation mode continues
   to omit these rulesets.

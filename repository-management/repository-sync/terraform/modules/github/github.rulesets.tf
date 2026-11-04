@@ -62,6 +62,34 @@ resource "github_repository_ruleset" "tag_deny_non_v" {
   conditions {
     ref_name {
       include = ["~ALL"]
+      exclude = ["refs/tags/v[0-9]*.[0-9]*.[0-9]*"]
+    }
+  }
+}
+
+resource "github_repository_ruleset" "tag_prevent_v1_plus" {
+  count       = var.repository_creation_mode_enabled ? 0 : 1
+  name        = "Restrict v1+ release tags"
+  repository  = github_repository.this.name
+  target      = "tag"
+  enforcement = "active"
+
+  dynamic "bypass_actors" {
+    for_each = toset([for name, team in var.github_teams : name if team.slug == "azure-verified-modules-engineering-owners"])
+    content {
+      actor_id    = data.github_team.this[bypass_actors.value].id
+      actor_type  = "Team"
+      bypass_mode = "always"
+    }
+  }
+
+  rules {
+    creation = true
+  }
+
+  conditions {
+    ref_name {
+      include = ["refs/tags/v[0-9]*.[0-9]*.[0-9]*"]
       exclude = ["refs/tags/v0.[0-9]*.[0-9]*"]
     }
   }
