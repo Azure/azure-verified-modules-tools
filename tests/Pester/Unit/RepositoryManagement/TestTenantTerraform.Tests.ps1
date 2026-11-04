@@ -1155,6 +1155,10 @@ Describe 'Terraform effective contract and state wiring' {
         $source | Should -Not -Match 'bamiTestTenantSyncEnabled|PendingTestTenantActivation|stateLayout|state_layout|unified-v1'
         $source | Should -Match 'Resolve-AvmRepositorySyncContext -RepoId \$repoId -Repository \$orgAndRepoName'
         $source | Should -Match '-AllowExampleRepositoryBranchApply \$allowExampleRepositoryBranchApply'
+        $source | Should -Match '\$useGalleryAuthoringModule = \('
+        $source | Should -Match '\$repoId -ceq ''avm-ptn-example-repo'''
+        $source | Should -Match 'Repository\.full_name -ceq ''Azure/terraform-azurerm-avm-ptn-example-repo'''
+        $source | Should -Match '-useGalleryAuthoringModule:\$useGalleryAuthoringModule'
         $source.IndexOf('Resolve-AvmRepositorySyncContext') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
         $source.IndexOf('Resolve-RepositoryTestTenantSettings') | Should -BeGreaterThan 0
         $source.IndexOf('Resolve-RepositoryTestTenantSettings') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')

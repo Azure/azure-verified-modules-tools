@@ -289,6 +289,17 @@ if (!$repositoryCreationModeEnabled) {
         }
         Write-Warning "Skipping file updates for $orgAndRepoName because repository sync reported errors."
     } else {
+        $useGalleryAuthoringModule = (
+            -not $planOnly -and
+            $allowExampleRepositoryBranchApply -and
+            $repoId -ceq 'avm-ptn-example-repo' -and
+            $repositorySyncContext.Repository.full_name -ceq 'Azure/terraform-azurerm-avm-ptn-example-repo'
+        )
+        if ($allowExampleRepositoryBranchApply -and -not $planOnly -and -not $useGalleryAuthoringModule) {
+            throw [System.InvalidOperationException]::new(
+                'The branch-apply opt-in may use Gallery candidate checks only for the resolved example repository.')
+        }
+        $candidateAuthoringModulePath = if ($useGalleryAuthoringModule) { '' } else { $authoringModulePath }
         $preCommitResult = Invoke-RepositorySyncLogGroup -Name 'Managed files and authoring checks' -Action {
             Invoke-AvmPreCommitForRepository `
             -orgAndRepoName $orgAndRepoName `
@@ -300,7 +311,8 @@ if (!$repositoryCreationModeEnabled) {
             -planOnly $planOnly `
             -forceFileUpdate $forceFileUpdate.IsPresent `
             -candidateOutputDirectory $candidateOutputDirectory `
-            -authoringModulePath $authoringModulePath `
+            -authoringModulePath $candidateAuthoringModulePath `
+            -useGalleryAuthoringModule:$useGalleryAuthoringModule `
             -issueLog $issueLog
         }
         $issueLog = @($preCommitResult.IssueLog)

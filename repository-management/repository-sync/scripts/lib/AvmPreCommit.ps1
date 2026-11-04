@@ -181,17 +181,29 @@ function Invoke-AvmPreCommitForRepository {
         [bool]$forceFileUpdate = $false,
         [string]$candidateOutputDirectory,
         [string]$authoringModulePath,
+        [switch]$useGalleryAuthoringModule,
         [array]$issueLog
     )
 
     $result = @{ IssueLog = $issueLog; HasChanges = $false }
 
     try {
+        if ($useGalleryAuthoringModule -and $authoringModulePath) {
+            throw [System.ArgumentException]::new('Gallery candidate checks cannot use a checked-out Avm.Authoring source.')
+        }
         if ($authoringModulePath -and -not $planOnly) {
             throw [System.ArgumentException]::new('Checked-out Avm.Authoring source is only supported for plan-only repository sync.')
         }
-        $moduleName = if ($authoringModulePath) { $authoringModulePath } else { 'Avm.Authoring' }
-        Import-Module -Name $moduleName -ErrorAction Stop
+        if ($useGalleryAuthoringModule) {
+            foreach ($module in @(Get-Module -Name Avm.Authoring)) {
+                Remove-Module -ModuleInfo $module -Force -ErrorAction Stop
+            }
+            Import-Module -Name Avm.Authoring -Force -ErrorAction Stop
+        }
+        else {
+            $moduleName = if ($authoringModulePath) { $authoringModulePath } else { 'Avm.Authoring' }
+            Import-Module -Name $moduleName -ErrorAction Stop
+        }
         $template = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' '..' 'CODEOWNERS.template') -Raw -ErrorAction Stop
         $codeowners = ConvertTo-TerraformCodeowners -Organization $orgAndRepoName.Split('/')[0] `
             -DefaultTeams $codeOwnersDefaultTeams -FileProtectionTeams $codeOwnersFileProtectionTeams -Template $template
