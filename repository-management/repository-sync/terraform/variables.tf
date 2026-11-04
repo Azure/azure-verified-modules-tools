@@ -211,12 +211,6 @@ variable "is_protected_repo" {
   default     = true
 }
 
-variable "github_job_workflow_ref" {
-  type        = string
-  description = "GitHub job workflow ref to use for the federated identity credentials."
-  default     = "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main"
-}
-
 variable "repository_sync_repository_id" {
   type        = string
   description = "Verified GitHub Actions repository ID for the tools repository; unused in repository creation mode."

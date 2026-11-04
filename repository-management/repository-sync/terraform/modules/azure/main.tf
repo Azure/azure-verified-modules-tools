@@ -81,23 +81,27 @@ data "azapi_resource" "existing_identity" {
 resource "azapi_resource" "identity_federated_credentials" {
   for_each = var.github_repository_environment_names
 
-  type      = "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview"
+  type      = var.github_job_workflow_ref == null ? "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview" : "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview"
   name      = var.github_workflow_ref == null ? "${local.federation_identity_name}-${each.value}" : "${local.federation_identity_name}-module-${each.value}"
   parent_id = local.identity_resource_id
   locks     = [local.identity_resource_id]
   body = {
-    properties = {
+    properties = merge({
       audiences = ["api://AzureADTokenExchange"]
       issuer    = "https://token.actions.githubusercontent.com"
-      # OIDC subject layout matches the `include_claim_keys` order configured in
-      # modules/github/github.actions_oidc.tf. The `context` claim is not
-      # included literally in `sub`; it expands to its value, which is
-      # `environment:<name>` when the job references an environment.
-      subject = join("", [
-        "repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:${each.value}:job_workflow_ref:${var.github_job_workflow_ref}",
-        var.github_workflow_ref == null ? "" : ":workflow_ref:${var.github_workflow_ref}"
-      ])
-    }
+    }, var.github_job_workflow_ref == null ? {
+      claimsMatchingExpression = {
+        languageVersion = 1
+        value = join(" and ", compact([
+          "claims['sub'] matches 'repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:${each.value}:job_workflow_ref:Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@*${var.github_workflow_ref == null ? "" : ":workflow_ref:${var.github_workflow_ref}"}'",
+          "claims['repository_id'] eq '${var.github_repository_id}'",
+          "claims['repository_owner_id'] eq '${var.github_organization_id}'",
+          "claims['job_workflow_ref'] matches 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@*'"
+        ]))
+      }
+    } : {
+      subject = "repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:${each.value}:job_workflow_ref:${var.github_job_workflow_ref}${var.github_workflow_ref == null ? "" : ":workflow_ref:${var.github_workflow_ref}"}"
+    })
   }
 }
 

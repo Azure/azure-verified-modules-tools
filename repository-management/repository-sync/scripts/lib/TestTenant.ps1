@@ -138,6 +138,70 @@ function Get-AvmBamiOwnerAssignmentName {
     return '{0}-{1}-{2}-{3}-{4}' -f $hex.Substring(0, 8), $hex.Substring(8, 4), $hex.Substring(12, 4), $hex.Substring(16, 4), $hex.Substring(20, 12)
 }
 
+function Get-AvmBamiModuleFederationExpression {
+    param(
+        [Parameter(Mandatory)] [string] $RepositoryOwnerId,
+        [Parameter(Mandatory)] [string] $RepositoryId,
+        [Parameter(Mandatory)] [string] $Environment,
+        [string] $WorkflowRef
+    )
+
+    $subject = "repository_owner_id:$RepositoryOwnerId`:repository_id:$RepositoryId`:environment:$Environment`:job_workflow_ref:Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@*"
+    if ($WorkflowRef) {
+        $subject += ":workflow_ref:$WorkflowRef"
+    }
+    return @(
+        "claims['sub'] matches '$subject'",
+        "claims['repository_id'] eq '$RepositoryId'",
+        "claims['repository_owner_id'] eq '$RepositoryOwnerId'",
+        "claims['job_workflow_ref'] matches 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@*'"
+    ) -join ' and '
+}
+
+function Get-AvmBamiLegacyModuleSubjectPattern {
+    param(
+        [Parameter(Mandatory)] [string] $RepositoryOwnerId,
+        [Parameter(Mandatory)] [string] $RepositoryId,
+        [Parameter(Mandatory)] [string] $Environment,
+        [string] $WorkflowRef
+    )
+
+    $prefix = "repository_owner_id:$RepositoryOwnerId`:repository_id:$RepositoryId`:environment:$Environment`:job_workflow_ref:"
+    $suffix = if ($WorkflowRef) { ":workflow_ref:$WorkflowRef" } else { '' }
+    return '\A' + [regex]::Escape($prefix) +
+        'Azure/azure-verified-modules-tools/\.github/workflows/terraform-module\.yml@(?:refs/[^\s:]+|[0-9a-fA-F]{40})' +
+        [regex]::Escape($suffix) + '\z'
+}
+
+function Test-AvmBamiModuleFederation {
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Values,
+        [Parameter(Mandatory)] [string] $Expression,
+        [string] $LegacySubjectPattern,
+        [switch] $AllowLegacy
+    )
+
+    if ($Values['body'] -isnot [System.Collections.IDictionary] -or
+        $Values['body']['properties'] -isnot [System.Collections.IDictionary]) {
+        return $false
+    }
+    $properties = $Values['body']['properties']
+    $audiences = @($properties['audiences'])
+    $claimExpression = $properties['claimsMatchingExpression']
+    if ($Values['type'] -ceq 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview' -and
+        $properties.Count -eq 3 -and $properties['issuer'] -ceq 'https://token.actions.githubusercontent.com' -and
+        $audiences.Count -eq 1 -and $audiences[0] -ceq 'api://AzureADTokenExchange' -and
+        $claimExpression -is [System.Collections.IDictionary] -and $claimExpression.Count -eq 2 -and
+        $claimExpression['languageVersion'] -eq 1 -and $claimExpression['value'] -ceq $Expression) {
+        return $true
+    }
+    return $AllowLegacy -and
+        $Values['type'] -ceq 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview' -and
+        $properties.Count -eq 3 -and $properties['issuer'] -ceq 'https://token.actions.githubusercontent.com' -and
+        $audiences.Count -eq 1 -and $audiences[0] -ceq 'api://AzureADTokenExchange' -and
+        $properties['subject'] -is [string] -and $properties['subject'] -cmatch $LegacySubjectPattern
+}
+
 function Assert-AvmExternalBamiIdentityPlan {
     [CmdletBinding()]
     param(
@@ -241,10 +305,21 @@ function Assert-AvmExternalBamiIdentityPlan {
     foreach ($environment in $Environments) {
         $address = "$ModuleAddress.azapi_resource.identity_federated_credentials[`"$environment`"]"
         $expectedName = $WorkflowRef ? "$federationName-module-$environment" : "$federationName-$environment"
-        $subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:${environment}:job_workflow_ref:$JobWorkflowRef"
-        if ($WorkflowRef) { $subject += ":workflow_ref:$WorkflowRef" }
-        Assert-AvmExternalFederatedCredential -Resource @($managed | Where-Object { $_['address'] -ceq $address })[0] `
-            -Name $expectedName -ParentId $Identity['resource_id'] -Subject $subject
+        if ($JobWorkflowRef) {
+            $subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:${environment}:job_workflow_ref:$JobWorkflowRef"
+            if ($WorkflowRef) { $subject += ":workflow_ref:$WorkflowRef" }
+            Assert-AvmExternalFederatedCredential -Resource @($managed | Where-Object { $_['address'] -ceq $address })[0] `
+                -Name $expectedName -ParentId $Identity['resource_id'] -Subject $subject
+            continue
+        }
+        $credential = @($managed | Where-Object { $_['address'] -ceq $address })[0]
+        if ($credential['values']['name'] -cne $expectedName -or $expectedName.Length -gt 120 -or
+            $credential['values']['parent_id'] -ine $Identity['resource_id'] -or
+            -not (Test-AvmBamiModuleFederation -Values $credential['values'] -Expression (
+                Get-AvmBamiModuleFederationExpression -RepositoryOwnerId $RepositoryOwnerId `
+                    -RepositoryId $RepositoryId -Environment $environment -WorkflowRef $WorkflowRef))) {
+            throw [System.InvalidOperationException]::new('External identity federation must retain the canonical Tools repository workflow boundary.')
+        }
     }
     if ($Identity['manage_entra_groups']) {
         Assert-AvmExternalFederatedCredential -Resource @($managed | Where-Object { $_['address'] -ceq "$ModuleAddress.azapi_resource.validation_federated_credential[0]" })[0] `
@@ -286,7 +361,7 @@ function Assert-AvmBamiIdentityPlan {
         [Parameter(Mandatory)] [string] $RepositoryId,
         [Parameter(Mandatory)] [string] $RepositoryOwnerId,
         [Parameter(Mandatory)] [string] $RepositorySyncRepositoryId,
-        [string] $JobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main',
+        [string] $JobWorkflowRef,
         [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $EntraGroupNames,
         [ValidatePattern('^module\.(azure|bami\[0\]|bicep\["avm/(res|ptn|utl)/[a-z0-9-]+/[a-z0-9-]+"\])$')]
         [string] $ModuleAddress = 'module.azure',
@@ -540,11 +615,17 @@ function Assert-AvmBamiIdentityPlan {
     $federation = [ordered]@{}
     foreach ($environment in $Environments) {
         $address = "$ModuleAddress.azapi_resource.identity_federated_credentials[`"$environment`"]"
-        $subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:${environment}:job_workflow_ref:$JobWorkflowRef"
-        if ($WorkflowRef) { $subject += ":workflow_ref:$WorkflowRef" }
         $federation[$address] = @{
             Name = if ($WorkflowRef) { "$name-module-$environment" } else { "$name-$environment" }
-            Subject = $subject
+            Expression = Get-AvmBamiModuleFederationExpression -RepositoryOwnerId $RepositoryOwnerId `
+                -RepositoryId $RepositoryId -Environment $environment -WorkflowRef $WorkflowRef
+            LegacySubjectPattern = Get-AvmBamiLegacyModuleSubjectPattern -RepositoryOwnerId $RepositoryOwnerId `
+                -RepositoryId $RepositoryId -Environment $environment -WorkflowRef $WorkflowRef
+        }
+        if ($JobWorkflowRef) {
+            $subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:${environment}:job_workflow_ref:$JobWorkflowRef"
+            if ($WorkflowRef) { $subject += ":workflow_ref:$WorkflowRef" }
+            $federation[$address]['Subject'] = $subject
         }
     }
     $federation[$validationCredentialAddress] = @{
@@ -583,21 +664,26 @@ function Assert-AvmBamiIdentityPlan {
         }
         foreach ($side in $sides) {
             $values = $side.Values
-            if ($values -isnot [System.Collections.IDictionary] -or $values['body'] -isnot [System.Collections.IDictionary] -or
-                $values['body']['properties'] -isnot [System.Collections.IDictionary]) {
-                throw [System.InvalidOperationException]::new('Candidate federation must have complete credential properties.')
-            }
-            $properties = $values['body']['properties']
-            $audiences = @($properties['audiences'])
-            if ($values['type'] -cne 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview' -or
+            $isModuleCredential = -not $JobWorkflowRef -and $address -cnotin @($validationCredentialAddress, $registryCredentialAddress)
+            $isValidModuleFederation = $isModuleCredential -and (Test-AvmBamiModuleFederation -Values $values `
+                -Expression $federation[$address].Expression `
+                -LegacySubjectPattern $federation[$address].LegacySubjectPattern -AllowLegacy:$side.Previous)
+            $isValidExactFederation = -not $isModuleCredential -and
+                $values -is [System.Collections.IDictionary] -and $values['body'] -is [System.Collections.IDictionary] -and
+                $values['body']['properties'] -is [System.Collections.IDictionary] -and
+                $values['type'] -ceq 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview' -and
+                $values['body']['properties'].Count -eq 3 -and
+                $values['body']['properties']['issuer'] -ceq 'https://token.actions.githubusercontent.com' -and
+                @($values['body']['properties']['audiences']).Count -eq 1 -and
+                @($values['body']['properties']['audiences'])[0] -ceq 'api://AzureADTokenExchange' -and
+                $values['body']['properties']['subject'] -ceq $federation[$address].Subject
+            if ($values -isnot [System.Collections.IDictionary] -or
                 $values['name'] -cne $side.Name -or $side.Name.Length -gt 120 -or
                 ($null -ne $values['id'] -and $values['id'] -ine "$($side.Parent)/federatedIdentityCredentials/$($side.Name)") -or
                 ($null -ne $values['parent_id'] -and $values['parent_id'] -ine $side.Parent) -or
                 ($null -eq $values['parent_id'] -and ($side.Previous -or
                     -not (Test-AvmTerraformPlanUnknownField -Change $credentialChange -Path 'parent_id'))) -or
-                $properties.Count -ne 3 -or $properties['issuer'] -cne 'https://token.actions.githubusercontent.com' -or
-                $audiences.Count -ne 1 -or $audiences[0] -cne 'api://AzureADTokenExchange' -or
-                $properties['subject'] -cne $federation[$address].Subject) {
+                -not ($isValidModuleFederation -or $isValidExactFederation)) {
                 throw [System.InvalidOperationException]::new('Candidate federation, including validation federation, must retain the exact repository, environment, workflow, and identity binding.')
             }
         }
@@ -797,7 +883,10 @@ function Assert-AvmRetiredRepositoryIdentityPlan {
         }
         if ($change['type'] -ceq 'azapi_resource' -and
             $change['address'] -cmatch '^module\.azure\[0\]\.azapi_resource\.(identity_federated_credentials\["(pr-check|integration-test|examples-test|avm-validation)"\]|validation_federated_credential(\[0\])?)$' -and
-            $before['type'] -ceq 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview' -and
+            $before['type'] -cin @(
+                'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview',
+                'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview'
+            ) -and
             $before['parent_id'] -ieq $identity['id']) { continue }
         if ($change['address'] -cin @('module.azure[0].azapi_resource.identity_role_assignment', 'module.azure[0].azapi_resource.identity_role_assignment[0]') -and
             $change['type'] -ceq 'azapi_resource' -and
@@ -819,7 +908,6 @@ function Assert-AvmRepositorySyncPlan {
         [string] $RepositorySyncRepositoryId,
         [string[]] $EntraGroupNames = @(),
         [AllowNull()] [System.Collections.IDictionary] $ExistingIdentity,
-        [string] $JobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main',
         [string[]] $ResourceTypesThatCannotBeDestroyed = @('github_repository')
     )
 
@@ -903,6 +991,6 @@ function Assert-AvmRepositorySyncPlan {
     }
     Assert-AvmBamiIdentityPlan -Plan $identityPlan -Settings $Settings -Repository $Repository.full_name `
         -RepositoryId ([string]$Repository.id) -RepositoryOwnerId ([string]$Repository.owner.id) `
-        -RepositorySyncRepositoryId $RepositorySyncRepositoryId -JobWorkflowRef $JobWorkflowRef `
+        -RepositorySyncRepositoryId $RepositorySyncRepositoryId `
         -EntraGroupNames $EntraGroupNames -ExistingIdentity $ExistingIdentity -ModuleAddress 'module.bami[0]'
 }

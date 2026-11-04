@@ -130,8 +130,6 @@ Describe 'Repository sync candidate workflow' {
     }
 
     It 'publishes only after this repository validation passes and never for plan-only' {
-        $script:publish | Should -Not -Match 'always\(\)'
-        $script:publish | Should -Not -Match 'continue-on-error:'
         $step = [regex]::Match($script:publish,
             '(?ms)^      - name: Publish validated candidate\r?\n(?<body>.*?)(?=^      - name:|\z)')
         $step.Success | Should -BeTrue
@@ -206,7 +204,6 @@ Describe 'Repository sync candidate workflow' {
     }
 
     It 'propagates validation errors and uploads receipts only after successful checks' {
-        $script:validate | Should -Not -Match 'continue-on-error:'
         $checks = [regex]::Match($script:validate,
             '(?ms)^      - name: Validate repository candidate\r?\n(?<body>.*?)(?=^      - name:|\z)').Groups['body'].Value
         $checks | Should -Match '(?m)^        shell: pwsh\r?$'

@@ -169,12 +169,6 @@ if ($null -ne $repositorySyncContext) {
     $terraformVariables["repository_sync_repository_id"] = $repositorySyncContext.RepositoryId
 }
 
-# Only emit the override when a group actually sets it. Writing a null would
-# clobber the Terraform-side default for every other repository.
-if ($settings.WorkloadIdentityFederationSubjectClaimOverrides.ContainsKey("jobWorkflowRef")) {
-    $terraformVariables["github_job_workflow_ref"] = $settings.WorkloadIdentityFederationSubjectClaimOverrides["jobWorkflowRef"]
-}
-
 $terraformVariables | ConvertTo-Json -Depth 100 |
     Set-Content -LiteralPath (Join-Path $terraformModulePath 'terraform.tfvars.json') -Encoding utf8NoBOM
 
@@ -214,9 +208,6 @@ $issueLog = @(Invoke-RepositorySyncLogGroup -Name 'Terraform repository configur
         $planParameters.stateSubscriptionId = $stateSubscriptionId
         $planParameters.stateTenantId = $stateTenantId
         $planParameters.stateClientId = $stateClientId
-    }
-    if ($settings.WorkloadIdentityFederationSubjectClaimOverrides.ContainsKey('jobWorkflowRef')) {
-        $planParameters.jobWorkflowRef = $settings.WorkloadIdentityFederationSubjectClaimOverrides['jobWorkflowRef']
     }
     Invoke-TerraformPlanAndApply @planParameters -Confirm:$false
 })

@@ -2777,11 +2777,27 @@ This section is the implementation-level expression of the **Security stance** p
 - Saved-plan guards may permit naming replacement only from the exact known
   legacy name to the computed current name for the same repository/module and
   tenant. Verify before/after resource identity, old dedicated client/principal,
-  immutable repository/workflow federation, provider context and state-owned
+  immutable repository/environment federation and caller binding, provider context and state-owned
   membership edges. A matching name alone is not ownership evidence. Retained
   federation and memberships must transition to the new identity; deletion of
   unrelated identities, shared groups, foreign principals, imported/moved
   identities or widened trust remains forbidden.
+- Module federation uses the UAMI flexible federated-credential API
+  `2025-01-31-preview` and a canonical claims-matching expression, never a
+  `subject`. It must bind the exact GitHub repository owner ID, repository ID,
+  environment, issuer, audience, and an exact `job_workflow_ref` repository
+  boundary of `Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@*`.
+  The optional caller-workflow suffix remains exact when configured. The
+  expression is deterministic and validated by the saved-plan guard; callers
+  cannot supply an alternate wildcard expression. Validation and registry
+  credentials remain exact-subject credentials.
+- A relevant module credential may transition only from its existing exact
+  Tools-repository legacy subject to the canonical flexible expression, or
+  from that same canonical expression to itself. Previous workflow references
+  from any other owner or repository are not trusted. Preserve identity,
+  credential-name, issuer, audience, provider, ownership, and saved-plan
+  guards. This preview API migration requires recorded SFI review before
+  merge; source review does not authorize an Azure apply.
 - Bicep mapping rebinding requires a trusted current-run/current-attempt
   job-local record produced from the verified saved plan and validated applied
   outputs. Bind it to the Tools repository ID, workflow ref and commit; accept

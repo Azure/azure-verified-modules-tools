@@ -19,7 +19,6 @@ module "bami" {
     var.github_repository_examples_test_execution_environment_name,
   ]
   location                      = var.location
-  github_job_workflow_ref       = var.github_job_workflow_ref
   repository_sync_repository_id = var.repository_sync_repository_id
   is_protected_repo             = var.is_protected_repo
   entra_group_names             = var.entra_group_names

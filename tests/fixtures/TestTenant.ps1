@@ -85,7 +85,7 @@ function New-AvmTestBamiPlan {
         [string[]] $GroupNames = @('avm-test-management-group-owners', 'avm-test-entra-readers'),
         [string] $RepositoryOwnerId = '6844498',
         [string] $RepositorySyncRepositoryId = '1239632211',
-        [string] $JobWorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main',
+        [string] $JobWorkflowRef,
         [string] $ModuleAddress = 'module.azure',
         [string] $IdentityName = 'id-test-terraform-azurerm-avm-ptn-example-repo',
         [string] $PreviousIdentityName = 'Azure-terraform-azurerm-avm-ptn-example-repo',
@@ -167,12 +167,22 @@ AND
             }
         }
         foreach ($environment in $Environments) {
-            $subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:${environment}:job_workflow_ref:$JobWorkflowRef"
-            if ($WorkflowRef) { $subject += ":workflow_ref:$WorkflowRef" }
+            if ($JobWorkflowRef) {
+                $subject = "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:${environment}:job_workflow_ref:$JobWorkflowRef"
+                if ($WorkflowRef) { $subject += ":workflow_ref:$WorkflowRef" }
+                @{
+                    Address = 'module.azure.azapi_resource.identity_federated_credentials["' + $environment + '"]'
+                    Name = if ($WorkflowRef) { "$IdentityName-module-$environment" } else { "$IdentityName-$environment" }
+                    Subject = $subject
+                }
+                continue
+            }
             @{
                 Address = 'module.azure.azapi_resource.identity_federated_credentials["' + $environment + '"]'
                 Name = if ($WorkflowRef) { "$IdentityName-module-$environment" } else { "$IdentityName-$environment" }
-                Subject = $subject
+                Expression = Get-AvmBamiModuleFederationExpression -RepositoryOwnerId $RepositoryOwnerId `
+                    -RepositoryId $RepositoryId -Environment $environment -WorkflowRef $WorkflowRef
+                Module = $true
             }
         }
         @{
@@ -187,17 +197,28 @@ AND
             mode = 'managed'
             type = 'azapi_resource'
             values = @{
-                type = 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview'
+                type = if ($credential.ContainsKey('Module') -and $credential.Module) {
+                    'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview'
+                } else {
+                    'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview'
+                }
                 name = $credential.Name
                 parent_id = if ($KnownClient) { $identity.identity_resource_id } else { $null }
                 body = @{
                     properties = @{
                         audiences = @('api://AzureADTokenExchange')
                         issuer = 'https://token.actions.githubusercontent.com'
-                        subject = $credential.Subject
                     }
                 }
             }
+        }
+        if ($credential.ContainsKey('Module') -and $credential.Module) {
+            $resources[-1].values.body.properties['claimsMatchingExpression'] = @{
+                languageVersion = 1
+                value = $credential.Expression
+            }
+        } else {
+            $resources[-1].values.body.properties['subject'] = $credential.Subject
         }
     }
     $changes = @($resources | ForEach-Object {

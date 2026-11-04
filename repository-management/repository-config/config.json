@@ -24,9 +24,6 @@
       "codeOwnersFileProtectionTeams": [
         "azure-verified-modules-engineering-owners"
       ],
-      "workloadIdentityFederationSubjectClaimOverrides": {
-        "jobWorkflowRef": "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@refs/heads/main"
-      },
       "teams": [
         {
           "name": "azure-verified-modules-module-contributors",

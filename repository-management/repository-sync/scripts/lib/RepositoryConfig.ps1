@@ -104,39 +104,6 @@ function Resolve-RepositorySettings {
     }
     $repositoryTopics = @($repositoryTopics | Select-Object -Unique)
 
-    # Workload identity federation subject-claim overrides, merged per key
-    # across every group containing the repo using the same (order,
-    # declaration index) precedence as managed-file groups: higher order wins.
-    # The `default` group declares a negative order so it always loses.
-    $supportedClaimOverrides = @{
-        jobWorkflowRef = "github_job_workflow_ref"
-    }
-
-    $workloadIdentityFederationSubjectClaimOverrides = @{}
-    foreach ($entry in @(Get-AvmOrderedGroup -Groups $repositoryConfig.repositoryGroups -SelectorProperty 'repositories' -Item $repoId)) {
-        $repositoryGroup = $entry.Group
-        if ($repositoryGroup['workloadIdentityFederationSubjectClaimOverrides']) {
-            $overrides = ConvertTo-AvmSettingDictionary -Value $repositoryGroup['workloadIdentityFederationSubjectClaimOverrides']
-            foreach ($claim in $overrides.Keys) {
-                if (-not $supportedClaimOverrides.ContainsKey($claim)) {
-                    throw "Repository group '$($repositoryGroup.name)' sets unsupported workloadIdentityFederationSubjectClaimOverrides key '$claim'. Supported keys: $($supportedClaimOverrides.Keys -join ', ')."
-                }
-                $workloadIdentityFederationSubjectClaimOverrides[$claim] = $overrides[$claim]
-            }
-        }
-    }
-
-    # A job_workflow_ref claim always carries a fully-qualified git ref
-    # (refs/heads/..., refs/tags/...) or a full commit SHA, even though `uses:`
-    # is normally written as `@main`. Fail here rather than at OIDC exchange.
-    if ($workloadIdentityFederationSubjectClaimOverrides.ContainsKey("jobWorkflowRef")) {
-        $jobWorkflowRefOverride = $workloadIdentityFederationSubjectClaimOverrides["jobWorkflowRef"]
-        $jobWorkflowRefPattern = "^[^/\s@]+/[^/\s@]+/\.github/workflows/[^/\s@]+\.ya?ml@(?:refs/[^\s]+|[0-9a-fA-F]{40})$"
-        if ($jobWorkflowRefOverride -notmatch $jobWorkflowRefPattern) {
-            throw "workloadIdentityFederationSubjectClaimOverrides.jobWorkflowRef must use the form 'owner/repository/.github/workflows/workflow.yml@refs/heads/branch' (a tag ref or full commit SHA is also supported), but was '$jobWorkflowRefOverride'."
-        }
-    }
-
     return @{
         RepositoryGroups                                = $repositoryGroups
         RepositoryGroupNames                            = $repositoryGroupNames
@@ -145,7 +112,6 @@ function Resolve-RepositorySettings {
         CodeOwnersDefaultTeams                          = $codeOwnersDefaultTeams
         CodeOwnersFileProtectionTeams                   = $codeOwnersFileProtectionTeams
         Topics                                          = $repositoryTopics
-        WorkloadIdentityFederationSubjectClaimOverrides = $workloadIdentityFederationSubjectClaimOverrides
         TestTenant                                      = Resolve-AvmGroupTestTenant -Groups $repositoryConfig.repositoryGroups -SelectorProperty 'repositories' -Item $repoId
         EntraGroups                                     = Resolve-AvmRepositoryEntraGroups -Groups $repositoryConfig.repositoryGroups -RepositoryId $repoId
         ExistingIdentity                                = Resolve-AvmGroupExistingIdentity -Groups $repositoryConfig.repositoryGroups -SelectorProperty 'repositories' -Item $repoId

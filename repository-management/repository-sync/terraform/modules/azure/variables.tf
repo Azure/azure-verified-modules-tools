@@ -144,7 +144,8 @@ variable "is_protected_repo" {
 
 variable "github_job_workflow_ref" {
   type        = string
-  description = "GitHub Actions job workflow ref."
+  description = "Exact reusable workflow reference for callers retaining subject-based federation."
+  default     = null
 }
 
 variable "github_organization_id" {
