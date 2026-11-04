@@ -26,7 +26,9 @@ function Invoke-AvmBicepNativeArmOperation {
         [string] $ManagementGroupId,
 
         [ValidateNotNull()]
-        [object] $DefaultProfile
+        [object] $DefaultProfile,
+
+        [switch] $AsJob
     )
 
     Set-StrictMode -Version 3.0
@@ -43,6 +45,10 @@ function Invoke-AvmBicepNativeArmOperation {
     }
     if ($PSBoundParameters.ContainsKey('DefaultProfile')) {
         $arguments.DefaultProfile = $DefaultProfile
+    }
+    if ($AsJob) {
+        if ($Operation -ne 'Create') { throw [AvmConfigurationException]::new('Only deployment creation supports asynchronous execution.') }
+        $arguments.AsJob = $true
     }
     if ($Scope -eq 'group') {
         if ([string]::IsNullOrWhiteSpace($ResourceGroupName)) {
@@ -73,7 +79,7 @@ function Invoke-AvmBicepNativeArmOperation {
     }
     if (-not $PSCmdlet.ShouldProcess($DeploymentName, "$Operation native ARM deployment at $Scope scope")) { return }
     Write-AvmLog -Level Info -Message (
-        "Running $command for deployment '$DeploymentName' at '$Scope' scope with template '$TemplatePath'. " +
+        "Running $command for deployment '$DeploymentName' at '$Scope' scope with template '$TemplatePath' and location '$MetadataLocation'. " +
         'Template parameter values are not logged.')
     if ($Operation -eq 'Create') {
         return & $command @arguments

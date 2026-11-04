@@ -247,7 +247,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
                 if (-not $job.Contains('steps')) { continue }
                 $usesSupport = @($job.steps | Where-Object { $_['uses'] -like './.avm-tools/*' })
                 if ($usesSupport.Count -eq 0) { continue }
-                foreach ($caller in $job.steps | Where-Object { $_['name'] -eq 'Check out caller' }) {
+                foreach ($caller in $job.steps | Where-Object { $_['name'] -in @('Check out caller', 'Check out module repository') }) {
                     $caller.with.Contains('sparse-checkout') | Should -BeFalse
                 }
                 $checkout = @($job.steps | Where-Object { $_.Contains('with') -and $_.with['repository'] -eq 'Azure/azure-verified-modules-tools' })
@@ -282,7 +282,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             $installers = @(
                 foreach ($job in $workflow.jobs.Values) {
                     if (-not $job.Contains('steps')) { continue }
-                    $job.steps | Where-Object { $_.name -eq 'Install Avm.Authoring' }
+                    $job.steps | Where-Object { $_.name -in @('Install Avm.Authoring', 'Install AVM tools') }
                 }
             )
             $installers.Count | Should -BeGreaterThan 0
@@ -315,7 +315,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             $job.permissions.Contains('id-token') | Should -BeFalse
             ($job | ConvertTo-Json -Depth 20) | Should -Not -Match '\bsecrets\b|AVM_CI_|azure/login|environment:'
         }
-        $runtime.jobs.'pr-check'.steps[-1].run | Should -Match '(?m)^\s*avm -SkipModuleVersionCheck pr-check\s*$'
+        $runtime.jobs.'pr-check'.steps[-1].run | Should -Match 'avm -SkipModuleVersionCheck pr-check --passthru'
         $unitResult = @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Run unit tests')
         $unitResult | Should -HaveCount 1
         $unitResult[0].id | Should -BeExactly 'unit-result'
@@ -328,7 +328,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $unitArtifact[0].uses | Should -Match '^actions/upload-artifact@[0-9a-f]{40}$'
         $unitArtifact[0].with.'retention-days' | Should -Be 7
         $unitArtifact[0].with.path | Should -BeExactly '${{ steps.unit-result.outputs.resultPath }}'
-        @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Fail failed unit tests')[0].if |
+        @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Report failed unit tests')[0].if |
             Should -BeExactly "steps.unit-result.outputs.failed == 'True'"
         $unitRun = @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Run unit tests')[0].run
         $unitRun | Should -Match 'Authored unit tests did not return a validated child identity receipt'
@@ -368,17 +368,17 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $prCheck.jobs.check.with.workflowInput | Should -BeExactly '${{ needs.initialize.outputs.workflowInput }}'
         $prCheck.jobs.check.with.baseCommit | Should -BeExactly '${{ needs.initialize.outputs.baseCommit }}'
 
+        $runtime.jobs.'pr-check'.name | Should -BeExactly 'Run PR check'
+        $runtime.jobs.'unit-test'.name | Should -BeExactly 'Run unit tests'
+        $runtime.jobs.'discover-examples'.name | Should -BeExactly 'Discover end-to-end test examples'
+        $runtime.jobs.'e2e-test'.name | Should -BeExactly 'Run end-to-end tests'
         foreach ($jobName in @('pr-check', 'unit-test', 'discover-examples')) {
-            $runtime.jobs[$jobName].name | Should -BeExactly $terraform.jobs[$jobName].name
-        }
-        $runtime.jobs.'e2e-test'.name | Should -BeExactly 'End-to-end tests'
-        foreach ($jobName in @('pr-check', 'unit-test', 'discover-examples')) {
-            @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Check out caller'
-            @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Download prepared authoring runtime'
+            @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Check out module repository'
+            @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Download AVM tools from build job'
         }
         @($runtime.jobs.'pr-check'.steps | ForEach-Object name) | Should -Contain 'Run PR check'
         @($runtime.jobs.'unit-test'.steps | ForEach-Object name) | Should -Contain 'Run unit tests'
-        @($runtime.jobs.'discover-examples'.steps | ForEach-Object name) | Should -Contain 'Select deployments'
+        @($runtime.jobs.'discover-examples'.steps | ForEach-Object name) | Should -Contain 'Select tests and subscriptions'
         $runtime.jobs.'e2e-test'.needs | Should -BeExactly 'discover-examples'
         $runtime.jobs.'e2e-test'.strategy.'fail-fast' | Should -BeFalse
         $runtime.jobs.'e2e-test'.uses | Should -BeExactly './.github/workflows/bicep-module-runtime-deployment.yml'
@@ -394,7 +394,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             $script:workflows['bicep-module-runtime-e2e'].jobs.'select-deployments'.steps,
             $script:workflows['bicep-module-runtime-release'].jobs.release.steps
         ) | ForEach-Object {
-            @($_ | Where-Object name -EQ 'Select prepared authoring runtime')
+            @($_ | Where-Object name -In @('Select prepared authoring runtime', 'Verify downloaded AVM tools'))
         }
 
         $selectors | Should -HaveCount 6
@@ -420,7 +420,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $leaf.concurrency.group | Should -BeExactly '${{ fromJSON(inputs.testCase).ConcurrencyGroup }}'
         $leaf.concurrency.queue | Should -BeExactly 'max'
         $leaf.environment | Should -BeExactly 'avm-validation'
-        foreach ($phase in @('Validate and deploy the E2E test case', 'Run assertions, post hook and cleanup', 'Recover unfinished cleanup from saved state')) {
+        foreach ($phase in @('Validate (What-If) and deploy test to Azure', 'Run post-deployment tests, then delete test resources', 'Retry deleting leftover test resources (only if an earlier step failed)')) {
             @($leaf.steps | Where-Object { $_['name'] -ceq $phase }).Count | Should -Be 1
         }
     }
@@ -439,8 +439,8 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $steps = $script:workflows['bicep-module-runtime-deployment'].jobs.deploy.steps
         $deploy = $steps | Where-Object { $_['id'] -eq 'deploy' }
         $renew = $steps | Where-Object { $_['id'] -eq 'renew_oidc' }
-        $complete = $steps | Where-Object { $_['name'] -eq 'Run assertions, post hook and cleanup' }
-        $recover = $steps | Where-Object { $_['name'] -eq 'Recover unfinished cleanup from saved state' }
+        $complete = $steps | Where-Object { $_['name'] -eq 'Run post-deployment tests, then delete test resources' }
+        $recover = $steps | Where-Object { $_['name'] -eq 'Retry deleting leftover test resources (only if an earlier step failed)' }
 
         $renew | Should -Not -BeNullOrEmpty
         $deploy.env.METADATA_LOCATION | Should -BeExactly 'WestEurope'
@@ -478,7 +478,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         }
         $inner = $script:workflows['bicep-module-deployment']
         $inner.on.workflow_call.inputs.targetCommit.required | Should -BeFalse
-        ($inner.jobs.job_module_deploy_validation.steps | Where-Object { $_['name'] -eq 'Check out caller' }).with.ref |
+        ($inner.jobs.job_module_deploy_validation.steps | Where-Object { $_['name'] -eq 'Check out module repository' }).with.ref |
             Should -BeExactly '${{ inputs.targetCommit || github.sha }}'
     }
 
@@ -607,7 +607,7 @@ Describe 'Bicep required checks and deployment guards' {
     ) {
         $steps = $script:workflows['bicep-module-deployment'].jobs.job_module_deploy_validation.steps
         $selected = @(foreach ($step in $steps) {
-                if ($step.name -eq 'Report skipped deployment') {
+                if ($step.name -eq 'Skip test (not selected to run)') {
                     $step.if | Should -BeExactly 'fromJSON(inputs.testCase).e2eIgnore'
                     if ($Ignored) { $step }
                 }
@@ -618,7 +618,7 @@ Describe 'Bicep required checks and deployment guards' {
             })
         if ($Ignored) {
             $selected.Count | Should -Be 1
-            $selected[0].name | Should -BeExactly 'Report skipped deployment'
+            $selected[0].name | Should -BeExactly 'Skip test (not selected to run)'
             $selected[0].run | Should -Match 'Deployment skipped'
             $selected[0].Contains('uses') | Should -BeFalse
             $selected[0].run | Should -Not -Match 'GITHUB_WORKSPACE|Initialize-AvmWorkflow|Import-Module'
@@ -660,7 +660,7 @@ Describe 'Bicep required checks and deployment guards' {
         $job.environment | Should -BeExactly 'avm-validation'
         $job.permissions.'id-token' | Should -Be 'write'
         $job.concurrency.group | Should -BeExactly '${{ fromJSON(inputs.testCase).concurrencyGroup }}'
-        foreach ($step in $job.steps | Where-Object name -NE 'Report skipped deployment') {
+        foreach ($step in $job.steps | Where-Object name -NE 'Skip test (not selected to run)') {
             $step.if | Should -Match '!fromJSON\(inputs.testCase\).e2eIgnore'
         }
     }
@@ -716,7 +716,7 @@ Describe 'Bicep required checks and deployment guards' {
         $ids | Should -Be @('auth', 'setup', 'login_oidc', 'context', 'deploy', 'renew_oidc', 'complete')
         foreach ($step in $steps) {
             if ($step.Contains('env') -and ($step.env['AVM_CI_SECRETS'] -or $step.env['AVM_CI_VARIABLES'])) { $step.id | Should -BeIn @('auth', 'deploy') }
-            if ($step['id'] -in @('renew_oidc', 'complete') -or $step.name -eq 'Recover unfinished native cleanup') {
+            if ($step['id'] -in @('renew_oidc', 'complete') -or $step.name -eq 'Retry deleting leftover test resources (only if an earlier step failed)') {
                 $step.if | Should -Match '!cancelled\(\)'
             }
         }
@@ -724,7 +724,7 @@ Describe 'Bicep required checks and deployment guards' {
         $steps[-1].with.path | Should -Match 'avm-bicep-state'
         ($steps | Where-Object { $_['id'] -eq 'login_oidc' }).with.'subscription-id' |
             Should -BeExactly ($steps | Where-Object { $_['id'] -eq 'renew_oidc' }).with.'subscription-id'
-        ($steps | Where-Object name -EQ 'Recover unfinished native cleanup').if | Should -Match "removeDeployment == 'true'"
+        ($steps | Where-Object name -EQ 'Retry deleting leftover test resources (only if an earlier step failed)').if | Should -Match "removeDeployment == 'true'"
     }
 
     It 'pins both login clients and every native phase to the same checked module identity' {
@@ -750,7 +750,7 @@ Describe 'Bicep required checks and deployment guards' {
         }
 
         foreach ($step in $action.runs.steps | Where-Object {
-                $_['id'] -in @('deploy', 'complete') -or $_.name -eq 'Recover unfinished native cleanup'
+                $_['id'] -in @('deploy', 'complete') -or $_.name -eq 'Retry deleting leftover test resources (only if an earlier step failed)'
             }) {
             $step.env.ARM_CLIENT_ID | Should -BeExactly '${{ steps.auth.outputs.clientId }}'
             $step.env.ARM_TENANT_ID | Should -BeExactly '${{ steps.context.outputs.tenantId }}'
@@ -837,7 +837,7 @@ Describe 'Bicep required checks and deployment guards' {
         $selected = @(
             $steps | Where-Object { $_['id'] -eq 'renew_oidc' }
             $steps | Where-Object { $_['id'] -eq 'complete' }
-            $steps | Where-Object name -EQ 'Recover unfinished native cleanup'
+            $steps | Where-Object name -EQ 'Retry deleting leftover test resources (only if an earlier step failed)'
         )
         $priorOutcomes = [Collections.Generic.List[string]]::new()
         $priorOutcomes.Add($Deploy)

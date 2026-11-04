@@ -47,7 +47,7 @@ function Invoke-AvmBicepNativeTestCase {
     Invoke-AvmBicepAzureContext -SubscriptionId $Item.SubscriptionId -TenantId $TenantId -ScriptBlock {
         Assert-AvmBicepAzureIdentity -AzPath $executionOptions.AzPath -SubscriptionId $Item.SubscriptionId -TenantId $TenantId
         Write-AvmLog -Level Info -Message (
-            "Preparing Bicep E2E case '$($Item.Case.RelativeDirectory)' at '$($Item.Scope)' scope; phase '$($executionOptions.Phase)'.")
+            "Deploying test '$($Item.Case.RelativeDirectory)' at '$($Item.Scope)' scope.")
         $assertRegistrationIdentity = {
             Assert-AvmBicepAzureIdentity -AzPath $executionOptions.AzPath `
                 -SubscriptionId $executionOptions.SubscriptionId -TenantId $executionOptions.TenantId
@@ -97,7 +97,7 @@ function Invoke-AvmBicepNativeTestCase {
             completionStarted                    = $false
         }
         Save-AvmBicepCleanupState -State $state -Path $handle.Path -Confirm:$false
-        Write-AvmLog -Level Info -Message "Bicep cleanup state for '$($Item.Case.RelativeDirectory)': $($handle.Path)"
+        Write-AvmLog -Level Info -Message "Saved clean-up state for '$($Item.Case.RelativeDirectory)' at '$($handle.Path)'."
         $issues = [System.Collections.Generic.List[object]]::new()
         $completion = $null
         $interrupted = $false
@@ -196,8 +196,8 @@ function Invoke-AvmBicepNativeTestCase {
                     -RecoveryDeadlineUtc $executionOptions.RecoveryDeadlineUtc `
                     -SensitiveValues @(Get-AvmBicepDiagnosticSecret -Parameters $validated.DeploymentInput.Parameters `
                         -SecretInputs $executionOptions.CiInput.Secrets) `
-                    -ClassifyRetry:($attempt -lt $attemptLimit) -ResourceLocation $validated.Location -Confirm:$false
-                Write-AvmLog -Level Info -Message "Deployment attempt $attempt ended with '$($deployed.Outcome)'."
+                    -ClassifyRetry:($attempt -lt $attemptLimit) -ShowProgress -ResourceLocation $validated.Location -Confirm:$false
+                Write-AvmLog -Level Info -Message "Finished deployment attempt $attempt with '$($deployed.Outcome)'."
                 if ($deployed.Status -eq 'pass' -or $attempt -eq $attemptLimit -or -not $deployed.RetryMode -or
                     ($deployed.RetryMode -eq 'Fresh' -and -not $canFresh)) { break }
 

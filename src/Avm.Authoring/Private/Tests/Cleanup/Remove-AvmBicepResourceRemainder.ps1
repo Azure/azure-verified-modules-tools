@@ -52,6 +52,7 @@ function Remove-AvmBicepResourceRemainder {
                             if ([int]$response.StatusCode -lt 200 -or [int]$response.StatusCode -ge 300) {
                                 throw [AvmProcessException]::new([string](('Purge of resource [{0}] failed with error code [{1}]' -f $ResourceId, $response.StatusCode)))
                             }
+                            Write-AvmLog -Level Info -Message "Purge request accepted for $ResourceId (HTTP $($response.StatusCode))."
                         }
                     }
                     break
@@ -68,6 +69,7 @@ function Remove-AvmBicepResourceRemainder {
                         if ($PSCmdlet.ShouldProcess(('Key Vault with ID [{0}]' -f $matchingKeyVault.Id), 'Purge')) {
                             try {
                                 $null = Remove-AzKeyVault -ResourceId $matchingKeyVault.Id -InRemovedState -Force -Location $matchingKeyVault.Location -ErrorAction 'Stop'
+                                Write-AvmLog -Level Info -Message "Purge request succeeded for $ResourceId."
                             }
                             catch {
                                 if (-not $RequireCompleteRemoval -and
@@ -92,6 +94,7 @@ function Remove-AvmBicepResourceRemainder {
                         Write-Verbose ('[*] Purging resource [{0}] of type [{1}]' -f $resourceName, $Type) -Verbose
                         if ($PSCmdlet.ShouldProcess(('Cognitive services account with ID [{0}]' -f $matchingAccount.Id), 'Purge')) {
                             $null = Remove-AzCognitiveServicesAccount -InRemovedState -Force -Location $matchingAccount.Location -ResourceGroupName $resourceGroupName -Name $matchingAccount.AccountName
+                            Write-AvmLog -Level Info -Message "Purge request succeeded for $ResourceId."
                         }
                     }
                     break
@@ -118,6 +121,7 @@ function Remove-AvmBicepResourceRemainder {
                                 throw [AvmProcessException]::new(
                                     "API Management purge failed with HTTP $($response.StatusCode): $ResourceId")
                             }
+                            Write-AvmLog -Level Info -Message "Purge request accepted for $ResourceId (HTTP $($response.StatusCode))."
                         }
                     }
                     break
@@ -155,6 +159,7 @@ function Remove-AvmBicepResourceRemainder {
                                 $null = Undo-AzRecoveryServicesBackupItemDeletion -Item $backupItem -VaultId $vaultId -Force
                             }
                             $null = Disable-AzRecoveryServicesBackupProtection -Item $backupItem -VaultId $vaultId -RemoveRecoveryPoints -Force
+                            Write-AvmLog -Level Info -Message "Backup data removal request succeeded for $ResourceId."
                         }
                     }
                     finally {
@@ -195,6 +200,7 @@ function Remove-AvmBicepResourceRemainder {
                         }
                         if ($PSCmdlet.ShouldProcess($candidate, 'Remove Databricks managed resource group')) {
                             $null = Remove-AzResourceGroup -Name $candidate.Split('/')[-1] -Force
+                            Write-AvmLog -Level Info -Message "Managed resource group removal request succeeded: $candidate."
                         }
                     }
                     break

@@ -1718,12 +1718,29 @@ from the deployment and failed operation status messages, including nested
 details, plus a valid deployment correlation ID when available. Redact supplied
 parameter and CI-secret values and recognizable credentials, connection-string
 fields, bearer tokens and SAS signatures before logging. Never render raw
-response objects or parameter values. Diagnostic read failure is explicit and
-does not authorize retry or change cleanup safety. This change to the prior
-diagnostic confidentiality boundary requires SFI sign-off before merge.
+response objects or parameter values. Deployment output names, types and
+values are an explicit exception: log the values as returned by ARM. ARM
+does not expose secure output values; if one is unexpectedly present, do not
+log it. Module authors must keep secrets out of non-secure outputs, as required
+by the AVM specification and `outputs-should-not-contain-secrets` linter rule.
+Diagnostic read failure is explicit and does not authorize retry or change
+cleanup safety. The changes to error diagnostics and deployment output logging
+require SFI sign-off before merge.
 An unclassified submission exception may be recovered only by an exact Failed
 root record and complete eligible operation evidence; a malformed returned
 identity or unreadable classification must never enable replay.
+
+Before each submission, show ARM What-If resource IDs and change types using
+`ResourceIdOnly`. What-If failure is visible but does not permit a retry or
+replace validation. Submit through an Azure job and poll deployment operations
+while it runs; show each changed resource state, timestamp and duration without
+printing operation bodies. Bound nesting and pagination, validate nested
+deployment IDs and follow only the original subscription or management scope.
+Progress reads do not affect submission, observation, recovery or cleanup
+authority. Show the final exact deployment identity, state, location, duration,
+correlation ID, observed resource states and outputs. List individual
+post-deployment test results and distinguish successful removal or purge
+requests from confirmed absence.
 
 The default policy assigns narrowly targeted `InternalServerError` leaves for
 application gateways, private endpoints and PostgreSQL flexible servers to
@@ -1864,7 +1881,10 @@ artifact contains the engine, aggregate counts, stable issue coordinates and
 bounded normalized diagnostics; it never includes environment values or an
 unfiltered test error record. This preserves the unit job's failure semantics
 while giving maintainers a per-module diagnostic for platform-specific Pester
-failures.
+failures. Unit jobs also report each normalized issue using the corresponding
+GitHub annotation severity. PR-check jobs annotate each nested error and
+warning with its code, severity, file and message while preserving the
+original check result and failure status.
 
 Every selected non-fork deployment route is native. The exact root
 `.reserved-test-subscriptions.json` map remains the only source of reservation

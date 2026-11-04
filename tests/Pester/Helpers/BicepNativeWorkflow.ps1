@@ -59,6 +59,9 @@ function New-NativeBicepWorkflowFixture {
         param($State)
         $script:nativeWorkflow = $State
         Mock Assert-AvmBicepAzureDependency {}
+        Mock Write-AvmBicepWhatIf {}
+        Mock Write-AvmBicepDeploymentProgress {}
+        Mock Write-AvmBicepDeploymentSummary {}
         Mock Get-Command { [pscustomobject]@{ Source = 'fake-az' } } -ParameterFilter { $Name -eq 'az' }
         Mock Resolve-AvmTool { [pscustomobject]@{ Path = 'fake-bicep'; Source = 'fixture'; Version = 'pinned' } }
         Mock Start-Sleep {}
@@ -285,12 +288,18 @@ function New-NativeBicepWorkflowFixture {
                 throw [InvalidOperationException]::new('Native submission reported a resource failure.')
             }
             if ($state.NativeResponseMode -eq 'array-id') {
-                return @{ Id = @($id); ProvisioningState = $provisioning; Outputs = $state.Outputs }
+                $response = @{ Id = @($id); ProvisioningState = $provisioning; Outputs = $state.Outputs }
             }
-            if ($state.NativeResponseMode -eq 'array-state') {
-                return @{ Id = $id; ProvisioningState = @($provisioning); Outputs = $state.Outputs }
+            elseif ($state.NativeResponseMode -eq 'array-state') {
+                $response = @{ Id = $id; ProvisioningState = @($provisioning); Outputs = $state.Outputs }
             }
-            return @{ Id = $id; DeploymentName = $DeploymentName; ProvisioningState = $provisioning; Outputs = $state.Outputs }
+            else {
+                $response = @{ Id = $id; DeploymentName = $DeploymentName; ProvisioningState = $provisioning; Outputs = $state.Outputs }
+            }
+            if ($AsJob) {
+                return Start-ThreadJob -ScriptBlock { param($Deployment) $Deployment } -ArgumentList (, $response)
+            }
+            return $response
         }
         Mock Invoke-AzRestMethod {
             $state = $script:nativeWorkflow

@@ -11,6 +11,7 @@ function New-AvmBicepNativeDeployment {
         [string] $ResourceLocation,
         [AllowEmptyCollection()] [string[]] $SensitiveValues = @(),
         [switch] $ClassifyRetry,
+        [switch] $ShowProgress,
         [ValidateScript({ $_.Kind -eq [System.DateTimeKind]::Utc })]
         [datetime] $RecoveryDeadlineUtc
     )
@@ -69,8 +70,41 @@ function New-AvmBicepNativeDeployment {
     $submissionReturned = $false
     $failureQueryAllowed = $false
     $recoveredFailure = $false
+    $observed = @{}
+    $progressOptions = @{ DeploymentId = $id; Observed = $observed; SensitiveValues = $SensitiveValues }
+    if ($inputOptions.ContainsKey('DefaultProfile')) { $progressOptions.DefaultProfile = $inputOptions.DefaultProfile }
     try {
-        $response = Invoke-AvmBicepNativeArmOperation @inputOptions -Operation Create -Confirm:$false
+        if ($ShowProgress) {
+            Write-AvmBicepWhatIf -DeploymentInput $inputOptions -SensitiveValues $SensitiveValues
+            $job = Invoke-AvmBicepNativeArmOperation @inputOptions -Operation Create -AsJob -Confirm:$false
+            if ($job -isnot [System.Management.Automation.Job]) {
+                throw [AvmProcessException]::new('Azure deployment did not return an asynchronous job.')
+            }
+            try {
+                Write-AvmLog -Level Info -Message "Polling resource states with Invoke-AzRestMethod GET for deployment '$id'."
+                while ($job.State -in @('NotStarted', 'Running')) {
+                    Write-AvmBicepDeploymentProgress @progressOptions
+                    $null = Wait-Job -Job $job -Timeout 10
+                }
+                Write-AvmBicepDeploymentProgress @progressOptions
+                if ($job.State -in @('Stopping', 'Stopped')) {
+                    throw [System.OperationCanceledException]::new('Azure deployment job was stopped.')
+                }
+                $response = Receive-Job -Job $job -ErrorAction Stop
+                if ($job.State -ne 'Completed') {
+                    $reason = $job.JobStateInfo.Reason
+                    if ($null -ne $reason) { throw $reason }
+                    throw [AvmProcessException]::new("Azure deployment job ended in state '$($job.State)'.")
+                }
+            }
+            finally {
+                if ($job.State -in @('Running', 'NotStarted')) { Stop-Job -Job $job -ErrorAction Continue }
+                Remove-Job -Job $job -Force -ErrorAction Continue
+            }
+        }
+        else {
+            $response = Invoke-AvmBicepNativeArmOperation @inputOptions -Operation Create -Confirm:$false
+        }
         $submissionReturned = $true
         if ($null -eq $response -or $response -is [System.Collections.IList] -or
             (Get-AvmPropertyValue -InputObject $response -Name 'Id' -NoEnumerate) -isnot [string] -or
@@ -133,6 +167,9 @@ function New-AvmBicepNativeDeployment {
                 Write-AvmLog -Level Warning -Message "Status recovery for '$name' did not confirm success; outcome '$($entry['status'])'."
             }
         }
+    }
+    if ($ShowProgress) {
+        Write-AvmBicepDeploymentSummary @progressOptions -Scope $DeploymentInput.Scope -Location $DeploymentInput.MetadataLocation
     }
     if ($entry['status'] -ne 'Succeeded') {
         $readDiagnostics = $entry['status'] -eq 'Failed'

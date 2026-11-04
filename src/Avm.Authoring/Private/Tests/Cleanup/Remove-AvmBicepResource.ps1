@@ -476,6 +476,7 @@ function Remove-AvmBicepResource {
                     $responseContent = $purgeResource.Content | ConvertFrom-Json
                     throw [AvmProcessException]::new([string](('{0} : {1}' -f $responseContent.error.code, $responseContent.error.message)))
                 }
+                Write-AvmLog -Level Info -Message "Requested purge for $ResourceId (HTTP $($purgeResource.StatusCode))."
 
                 $retryCount = 0
                 $retryLimit = 240
@@ -494,6 +495,7 @@ function Remove-AvmBicepResource {
                         })
                     $workspaceExists = @($workspace | Where-Object { $null -ne $_ }).Count -gt 0
                 } while ($workspaceExists)
+                Write-AvmLog -Level Info -Message "Confirmed the workspace is absent after purge: $ResourceId."
             }
             break
         }
@@ -633,6 +635,7 @@ function Remove-AvmBicepResource {
                         $null = Invoke-AvmBicepCleanupCli -ArgumentList @(
                             'apim', 'deletedservice', 'purge', '--service-name', $resourceName, '--location', $apimLocation
                         )
+                        Write-AvmLog -Level Info -Message "Requested purge for $ResourceId."
                     }
                 }
                 else {
@@ -655,6 +658,7 @@ function Remove-AvmBicepResource {
                             $null = Invoke-AvmBicepCleanupCli -ArgumentList @(
                                 'apim', 'deletedservice', 'purge', '--service-name', $resourceName, '--location', $apimLocation
                             )
+                            Write-AvmLog -Level Info -Message "Requested purge for $ResourceId."
                         }
                     }
                     else {

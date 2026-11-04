@@ -23,7 +23,7 @@ permissions: {}
 
 jobs:
   deploy:
-    name: Deploy [${{ fromJSON(inputs.testCase).Name }}] on [${{ fromJSON(inputs.testCase).SubscriptionName }}]
+    name: Run E2E test [${{ fromJSON(inputs.testCase).Name }}] on [${{ fromJSON(inputs.testCase).SubscriptionName }}]
     environment: avm-validation
     runs-on: ubuntu-latest
     permissions:
@@ -35,24 +35,24 @@ jobs:
       group: ${{ fromJSON(inputs.testCase).ConcurrencyGroup }}
       queue: max
     steps:
-      - name: Report skipped deployment
+      - name: Skip test (not selected to run)
         if: fromJSON(inputs.testCase).E2eIgnore
         shell: pwsh
         run: Write-Output 'Deployment skipped because .e2eignore is set.'
-      - name: Check out caller
+      - name: Check out module repository
         if: ${{ !fromJSON(inputs.testCase).E2eIgnore }}
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.targetCommit }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Download prepared authoring runtime
+      - name: Download AVM tools from build job
         if: ${{ !fromJSON(inputs.testCase).E2eIgnore && inputs.authoringArtifact != '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ inputs.authoringArtifact }}
           path: ${{ runner.temp }}/avm-authoring
-      - name: Select prepared authoring runtime
+      - name: Verify downloaded AVM tools
         if: ${{ !fromJSON(inputs.testCase).E2eIgnore && inputs.authoringArtifact != '' }}
         shell: pwsh
         run: |
@@ -85,11 +85,11 @@ jobs:
           "AVM_AUTHORING_MODULE=$discoveryManifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "AVM_AUTHORING_ARTIFACT_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "AVM_AUTHORING_ARTIFACT_MANIFEST_SHA256=$artifactHash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Install Avm.Authoring
+      - name: Install AVM tools
         if: >-
           !fromJSON(inputs.testCase).E2eIgnore && env.AVM_AUTHORING_MODULE == 'Avm.Authoring'
         uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
-      - name: Verify test selection and prepare Azure dependencies
+      - name: Check selected test and install Azure tools
         id: context
         if: ${{ !fromJSON(inputs.testCase).E2eIgnore }}
         shell: pwsh
@@ -174,7 +174,7 @@ jobs:
           foreach ($property in $context.PSObject.Properties) {
             "$($property.Name)=$($property.Value)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           }
-      - name: Sign in with OIDC
+      - name: Sign in to Azure
         if: ${{ !fromJSON(inputs.testCase).E2eIgnore }}
         uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
         with:
@@ -182,7 +182,7 @@ jobs:
           tenant-id: ${{ steps.context.outputs.TenantId }}
           subscription-id: ${{ steps.context.outputs.SubscriptionId }}
           enable-AzPSSession: true
-      - name: Validate and deploy the E2E test case
+      - name: Validate (What-If) and deploy test to Azure
         id: deploy
         if: ${{ !fromJSON(inputs.testCase).E2eIgnore }}
         shell: pwsh
@@ -223,7 +223,7 @@ jobs:
           }
           Write-Host "Running avm test e2e --ecosystem bicep --example '$env:EXAMPLE' --phase Deploy for '$env:MODULE_PATH'; metadata location '$env:METADATA_LOCATION', isolation '$env:REQUIRE_ISOLATION'."
           avm -SkipModuleVersionCheck @arguments
-      - name: Renew OIDC sign-in for completion
+      - name: Sign in to Azure again before tests and clean-up
         id: renew_oidc
         if: ${{ !cancelled() && (success() || failure()) && steps.deploy.outcome != 'skipped' }}
         uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
@@ -232,7 +232,7 @@ jobs:
           tenant-id: ${{ steps.context.outputs.TenantId }}
           subscription-id: ${{ steps.context.outputs.SubscriptionId }}
           enable-AzPSSession: true
-      - name: Run assertions, post hook and cleanup
+      - name: Run post-deployment tests, then delete test resources
         if: ${{ !cancelled() && (success() || failure()) && (steps.deploy.outcome == 'success' || steps.deploy.outcome == 'failure') && steps.renew_oidc.outcome == 'success' }}
         shell: pwsh
         env:
@@ -244,10 +244,10 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
           Set-Location (Join-Path $env:GITHUB_WORKSPACE $env:MODULE_PATH)
-          Write-Host "Running avm test e2e --ecosystem bicep --phase Complete for '$env:MODULE_PATH' using the saved cleanup state."
+          Write-Host "Running post-deployment tests and clean-up for '$env:MODULE_PATH' with avm test e2e --ecosystem bicep --phase Complete and the saved cleanup state."
           avm -SkipModuleVersionCheck test e2e --ecosystem bicep --subscription-id $env:SUBSCRIPTION_ID `
             --tenant-id $env:TENANT_ID --phase Complete --cleanup-state-path $env:STATE_PATH --confirm=false
-      - name: Recover unfinished cleanup from saved state
+      - name: Retry deleting leftover test resources (only if an earlier step failed)
         if: ${{ !cancelled() && failure() && steps.deploy.outcome != 'skipped' && fromJSON(inputs.workflowInput).removeDeployment == 'true' && steps.renew_oidc.outcome == 'success' }}
         shell: pwsh
         env:
@@ -260,7 +260,7 @@ jobs:
           Write-Host 'Running avm test cleanup using the saved cleanup state and selected subscription.'
           avm -SkipModuleVersionCheck test cleanup --state-path $env:STATE_PATH --subscription-id $env:SUBSCRIPTION_ID `
             --tenant-id $env:TENANT_ID --confirm=false
-      - name: Retain recovery state
+      - name: Upload clean-up state for later recovery
         if: always() && steps.context.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
