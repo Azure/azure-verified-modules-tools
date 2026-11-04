@@ -7,13 +7,38 @@
 
 function Assert-AvmBamiRepositorySyncRunContext {
     [CmdletBinding()]
-    param([Parameter(Mandatory)] [bool] $PlanOnly)
+    param(
+        [Parameter(Mandatory)] [bool] $PlanOnly,
+        [bool] $AllowExampleRepositoryBranchApply = $false,
+        [string] $RepoId,
+        [object] $ResolvedRepository
+    )
 
     $manualBranchPreview = $PlanOnly -and
         $env:GITHUB_EVENT_NAME -ceq 'workflow_dispatch' -and
         $env:GITHUB_REF -cmatch '^refs/heads/[^\r\n]+$'
+    $exampleRepositoryBranchApply = -not $PlanOnly -and $AllowExampleRepositoryBranchApply
     if ($env:GITHUB_ACTIONS -cne 'true' -or
-        $env:GITHUB_REPOSITORY -cne 'Azure/azure-verified-modules-tools' -or
+        $env:GITHUB_REPOSITORY -cne 'Azure/azure-verified-modules-tools') {
+        throw [System.InvalidOperationException]::new(
+            'BAMI repository sync requires trusted Azure/azure-verified-modules-tools in GitHub Actions.')
+    }
+    if ($exampleRepositoryBranchApply) {
+        if ($env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or
+            $env:GITHUB_REF -cnotmatch '^refs/heads/[^/\r\n][^\r\n]*$' -or
+            $env:GITHUB_REF -ceq 'refs/heads/main' -or
+            $RepoId -cne 'avm-ptn-example-repo' -or
+            $null -eq $ResolvedRepository -or
+            $ResolvedRepository.full_name -cne 'Azure/terraform-azurerm-avm-ptn-example-repo' -or
+            $ResolvedRepository.fork -ne $false -or
+            $ResolvedRepository.owner.login -cne 'Azure' -or
+            [string]$ResolvedRepository.owner.id -cnotmatch '^[1-9][0-9]*$') {
+            throw [System.InvalidOperationException]::new(
+                'The branch-apply opt-in requires one resolved Azure avm-ptn-example-repo target from a non-main manual tools workflow.')
+        }
+        return
+    }
+    if ($AllowExampleRepositoryBranchApply -or
         ($env:GITHUB_REF -cne 'refs/heads/main' -and -not $manualBranchPreview)) {
         throw [System.InvalidOperationException]::new(
             'BAMI repository sync requires trusted Azure/azure-verified-modules-tools main in GitHub Actions, except for manual plan-only branch previews.')
@@ -889,7 +914,8 @@ function Resolve-AvmRepositorySyncContext {
         [Parameter(Mandatory)] [string] $RepoId,
         [Parameter(Mandatory)] [string] $Repository,
         [Parameter(Mandatory)] [string] $RepositorySyncRepositoryId,
-        [bool] $PlanOnly = $false
+        [bool] $PlanOnly = $false,
+        [bool] $AllowExampleRepositoryBranchApply = $false
     )
 
     Set-StrictMode -Version 3.0
@@ -900,13 +926,14 @@ function Resolve-AvmRepositorySyncContext {
         throw [System.ArgumentException]::new('Repository sync requires the selected canonical Azure AVM repository.')
     }
     $null = Get-AvmTestIdentityName -Repository $Repository
-    Assert-AvmBamiRepositorySyncRunContext -PlanOnly $PlanOnly
     $toolsContext = Resolve-AvmRepositorySyncFederationContext -RepositoryId $RepositorySyncRepositoryId
     $repo = Invoke-RepositoryGitHubApi -Endpoint "repos/$Repository"
     if ($repo.full_name -cne $Repository -or $repo.fork -or $repo.id -le 0 -or
         [string]$repo.owner.id -cne $toolsContext.OrganizationId -or $repo.owner.login -cne 'Azure') {
         throw [System.InvalidOperationException]::new('GitHub returned an unexpected repository identity.')
     }
+    Assert-AvmBamiRepositorySyncRunContext -PlanOnly $PlanOnly `
+        -AllowExampleRepositoryBranchApply $AllowExampleRepositoryBranchApply -RepoId $RepoId -ResolvedRepository $repo
     if ($Repository -imatch 'windows|w5s') {
         $installed = @(Get-RepositoryInstalledRepositories)
         if (@($installed | Where-Object { $_.full_name -ceq $Repository }).Count -ne 1) {

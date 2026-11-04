@@ -12,6 +12,7 @@ param(
     [string]$stateSubscriptionId = "",
     [string]$stateClientId = "",
     [bool]$planOnly = $false,
+    [bool]$allowExampleRepositoryBranchApply = $false,
     [string]$repoId = "avm-ptn-example-repo",
     [string]$repoUrl = "https://github.com/Azure/terraform-azurerm-avm-ptn-example-repo",
     [string]$outputDirectory = ".",
@@ -88,9 +89,6 @@ $selectedTestTenant = if ($repositoryCreationModeEnabled) { 'none' } else { $set
 if (-not $repositoryCreationModeEnabled -and $selectedTestTenant -cne 'bami') {
     throw [System.InvalidOperationException]::new('The legacy test tenant is retired. Normal repository sync requires testTenant bami.')
 }
-if ($selectedTestTenant -ceq 'bami' -and $env:GITHUB_ACTIONS -eq 'true') {
-    Assert-AvmBamiRepositorySyncRunContext -PlanOnly $planOnly
-}
 $testTenant = if ($repositoryCreationModeEnabled) {
     [pscustomobject]@{ TestTenant = 'none'; Settings = $null }
 }
@@ -113,7 +111,8 @@ Write-Information "Repository: $orgAndRepoName; plan only: $planOnly; force file
 $discovery = Invoke-RepositorySyncLogGroup -Name 'GitHub repository and team discovery' -Action {
     $context = if ($repositoryCreationModeEnabled) { $null } else {
         Resolve-AvmRepositorySyncContext -RepoId $repoId -Repository $orgAndRepoName `
-            -RepositorySyncRepositoryId $repositorySyncRepositoryId -PlanOnly $planOnly
+            -RepositorySyncRepositoryId $repositorySyncRepositoryId -PlanOnly $planOnly `
+            -AllowExampleRepositoryBranchApply $allowExampleRepositoryBranchApply
     }
     $tree = if ($repositoryCreationModeEnabled) { $null } else {
         Get-RepositoryDefaultBranchTree -orgAndRepoName $orgAndRepoName

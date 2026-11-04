@@ -3012,6 +3012,11 @@ validate without publishing. Candidate and receipt artifacts remain diagnostic
 outputs, not inter-job transfers. Keep the candidate identity configuration,
 OIDC permission and existing `avm-validation` federation for future authenticated
 checks, but the combined job does not use that environment's OIDC subject.
+The repository-management Terraform sync's only non-main apply exception is an
+explicitly selected `workflow_dispatch` for `avm-ptn-example-repo`: it must use
+the current workflow source, a non-main tools branch, and independently
+verified resolved repository identity. It is never available to schedules,
+repository dispatches, `All`, or any other repository.
 Restoring authenticated candidate checks requires a compatible isolation and
 federation design first. Sharing the preparation environment and runner with
 module-owned checks removes the former validation isolation boundary and

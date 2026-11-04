@@ -60,6 +60,64 @@ Describe 'Test identity naming' {
     }
 }
 
+Describe 'BAMI repository-sync run context' {
+    BeforeEach {
+        $script:previousRunContext = @{}
+        foreach ($name in @('GITHUB_ACTIONS', 'GITHUB_REPOSITORY', 'GITHUB_EVENT_NAME', 'GITHUB_REF')) {
+            $script:previousRunContext[$name] = [Environment]::GetEnvironmentVariable($name)
+        }
+        $env:GITHUB_ACTIONS = 'true'
+        $env:GITHUB_REPOSITORY = 'Azure/azure-verified-modules-tools'
+        $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
+        $env:GITHUB_REF = 'refs/heads/fix/example-repository-apply'
+    }
+
+    AfterEach {
+        foreach ($name in $script:previousRunContext.Keys) {
+            [Environment]::SetEnvironmentVariable(
+                $name,
+                ($null -eq $script:previousRunContext[$name] ? [NullString]::Value : $script:previousRunContext[$name]),
+                'Process'
+            )
+        }
+    }
+
+    It 'allows only the resolved example repository for the manual branch apply opt-in' {
+        {
+            Assert-AvmBamiRepositorySyncRunContext -PlanOnly $false -AllowExampleRepositoryBranchApply $true `
+                -RepoId 'avm-ptn-example-repo' -ResolvedRepository $script:repository
+        } | Should -Not -Throw
+    }
+
+    It 'preserves manual branch previews and trusted main applies without the opt-in' {
+        { Assert-AvmBamiRepositorySyncRunContext -PlanOnly $true } | Should -Not -Throw
+
+        $env:GITHUB_EVENT_NAME = 'repository_dispatch'
+        $env:GITHUB_REF = 'refs/heads/main'
+        { Assert-AvmBamiRepositorySyncRunContext -PlanOnly $false } | Should -Not -Throw
+    }
+
+    It 'rejects non-manual, main, preview, or misbound example branch apply opt-ins: <Case>' -ForEach @(
+        @{ Case = 'scheduled event'; Event = 'schedule'; Ref = 'refs/heads/fix/example-repository-apply'; PlanOnly = $false; RepoId = 'avm-ptn-example-repo'; Repository = $null }
+        @{ Case = 'repository dispatch'; Event = 'repository_dispatch'; Ref = 'refs/heads/fix/example-repository-apply'; PlanOnly = $false; RepoId = 'avm-ptn-example-repo'; Repository = $null }
+        @{ Case = 'main branch'; Event = 'workflow_dispatch'; Ref = 'refs/heads/main'; PlanOnly = $false; RepoId = 'avm-ptn-example-repo'; Repository = $null }
+        @{ Case = 'plan-only execution'; Event = 'workflow_dispatch'; Ref = 'refs/heads/fix/example-repository-apply'; PlanOnly = $true; RepoId = 'avm-ptn-example-repo'; Repository = $null }
+        @{ Case = 'all repository selection'; Event = 'workflow_dispatch'; Ref = 'refs/heads/fix/example-repository-apply'; PlanOnly = $false; RepoId = 'All'; Repository = $null }
+        @{ Case = 'other module'; Event = 'workflow_dispatch'; Ref = 'refs/heads/fix/example-repository-apply'; PlanOnly = $false; RepoId = 'avm-res-storage-storage-account'; Repository = $null }
+        @{ Case = 'other repository'; Event = 'workflow_dispatch'; Ref = 'refs/heads/fix/example-repository-apply'; PlanOnly = $false; RepoId = 'avm-ptn-example-repo'; Repository = [pscustomobject]@{ full_name = 'Azure/terraform-azurerm-avm-res-storage-storage-account'; fork = $false; owner = [pscustomobject]@{ login = 'Azure'; id = 6844498 } } }
+    ) {
+        param($Event, $Ref, $PlanOnly, $RepoId, $Repository)
+        $env:GITHUB_EVENT_NAME = $Event
+        $env:GITHUB_REF = $Ref
+        $resolvedRepository = if ($null -eq $Repository) { $script:repository } else { $Repository }
+
+        {
+            Assert-AvmBamiRepositorySyncRunContext -PlanOnly $PlanOnly -AllowExampleRepositoryBranchApply $true `
+                -RepoId $RepoId -ResolvedRepository $resolvedRepository
+        } | Should -Throw
+    }
+}
+
 Describe 'Tools repository federation context' {
     BeforeEach {
         $script:previousGitHubContext = @{}
@@ -1091,8 +1149,9 @@ Describe 'Terraform effective contract and state wiring' {
     It 'validates selected settings and the trusted BAMI run context before mutations without an activation switch' {
         $source = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'Invoke-RepositorySync.ps1')
         $source | Should -Not -Match 'bamiTestTenantSyncEnabled|PendingTestTenantActivation|stateLayout|state_layout|unified-v1'
-        $source | Should -Match 'Assert-AvmBamiRepositorySyncRunContext -PlanOnly \$planOnly'
-        $source.IndexOf('Assert-AvmBamiRepositorySyncRunContext') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
+        $source | Should -Match 'Resolve-AvmRepositorySyncContext -RepoId \$repoId -Repository \$orgAndRepoName'
+        $source | Should -Match '-AllowExampleRepositoryBranchApply \$allowExampleRepositoryBranchApply'
+        $source.IndexOf('Resolve-AvmRepositorySyncContext') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
         $source.IndexOf('Resolve-RepositoryTestTenantSettings') | Should -BeGreaterThan 0
         $source.IndexOf('Resolve-RepositoryTestTenantSettings') | Should -BeLessThan $source.IndexOf('Clear-TerraformWorkspace')
         $source.IndexOf('Resolve-AvmRepositorySyncContext') | Should -BeGreaterThan $source.IndexOf('Resolve-RepositoryTestTenantSettings')
@@ -1108,6 +1167,8 @@ Describe 'Terraform effective contract and state wiring' {
         $workflow | Should -Not -Match 'Write-Output "Token:'
         $helper = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'scripts' 'lib' 'TestTenant.ps1')
         $helper | Should -Match 'Assert-AvmBamiRepositorySyncRunContext -PlanOnly \$PlanOnly'
+        $helper | Should -Match '\$RepoId -cne ''avm-ptn-example-repo'''
+        $helper | Should -Match 'ResolvedRepository\.full_name -cne ''Azure/terraform-azurerm-avm-ptn-example-repo'''
         $helper | Should -Match '\$env:GITHUB_ACTIONS -cne ''true'''
         $helper | Should -Match '\$env:GITHUB_REPOSITORY -cne ''Azure/azure-verified-modules-tools'''
         $helper | Should -Match '\$env:GITHUB_EVENT_NAME -ceq ''workflow_dispatch'''
