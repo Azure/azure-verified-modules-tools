@@ -1,0 +1,188 @@
+name: 'Reusable: Bicep retained TEST evidence'
+
+on:
+  workflow_call:
+    inputs:
+      tools-ref:
+        description: Full tools commit SHA, identical to the caller's workflow revision.
+        type: string
+        required: true
+      expectedCommit:
+        description: Exact reviewed caller commit approved for this diagnostic.
+        type: string
+        required: true
+      evidenceBundle:
+        description: Base64 of the independently digest-admitted scope bundle.
+        type: string
+        required: true
+      evidenceBundleSha256:
+        type: string
+        required: true
+      readOnlyEvidence:
+        type: boolean
+        required: true
+      runE2E:
+        type: boolean
+        required: true
+    secrets:
+      VALIDATE_TENANT_ID:
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: retained-test-evidence-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  RUNNER_SHA256: d9a9dccbd2a4b794ad0ac45f5132712eee8dd457284e71675664699613b1731c
+
+jobs:
+  admit:
+    name: Admit exact retained TEST scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: avm-validation
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.admit.outputs.matrix }}
+    steps:
+      - name: Validate immutable tools revision
+        shell: pwsh
+        env:
+          TOOLS_REF: ${{ inputs.tools-ref }}
+        run: |
+          if ($env:TOOLS_REF -cnotmatch '^[0-9a-f]{40}$') { throw 'An immutable tools SHA is required.' }
+      - name: Check out diagnostic support only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Azure/azure-verified-modules-tools
+          ref: ${{ inputs.tools-ref }}
+          path: .avm-tools
+          persist-credentials: false
+          sparse-checkout: scripts/bicep-workflows/Read-AvmRetainedTestEvidence.ps1
+          sparse-checkout-cone-mode: false
+      - name: Admit bundle and existing identity mappings before OIDC
+        id: admit
+        shell: pwsh
+        env:
+          TOOLS_REF: ${{ inputs.tools-ref }}
+          EXPECTED_COMMIT: ${{ inputs.expectedCommit }}
+          BUNDLE: ${{ inputs.evidenceBundle }}
+          BUNDLE_SHA256: ${{ inputs.evidenceBundleSha256 }}
+          DIAGNOSTIC_ENABLED: ${{ inputs.readOnlyEvidence }}
+          RUN_E2E: ${{ inputs.runE2E }}
+          MODULE_CLIENT_IDS: ${{ vars.VALIDATE_MODULE_CLIENT_IDS }}
+          TENANT_ID: ${{ secrets.VALIDATE_TENANT_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:GITHUB_WORKSPACE '.avm-tools'
+          $commit = [IO.File]::ReadAllText((Join-Path $root '.git' 'HEAD')).Trim()
+          $runner = Join-Path $root 'scripts' 'bicep-workflows' 'Read-AvmRetainedTestEvidence.ps1'
+          if ($commit -cne $env:TOOLS_REF -or (Get-FileHash -LiteralPath $runner).Hash.ToLowerInvariant() -cne $env:RUNNER_SHA256) {
+            throw 'Diagnostic checkout or runner digest differs from the reviewed source.'
+          }
+          . $runner
+          $admission = Get-AvmRetainedEvidenceAdmission -BundleBase64 $env:BUNDLE -BundleSha256 $env:BUNDLE_SHA256 `
+            -ExpectedCommit $env:EXPECTED_COMMIT -CallerCommit $env:GITHUB_SHA -CallerRepository $env:GITHUB_REPOSITORY `
+            -CallerEvent $env:GITHUB_EVENT_NAME -ToolsRef $env:TOOLS_REF -ToolsCommit $commit `
+            -DiagnosticEnabled ([bool]::Parse($env:DIAGNOSTIC_ENABLED)) -RunE2E ([bool]::Parse($env:RUN_E2E)) `
+            -ModuleClientIds $env:MODULE_CLIENT_IDS -TenantId $env:TENANT_ID
+          $matrix = $admission.Matrix | ConvertTo-Json -Depth 4 -Compress
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "matrix=$matrix`n")
+
+  observe:
+    name: Read ${{ matrix.caseKey }}
+    needs: admit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: avm-validation
+    permissions:
+      contents: read
+      id-token: write # Existing TEST OIDC exchange for this admitted module only.
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.admit.outputs.matrix) }}
+    steps:
+      - name: Check out diagnostic support only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Azure/azure-verified-modules-tools
+          ref: ${{ inputs.tools-ref }}
+          path: .avm-tools
+          persist-credentials: false
+          sparse-checkout: scripts/bicep-workflows/Read-AvmRetainedTestEvidence.ps1
+          sparse-checkout-cone-mode: false
+      - name: Verify source and admit this exact identity
+        id: identity
+        shell: pwsh
+        env:
+          TOOLS_REF: ${{ inputs.tools-ref }}
+          EXPECTED_COMMIT: ${{ inputs.expectedCommit }}
+          BUNDLE: ${{ inputs.evidenceBundle }}
+          BUNDLE_SHA256: ${{ inputs.evidenceBundleSha256 }}
+          DIAGNOSTIC_ENABLED: ${{ inputs.readOnlyEvidence }}
+          RUN_E2E: ${{ inputs.runE2E }}
+          CASE_KEY: ${{ matrix.caseKey }}
+          MODULE_CLIENT_IDS: ${{ vars.VALIDATE_MODULE_CLIENT_IDS }}
+          TENANT_ID: ${{ secrets.VALIDATE_TENANT_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:GITHUB_WORKSPACE '.avm-tools'
+          $commit = [IO.File]::ReadAllText((Join-Path $root '.git' 'HEAD')).Trim()
+          $runner = Join-Path $root 'scripts' 'bicep-workflows' 'Read-AvmRetainedTestEvidence.ps1'
+          if ($commit -cne $env:TOOLS_REF -or (Get-FileHash -LiteralPath $runner).Hash.ToLowerInvariant() -cne $env:RUNNER_SHA256) {
+            throw 'Diagnostic checkout or runner digest differs from the reviewed source.'
+          }
+          . $runner
+          $admission = Get-AvmRetainedEvidenceAdmission -BundleBase64 $env:BUNDLE -BundleSha256 $env:BUNDLE_SHA256 `
+            -ExpectedCommit $env:EXPECTED_COMMIT -CallerCommit $env:GITHUB_SHA -CallerRepository $env:GITHUB_REPOSITORY `
+            -CallerEvent $env:GITHUB_EVENT_NAME -ToolsRef $env:TOOLS_REF -ToolsCommit $commit `
+            -DiagnosticEnabled ([bool]::Parse($env:DIAGNOSTIC_ENABLED)) -RunE2E ([bool]::Parse($env:RUN_E2E)) `
+            -ModuleClientIds $env:MODULE_CLIENT_IDS -TenantId $env:TENANT_ID
+          $selection = Get-AvmRetainedEvidenceSelection -Bundle $admission.Bundle -CaseKey $env:CASE_KEY `
+            -ModuleClientIds $env:MODULE_CLIENT_IDS -TenantId $env:TENANT_ID
+          Get-Command Get-AzContext, Invoke-AzRestMethod -ErrorAction Stop | Out-Null
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "clientId=$($selection.ClientId)`nsubscriptionId=$($selection.SubscriptionId)`n")
+      - name: Sign in with existing scoped TEST OIDC identity
+        id: login
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.0
+        with:
+          client-id: ${{ steps.identity.outputs.clientId }}
+          tenant-id: ${{ secrets.VALIDATE_TENANT_ID }}
+          subscription-id: ${{ steps.identity.outputs.subscriptionId }}
+          enable-AzPSSession: true
+      - name: Retain sanitized observations or authentication blocker
+        if: ${{ !cancelled() && steps.identity.outcome == 'success' }}
+        shell: pwsh
+        env:
+          BUNDLE: ${{ inputs.evidenceBundle }}
+          BUNDLE_SHA256: ${{ inputs.evidenceBundleSha256 }}
+          CASE_KEY: ${{ matrix.caseKey }}
+          MODULE_CLIENT_IDS: ${{ vars.VALIDATE_MODULE_CLIENT_IDS }}
+          TENANT_ID: ${{ secrets.VALIDATE_TENANT_ID }}
+          LOGIN_SUCCEEDED: ${{ steps.login.outcome == 'success' }}
+          TOOLS_REF: ${{ inputs.tools-ref }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runner = Join-Path $env:GITHUB_WORKSPACE '.avm-tools' 'scripts' 'bicep-workflows' 'Read-AvmRetainedTestEvidence.ps1'
+          if ((Get-FileHash -LiteralPath $runner).Hash.ToLowerInvariant() -cne $env:RUNNER_SHA256) {
+            throw 'Diagnostic runner bytes changed after admission.'
+          }
+          . $runner
+          $output = Join-Path $env:RUNNER_TEMP 'retained-test-evidence' 'evidence.json'
+          $null = Invoke-AvmRetainedEvidenceRead -BundleBase64 $env:BUNDLE -BundleSha256 $env:BUNDLE_SHA256 `
+            -CaseKey $env:CASE_KEY -ModuleClientIds $env:MODULE_CLIENT_IDS -TenantId $env:TENANT_ID `
+            -OutputPath $output -AuthenticationSucceeded ([bool]::Parse($env:LOGIN_SUCCEEDED))
+      - name: Upload sanitized evidence only
+        if: ${{ !cancelled() && steps.identity.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: retained-test-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.caseKey }}
+          path: |
+            ${{ runner.temp }}/retained-test-evidence/evidence.json
+            ${{ runner.temp }}/retained-test-evidence/evidence.json.sha256
+          if-no-files-found: error
+          retention-days: 7
