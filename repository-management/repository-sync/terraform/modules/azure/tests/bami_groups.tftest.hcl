@@ -364,25 +364,29 @@ run "seed_legacy_terraform_identity" {
   override_resource {
     target = azapi_resource.federated_credentials["module-pr-check"]
     values = {
-      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-pr-check"
+      name = "Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-pr-check"
+      id   = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-pr-check"
     }
   }
   override_resource {
     target = azapi_resource.federated_credentials["module-integration-test"]
     values = {
-      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-integration-test"
+      name = "Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-integration-test"
+      id   = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-integration-test"
     }
   }
   override_resource {
     target = azapi_resource.federated_credentials["module-examples-test"]
     values = {
-      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-examples-test"
+      name = "Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-examples-test"
+      id   = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-examples-test"
     }
   }
   override_resource {
     target = azapi_resource.federated_credentials["validation"]
     values = {
-      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-avm-validation"
+      name = "Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-avm-validation"
+      id   = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-avm-validation"
     }
   }
 }
@@ -462,7 +466,7 @@ run "recreate_windows_identity_after_its_legacy_resources_were_deleted" {
     condition = (
       azapi_resource.identity[0].name == "id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent" &&
       alltrue([for environment, credential in azapi_resource.federated_credentials :
-        credential.name == "id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent-${trimprefix(environment, "module-")}" &&
+        credential.name == "id-test-terraform-azurerm-avm-ptn-azuremonitorw5sagent-fic-m-${trimprefix(environment, "module-")}" &&
         credential.parent_id == azapi_resource.identity[0].id
         if startswith(environment, "module-")
       ])
@@ -501,13 +505,15 @@ run "seed_legacy_bicep_identity" {
   override_resource {
     target = azapi_resource.federated_credentials["module-avm-validation"]
     values = {
-      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-bicep-avm-res-fabric-capacity-32f81a9a/federatedIdentityCredentials/id-avm-bicep-avm-res-fabric-capacity-32f81a9a-module-avm-validation"
+      name = "id-avm-bicep-avm-res-fabric-capacity-32f81a9a-module-avm-validation"
+      id   = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-bicep-avm-res-fabric-capacity-32f81a9a/federatedIdentityCredentials/id-avm-bicep-avm-res-fabric-capacity-32f81a9a-module-avm-validation"
     }
   }
   override_resource {
     target = azapi_resource.federated_credentials["validation"]
     values = {
-      id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-bicep-avm-res-fabric-capacity-32f81a9a/federatedIdentityCredentials/id-avm-bicep-avm-res-fabric-capacity-32f81a9a-avm-validation"
+      name = "id-avm-bicep-avm-res-fabric-capacity-32f81a9a-avm-validation"
+      id   = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-avm-bicep-avm-res-fabric-capacity-32f81a9a/federatedIdentityCredentials/id-avm-bicep-avm-res-fabric-capacity-32f81a9a-avm-validation"
     }
   }
 }
@@ -556,7 +562,7 @@ run "rename_legacy_bicep_identity" {
       azapi_resource.identity[0].name == "id-test-bicep-avm-res-fabric-capacity" &&
       output.client_id == "10000000-0000-4000-8000-000000000006" &&
       azapi_resource.federated_credentials["module-avm-validation"].name ==
-      "id-test-bicep-avm-res-fabric-capacity-module-avm-validation" &&
+      "id-test-bicep-avm-res-fabric-capacity-fic-m-avm-validation" &&
       azapi_resource.federated_credentials["bicep-registry"].body.properties.claimsMatchingExpression.value ==
       "claims['sub'] matches 'repository_owner_id:6844498:repository_id:447791597:environment:avm-validation' and claims['repository_id'] eq '447791597' and claims['repository_owner_id'] eq '6844498'"
     )

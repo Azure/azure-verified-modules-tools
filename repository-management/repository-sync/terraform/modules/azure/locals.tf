@@ -14,21 +14,21 @@ locals {
   module_federated_credentials = {
     for environment, subject_pattern in local.module_subject_patterns :
     "module-${environment}" => {
-      name            = var.github_workflow_ref == null ? "${local.federation_identity_name}-${environment}" : "${local.federation_identity_name}-module-${environment}"
+      name            = "${local.federation_identity_name}-fic-m-${environment}"
       subject_pattern = subject_pattern
       repository_id   = var.github_repository_id
     }
   }
   validation_federated_credentials = var.existing_identity == null || var.existing_identity.manage_entra_groups ? {
     validation = {
-      name            = "${local.federation_identity_name}-avm-validation"
+      name            = "${local.federation_identity_name}-fic-v-avm-validation"
       subject_pattern = "repository_owner_id:${var.github_organization_id}:repository_id:${var.repository_sync_repository_id}:environment:avm-validation"
       repository_id   = var.repository_sync_repository_id
     }
   } : {}
   registry_federated_credentials = var.bicep_registry_federation_enabled ? {
     bicep-registry = {
-      name            = "${local.federation_identity_name}-registry-avm-validation"
+      name            = "${local.federation_identity_name}-fic-r-avm-validation"
       subject_pattern = "repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:avm-validation"
       repository_id   = var.github_repository_id
     }

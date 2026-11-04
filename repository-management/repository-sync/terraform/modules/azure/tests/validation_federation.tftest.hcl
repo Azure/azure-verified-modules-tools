@@ -65,7 +65,7 @@ run "execution_federation_uses_the_configured_workflow_path" {
         "claims['sub'] matches 'repository_owner_id:6844498:repository_id:1234:environment:${environment}:job_workflow_ref:${var.github_job_workflow_path}@*' and claims['repository_id'] eq '1234' and claims['repository_owner_id'] eq '6844498'" &&
         azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].body.properties.issuer == "https://token.actions.githubusercontent.com" &&
         tolist(azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].body.properties.audiences) == tolist(["api://AzureADTokenExchange"]) &&
-        azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].name == "${local.owner_repo_name}-${trimprefix(environment, "module-")}" &&
+        azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].name == "${local.owner_repo_name}-fic-m-${trimprefix(environment, "module-")}" &&
         azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].parent_id == azapi_resource.identity[0].id &&
         toset(azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].locks) == toset([azapi_resource.identity[0].id])
       ])
@@ -93,7 +93,7 @@ run "validation_trust_stays_on_the_same_test_identity" {
 
   assert {
     condition = (
-      azapi_resource.federated_credentials["validation"].name == "${local.owner_repo_name}-avm-validation" &&
+      azapi_resource.federated_credentials["validation"].name == "${local.owner_repo_name}-fic-v-avm-validation" &&
       azapi_resource.federated_credentials["validation"].parent_id == azapi_resource.identity[0].id &&
       length(azapi_resource.federated_credentials["validation"].locks) == 1 &&
       azapi_resource.federated_credentials["validation"].locks[0] == azapi_resource.identity[0].id
@@ -157,10 +157,10 @@ run "identity_names_preserve_the_stem_except_the_reserved_windows_substring" {
     condition = (
       azapi_resource.identity[0].name == "id-test-terraform-azapi-avm-res-compute-w5s-terraform" &&
       alltrue([for environment, credential in azapi_resource.federated_credentials :
-        credential.name == "id-test-terraform-azapi-avm-res-compute-w5s-terraform-${trimprefix(environment, "module-")}"
+        credential.name == "id-test-terraform-azapi-avm-res-compute-w5s-terraform-fic-m-${trimprefix(environment, "module-")}"
         if startswith(environment, "module-")
       ]) &&
-      azapi_resource.federated_credentials["validation"].name == "id-test-terraform-azapi-avm-res-compute-w5s-terraform-avm-validation"
+      azapi_resource.federated_credentials["validation"].name == "id-test-terraform-azapi-avm-res-compute-w5s-terraform-fic-v-avm-validation"
     )
     error_message = "The owner and leading terraform- are removed, and only the reserved windows substring is abbreviated in identity and credential names."
   }
@@ -198,7 +198,7 @@ run "full_identity_and_credential_names_accept_their_exact_bounds" {
 
   variables {
     github_repository_name              = "terraform-azurerm-avm-res-${join("", [for index in range(56) : "a"])}"
-    github_repository_environment_names = [join("", [for index in range(29) : "a"])]
+    github_repository_environment_names = [join("", [for index in range(23) : "a"])]
   }
 
   assert {
@@ -238,7 +238,7 @@ run "overlong_credential_is_rejected_without_truncation" {
 
   variables {
     github_repository_name              = "terraform-azurerm-avm-res-${join("", [for index in range(56) : "a"])}"
-    github_repository_environment_names = [join("", [for index in range(30) : "a"])]
+    github_repository_environment_names = [join("", [for index in range(24) : "a"])]
   }
 
   expect_failures = [var.github_repository_environment_names]
@@ -250,12 +250,12 @@ run "caller_bound_credential_accepts_exactly_120_characters" {
   variables {
     identity_name                       = join("", [for index in range(90) : "a"])
     github_workflow_ref                 = "Azure/bicep-registry-modules/.github/workflows/avm.res.fabric.capacity.yml@refs/heads/main"
-    github_repository_environment_names = [join("", [for index in range(22) : "a"])]
+    github_repository_environment_names = [join("", [for index in range(23) : "a"])]
   }
 
   assert {
     condition     = alltrue([for key, credential in azapi_resource.federated_credentials : length(credential.name) == 120 if startswith(key, "module-")])
-    error_message = "The module- discriminator must be counted in caller-bound credential names."
+    error_message = "The canonical fic-m- discriminator must be counted in credential names."
   }
 }
 
@@ -265,7 +265,7 @@ run "overlong_caller_bound_credential_is_rejected" {
   variables {
     identity_name                       = join("", [for index in range(90) : "a"])
     github_workflow_ref                 = "Azure/bicep-registry-modules/.github/workflows/avm.res.fabric.capacity.yml@refs/heads/main"
-    github_repository_environment_names = [join("", [for index in range(23) : "a"])]
+    github_repository_environment_names = [join("", [for index in range(24) : "a"])]
   }
 
   expect_failures = [var.github_repository_environment_names]

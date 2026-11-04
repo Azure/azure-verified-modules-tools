@@ -93,9 +93,9 @@ variable "bicep_registry_federation_enabled" {
       var.github_repository_owner == "Azure" &&
       var.github_repository_name == "bicep-registry-modules" &&
       var.github_repository_environment_names == toset(["avm-validation"]) &&
-      can(regex("^[A-Za-z0-9][A-Za-z0-9_-]{2,119}$", "${local.owner_repo_name}-registry-avm-validation"))
+      can(regex("^[A-Za-z0-9][A-Za-z0-9_-]{2,119}$", "${local.owner_repo_name}-fic-r-avm-validation"))
     )
-    error_message = "Registry federation requires a named Azure/bicep-registry-modules identity, only avm-validation, and a credential name within 120 characters."
+    error_message = "Registry federation requires a named Azure/bicep-registry-modules identity, only avm-validation, and a canonical credential name within 120 characters."
   }
 }
 
@@ -125,10 +125,10 @@ variable "github_repository_environment_names" {
     condition = alltrue([
       for name in var.github_repository_environment_names :
       can(regex("^[A-Za-z0-9][A-Za-z0-9_-]{2,119}$",
-        var.github_workflow_ref == null ? "${local.owner_repo_name}-${name}" : "${local.owner_repo_name}-module-${name}"
+        "${local.owner_repo_name}-fic-m-${name}"
       ))
     ])
-    error_message = "Environment suffixes must keep federated credential names within 120 characters, including the optional module- prefix."
+    error_message = "Environment suffixes must keep canonical federated credential names within 120 characters, including the fic-m- prefix."
   }
 }
 

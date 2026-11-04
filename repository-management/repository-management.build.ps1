@@ -191,6 +191,46 @@ task 'test-tenant-terraform' {
                         $evidence = $plans[0]['test_plan']['output_changes']['test_group_contract']['after']
                         $candidatePlan = ConvertFrom-AvmTestTerraformPlan -Plan $plans[0]['test_plan'] `
                             -GroupContracts @{ $address = $evidence } -AddressPrefix "$address."
+                        foreach ($change in @($candidatePlan.resource_changes | Where-Object {
+                                    $_['address'].Contains('azapi_resource.federated_credentials[') -and
+                                    (@($_['change']['actions']) -join ',') -cin @('delete,create', 'create,delete')
+                                })) {
+                            $before = $change['change']['before']
+                            $credential = [regex]::Match($change['address'], '\.federated_credentials\["(?<key>[^"]+)"\]$')
+                            $identity = if ($before -is [System.Collections.IDictionary] -and $before['id'] -is [string]) {
+                                [regex]::Match($before['id'], '/userAssignedIdentities/(?<name>[^/]+)/federatedIdentityCredentials/(?<credential>[^/]+)$')
+                            }
+                            if ($credential.Success -and $identity.Success) {
+                                $key = $credential.Groups['key'].Value
+                                $identityName = $identity.Groups['name'].Value
+                                $legacyName = $identity.Groups['credential'].Value
+                                $canonicalName = switch ($key) {
+                                    'validation' { "$identityName-fic-v-avm-validation" }
+                                    'bicep-registry' { "$identityName-fic-r-avm-validation" }
+                                    default {
+                                        if ($key.StartsWith('module-', [StringComparison]::Ordinal)) {
+                                            "$identityName-fic-m-$($key.Substring(7))"
+                                        }
+                                    }
+                                }
+                                $legacyNames = if ($key.StartsWith('module-', [StringComparison]::Ordinal)) {
+                                    $environment = $key.Substring(7)
+                                    @("$identityName-$environment", "$identityName-module-$environment")
+                                }
+                                elseif ($key -ceq 'validation') {
+                                    @("$identityName-avm-validation")
+                                }
+                                elseif ($key -ceq 'bicep-registry') {
+                                    @("$identityName-registry-avm-validation")
+                                }
+                                else {
+                                    @()
+                                }
+                                if ($canonicalName -and $before['name'] -ceq $canonicalName -and $legacyName -cin $legacyNames) {
+                                    $before['name'] = $legacyName
+                                }
+                            }
+                        }
                         if (@($candidatePlan.resource_changes | Where-Object { $_['change']['actions'] -contains 'delete' }).Count -ne
                             $(if ($ecosystem -ceq 'bicep') { 5 } else { 7 })) {
                             throw [System.IO.InvalidDataException]::new('A mocked naming migration must replace its identity, every credential and both individual memberships.')

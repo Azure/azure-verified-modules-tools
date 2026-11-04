@@ -120,38 +120,38 @@ variables {
 override_resource {
   target = module.bicep["avm/res/fabric/capacity"].azapi_resource.federated_credentials["module-avm-validation"]
   values = {
-    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-fabric-capacity/federatedIdentityCredentials/id-test-bicep-avm-res-fabric-capacity-module-avm-validation"
+    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-fabric-capacity/federatedIdentityCredentials/id-test-bicep-avm-res-fabric-capacity-fic-m-avm-validation"
   }
 }
 override_resource {
   target = module.bicep["avm/res/fabric/capacity"].azapi_resource.federated_credentials["validation"]
   values = {
-    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-fabric-capacity/federatedIdentityCredentials/id-test-bicep-avm-res-fabric-capacity-avm-validation"
+    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-fabric-capacity/federatedIdentityCredentials/id-test-bicep-avm-res-fabric-capacity-fic-v-avm-validation"
   }
 }
 override_resource {
   target = module.bicep["avm/res/storage/storage-account"].azapi_resource.federated_credentials["module-avm-validation"]
   values = {
-    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-storage-storage-account/federatedIdentityCredentials/id-test-bicep-avm-res-storage-storage-account-module-avm-validation"
+    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-storage-storage-account/federatedIdentityCredentials/id-test-bicep-avm-res-storage-storage-account-fic-m-avm-validation"
   }
 }
 override_resource {
   target = module.bicep["avm/res/storage/storage-account"].azapi_resource.federated_credentials["validation"]
   values = {
-    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-storage-storage-account/federatedIdentityCredentials/id-test-bicep-avm-res-storage-storage-account-avm-validation"
+    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-storage-storage-account/federatedIdentityCredentials/id-test-bicep-avm-res-storage-storage-account-fic-v-avm-validation"
   }
 }
 
 override_resource {
   target = module.bicep["avm/res/fabric/capacity"].azapi_resource.federated_credentials["bicep-registry"]
   values = {
-    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-fabric-capacity/federatedIdentityCredentials/id-test-bicep-avm-res-fabric-capacity-registry-avm-validation"
+    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-fabric-capacity/federatedIdentityCredentials/id-test-bicep-avm-res-fabric-capacity-fic-r-avm-validation"
   }
 }
 override_resource {
   target = module.bicep["avm/res/storage/storage-account"].azapi_resource.federated_credentials["bicep-registry"]
   values = {
-    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-storage-storage-account/federatedIdentityCredentials/id-test-bicep-avm-res-storage-storage-account-registry-avm-validation"
+    id = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-bicep-avm-res-storage-storage-account/federatedIdentityCredentials/id-test-bicep-avm-res-storage-storage-account-fic-r-avm-validation"
   }
 }
 

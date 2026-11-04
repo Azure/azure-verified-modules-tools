@@ -390,7 +390,7 @@ Describe 'Bicep identity saved-plan ownership guard' {
             $tools.values.body.properties.claimsMatchingExpression.value |
                 Should -BeExactly "claims['sub'] matches 'repository_owner_id:6844498:repository_id:1239632211:environment:avm-validation' and claims['repository_id'] eq '1239632211' and claims['repository_owner_id'] eq '6844498'"
             $registry = @($credentials | Where-Object { $_.address.EndsWith('.azapi_resource.federated_credentials["bicep-registry"]') })[0]
-            $registry.values.name | Should -BeExactly ((Get-AvmBicepModuleIdentityName -ModulePath $path) + '-registry-avm-validation')
+            $registry.values.name | Should -BeExactly ((Get-AvmBicepModuleIdentityName -ModulePath $path) + '-fic-r-avm-validation')
             $registry.values.body.properties.claimsMatchingExpression.value |
                 Should -BeExactly "claims['sub'] matches 'repository_owner_id:6844498:repository_id:447791597:environment:avm-validation' and claims['repository_id'] eq '447791597' and claims['repository_owner_id'] eq '6844498'"
             $registry.values.body.properties.audiences | Should -Be @('api://AzureADTokenExchange')
@@ -409,6 +409,25 @@ Describe 'Bicep identity saved-plan ownership guard' {
         { Assert-AvmBicepIdentityPlan @script:guard } | Should -Not -Throw
         @($script:plan.resource_changes | Where-Object { $_.change.actions -contains 'create' }) | Should -HaveCount 2
         @($script:plan.resource_changes | Where-Object { $_.change.actions -contains 'delete' }) | Should -HaveCount 0
+    }
+
+    It 'allows only verified Bicep credential deletion paired with canonical recreation' {
+        $script:guard.Plan = New-AvmTestBicepIdentityPlan -KnownClient
+        $current = @($script:guard.Plan.resource_changes | Where-Object {
+                $_.address -ceq 'module.bicep["avm/res/fabric/capacity"].azapi_resource.federated_credentials["module-avm-validation"]'
+            })[0]
+        $legacy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $current -Depth 100) -AsHashtable
+        $legacy.address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.identity_federated_credentials["avm-validation"]'
+        $legacy.change.actions = @('delete')
+        $legacy.change.after = $null
+        $legacy.change.before.name = 'id-test-bicep-avm-res-fabric-capacity-module-avm-validation'
+        $current.change.actions = @('create')
+        $current.change.before = $null
+        $script:guard.Plan.resource_changes += $legacy
+
+        { Assert-AvmBicepIdentityPlan @script:guard } | Should -Not -Throw
+        $legacy.change.before.parent_id = '/foreign/identity'
+        { Assert-AvmBicepIdentityPlan @script:guard } | Should -Throw '*obsolete Owner assignment*'
     }
 
     It 'requires every staged and current registry credential: <_>' -ForEach @(
@@ -620,26 +639,6 @@ Describe 'Bicep identity saved-plan ownership guard' {
         $identity.previous_address = $identity.address.Replace('.identity[0]', '.identity')
 
         { Assert-AvmBicepIdentityPlan @script:guard } | Should -Not -Throw
-    }
-
-    It 'allows only the exact unchanged validation credential state move for dedicated and existing identities' {
-        $credential = @{
-            address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.federated_credentials["validation"]'
-            previous_address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.validation_federated_credential[0]'
-            mode = 'managed'
-            type = 'azapi_resource'
-            provider_name = 'registry.terraform.io/azure/azapi'
-            change = @{ actions = @('no-op'); before = @{ name = 'credential' }; after = @{ name = 'credential' } }
-        }
-        $arguments = @{ ModuleAddress = 'module.bicep["avm/res/fabric/capacity"]'; ModulePath = 'avm/res/fabric/capacity' }
-
-        Test-AvmBicepDedicatedIdentityStateMove -Resource $credential @arguments -ExistingIdentities @{} | Should -BeTrue
-        Test-AvmBicepDedicatedIdentityStateMove -Resource $credential @arguments -ExistingIdentities @{ 'avm/res/fabric/capacity' = @{} } | Should -BeTrue
-        $credential.change.after.name = 'changed'
-        Test-AvmBicepDedicatedIdentityStateMove -Resource $credential @arguments -ExistingIdentities @{} | Should -BeFalse
-        $credential.change.after.name = 'credential'
-        $credential.previous_address = 'module.bicep["avm/res/fabric/capacity"].azapi_resource.bicep_registry_federated_credential'
-        Test-AvmBicepDedicatedIdentityStateMove -Resource $credential @arguments -ExistingIdentities @{} | Should -BeFalse
     }
 
     It 'rejects incompatible dedicated identity state moves: <Case>' -ForEach @(

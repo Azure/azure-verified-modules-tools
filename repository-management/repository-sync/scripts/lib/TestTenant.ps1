@@ -315,7 +315,7 @@ function Assert-AvmExternalBamiIdentityPlan {
 
     foreach ($environment in $Environments) {
         $address = "$ModuleAddress.azapi_resource.federated_credentials[`"module-$environment`"]"
-        $expectedName = $WorkflowRef ? "$federationName-module-$environment" : "$federationName-$environment"
+        $expectedName = "$federationName-fic-m-$environment"
         $credential = @($managed | Where-Object { $_['address'] -ceq $address })[0]
         if ($credential['values']['name'] -cne $expectedName -or $expectedName.Length -gt 120 -or
             $credential['values']['parent_id'] -ine $Identity['resource_id'] -or
@@ -331,7 +331,7 @@ function Assert-AvmExternalBamiIdentityPlan {
             -RepositoryOwnerId $RepositoryOwnerId -RepositoryId $RepositorySyncRepositoryId
         Assert-AvmExternalFederatedCredential -Resource @($managed | Where-Object {
                 $_['address'] -ceq "$ModuleAddress.azapi_resource.federated_credentials[`"validation`"]"
-            })[0] -Name "$federationName-avm-validation" -ParentId $Identity['resource_id'] -Expression $validationExpression
+            })[0] -Name "$federationName-fic-v-avm-validation" -ParentId $Identity['resource_id'] -Expression $validationExpression
     }
     if ($BicepRegistryFederation) {
         $registryExpression = Get-AvmBamiFederationExpression `
@@ -339,7 +339,59 @@ function Assert-AvmExternalBamiIdentityPlan {
             -RepositoryOwnerId $RepositoryOwnerId -RepositoryId $RepositoryId
         Assert-AvmExternalFederatedCredential -Resource @($managed | Where-Object {
                 $_['address'] -ceq "$ModuleAddress.azapi_resource.federated_credentials[`"bicep-registry`"]"
-            })[0] -Name "$federationName-registry-avm-validation" -ParentId $Identity['resource_id'] -Expression $registryExpression
+            })[0] -Name "$federationName-fic-r-avm-validation" -ParentId $Identity['resource_id'] -Expression $registryExpression
+    }
+
+    $legacyFederation = @{}
+    foreach ($environment in $Environments) {
+        $legacyFederation["$ModuleAddress.azapi_resource.identity_federated_credentials[`"$environment`"]"] = @{
+            CurrentAddress = "$ModuleAddress.azapi_resource.federated_credentials[`"module-$environment`"]"
+            Name           = "$federationName-fic-m-$environment"
+            LegacyName     = $WorkflowRef ? "$federationName-module-$environment" : "$federationName-$environment"
+            Expression     = Get-AvmBamiModuleFederationExpression -RepositoryOwnerId $RepositoryOwnerId `
+                -RepositoryId $RepositoryId -Environment $environment -JobWorkflowPath $JobWorkflowPath -WorkflowRef $WorkflowRef
+            LegacySubjectPattern = Get-AvmBamiLegacyModuleSubjectPattern -RepositoryOwnerId $RepositoryOwnerId `
+                -RepositoryId $RepositoryId -Environment $environment -JobWorkflowPath $JobWorkflowPath -WorkflowRef $WorkflowRef
+        }
+    }
+    if ($Identity['manage_entra_groups']) {
+        $legacyFederation["$ModuleAddress.azapi_resource.validation_federated_credential[0]"] = @{
+            CurrentAddress       = "$ModuleAddress.azapi_resource.federated_credentials[`"validation`"]"
+            Name                 = "$federationName-fic-v-avm-validation"
+            LegacyName           = "$federationName-avm-validation"
+            Expression           = $validationExpression
+            LegacySubjectPattern = '\A' + [regex]::Escape(
+                "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation"
+            ) + '\z'
+        }
+    }
+    if ($BicepRegistryFederation) {
+        $legacyFederation["$ModuleAddress.azapi_resource.bicep_registry_federated_credential[0]"] = @{
+            CurrentAddress       = "$ModuleAddress.azapi_resource.federated_credentials[`"bicep-registry`"]"
+            Name                 = "$federationName-fic-r-avm-validation"
+            LegacyName           = "$federationName-registry-avm-validation"
+            Expression           = $registryExpression
+            LegacySubjectPattern = '\A' + [regex]::Escape(
+                "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:avm-validation"
+            ) + '\z'
+        }
+    }
+    foreach ($change in $changes.Values) {
+        if ($change['address'] -cin $allowed) { continue }
+        $expected = $legacyFederation[$change['address']]
+        $currentChange = if ($null -ne $expected) { $changes[$expected.CurrentAddress] } else { $null }
+        $before = $change['change']['before']
+        if ($null -eq $expected -or (@($change['change']['actions']) -join ',') -cne 'delete' -or
+            $null -ne $change['change']['after'] -or $before -isnot [System.Collections.IDictionary] -or
+            $change['mode'] -cne 'managed' -or $change['type'] -cne 'azapi_resource' -or
+            $change['provider_name'] -cne 'registry.terraform.io/azure/azapi' -or
+            $before['name'] -cne $expected.LegacyName -or $before['parent_id'] -ine $Identity['resource_id'] -or
+            -not (Test-AvmBamiModuleFederation -Values $before -Expression $expected.Expression `
+                -LegacySubjectPattern $expected.LegacySubjectPattern -AllowLegacy) -or
+            $null -eq $currentChange -or (@($currentChange['change']['actions']) -join ',') -cne 'create' -or
+            $null -ne $currentChange['change']['before'] -or $currentChange.Contains('previous_address')) {
+            throw [System.InvalidOperationException]::new('External identity plans may recreate only verified legacy federated credentials with their canonical trust boundary.')
+        }
     }
 }
 
@@ -427,17 +479,6 @@ function Assert-AvmBamiIdentityPlan {
         $allowed += "$ModuleAddress.azapi_resource.federated_credentials[`"module-$environment`"]"
     }
     $allowed += @($membershipNames.Keys)
-    $approvedFederationMoves = @{}
-    foreach ($environment in $Environments) {
-        $approvedFederationMoves["$ModuleAddress.azapi_resource.federated_credentials[`"module-$environment`"]"] =
-            "$ModuleAddress.azapi_resource.identity_federated_credentials[`"$environment`"]"
-    }
-    $approvedFederationMoves[$validationCredentialAddress] =
-        "$ModuleAddress.azapi_resource.validation_federated_credential[0]"
-    if ($BicepRegistryFederation) {
-        $approvedFederationMoves[$registryCredentialAddress] =
-            "$ModuleAddress.azapi_resource.bicep_registry_federated_credential[0]"
-    }
     $managed = @($resources | Where-Object { $_['mode'] -ceq 'managed' })
     $addresses = @($managed | ForEach-Object { $_['address'] } | Select-Object -Unique)
     if ($managed.Count -ne $allowed.Count -or $addresses.Count -ne $allowed.Count -or
@@ -482,11 +523,8 @@ function Assert-AvmBamiIdentityPlan {
             $null -eq $change -or $change['mode'] -cne 'managed' -or $change['type'] -cne $type -or
             $change['provider_name'] -cne $provider -or $change['change']['after'] -isnot [System.Collections.IDictionary] -or
             ($change.Contains('previous_address') -and $change['previous_address'] -cne $address -and
-                -not ($address -cin @($identityAddress, $validationCredentialAddress) -and
+                -not ($address -ceq $identityAddress -and
                     $change['previous_address'] -ceq $address.Substring(0, $address.Length - 3) -and
-                    ($actions -join ',') -ceq 'no-op') -and
-                -not ($approvedFederationMoves.ContainsKey($address) -and
-                    $change['previous_address'] -ceq $approvedFederationMoves[$address] -and
                     ($actions -join ',') -ceq 'no-op')) -or
             $null -ne $change['change']['importing'] -or ($actions -join ',') -cnotin $permittedActions) {
             throw [System.InvalidOperationException]::new('Candidate identity plans must not delete or replace required resources, or omit their changes.')
@@ -642,7 +680,8 @@ function Assert-AvmBamiIdentityPlan {
         $address = "$ModuleAddress.azapi_resource.federated_credentials[`"module-$environment`"]"
         $federation[$address] = @{
             Kind = 'module'
-            Name = if ($WorkflowRef) { "$name-module-$environment" } else { "$name-$environment" }
+            Name = "$name-fic-m-$environment"
+            LegacyName = if ($WorkflowRef) { "$name-module-$environment" } else { "$name-$environment" }
             Expression = Get-AvmBamiModuleFederationExpression -RepositoryOwnerId $RepositoryOwnerId `
                 -RepositoryId $RepositoryId -Environment $environment -JobWorkflowPath $JobWorkflowPath -WorkflowRef $WorkflowRef
             LegacySubjectPattern = Get-AvmBamiLegacyModuleSubjectPattern -RepositoryOwnerId $RepositoryOwnerId `
@@ -651,7 +690,8 @@ function Assert-AvmBamiIdentityPlan {
     }
     $federation[$validationCredentialAddress] = @{
         Kind = 'validation'
-        Name = "$name-avm-validation"
+        Name = "$name-fic-v-avm-validation"
+        LegacyName = "$name-avm-validation"
         Expression = Get-AvmBamiFederationExpression `
             -SubjectPattern "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation" `
             -RepositoryOwnerId $RepositoryOwnerId -RepositoryId $RepositorySyncRepositoryId
@@ -662,7 +702,8 @@ function Assert-AvmBamiIdentityPlan {
     if ($BicepRegistryFederation) {
         $federation[$registryCredentialAddress] = @{
             Kind = 'registry'
-            Name = "$name-registry-avm-validation"
+            Name = "$name-fic-r-avm-validation"
+            LegacyName = "$name-registry-avm-validation"
             Expression = Get-AvmBamiFederationExpression `
                 -SubjectPattern "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:avm-validation" `
                 -RepositoryOwnerId $RepositoryOwnerId -RepositoryId $RepositoryId
@@ -670,6 +711,16 @@ function Assert-AvmBamiIdentityPlan {
                 "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:avm-validation"
             ) + '\z'
         }
+    }
+    $legacyFederation = @{}
+    foreach ($environment in $Environments) {
+        $legacyFederation["$ModuleAddress.azapi_resource.identity_federated_credentials[`"$environment`"]"] =
+            "$ModuleAddress.azapi_resource.federated_credentials[`"module-$environment`"]"
+    }
+    $legacyFederation["$ModuleAddress.azapi_resource.validation_federated_credential[0]"] = $validationCredentialAddress
+    $legacyFederation["$ModuleAddress.azapi_resource.validation_federated_credential"] = $validationCredentialAddress
+    if ($BicepRegistryFederation) {
+        $legacyFederation["$ModuleAddress.azapi_resource.bicep_registry_federated_credential[0]"] = $registryCredentialAddress
     }
     $previousModuleCredentials = 0
     foreach ($address in $federation.Keys) {
@@ -687,22 +738,31 @@ function Assert-AvmBamiIdentityPlan {
             throw [System.InvalidOperationException]::new('Existing federation changes require previous credential ownership evidence.')
         }
         $sides = @(
-            @{ Values = $credential; Name = $federation[$address].Name; Parent = $identityId; Previous = $false }
-            @{ Values = $credentialChange['after']; Name = $federation[$address].Name; Parent = $identityId; Previous = $false }
+            @{ Values = $credential; Names = @($federation[$address].Name); Parent = $identityId; Previous = $false }
+            @{ Values = $credentialChange['after']; Names = @($federation[$address].Name); Parent = $identityId; Previous = $false }
         )
         if ($null -ne $beforeCredential) {
             if ($federation[$address].Kind -ceq 'module') { $previousModuleCredentials++ }
-            $oldName = if ($renaming) { $previousName + $federation[$address].Name.Substring($name.Length) } else { $federation[$address].Name }
-            $sides += @{ Values = $beforeCredential; Name = $oldName; Parent = $previousIdentityId; Previous = $true }
+            $oldNames = if ($renaming) {
+                @(
+                    $previousName + $federation[$address].Name.Substring($name.Length)
+                    $previousName + $federation[$address].LegacyName.Substring($name.Length)
+                ) | Select-Object -Unique
+            }
+            else {
+                @($federation[$address].Name)
+            }
+            $sides += @{ Values = $beforeCredential; Names = $oldNames; Parent = $previousIdentityId; Previous = $true }
         }
         foreach ($side in $sides) {
             $values = $side.Values
             $isValidModuleFederation = Test-AvmBamiModuleFederation -Values $values `
                 -Expression $federation[$address].Expression `
                 -LegacySubjectPattern $federation[$address].LegacySubjectPattern -AllowLegacy:$side.Previous
+            $validName = $values -is [System.Collections.IDictionary] -and $values['name'] -cin $side.Names
             if ($values -isnot [System.Collections.IDictionary] -or
-                $values['name'] -cne $side.Name -or $side.Name.Length -gt 120 -or
-                ($null -ne $values['id'] -and $values['id'] -ine "$($side.Parent)/federatedIdentityCredentials/$($side.Name)") -or
+                -not $validName -or $values['name'].Length -gt 120 -or
+                ($null -ne $values['id'] -and $values['id'] -ine "$($side.Parent)/federatedIdentityCredentials/$($values['name'])") -or
                 ($null -ne $values['parent_id'] -and $values['parent_id'] -ine $side.Parent) -or
                 ($null -eq $values['parent_id'] -and ($side.Previous -or
                     -not (Test-AvmTerraformPlanUnknownField -Change $credentialChange -Path 'parent_id'))) -or
@@ -722,6 +782,25 @@ function Assert-AvmBamiIdentityPlan {
             $null -eq $change['change']['before']) { continue }
         if ($change['mode'] -ceq 'data' -and $actions.Count -eq 1 -and $actions[0] -cin @('no-op', 'read')) { continue }
         $before = $change['change']['before']
+        if ($legacyFederation.ContainsKey($change['address'])) {
+            $currentAddress = $legacyFederation[$change['address']]
+            $currentChange = $changes[$currentAddress]
+            $expected = $federation[$currentAddress]
+            $legacyValid = $before -is [System.Collections.IDictionary] -and
+                (Test-AvmBamiModuleFederation -Values $before -Expression $expected.Expression `
+                    -LegacySubjectPattern $expected.LegacySubjectPattern -AllowLegacy) -and
+                $before['name'] -ceq $expected.LegacyName -and
+                $before['parent_id'] -ieq $identityId
+            if (($actions -join ',') -ceq 'delete' -and $null -eq $change['change']['after'] -and
+                $change['mode'] -ceq 'managed' -and $change['type'] -ceq 'azapi_resource' -and
+                $change['provider_name'] -ceq 'registry.terraform.io/azure/azapi' -and
+                $legacyValid -and $null -ne $currentChange -and
+                (@($currentChange['change']['actions']) -join ',') -ceq 'create' -and
+                $null -eq $currentChange['change']['before'] -and
+                -not $currentChange.Contains('previous_address')) {
+                continue
+            }
+        }
         if ($change['mode'] -cne 'managed' -or $before -isnot [System.Collections.IDictionary] -or $null -eq $previousPrincipal) {
             throw [System.InvalidOperationException]::new('Candidate plans must not delete or replace resources outside verified permission migration or revocation.')
         }

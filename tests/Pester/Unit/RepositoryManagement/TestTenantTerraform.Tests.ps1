@@ -258,20 +258,6 @@ Describe 'Candidate plan and output safety' {
         $credential['previous_address'] = 'module.bami[0].azapi_resource.other'
         { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } | Should -Throw
     }
-    It 'accepts only the exact no-op validation credential move to its shared address' {
-        $script:plan = New-AvmTestBamiPlan -KnownClient
-        $credential = @($script:plan.resource_changes | Where-Object {
-                $_.address -clike '*.azapi_resource.federated_credentials`["validation"`]'
-            })[0]
-        $credential['previous_address'] = $credential['address'].Replace(
-            '.federated_credentials["validation"]',
-            '.validation_federated_credential[0]'
-        )
-        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } | Should -Not -Throw
-        $credential['change']['actions'] = @('update')
-        { Assert-AvmBamiIdentityPlan -Plan $script:plan @script:planArguments } | Should -Throw
-    }
-
     It 'validates naming replacements through the ordinary root and refuses incomplete root plans' {
         $plan = New-AvmTestRepositorySyncPlan -NamingMigration
         $arguments = @{
@@ -683,6 +669,25 @@ Describe 'Candidate plan and output safety' {
         { Assert-AvmBamiIdentityPlan -Plan $migration @script:planArguments } | Should -Throw '*incomplete*'
     }
 
+    It 'allows only a verified legacy credential delete paired with canonical recreation' {
+        $migration = New-AvmTestBamiPlan -KnownClient
+        $current = @($migration.resource_changes | Where-Object {
+                $_.address -ceq 'module.azure.azapi_resource.federated_credentials["module-pr-check"]'
+            })[0]
+        $legacy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $current -Depth 100) -AsHashtable
+        $legacy.address = 'module.azure.azapi_resource.identity_federated_credentials["pr-check"]'
+        $legacy.change.actions = @('delete')
+        $legacy.change.after = $null
+        $legacy.change.before.name = 'id-test-terraform-azurerm-avm-ptn-example-repo-pr-check'
+        $current.change.actions = @('create')
+        $current.change.before = $null
+        $migration.resource_changes += $legacy
+
+        { Assert-AvmBamiIdentityPlan -Plan $migration @script:planArguments } | Should -Not -Throw
+        $legacy.change.before.name = 'foreign-credential'
+        { Assert-AvmBamiIdentityPlan -Plan $migration @script:planArguments } | Should -Throw '*obsolete Owner assignment*'
+    }
+
     It 'rejects partial, extra or wrong-target planned resources' {
         $script:plan.planned_values.root_module.child_modules[0].resources += @{
             address = 'module.azure.azapi_resource.extra_owner'; mode = 'managed'; values = @{}
@@ -1055,7 +1060,7 @@ Describe 'Terraform effective contract and state wiring' {
         $original | Should -Match 'parent_id\s*=\s*local.identity_resource_id'
         $original | Should -Match 'locks\s*=\s*\[local.identity_resource_id\]'
         $locals | Should -Match 'validation\s*=\s*\{'
-        $locals | Should -Match 'name\s*=\s*"\$\{local.federation_identity_name\}-avm-validation"'
+        $locals | Should -Match 'name\s*=\s*"\$\{local.federation_identity_name\}-fic-v-avm-validation"'
         $locals | Should -Match 'repository_id\s*=\s*var.repository_sync_repository_id'
         $locals | Should -Not -Match 'repository_owner_id:[0-9]|repository_id:[0-9]'
         $locals | Should -Not -Match 'ref:refs/heads/'

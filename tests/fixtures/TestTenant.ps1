@@ -162,7 +162,7 @@ AND
         if ($BicepRegistryFederation) {
             @{
                 Address = 'module.azure.azapi_resource.federated_credentials["bicep-registry"]'
-                Name = "$IdentityName-registry-avm-validation"
+                Name = "$IdentityName-fic-r-avm-validation"
                 Expression = Get-AvmBamiFederationExpression `
                     -SubjectPattern "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositoryId}:environment:avm-validation" `
                     -RepositoryOwnerId $RepositoryOwnerId -RepositoryId $RepositoryId
@@ -171,14 +171,14 @@ AND
         foreach ($environment in $Environments) {
             @{
                 Address = 'module.azure.azapi_resource.federated_credentials["module-' + $environment + '"]'
-                Name = if ($WorkflowRef) { "$IdentityName-module-$environment" } else { "$IdentityName-$environment" }
+                Name = "$IdentityName-fic-m-$environment"
                 Expression = Get-AvmBamiModuleFederationExpression -RepositoryOwnerId $RepositoryOwnerId `
                     -RepositoryId $RepositoryId -Environment $environment -JobWorkflowPath $JobWorkflowPath -WorkflowRef $WorkflowRef
             }
         }
         @{
             Address = 'module.azure.azapi_resource.federated_credentials["validation"]'
-            Name = "$IdentityName-avm-validation"
+            Name = "$IdentityName-fic-v-avm-validation"
             Expression = Get-AvmBamiFederationExpression `
                 -SubjectPattern "repository_owner_id:${RepositoryOwnerId}:repository_id:${RepositorySyncRepositoryId}:environment:avm-validation" `
                 -RepositoryOwnerId $RepositoryOwnerId -RepositoryId $RepositorySyncRepositoryId
