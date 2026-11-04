@@ -62,7 +62,7 @@ run "execution_federation_uses_the_configured_workflow_path" {
         "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview" &&
         azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].body.properties.claimsMatchingExpression.languageVersion == 1 &&
         azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].body.properties.claimsMatchingExpression.value ==
-        "claims['sub'] matches 'repository_owner_id:6844498:repository_id:1234:environment:${environment}:job_workflow_ref:${var.github_job_workflow_path}@*' and claims['repository_id'] eq '1234' and claims['repository_owner_id'] eq '6844498'" &&
+        "claims['sub'] matches 'repository_owner_id:6844498:repository_id:1234:environment:${environment}:*' and claims['job_workflow_ref'] matches '${var.github_job_workflow_path}@*' and claims['repository_id'] eq '1234' and claims['repository_owner_id'] eq '6844498'" &&
         azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].body.properties.issuer == "https://token.actions.githubusercontent.com" &&
         tolist(azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].body.properties.audiences) == tolist(["api://AzureADTokenExchange"]) &&
         azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].name == "${local.owner_repo_name}-fic-m-${trimprefix(environment, "module-")}" &&
@@ -254,9 +254,36 @@ run "caller_bound_credential_accepts_exactly_120_characters" {
   }
 
   assert {
-    condition     = alltrue([for key, credential in azapi_resource.federated_credentials : length(credential.name) == 120 if startswith(key, "module-")])
-    error_message = "The canonical fic-m- discriminator must be counted in credential names."
+    condition = (
+      alltrue([for key, credential in azapi_resource.federated_credentials : length(credential.name) == 120 if startswith(key, "module-")]) &&
+      alltrue([for key, credential in azapi_resource.federated_credentials :
+        credential.body.properties.claimsMatchingExpression.value ==
+        "claims['sub'] matches 'repository_owner_id:6844498:repository_id:1234:environment:${trimprefix(key, "module-")}:*' and claims['job_workflow_ref'] matches '${var.github_job_workflow_path}@*' and claims['sub'] matches '*:workflow_ref:${var.github_workflow_ref}' and claims['repository_id'] eq '1234' and claims['repository_owner_id'] eq '6844498'"
+        if startswith(key, "module-")
+      ])
+    )
+    error_message = "The canonical fic-m- discriminator and separate bounded workflow claim comparands must be preserved."
   }
+}
+
+run "overlong_caller_workflow_comparand_is_rejected" {
+  command = plan
+
+  variables {
+    github_workflow_ref = "Azure/bicep-registry-modules/.github/workflows/${join("", [for index in range(100) : "a"])}.yml@refs/heads/main"
+  }
+
+  expect_failures = [var.github_workflow_ref]
+}
+
+run "overlong_reusable_workflow_comparand_is_rejected" {
+  command = plan
+
+  variables {
+    github_job_workflow_path = "Azure/${join("", [for index in range(100) : "a"])}/.github/workflows/module.yml"
+  }
+
+  expect_failures = [var.github_job_workflow_path]
 }
 
 run "overlong_caller_bound_credential_is_rejected" {

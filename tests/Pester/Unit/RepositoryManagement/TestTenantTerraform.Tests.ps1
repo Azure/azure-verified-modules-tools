@@ -519,7 +519,9 @@ Describe 'Candidate plan and output safety' {
         $expression | Should -Match 'terraform-module\.yml@\*'
         $expression | Should -Not -Match '[0-9a-f]{40}'
         $expression | Should -Not -Match '&&'
-        ($expression -split ' and ').Count | Should -Be 3
+        ($expression -split ' and ').Count | Should -Be 4
+        $expression | Should -Match "claims\['sub'\] matches 'repository_owner_id:6844498:repository_id:1234:environment:examples-test-execution:\*'"
+        $expression | Should -Match "claims\['job_workflow_ref'\] matches 'Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml@\*'"
         { Assert-AvmBamiIdentityPlan -Plan $plan @script:planArguments } | Should -Not -Throw
     }
 
@@ -1101,7 +1103,9 @@ Describe 'Terraform effective contract and state wiring' {
         $original | Should -Not -Match '&&'
         $original | Should -Not -Match '\bsubject\s*='
         $locals | Should -Match 'var\.github_job_workflow_path'
-        $locals | Should -Match 'job_workflow_ref:\$\{local\.module_workflow_pattern\}'
+        $locals | Should -Match 'job_workflow_pattern\s*=\s*"\$\{var\.github_job_workflow_path\}@\*"'
+        $locals | Should -Match 'caller_subject_pattern\s*=\s*var\.github_workflow_ref == null \? null : "\*:workflow_ref:\$\{var\.github_workflow_ref\}"'
+        $locals | Should -Match "claims\['job_workflow_ref'\] matches"
         $locals | Should -Match "claims\['repository_id'\] eq '\$\{credential.repository_id\}'"
         $locals | Should -Match "claims\['repository_owner_id'\] eq '\$\{var.github_organization_id\}'"
         $locals | Should -Not -Match 'terraform-module\.yml'

@@ -76,8 +76,11 @@ variable "github_workflow_ref" {
   default     = null
 
   validation {
-    condition     = var.github_workflow_ref == null ? true : can(regex("^[^/\\s@]+/[^/\\s@]+/\\.github/workflows/[^/\\s@]+\\.ya?ml@refs/heads/main$", var.github_workflow_ref))
-    error_message = "The caller workflow must be a fully qualified workflow ref on trusted main."
+    condition = var.github_workflow_ref == null ? true : (
+      can(regex("^[^/\\s@]+/[^/\\s@]+/\\.github/workflows/[^/\\s@]+\\.ya?ml@refs/heads/main$", var.github_workflow_ref)) &&
+      length("*:workflow_ref:${var.github_workflow_ref}") <= 128
+    )
+    error_message = "The caller workflow must be a fully qualified trusted-main workflow ref whose claims expression comparand is at most 128 characters."
   }
 }
 
@@ -126,9 +129,10 @@ variable "github_repository_environment_names" {
       for name in var.github_repository_environment_names :
       can(regex("^[A-Za-z0-9][A-Za-z0-9_-]{2,119}$",
         "${local.owner_repo_name}-fic-m-${name}"
-      ))
+      )) &&
+      length("repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:${name}:*") <= 128
     ])
-    error_message = "Environment suffixes must keep canonical federated credential names within 120 characters, including the fic-m- prefix."
+    error_message = "Environment suffixes must keep canonical federated credential names within 120 characters and subject comparands within 128 characters."
   }
 }
 
@@ -147,8 +151,11 @@ variable "github_job_workflow_path" {
   description = "Configured reusable workflow path, excluding its mutable Git reference, used for module federation."
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+/\\.github/workflows/[A-Za-z0-9][A-Za-z0-9_.-]*\\.ya?ml$", var.github_job_workflow_path))
-    error_message = "The reusable workflow path must be owner/repository/.github/workflows/name.yml with no Git ref, expression, tag, or commit SHA."
+    condition = (
+      can(regex("^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+/\\.github/workflows/[A-Za-z0-9][A-Za-z0-9_.-]*\\.ya?ml$", var.github_job_workflow_path)) &&
+      length("${var.github_job_workflow_path}@*") <= 128
+    )
+    error_message = "The reusable workflow path must be owner/repository/.github/workflows/name.yml with no Git ref, expression, tag, or commit SHA, and its claims expression comparand must be at most 128 characters."
   }
 }
 

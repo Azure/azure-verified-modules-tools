@@ -6,17 +6,18 @@ locals {
   identity_resource_id     = local.dedicated_identity ? azapi_resource.identity[0].id : data.azapi_resource.existing_identity[0].id
   identity_properties      = local.dedicated_identity ? azapi_resource.identity[0].output.properties : data.azapi_resource.existing_identity[0].output.properties
   federation_identity_name = local.dedicated_identity ? local.identity_name : "${local.identity_name}-${var.existing_identity.federation_name_key}"
-  module_workflow_pattern  = "${var.github_job_workflow_path}@*"
   module_subject_patterns = {
     for environment in var.github_repository_environment_names :
-    environment => "repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:${environment}:job_workflow_ref:${local.module_workflow_pattern}${var.github_workflow_ref == null ? "" : ":workflow_ref:${var.github_workflow_ref}"}"
+    environment => "repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:${environment}:*"
   }
   module_federated_credentials = {
     for environment, subject_pattern in local.module_subject_patterns :
     "module-${environment}" => {
-      name            = "${local.federation_identity_name}-fic-m-${environment}"
-      subject_pattern = subject_pattern
-      repository_id   = var.github_repository_id
+      name                   = "${local.federation_identity_name}-fic-m-${environment}"
+      subject_pattern        = subject_pattern
+      job_workflow_pattern   = "${var.github_job_workflow_path}@*"
+      caller_subject_pattern = var.github_workflow_ref == null ? null : "*:workflow_ref:${var.github_workflow_ref}"
+      repository_id          = var.github_repository_id
     }
   }
   validation_federated_credentials = var.existing_identity == null || var.existing_identity.manage_entra_groups ? {
@@ -40,11 +41,15 @@ locals {
   )
   federated_credential_claim_clauses = {
     for key, credential in local.federated_credentials :
-    key => [
-      "claims['sub'] matches '${credential.subject_pattern}'",
-      "claims['repository_id'] eq '${credential.repository_id}'",
-      "claims['repository_owner_id'] eq '${var.github_organization_id}'",
-    ]
+    key => concat(
+      ["claims['sub'] matches '${credential.subject_pattern}'"],
+      try(credential.job_workflow_pattern, null) == null ? [] : ["claims['job_workflow_ref'] matches '${credential.job_workflow_pattern}'"],
+      try(credential.caller_subject_pattern, null) == null ? [] : ["claims['sub'] matches '${credential.caller_subject_pattern}'"],
+      [
+        "claims['repository_id'] eq '${credential.repository_id}'",
+        "claims['repository_owner_id'] eq '${var.github_organization_id}'",
+      ],
+    )
   }
   member_is_repository_identity = (
     lower(local.identity_properties.tenantId) == lower(data.azapi_client_config.current.tenant_id) &&

@@ -381,9 +381,9 @@ Describe 'Bicep identity saved-plan ownership guard' {
             $staged.values.body.properties.ContainsKey('subject') | Should -BeFalse
             $staged.values.body.properties.claimsMatchingExpression.languageVersion | Should -Be 1
             $staged.values.body.properties.claimsMatchingExpression.value | Should -BeExactly (
-                "claims['sub'] matches 'repository_owner_id:6844498:repository_id:447791597:environment:avm-validation:" +
-                "job_workflow_ref:Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml@*:" +
-                "workflow_ref:Azure/bicep-registry-modules/.github/workflows/$($path.Replace('/', '.')).yml@refs/heads/main' and " +
+                "claims['sub'] matches 'repository_owner_id:6844498:repository_id:447791597:environment:avm-validation:*' and " +
+                "claims['job_workflow_ref'] matches 'Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml@*' and " +
+                "claims['sub'] matches '*:workflow_ref:Azure/bicep-registry-modules/.github/workflows/$($path.Replace('/', '.')).yml@refs/heads/main' and " +
                 "claims['repository_id'] eq '447791597' and claims['repository_owner_id'] eq '6844498'"
             )
             $tools = @($credentials | Where-Object { $_.address.EndsWith('.azapi_resource.federated_credentials["validation"]') })[0]

@@ -172,11 +172,19 @@ function Get-AvmBamiModuleFederationExpression {
         [string] $WorkflowRef
     )
 
-    $subject = "repository_owner_id:$RepositoryOwnerId`:repository_id:$RepositoryId`:environment:$Environment`:job_workflow_ref:$JobWorkflowPath@*"
+    $subject = "repository_owner_id:$RepositoryOwnerId`:repository_id:$RepositoryId`:environment:$Environment`:*"
+    $clauses = @(
+        "claims['sub'] matches '$subject'",
+        "claims['job_workflow_ref'] matches '$JobWorkflowPath@*'"
+    )
     if ($WorkflowRef) {
-        $subject += ":workflow_ref:$WorkflowRef"
+        $clauses += "claims['sub'] matches '*:workflow_ref:$WorkflowRef'"
     }
-    return Get-AvmBamiFederationExpression -SubjectPattern $subject -RepositoryOwnerId $RepositoryOwnerId -RepositoryId $RepositoryId
+    $clauses += @(
+        "claims['repository_id'] eq '$RepositoryId'",
+        "claims['repository_owner_id'] eq '$RepositoryOwnerId'"
+    )
+    return $clauses -join ' and '
 }
 
 function Get-AvmBamiFederationExpression {
