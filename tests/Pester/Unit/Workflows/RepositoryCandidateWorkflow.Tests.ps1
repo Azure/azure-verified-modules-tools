@@ -73,7 +73,8 @@ Describe 'Repository sync candidate workflow' {
     It 'defaults manual plan-only runs to the checked-out authoring source' {
         $script:workflow | Should -Match '(?ms)^      use_workflow_authoring_source:\r?\n.*?^        default:\s*true\s*$'
         $script:workflow | Should -Match '(?ms)^      plan_only:\r?\n.*?^        default:\s*true\s*$'
-        $script:prepare | Should -Match '\$planOnly -and \$triggerType -eq ''workflow_dispatch'''
+        $script:prepare | Should -Match '\$triggerType -eq ''workflow_dispatch'' -and \$env:USE_WORKFLOW_AUTHORING_SOURCE -eq ''true'''
+        $script:workflow | Should -Match '(?ms)^      allow_example_repository_branch_apply:\r?\n.*?^        default:\s*false\s*$'
         $script:prepare | Should -Match '-authoringModulePath \$authoringModulePath'
         $script:prepare | Should -Match '-candidateOutputDirectory \$candidateDirectory'
         $script:prepare | Should -Match 'REPO_META_DATA_JSON: \$\{\{ toJson\(matrix\.repoMetaData\) \}\}'
@@ -88,7 +89,7 @@ Describe 'Repository sync candidate workflow' {
 
     It 'shares the guarded source selection with bootstrap and optional project synchronization' {
         $script:prepare | Should -Match ([regex]::Escape(
-                'USE_WORKFLOW_AUTHORING_SOURCE: ${{ github.event_name == ''workflow_dispatch'' && inputs.plan_only && inputs.use_workflow_authoring_source }}'))
+                'USE_WORKFLOW_AUTHORING_SOURCE: ${{ github.event_name == ''workflow_dispatch'' && (inputs.allow_example_repository_branch_apply || (inputs.plan_only && inputs.use_workflow_authoring_source)) }}'))
         foreach ($name in @('Load Avm.Authoring', 'Add repository items to the AVM All Up project')) {
             $step = [regex]::Match($script:prepare,
                 '(?ms)^      - name: ' + [regex]::Escape($name) + '\r?\n(?<body>.*?)(?=^      - name:|\z)')
@@ -98,7 +99,8 @@ Describe 'Repository sync candidate workflow' {
                     "Join-Path `$env:GITHUB_WORKSPACE 'src' 'Avm.Authoring' 'Avm.Authoring.psd1'"))
             $step.Groups['body'].Value | Should -Match 'Import-Module -Name \$moduleToLoad -Force -ErrorAction Stop'
         }
-        $script:prepare | Should -Match '\$planOnly -and \$triggerType -eq ''workflow_dispatch'' -and\s+\$env:USE_WORKFLOW_AUTHORING_SOURCE -eq ''true'''
+        $script:prepare | Should -Match '\$triggerType -eq ''workflow_dispatch'' -and \$env:USE_WORKFLOW_AUTHORING_SOURCE -eq ''true'''
+        $script:workflow | Should -Match '"\$\{\{ inputs.repositories \}\}" -cne ''avm-ptn-example-repo'''
     }
 
     It 'stops validation after preparation failures without passing preparation credentials to checks' {
