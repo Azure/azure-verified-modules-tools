@@ -43,7 +43,7 @@ Describe 'Repository sync candidate workflow' {
         $jobs = [regex]::Match($script:workflow, '(?ms)^jobs:\r?\n(?<body>.*)\z').Groups['body'].Value
         @([regex]::Matches($jobs, '(?m)^  ([a-z][a-z-]*):\r?$') |
             ForEach-Object { $_.Groups[1].Value }) | Should -Be @('generate-matrix', 'sync-repository')
-        $script:worker | Should -Match ([regex]::Escape('name: Sync ${{ matrix.repoName }}'))
+        $script:worker | Should -Match ([regex]::Escape('name: ''Manage repository and update files: ${{ matrix.repoName }}'''))
         $script:worker | Should -Match '(?m)^    environment: avm\r?$'
         $script:worker | Should -Match ([regex]::Escape('group: repository-sync-state-${{ matrix.repoId }}'))
         $script:worker | Should -Match '(?m)^      cancel-in-progress: false\r?$'
@@ -60,7 +60,7 @@ Describe 'Repository sync candidate workflow' {
         }
         ([regex]::Matches($script:worker, 'uses: actions/checkout@')).Count | Should -Be 1
         $script:worker | Should -Not -Match 'uses: actions/download-artifact@'
-        $script:prepare | Should -Match '(?m)^      - name: Prepare repository candidate\r?$'
+        $script:prepare | Should -Match '(?m)^      - name: Run Terraform, reconcile repository settings and prepare file updates\r?$'
         $script:prepare | Should -Match '(?m)^          persist-credentials: false\r?$'
         foreach ($phase in @($script:validate, $script:publish)) {
             $phase | Should -Match ([regex]::Escape(

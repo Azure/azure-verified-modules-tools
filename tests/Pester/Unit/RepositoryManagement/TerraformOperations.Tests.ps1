@@ -197,7 +197,7 @@ Describe 'State identity wiring' {
         )) -Raw
         $syncStep = [regex]::Match(
             $workflow,
-            '(?ms)^      - name: Prepare repository candidate\r?\n.*?(?=^      - name:)'
+            '(?ms)^      - name: Run Terraform, reconcile repository settings and prepare file updates\r?\n.*?(?=^      - name:)'
         ).Value
         $syncStep | Should -Not -BeNullOrEmpty
         $workflow | Should -Match '(?s)Write-Host "Running repo sync"\s+\$moduleToLoad = .*?Import-Module -Name \$moduleToLoad -Force -ErrorAction Stop\s+\./scripts/Invoke-RepositorySync\.ps1'
