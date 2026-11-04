@@ -199,6 +199,183 @@ module "child" {
         }
     }
 
+It 'classifies a forwarded registry location conservatively: <Case>' -ForEach @(
+        @{
+            Case = 'verified interface'
+            Source = 'Azure/avm-utl-interfaces/azure'
+            Version = '0.10.0'
+            Telemetry = 'var.enable_telemetry'
+            Location = 'var.location'
+            Business = ''
+            Optional = $true
+        }
+        @{
+            Case = 'verified interface explicit registry and exact constraint'
+            Source = 'registry.terraform.io/Azure/avm-utl-interfaces/azure'
+            Version = '= 0.10.0'
+            Telemetry = 'var.enable_telemetry'
+            Location = 'var.location'
+            Business = ''
+            Optional = $true
+        }
+        @{
+            Case = 'other version'
+            Source = 'Azure/avm-utl-interfaces/azure'
+            Version = '0.10.1'
+            Telemetry = 'var.enable_telemetry'
+            Location = 'var.location'
+            Business = ''
+            Optional = $false
+        }
+        @{
+            Case = 'version range'
+            Source = 'Azure/avm-utl-interfaces/azure'
+            Version = '>= 0.10.0'
+            Telemetry = 'var.enable_telemetry'
+            Location = 'var.location'
+            Business = ''
+            Optional = $false
+        }
+        @{
+            Case = 'custom registry'
+            Source = 'registry.example.invalid/Azure/avm-utl-interfaces/azure'
+            Version = '0.10.0'
+            Telemetry = 'var.enable_telemetry'
+            Location = 'var.location'
+            Business = ''
+            Optional = $false
+        }
+        @{
+            Case = 'another registry module'
+            Source = 'Azure/other/azure'
+            Version = '0.10.0'
+            Telemetry = 'var.enable_telemetry'
+            Location = 'var.location'
+            Business = ''
+            Optional = $false
+        }
+        @{
+            Case = 'telemetry not forwarded'
+            Source = 'Azure/avm-utl-interfaces/azure'
+            Version = '0.10.0'
+            Telemetry = 'true'
+            Location = 'var.location'
+            Business = ''
+            Optional = $false
+        }
+        @{
+            Case = 'telemetry input omitted'
+            Source = 'Azure/avm-utl-interfaces/azure'
+            Version = '0.10.0'
+            Telemetry = ''
+            Location = 'var.location'
+            Business = ''
+            Optional = $false
+        }
+        @{
+            Case = 'location expression differs'
+            Source = 'Azure/avm-utl-interfaces/azure'
+            Version = '0.10.0'
+            Telemetry = 'var.enable_telemetry'
+            Location = 'upper(var.location)'
+            Business = ''
+            Optional = $false
+        }
+        @{
+            Case = 'separate business location'
+            Source = 'Azure/avm-utl-interfaces/azure'
+            Version = '0.10.0'
+            Telemetry = 'var.enable_telemetry'
+            Location = 'var.location'
+            Business = 'output "business" { value = var.location }'
+            Optional = $false
+        }
+        @{
+            Case = 'other registry module also consumes location'
+            Source = 'Azure/avm-utl-interfaces/azure'
+            Version = '0.10.0'
+            Telemetry = 'var.enable_telemetry'
+            Location = 'var.location'
+            Business = @'
+module "business" {
+  source   = "Azure/other/azure"
+  version  = "0.10.0"
+  location = var.location
+}
+'@
+            Optional = $false
+        }
+    ) {
+        $root = Join-Path $TestDrive ("registry-location-" + ($Case -replace ' ', '-'))
+        $null = New-Item -ItemType Directory -Path $root -Force
+        $mainPath = Join-Path $root 'main.tf'
+        $variablesPath = Join-Path $root 'variables.tf'
+        $telemetryInput = if ($Telemetry) { "  enable_telemetry = $Telemetry" } else { '' }
+        Set-Content -LiteralPath $mainPath -Encoding utf8NoBOM -Value @"
+locals {
+  main_location = var.location
+}
+
+resource "azapi_resource" "telemetry" {
+  count    = var.enable_telemetry ? 1 : 0
+  type     = "Microsoft.Resources/deployments@2025-04-01"
+  location = local.main_location
+}
+
+module "interfaces" {
+  source           = "$Source"
+  version          = "$Version"
+$telemetryInput
+  location         = $Location
+}
+
+$Business
+"@
+        Set-Content -LiteralPath $variablesPath -Encoding utf8NoBOM -Value @'
+variable "enable_telemetry" {
+  type    = bool
+  default = true
+}
+
+variable "location" {
+  type    = string
+  default = null
+  validation {
+    condition     = !var.enable_telemetry || var.location != null
+    error_message = "The location must not be null when telemetry is enabled."
+  }
+}
+'@
+        $profile = Join-Path $repoRoot 'src' 'Avm.Authoring' 'Resources' 'mapotf' 'module-call'
+        $firstVariables = ''
+        $firstMain = ''
+        foreach ($pass in 1..2) {
+            $null = Invoke-ModuleSourceProcess -FilePath $script:mapotfPath -WorkingDirectory $root -ArgumentList @(
+                'transform', '--tf-dir', $root, '--mptf-dir', $profile
+            )
+            $variables = [IO.File]::ReadAllText($variablesPath)
+            $location = [regex]::Match($variables, '(?ms)^variable "location" \{.*?^\}').Value
+            $location | Should -Match '!var\.enable_telemetry\s*\|\|\s*var\.location\s*!=\s*null'
+            if ($Optional) {
+                $location | Should -Match 'default\s*=\s*null'
+                $location | Should -Not -Match 'nullable\s*=\s*false'
+            }
+            else {
+                $location | Should -Not -Match 'default\s*='
+                $location | Should -Match 'nullable\s*=\s*false'
+            }
+            $main = [IO.File]::ReadAllText($mainPath)
+            if ($pass -eq 1) {
+                $firstVariables = $variables
+                $firstMain = $main
+            }
+            else {
+                $variables | Should -BeExactly $firstVariables
+                $main | Should -BeExactly $firstMain
+            }
+        }
+    }
+
 It 'forwards root telemetry through local children on the first pass with instrumentation=<Instrumented>' -ForEach @(
         @{ Instrumented = $true }
         @{ Instrumented = $false }
