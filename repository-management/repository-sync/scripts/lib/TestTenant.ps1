@@ -21,7 +21,7 @@ function Assert-AvmBamiRepositorySyncRunContext {
     if ($env:GITHUB_ACTIONS -cne 'true' -or
         $env:GITHUB_REPOSITORY -cne 'Azure/azure-verified-modules-tools') {
         throw [System.InvalidOperationException]::new(
-            'BAMI repository sync requires trusted Azure/azure-verified-modules-tools in GitHub Actions.')
+            'BAMI repository sync requires trusted Azure/azure-verified-modules-tools main in GitHub Actions, except for explicitly permitted manual branch runs.')
     }
     if ($exampleRepositoryBranchApply) {
         if ($env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or
@@ -934,6 +934,9 @@ function Resolve-AvmRepositorySyncContext {
         throw [System.ArgumentException]::new('Repository sync requires the selected canonical Azure AVM repository.')
     }
     $null = Get-AvmTestIdentityName -Repository $Repository
+    if (-not $AllowExampleRepositoryBranchApply) {
+        Assert-AvmBamiRepositorySyncRunContext -PlanOnly $PlanOnly
+    }
     $toolsContext = Resolve-AvmRepositorySyncFederationContext -RepositoryId $RepositorySyncRepositoryId
     $repo = Invoke-RepositoryGitHubApi -Endpoint "repos/$Repository"
     if ($repo.full_name -cne $Repository -or $repo.fork -or $repo.id -le 0 -or
