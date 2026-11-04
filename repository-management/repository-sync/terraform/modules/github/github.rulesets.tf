@@ -62,7 +62,7 @@ resource "github_repository_ruleset" "tag_deny_non_v" {
   conditions {
     ref_name {
       include = ["~ALL"]
-      exclude = ["refs/tags/v[0-9]*.[0-9]*.[0-9]*"]
+      exclude = ["refs/tags/v0.[0-9]*.[0-9]*"]
     }
   }
 }

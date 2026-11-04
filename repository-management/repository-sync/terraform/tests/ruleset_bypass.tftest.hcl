@@ -108,3 +108,65 @@ run "configured_teams_bypass_pull_requests_only" {
     error_message = "Only the App and the two configured team IDs may bypass the main ruleset, and only on pull requests."
   }
 }
+
+run "version_tags_remain_pre_v1_and_immutable" {
+  command = plan
+
+  module {
+    source = "./modules/github"
+  }
+
+  variables {
+    github_teams              = {}
+    pull_request_bypass_teams = []
+  }
+
+  assert {
+    condition = (
+      github_repository_ruleset.tag_deny_non_v[0].target == "tag" &&
+      github_repository_ruleset.tag_deny_non_v[0].enforcement == "active" &&
+      github_repository_ruleset.tag_deny_non_v[0].rules[0].creation &&
+      github_repository_ruleset.tag_deny_non_v[0].rules[0].update &&
+      toset(github_repository_ruleset.tag_deny_non_v[0].conditions[0].ref_name[0].include) == toset(["~ALL"]) &&
+      toset(github_repository_ruleset.tag_deny_non_v[0].conditions[0].ref_name[0].exclude) == toset(["refs/tags/v0.[0-9]*.[0-9]*"]) &&
+      length(github_repository_ruleset.tag_deny_non_v[0].bypass_actors) == 0
+    )
+    error_message = "Tag creation and updates must be denied without bypass except for v0 version tags, blocking v1 and all later majors."
+  }
+
+  assert {
+    condition = (
+      github_repository_ruleset.tag_prevent_delete_version_tags[0].target == "tag" &&
+      github_repository_ruleset.tag_prevent_delete_version_tags[0].enforcement == "active" &&
+      github_repository_ruleset.tag_prevent_delete_version_tags[0].rules[0].update &&
+      github_repository_ruleset.tag_prevent_delete_version_tags[0].rules[0].deletion &&
+      github_repository_ruleset.tag_prevent_delete_version_tags[0].rules[0].non_fast_forward &&
+      toset(github_repository_ruleset.tag_prevent_delete_version_tags[0].conditions[0].ref_name[0].include) == toset(["refs/tags/v[0-9]*.[0-9]*.[0-9]*"]) &&
+      length(github_repository_ruleset.tag_prevent_delete_version_tags[0].conditions[0].ref_name[0].exclude) == 0 &&
+      length(github_repository_ruleset.tag_prevent_delete_version_tags[0].bypass_actors) == 0
+    )
+    error_message = "All existing version tags, including v1 and later tags, must remain protected against updates and deletion without bypass."
+  }
+}
+
+run "creation_mode_omits_tag_rulesets" {
+  command = plan
+
+  module {
+    source = "./modules/github"
+  }
+
+  variables {
+    repository_creation_mode_enabled = true
+    github_teams                     = {}
+    pull_request_bypass_teams        = []
+  }
+
+  assert {
+    condition = (
+      length(github_repository_ruleset.tag_deny_non_v) == 0 &&
+      length(github_repository_ruleset.tag_prevent_delete_version_tags) == 0
+    )
+    error_message = "Repository creation mode must continue to omit tag rulesets."
+  }
+}

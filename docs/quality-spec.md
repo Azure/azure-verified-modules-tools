@@ -2883,6 +2883,16 @@ This section is the implementation-level expression of the **Security stance** p
   The changed automatic-recovery policy requires recorded SFI sign-off before
   merge, separately from user risk acceptance and any live-operation approval.
 
+### Repository-sync tag protection
+
+- Managed Terraform module repositories permit new version tags only in the
+  `v0.*.*` family, using the GitHub ref pattern `refs/tags/v0.[0-9]*.[0-9]*`.
+  The existing `Only allow v tags` ruleset denies creation and updates of all
+  other tags, including v1 and later majors, without bypass actors.
+- Preserve update, deletion and non-fast-forward protection for every version
+  tag, including existing v1 and later tags. Repository creation mode continues
+  to omit these rulesets.
+
 ### Module manifest and release pipeline
 
 - `LICENSE` at the repo root is referenced from the manifest's `LicenseUri`. The manifest fails its own self-check if the file isn't reachable.
