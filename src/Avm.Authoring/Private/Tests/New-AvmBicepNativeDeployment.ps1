@@ -77,6 +77,8 @@ function New-AvmBicepNativeDeployment {
     $submissionReturned = $false
     $failureQueryAllowed = $false
     $recoveredFailure = $false
+    $notSubmitted = $false
+    $submissionState = [hashtable]::Synchronized(@{ Invoked = $false })
     $observed = @{}
     $progressOptions = @{ DeploymentId = $id; Observed = $observed; SensitiveValues = $SensitiveValues }
     if ($inputOptions.ContainsKey('DefaultProfile')) { $progressOptions.DefaultProfile = $inputOptions.DefaultProfile }
@@ -91,8 +93,9 @@ function New-AvmBicepNativeDeployment {
             Write-AvmLog -Level Info -Message (
                 "Starting $command for deployment '$name' at '$($DeploymentInput.Scope)' scope with template " +
                 "'$($DeploymentInput.TemplatePath)' and location '$($DeploymentInput.MetadataLocation)'. Template parameter values are not logged.")
+            $azureModulePaths = @(Get-AvmBicepAzModuleManifest)
             $job = Start-AvmBicepNativeDeploymentJob -ModulePath $ExecutionContext.SessionState.Module.Path `
-                -DeploymentInput $inputOptions
+                -DeploymentInput $inputOptions -AzureModulePaths $azureModulePaths -SubmissionState $submissionState -Confirm:$false
             if ($job -isnot [System.Management.Automation.Job]) {
                 throw [AvmProcessException]::new('Azure deployment did not return an asynchronous job.')
             }
@@ -141,9 +144,13 @@ function New-AvmBicepNativeDeployment {
     catch {
         $failure = $_
         $kind = Get-AvmBicepDeploymentErrorKind -ErrorRecord $_
+        $notSubmitted = $ShowProgress -and -not $submissionState['Invoked']
         $failedPattern = "^(?:\d{2}:\d{2}:\d{2} - )?The deployment '$([regex]::Escape($name))' failed with error\(s\)\. " +
         '(?:Showing \d+ out of \d+ error\(s\)\. Status Message: (?:(?!\(Code:)[^\r\n])* )?\(Code: DeploymentFailed\)(?:\s|$)'
-        if (Test-AvmBicepDeploymentPreflightRejection -ErrorRecord $_ -DeploymentName $name) {
+        if ($notSubmitted) {
+            $entry['status'] = if ($Mode -eq 'InPlace') { 'Failed' } else { 'NotSubmitted' }
+        }
+        elseif (Test-AvmBicepDeploymentPreflightRejection -ErrorRecord $_ -DeploymentName $name) {
             $entry['status'] = 'Rejected'
             $entry['preflightRejected'] = $true
         }
@@ -151,14 +158,14 @@ function New-AvmBicepNativeDeployment {
             $entry['status'] = 'Failed'
         }
         else { $entry['status'] = 'Unknown' }
-        $failureQueryAllowed = -not $submissionReturned -and $kind -eq 'Other' -and -not $entry['preflightRejected']
+        $failureQueryAllowed = -not $notSubmitted -and -not $submissionReturned -and $kind -eq 'Other' -and -not $entry['preflightRejected']
         if ($kind -eq 'Cancellation') {
             Save-AvmBicepCleanupState -State $State -Path $StatePath -Confirm:$false
             throw
         }
         $canObserve = Test-AvmBicepRetryErrorRecord -ErrorRecord $_ -Kind MetadataTimeout
         if (-not $submissionReturned -and $DeploymentInput.Scope -eq 'mg' -and $kind -eq 'Forbidden') { $canObserve = $true }
-        if (-not $submissionReturned -and $DeploymentInput.Scope -eq 'sub' -and $kind -eq 'Other') {
+        if (-not $notSubmitted -and -not $submissionReturned -and $DeploymentInput.Scope -eq 'sub' -and $kind -eq 'Other') {
             $canObserve = Test-AvmBicepNestedDeploymentReadFailure -ErrorRecord $_ -DeploymentId $id -DefaultProfile $submissionProfile
         }
         if ($canObserve -and $entry['status'] -eq 'Unknown') {
@@ -184,11 +191,11 @@ function New-AvmBicepNativeDeployment {
             }
         }
     }
-    if ($ShowProgress) {
+    if ($ShowProgress -and -not $notSubmitted) {
         Write-AvmBicepDeploymentSummary @progressOptions -Scope $DeploymentInput.Scope -Location $DeploymentInput.MetadataLocation
     }
     if ($entry['status'] -ne 'Succeeded') {
-        $readDiagnostics = $entry['status'] -eq 'Failed'
+        $readDiagnostics = -not $notSubmitted -and $entry['status'] -eq 'Failed'
         if ($kind -eq 'Other' -and $entry['status'] -eq 'Unknown' -and
             -not $submissionReturned -and $null -eq $recoveryFailure) {
             $readDiagnostics = $true
@@ -204,7 +211,7 @@ function New-AvmBicepNativeDeployment {
         }
     }
     $retryMode = ''
-    if ($ClassifyRetry -and $kind -ne 'Forbidden' -and $null -eq $recoveryFailure -and
+    if ($ClassifyRetry -and -not $notSubmitted -and $kind -ne 'Forbidden' -and $null -eq $recoveryFailure -and
         ($entry['status'] -eq 'Failed' -or $failureQueryAllowed)) {
         $classificationFailure = $failure
         if ($recoveredFailure) { $classificationFailure = $null }

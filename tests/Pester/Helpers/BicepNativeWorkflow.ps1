@@ -300,7 +300,9 @@ function New-NativeBicepWorkflowFixture {
             }
             return $response
         }
+        Mock Get-AvmBicepAzModuleManifest { @() }
         Mock Start-AvmBicepNativeDeploymentJob {
+            $SubmissionState.Invoked = $true
             $response = Invoke-AvmBicepNativeArmOperation @DeploymentInput -Operation Create -Confirm:$false
             Start-ThreadJob -ScriptBlock { param($Deployment) $Deployment } -ArgumentList (, $response)
         }

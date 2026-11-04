@@ -42,7 +42,7 @@ function ConvertTo-AvmBicepCleanupState {
         if ($entry -isnot [System.Collections.IDictionary] -or
             $entry['id'] -isnot [string] -or $entry['preflightRejected'] -isnot [bool] -or
             $entry['status'] -isnot [string] -or
-            $entry['status'] -cnotin @('Attempted', 'Succeeded', 'Failed', 'Unknown', 'Rejected')) {
+            $entry['status'] -cnotin @('NotSubmitted', 'Attempted', 'Succeeded', 'Failed', 'Unknown', 'Rejected')) {
             throw [AvmConfigurationException]::new('Invalid cleanup deployment record.')
         }
         $resource = ConvertTo-AvmBicepCleanupResource -ResourceIds @($entry['id'])

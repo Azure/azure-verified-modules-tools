@@ -1735,8 +1735,13 @@ and change types using `ResourceIdOnly`. A failure before submission must not
 create an attempted deployment record or change the prior failed attempt.
 What-If failure is visible but does not permit a retry or replace validation.
 Submit the synchronous Azure cmdlet through an in-process thread job with the
-selected Azure context, and poll deployment operations from the parent while
-it runs; show each changed resource state, timestamp and duration without
+selected Azure context and the exact loaded Az.Accounts and Az.Resources
+manifest versions, and poll deployment operations from the parent while it
+runs. A confirmed failure before the deployment cmdlet is invoked is recorded
+as `NotSubmitted` and excluded from cleanup discovery. An in-place retry that
+fails before invocation retains its earlier failed deployment record. Once
+invocation may have begun, its outcome remains ambiguous until Azure confirms
+otherwise. Show each changed resource state, timestamp and duration without
 printing operation bodies. Bound nesting and pagination, validate nested
 deployment IDs and follow only the original subscription or management scope.
 Progress reads do not affect submission, observation, recovery or cleanup

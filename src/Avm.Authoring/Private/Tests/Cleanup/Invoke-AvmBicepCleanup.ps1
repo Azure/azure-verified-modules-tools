@@ -107,7 +107,9 @@ function Invoke-AvmBicepCleanup {
         }
         $ids = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         $blockedGroups = [System.Collections.Generic.List[string]]::new()
-        $discoverOwners = @($state['deployments'] | Where-Object { -not $_.Contains('recordDeletion') })
+        $discoverOwners = @($state['deployments'] | Where-Object {
+                $_['status'] -cne 'NotSubmitted' -and -not $_.Contains('recordDeletion')
+            })
         $discovery = Get-AvmBicepDeploymentCleanupTarget @discoveryOptions `
             -DeploymentIds @($discoverOwners | ForEach-Object { $_['id'] }) `
             -PreflightRejectedDeploymentIds @($discoverOwners |

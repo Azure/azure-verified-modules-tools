@@ -175,12 +175,14 @@ Describe 'Bicep asynchronous deployment submission' {
             Mock Write-AvmBicepDeploymentSummary {}
             Mock Write-AvmBicepDeploymentDiagnostic { '' }
             Mock Test-AvmBicepNestedDeploymentReadFailure { $false }
+            Mock Get-AvmBicepAzModuleManifest { @() }
         }
     }
 
     It 'keeps the recorded identity and result when an asynchronous job succeeds' {
         InModuleScope Avm.Authoring {
             Mock Start-AvmBicepNativeDeploymentJob {
+                $SubmissionState.Invoked = $true
                 $id = "/subscriptions/$($script:state.subscriptionId)/providers/Microsoft.Resources/deployments/$($DeploymentInput.DeploymentName)"
                 Start-ThreadJob -ArgumentList $id -ScriptBlock {
                     param($id)
@@ -231,8 +233,10 @@ Describe 'Bicep asynchronous deployment submission' {
     It 'preserves job errors without reporting a successful deployment or resubmitting' {
         InModuleScope Avm.Authoring {
             Mock Start-AvmBicepNativeDeploymentJob {
+                $SubmissionState.Invoked = $true
                 Start-ThreadJob -ScriptBlock { throw [InvalidOperationException]::new('Azure submission failed') }
             }
+
             $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'unused' `
                 -DeploymentInput $script:options -ShowProgress
             $result.Status | Should -BeExactly 'fail'
@@ -243,9 +247,42 @@ Describe 'Bicep asynchronous deployment submission' {
         }
     }
 
+    It 'records a failed job initialization as not submitted without polling cleanup' {
+        InModuleScope Avm.Authoring {
+            Mock Start-AvmBicepNativeDeploymentJob {
+                Start-ThreadJob -ScriptBlock { throw [InvalidOperationException]::new('Azure module import failed') }
+            }
+            $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'unused' `
+                -DeploymentInput $script:options -ShowProgress -ClassifyRetry
+            $result.Outcome | Should -BeExactly 'NotSubmitted'
+            $result.ErrorRecord.Exception.Message | Should -Match 'Azure module import failed'
+            $script:state.deployments[0].status | Should -BeExactly 'NotSubmitted'
+            $pending = Get-AvmBicepPendingDeployment -State $script:state -RetryLimit 1 -RetryInterval 0
+            $pending.Pending.Count | Should -Be 0
+            Should -Invoke Write-AvmBicepDeploymentDiagnostic -Exactly 1 -ParameterFilter { -not $ReadDeployment }
+            Should -Invoke Write-AvmBicepDeploymentSummary -Exactly 0
+        }
+    }
+
+    It 'preserves an earlier failed deployment when in-place initialization fails' {
+        InModuleScope Avm.Authoring {
+            $id = "/subscriptions/$($script:state.subscriptionId)/providers/Microsoft.Resources/deployments/avm-e2e-$($script:state.runId)-t1"
+            $script:state.deployments = @(@{ id = $id; status = 'Failed'; preflightRejected = $false })
+            Mock Start-AvmBicepNativeDeploymentJob {
+                Start-ThreadJob -ScriptBlock { throw [InvalidOperationException]::new('Azure module import failed') }
+            }
+            $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'unused' `
+                -DeploymentInput $script:options -Mode InPlace -ShowProgress -ClassifyRetry
+            $result.Outcome | Should -BeExactly 'Failed'
+            $result.RetryMode | Should -BeExactly ''
+            $script:state.deployments[0].status | Should -BeExactly 'Failed'
+        }
+    }
+
     It 'keeps cancellation terminal for a stopped Azure job' {
         InModuleScope Avm.Authoring {
             Mock Start-AvmBicepNativeDeploymentJob {
+                $SubmissionState.Invoked = $true
                 $job = Start-ThreadJob -ScriptBlock { Start-Sleep -Seconds 30 }
                 while ($job.State -eq 'NotStarted') { Start-Sleep -Milliseconds 20 }
                 Stop-Job -Job $job
@@ -281,8 +318,10 @@ Describe 'Bicep submission with mocked Azure commands' {
             Mock Save-AvmBicepCleanupState {}
             Mock Write-AvmBicepDeploymentProgress {}
             Mock Write-AvmBicepDeploymentSummary {}
+            Mock Get-AvmBicepAzModuleManifest { @() }
             Mock Start-AvmBicepNativeDeploymentJob {
-                $response = Invoke-AvmBicepNativeArmOperation @DeploymentInput -Operation Create -Confirm:$false
+                $response = Invoke-AvmBicepNativeArmOperation @DeploymentInput -Operation Create `
+                    -SubmissionState $SubmissionState -Confirm:$false
                 Start-ThreadJob -ScriptBlock { param($Deployment) $Deployment } -ArgumentList (, $response)
             }
         }
