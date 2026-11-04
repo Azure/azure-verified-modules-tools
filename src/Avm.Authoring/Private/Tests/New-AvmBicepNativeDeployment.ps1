@@ -31,7 +31,7 @@ function New-AvmBicepNativeDeployment {
     $inputOptions.DeploymentName = $name
     $observationOptions = @{}
     if ($PSBoundParameters.ContainsKey('RecoveryDeadlineUtc')) { $observationOptions.RecoveryDeadlineUtc = $RecoveryDeadlineUtc }
-    if ($DeploymentInput.Scope -in @('mg', 'sub')) {
+    if ($DeploymentInput.Scope -in @('mg', 'sub') -or $ShowProgress) {
         $submissionProfile = Get-AzContext -ErrorAction Stop
         $tenant = Get-AvmPropertyValue -InputObject $submissionProfile -Name 'Tenant'
         $tenantId = Get-AvmPropertyValue -InputObject $tenant -Name 'Id' -NoEnumerate
@@ -46,12 +46,19 @@ function New-AvmBicepNativeDeployment {
         if ($entries.Count -ne 1 -or $entries[0]['status'] -cne 'Failed') {
             throw [AvmConfigurationException]::new('An in-place retry requires the exact previously failed deployment.')
         }
+    }
+    elseif ($entries.Count -ne 0) {
+        throw [AvmConfigurationException]::new('A fresh deployment identity was already recorded.')
+    }
+    if ($ShowProgress) {
+        Write-AvmBicepWhatIf -DeploymentInput $inputOptions -SensitiveValues $SensitiveValues
+    }
+    if ($Mode -eq 'InPlace') {
         $entry = $entries[0]
         $entry['status'] = 'Attempted'
         $entry['preflightRejected'] = $false
     }
     else {
-        if ($entries.Count -ne 0) { throw [AvmConfigurationException]::new('A fresh deployment identity was already recorded.') }
         $entry = @{ id = $id; status = 'Attempted'; preflightRejected = $false }
         $State['deployments'] = @($State['deployments']) + @($entry)
     }
@@ -75,8 +82,17 @@ function New-AvmBicepNativeDeployment {
     if ($inputOptions.ContainsKey('DefaultProfile')) { $progressOptions.DefaultProfile = $inputOptions.DefaultProfile }
     try {
         if ($ShowProgress) {
-            Write-AvmBicepWhatIf -DeploymentInput $inputOptions -SensitiveValues $SensitiveValues
-            $job = Invoke-AvmBicepNativeArmOperation @inputOptions -Operation Create -AsJob -Confirm:$false
+            $command = switch ($DeploymentInput.Scope) {
+                'group' { 'New-AzResourceGroupDeployment' }
+                'sub' { 'New-AzSubscriptionDeployment' }
+                'mg' { 'New-AzManagementGroupDeployment' }
+                'tenant' { 'New-AzTenantDeployment' }
+            }
+            Write-AvmLog -Level Info -Message (
+                "Starting $command for deployment '$name' at '$($DeploymentInput.Scope)' scope with template " +
+                "'$($DeploymentInput.TemplatePath)' and location '$($DeploymentInput.MetadataLocation)'. Template parameter values are not logged.")
+            $job = Start-AvmBicepNativeDeploymentJob -ModulePath $ExecutionContext.SessionState.Module.Path `
+                -DeploymentInput $inputOptions
             if ($job -isnot [System.Management.Automation.Job]) {
                 throw [AvmProcessException]::new('Azure deployment did not return an asynchronous job.')
             }

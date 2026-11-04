@@ -42,7 +42,7 @@ function Write-AvmBicepWhatIf {
         $changes = @(Get-AvmPropertyValue -InputObject $result -Name 'Changes' | Where-Object { $null -ne $_ })
         Write-AvmLog -Level Info -Message "Found $($changes.Count) resource changes in What-If."
         foreach ($change in $changes) {
-            $id = [string](Get-AvmPropertyValue -InputObject $change -Name 'ResourceId' -NoEnumerate)
+            $id = [string](Get-AvmPropertyValue -InputObject $change -Name 'FullyQualifiedResourceId' -NoEnumerate)
             $kind = [string](Get-AvmPropertyValue -InputObject $change -Name 'ChangeType' -NoEnumerate)
             if ([string]::IsNullOrWhiteSpace($id) -or [string]::IsNullOrWhiteSpace($kind)) {
                 throw [AvmProcessException]::new('What-If returned a change without a resource ID or change type.')

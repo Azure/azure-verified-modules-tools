@@ -1730,10 +1730,13 @@ An unclassified submission exception may be recovered only by an exact Failed
 root record and complete eligible operation evidence; a malformed returned
 identity or unreadable classification must never enable replay.
 
-Before each submission, show ARM What-If resource IDs and change types using
-`ResourceIdOnly`. What-If failure is visible but does not permit a retry or
-replace validation. Submit through an Azure job and poll deployment operations
-while it runs; show each changed resource state, timestamp and duration without
+Before recording an attempt and submitting it, show ARM What-If resource IDs
+and change types using `ResourceIdOnly`. A failure before submission must not
+create an attempted deployment record or change the prior failed attempt.
+What-If failure is visible but does not permit a retry or replace validation.
+Submit the synchronous Azure cmdlet through an in-process thread job with the
+selected Azure context, and poll deployment operations from the parent while
+it runs; show each changed resource state, timestamp and duration without
 printing operation bodies. Bound nesting and pagination, validate nested
 deployment IDs and follow only the original subscription or management scope.
 Progress reads do not affect submission, observation, recovery or cleanup

@@ -25,7 +25,7 @@ function New-NativeBicepWorkflowFixture {
         CurrentTenant = '00000000-0000-0000-0000-000000000002'
         IdentityMismatch = $false; GroupExists = $false; GroupCreateFails = $false
         OwnershipMismatch = $false; RetagDuringMetadata = $false
-        ValidationFails = $false; ValidationError = $null; CreateMode = 'success'
+        ValidationFails = $false; ValidationError = $null; WhatIfFails = $false; CreateMode = 'success'
         CleanupFails = $false; OutputMode = 'valid'; PesterMode = 'pass'; PostMode = 'pass'
         PesterInput = $null; HookInput = $null; FailuresRemaining = 0
         Nested = $false; NestedSubscription = ''; NestedResourceType = 'Microsoft.Storage/storageAccounts'
@@ -59,7 +59,9 @@ function New-NativeBicepWorkflowFixture {
         param($State)
         $script:nativeWorkflow = $State
         Mock Assert-AvmBicepAzureDependency {}
-        Mock Write-AvmBicepWhatIf {}
+        Mock Write-AvmBicepWhatIf {
+            if ($script:nativeWorkflow.WhatIfFails) { throw [InvalidOperationException]::new('What-If setup failed.') }
+        }
         Mock Write-AvmBicepDeploymentProgress {}
         Mock Write-AvmBicepDeploymentSummary {}
         Mock Get-Command { [pscustomobject]@{ Source = 'fake-az' } } -ParameterFilter { $Name -eq 'az' }
@@ -296,10 +298,11 @@ function New-NativeBicepWorkflowFixture {
             else {
                 $response = @{ Id = $id; DeploymentName = $DeploymentName; ProvisioningState = $provisioning; Outputs = $state.Outputs }
             }
-            if ($AsJob) {
-                return Start-ThreadJob -ScriptBlock { param($Deployment) $Deployment } -ArgumentList (, $response)
-            }
             return $response
+        }
+        Mock Start-AvmBicepNativeDeploymentJob {
+            $response = Invoke-AvmBicepNativeArmOperation @DeploymentInput -Operation Create -Confirm:$false
+            Start-ThreadJob -ScriptBlock { param($Deployment) $Deployment } -ArgumentList (, $response)
         }
         Mock Invoke-AzRestMethod {
             $state = $script:nativeWorkflow

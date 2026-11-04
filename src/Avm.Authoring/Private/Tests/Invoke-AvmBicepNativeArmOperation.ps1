@@ -26,9 +26,7 @@ function Invoke-AvmBicepNativeArmOperation {
         [string] $ManagementGroupId,
 
         [ValidateNotNull()]
-        [object] $DefaultProfile,
-
-        [switch] $AsJob
+        [object] $DefaultProfile
     )
 
     Set-StrictMode -Version 3.0
@@ -45,10 +43,6 @@ function Invoke-AvmBicepNativeArmOperation {
     }
     if ($PSBoundParameters.ContainsKey('DefaultProfile')) {
         $arguments.DefaultProfile = $DefaultProfile
-    }
-    if ($AsJob) {
-        if ($Operation -ne 'Create') { throw [AvmConfigurationException]::new('Only deployment creation supports asynchronous execution.') }
-        $arguments.AsJob = $true
     }
     if ($Scope -eq 'group') {
         if ([string]::IsNullOrWhiteSpace($ResourceGroupName)) {

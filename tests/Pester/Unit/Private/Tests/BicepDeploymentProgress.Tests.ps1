@@ -10,6 +10,11 @@ BeforeAll {
             [CmdletBinding()] param($Method, $Path, $DefaultProfile)
             throw 'Unexpected Azure request.'
         }
+        function script:New-AzSubscriptionDeployment {
+            [CmdletBinding(SupportsShouldProcess)]
+            param($Name, $Location, $TemplateFile, $TemplateParameterObject, $SkipTemplateParameterPrompt, $DefaultProfile)
+            throw 'Unexpected Azure deployment.'
+        }
         foreach ($scope in @('ResourceGroup', 'Subscription', 'ManagementGroup', 'Tenant')) {
             Set-Item -Path "function:script:Get-Az${scope}DeploymentWhatIfResult" -Value {
                 [CmdletBinding()] param($Name, $TemplateFile, $TemplateParameterObject, $SkipTemplateParameterPrompt,
@@ -42,7 +47,16 @@ Describe 'Bicep deployment progress logging' {
     ) {
         InModuleScope Avm.Authoring -Parameters @{ Scope = $Scope; Command = $Command } {
             param($Scope, $Command)
-            Mock $Command { @{ Changes = @(@{ ResourceId = '/subscriptions/example/providers/Microsoft.KeyVault/vaults/test'; ChangeType = 'Create' }) } }
+            Mock $Command {
+                [pscustomobject]@{
+                    PSTypeName = 'Microsoft.Azure.Commands.ResourceManager.Cmdlets.SdkModels.Deployments.PSWhatIfOperationResult'
+                    Changes = @([pscustomobject]@{
+                            PSTypeName = 'Microsoft.Azure.Commands.ResourceManager.Cmdlets.SdkModels.Deployments.PSWhatIfChange'
+                            FullyQualifiedResourceId = '/subscriptions/example/providers/Microsoft.KeyVault/vaults/test'
+                            ChangeType = 'Create'
+                        })
+                }
+            }
             $options = @{
                 Scope = $Scope; DeploymentName = 'test'; TemplatePath = 'fixture.json'; MetadataLocation = 'westus'
                 Parameters = @{ password = 'hidden' }; ResourceGroupName = 'group'; ManagementGroupId = 'mg'
@@ -166,8 +180,8 @@ Describe 'Bicep asynchronous deployment submission' {
 
     It 'keeps the recorded identity and result when an asynchronous job succeeds' {
         InModuleScope Avm.Authoring {
-            Mock Invoke-AvmBicepNativeArmOperation {
-                $id = "/subscriptions/$($script:state.subscriptionId)/providers/Microsoft.Resources/deployments/$DeploymentName"
+            Mock Start-AvmBicepNativeDeploymentJob {
+                $id = "/subscriptions/$($script:state.subscriptionId)/providers/Microsoft.Resources/deployments/$($DeploymentInput.DeploymentName)"
                 Start-ThreadJob -ArgumentList $id -ScriptBlock {
                     param($id)
                     @{ Id = $id; ProvisioningState = 'Succeeded'; Outputs = @{} }
@@ -177,15 +191,46 @@ Describe 'Bicep asynchronous deployment submission' {
                 -DeploymentInput $script:options -ShowProgress
             $result.Status | Should -BeExactly 'pass'
             $script:state.deployments[0].status | Should -BeExactly 'Succeeded'
-            Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1 -ParameterFilter { $AsJob }
+            Should -Invoke Start-AvmBicepNativeDeploymentJob -Exactly 1 -ParameterFilter {
+                $DeploymentInput.DefaultProfile.Tenant.Id -eq '00000000-0000-0000-0000-000000000002'
+            }
             Should -Invoke Write-AvmBicepDeploymentProgress -Times 1
             Should -Invoke Write-AvmBicepDeploymentSummary -Exactly 1
         }
     }
 
+    It 'does not record a deployment if What-If stops before submission' {
+        InModuleScope Avm.Authoring {
+            Mock Write-AvmBicepWhatIf { throw [OperationCanceledException]::new('What-If stopped.') }
+            Mock Start-AvmBicepNativeDeploymentJob { throw 'Deployment must not be submitted.' }
+            { New-AvmBicepNativeDeployment -State $script:state -StatePath 'unused' `
+                    -DeploymentInput $script:options -ShowProgress } | Should -Throw '*What-If stopped*'
+            $script:state.deployments.Count | Should -Be 0
+            $pending = Get-AvmBicepPendingDeployment -State $script:state -RetryLimit 1 -RetryInterval 0
+            $pending.Pending.Count | Should -Be 0
+            Should -Invoke Save-AvmBicepCleanupState -Exactly 0
+            Should -Invoke Start-AvmBicepNativeDeploymentJob -Exactly 0
+        }
+
+    }
+
+    It 'retains a failed in-place deployment when What-If stops before resubmission' {
+        InModuleScope Avm.Authoring {
+            $id = "/subscriptions/$($script:state.subscriptionId)/providers/Microsoft.Resources/deployments/avm-e2e-$($script:state.runId)-t1"
+            $script:state.deployments = @(@{ id = $id; status = 'Failed'; preflightRejected = $false })
+            Mock Write-AvmBicepWhatIf { throw [OperationCanceledException]::new('What-If stopped.') }
+            Mock Start-AvmBicepNativeDeploymentJob { throw 'Deployment must not be submitted.' }
+            { New-AvmBicepNativeDeployment -State $script:state -StatePath 'unused' `
+                    -DeploymentInput $script:options -Mode InPlace -ShowProgress } | Should -Throw '*What-If stopped*'
+            $script:state.deployments[0].status | Should -BeExactly 'Failed'
+            Should -Invoke Save-AvmBicepCleanupState -Exactly 0
+            Should -Invoke Start-AvmBicepNativeDeploymentJob -Exactly 0
+        }
+    }
+
     It 'preserves job errors without reporting a successful deployment or resubmitting' {
         InModuleScope Avm.Authoring {
-            Mock Invoke-AvmBicepNativeArmOperation {
+            Mock Start-AvmBicepNativeDeploymentJob {
                 Start-ThreadJob -ScriptBlock { throw [InvalidOperationException]::new('Azure submission failed') }
             }
             $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'unused' `
@@ -193,14 +238,14 @@ Describe 'Bicep asynchronous deployment submission' {
             $result.Status | Should -BeExactly 'fail'
             $result.ErrorRecord.Exception.Message | Should -Match 'Azure submission failed'
             $script:state.deployments[0].status | Should -BeExactly 'Unknown'
-            Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
+            Should -Invoke Start-AvmBicepNativeDeploymentJob -Exactly 1
             Should -Invoke Write-AvmBicepDeploymentDiagnostic -Exactly 1
         }
     }
 
     It 'keeps cancellation terminal for a stopped Azure job' {
         InModuleScope Avm.Authoring {
-            Mock Invoke-AvmBicepNativeArmOperation {
+            Mock Start-AvmBicepNativeDeploymentJob {
                 $job = Start-ThreadJob -ScriptBlock { Start-Sleep -Seconds 30 }
                 while ($job.State -eq 'NotStarted') { Start-Sleep -Milliseconds 20 }
                 Stop-Job -Job $job
@@ -215,8 +260,62 @@ Describe 'Bicep asynchronous deployment submission' {
             if ($null -eq $caught) {
                 throw "Expected cancellation; got $($result.ErrorKind): $($result.ErrorRecord.Exception.Message)"
             }
-            Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
+            Should -Invoke Start-AvmBicepNativeDeploymentJob -Exactly 1
             Should -Invoke Write-AvmBicepDeploymentDiagnostic -Exactly 0
+        }
+    }
+}
+
+Describe 'Bicep submission with mocked Azure commands' {
+    BeforeEach {
+        InModuleScope Avm.Authoring {
+            $script:state = @{
+                subscriptionId = '00000000-0000-0000-0000-000000000001'
+                runId = '00000000000000000000000000000010'
+                deployments = @()
+            }
+            $script:options = @{
+                Scope = 'sub'; TemplatePath = 'fixture.json'; MetadataLocation = 'westus'; Parameters = @{}
+            }
+            Mock Get-AzContext { @{ Tenant = @{ Id = '00000000-0000-0000-0000-000000000002' } } }
+            Mock Save-AvmBicepCleanupState {}
+            Mock Write-AvmBicepDeploymentProgress {}
+            Mock Write-AvmBicepDeploymentSummary {}
+            Mock Start-AvmBicepNativeDeploymentJob {
+                $response = Invoke-AvmBicepNativeArmOperation @DeploymentInput -Operation Create -Confirm:$false
+                Start-ThreadJob -ScriptBlock { param($Deployment) $Deployment } -ArgumentList (, $response)
+            }
+        }
+
+    }
+
+    It 'continues to the real submission wrapper after a What-If timeout' {
+        InModuleScope Avm.Authoring {
+            Mock Get-AzSubscriptionDeploymentWhatIfResult { throw [TimeoutException]::new('What-If timed out') }
+            Mock New-AzSubscriptionDeployment {
+                $id = "/subscriptions/$($script:state.subscriptionId)/providers/Microsoft.Resources/deployments/$Name"
+                @{ Id = $id; ProvisioningState = 'Succeeded'; Outputs = @{} }
+            }
+            $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'unused' `
+                -DeploymentInput $script:options -ShowProgress
+            $result.Status | Should -BeExactly 'pass'
+            Should -Invoke Get-AzSubscriptionDeploymentWhatIfResult -Exactly 1 -ParameterFilter {
+                $ResultFormat -eq 'ResourceIdOnly'
+            }
+            Should -Invoke New-AzSubscriptionDeployment -Exactly 1 -ParameterFilter {
+                $DefaultProfile.Tenant.Id -eq '00000000-0000-0000-0000-000000000002'
+            }
+        }
+    }
+
+    It 'does not record or submit a deployment when Azure cancels What-If' {
+        InModuleScope Avm.Authoring {
+            Mock Get-AzSubscriptionDeploymentWhatIfResult { throw [OperationCanceledException]::new('cancelled') }
+            Mock New-AzSubscriptionDeployment { throw 'Deployment must not be submitted.' }
+            { New-AvmBicepNativeDeployment -State $script:state -StatePath 'unused' `
+                    -DeploymentInput $script:options -ShowProgress } | Should -Throw '*cancelled*'
+            $script:state.deployments.Count | Should -Be 0
+            Should -Invoke New-AzSubscriptionDeployment -Exactly 0
         }
     }
 }

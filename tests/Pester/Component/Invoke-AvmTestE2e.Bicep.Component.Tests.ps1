@@ -134,17 +134,21 @@ Describe 'Component: Bicep native end-to-end workflow' -Tag Component {
     }
 
     It 'cleans a newly owned group but never runs a hook after pre-submission failure: <Kind>' -ForEach @(
-        @{ Kind = 'validation' }, @{ Kind = 'group creation' }
+        @{ Kind = 'validation' }, @{ Kind = 'group creation' }, @{ Kind = 'What-If setup' }
     ) {
         Set-Content -LiteralPath (Join-Path $script:fixture.Directory 'post.ps1') -Value 'exit 0'
         $script:fixture.ValidationFails = $Kind -eq 'validation'
         $script:fixture.GroupCreateFails = $Kind -eq 'group creation'
+        $script:fixture.WhatIfFails = $Kind -eq 'What-If setup'
         $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'fail'
         $script:fixture.Calls | Should -Not -Contain 'create'
         $script:fixture.Calls | Should -Not -Contain 'post'
         @($script:fixture.Calls | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 1
         $result.CleanupPending | Should -BeNullOrEmpty
+        $state = Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json
+        $state.deployments.Count | Should -Be 0
+        $state.status | Should -Be 'Complete'
     }
 
     It 'reports nested Azure error codes but never Azure messages for a validation failure' {
