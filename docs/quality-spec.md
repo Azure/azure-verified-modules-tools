@@ -1554,7 +1554,7 @@ numbers, booleans, arrays, objects, secure values and vault references intact.
 Tokens are replaced in temporary templates and recursively in in-memory
 parameters, never in authored source. Scope tokens belong to explicit
 target inputs. `keys` and `count` remain valid authored names. The default
-native `namePrefix` is five lowercase alphanumeric characters derived from the
+native `namePrefix` is three lowercase alphanumeric characters derived from the
 run ID; explicit prefixes and the ten-hex `avmE2eSuffix` token are unchanged.
 The short prefix is not an ownership proof and can collide; deployment-tracked
 cleanup, group ownership and the scoped cleanup guard retain their independent
@@ -1750,6 +1750,10 @@ otherwise. Show deduplicated resource state changes in observation order, with
 compact durations, without printing operation bodies. Treat an initial
 `DeploymentNotFound` progress response as waiting, not a warning. Bound nesting and pagination, validate nested
 deployment IDs and follow only the original subscription or management scope.
+Azure context selection and restoration and advisory progress reads retry a
+direct Azure operation cancellation at most three times; an exhausted progress
+read is reported and skipped, while an exhausted context operation fails.
+PowerShell pipeline cancellation remains terminal.
 Progress reads do not affect submission, observation, recovery or cleanup
 authority. Show the final exact deployment identity, state, location, duration,
 correlation ID, observed resource states and outputs. List individual

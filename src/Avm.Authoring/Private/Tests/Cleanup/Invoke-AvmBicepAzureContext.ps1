@@ -36,8 +36,10 @@ function Invoke-AvmBicepAzureContext {
     $originalEnvironment = [string](Get-AvmPropertyValue -InputObject (
             Get-AvmPropertyValue -InputObject $original -Name 'Environment') -Name 'Name')
     try {
-        $selected = Set-AzContext -Subscription $SubscriptionId.ToString('D') `
-            -Tenant $TenantId.ToString('D') -Scope Process -ErrorAction Stop
+        $selected = Invoke-AvmBicepAzureOperation -Activity 'Azure context selection' -Operation {
+            Set-AzContext -Subscription $SubscriptionId.ToString('D') `
+                -Tenant $TenantId.ToString('D') -Scope Process -ErrorAction Stop
+        }
         $selectedSubscription = [string](Get-AvmPropertyValue -InputObject (
                 Get-AvmPropertyValue -InputObject $selected -Name 'Subscription') -Name 'Id')
         $selectedTenant = [string](Get-AvmPropertyValue -InputObject (
@@ -57,7 +59,9 @@ function Invoke-AvmBicepAzureContext {
     }
     finally {
         try {
-            $restored = Set-AzContext -Context $original -Scope Process -ErrorAction Stop
+            $restored = Invoke-AvmBicepAzureOperation -Activity 'Azure context restoration' -Operation {
+                Set-AzContext -Context $original -Scope Process -ErrorAction Stop
+            }
             $restoredSubscription = [string](Get-AvmPropertyValue -InputObject (
                     Get-AvmPropertyValue -InputObject $restored -Name 'Subscription') -Name 'Id')
             $restoredTenant = [string](Get-AvmPropertyValue -InputObject (

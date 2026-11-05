@@ -126,4 +126,67 @@ Describe 'Bicep workflow cleanup provider containers' {
             $failure.FullyQualifiedErrorId | Should -BeLike 'AvmBicepContextRestoreFailed*'
         }
     }
+
+    It 'retries canceled context selection and restoration without repeating the operation' {
+        InModuleScope Avm.Authoring {
+            $script:selections = 0
+            $script:restorations = 0
+            $script:executions = 0
+            Mock Start-Sleep {}
+            Mock Write-AvmLog {}
+            Mock Set-AzContext {
+                if ($null -ne $Context) {
+                    $script:restorations++
+                    if ($script:restorations -lt 2) { throw [OperationCanceledException]::new('restore canceled') }
+                    return $Context
+                }
+                $script:selections++
+                if ($script:selections -lt 3) { throw [OperationCanceledException]::new('selection canceled') }
+                @{
+                    Subscription = @{ Id = $Subscription }; Tenant = @{ Id = $Tenant }
+                    Account = @{ Id = 'fixture-principal' }; Environment = @{ Name = 'AzureCloud' }
+                }
+            }
+            Invoke-AvmBicepAzureContext -SubscriptionId '00000000-0000-0000-0000-000000000001' `
+                -TenantId '00000000-0000-0000-0000-000000000002' `
+                -ScriptBlock { $script:executions++ }
+            $script:selections | Should -Be 3
+            $script:restorations | Should -Be 2
+            $script:executions | Should -Be 1
+            Should -Invoke Start-Sleep -Exactly 3
+        }
+    }
+
+    It 'fails after bounded canceled context selection and restores the original context' {
+        InModuleScope Avm.Authoring {
+            $script:executed = $false
+            Mock Start-Sleep {}
+            Mock Write-AvmLog {}
+            Mock Set-AzContext {
+                if ($null -ne $Context) { return $Context }
+                throw [OperationCanceledException]::new('selection canceled')
+            }
+            { Invoke-AvmBicepAzureContext -SubscriptionId '00000000-0000-0000-0000-000000000001' `
+                    -TenantId '00000000-0000-0000-0000-000000000002' `
+                    -ScriptBlock { $script:executed = $true } } | Should -Throw '*selection canceled*'
+            $script:executed | Should -BeFalse
+            Should -Invoke Set-AzContext -Exactly 3 -ParameterFilter { $null -ne $Subscription }
+            Should -Invoke Set-AzContext -Exactly 1 -ParameterFilter { $null -ne $Context }
+            Should -Invoke Start-Sleep -Exactly 2
+        }
+    }
+
+    It 'reports exhausted context restoration as fatal' {
+        InModuleScope Avm.Authoring {
+            Mock Start-Sleep {}
+            Mock Write-AvmLog {}
+            Mock Set-AzContext { throw [OperationCanceledException]::new('restore canceled') } `
+                -ParameterFilter { $null -ne $Context }
+            $failure = $null
+            try { Resolve-AvmBicepCleanupResource -ResourceId $script:providerContainer } catch { $failure = $_ }
+            $failure.FullyQualifiedErrorId | Should -BeLike 'AvmBicepContextRestoreFailed*'
+            Should -Invoke Set-AzContext -Exactly 3 -ParameterFilter { $null -ne $Context }
+            Should -Invoke Start-Sleep -Exactly 2
+        }
+    }
 }
