@@ -1557,6 +1557,99 @@ variable "subnet_endpoints" {
         }) -Expected $first
 }
 
+It 'preserves nullable location through the published Interfaces call and a local child' {
+    $root = Join-Path $TestDrive 'interface-registry-location'
+    $child = Join-Path $root 'modules' 'record'
+    New-TelemetryModule -Root $root
+    New-TelemetryModule -Root $child -Child
+    Set-Content -LiteralPath (Join-Path $child 'main.tf') -Value 'locals { fixture = true }' -Encoding utf8NoBOM
+    Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+module "interfaces" {
+  source           = "Azure/avm-utl-interfaces/azure"
+  version          = "0.10.0"
+  enable_telemetry = var.enable_telemetry
+  location         = var.location
+}
+
+module "record" {
+  source = "./modules/record"
+}
+'@
+    Set-Content -LiteralPath (Join-Path $root 'variables.tf') -Encoding utf8NoBOM -Value @'
+variable "location" {
+  type    = string
+  default = null
+  validation {
+    condition     = !var.enable_telemetry || var.location != null
+    error_message = "The location must not be null when telemetry is enabled."
+  }
+}
+'@
+    $tests = Join-Path $root 'tests' 'unit'
+    $null = New-Item -ItemType Directory -Path $tests -Force
+    Set-Content -LiteralPath (Join-Path $tests 'location.tftest.hcl') -Encoding utf8NoBOM -Value @'
+mock_provider "terraform" {}
+mock_provider "random" {}
+mock_provider "azapi" {
+  mock_data "azapi_client_config" {
+    defaults = {
+      subscription_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000001"
+    }
+  }
+}
+
+run "disabled_omitted" {
+  command = plan
+  variables {
+    enable_telemetry = false
+  }
+}
+
+run "disabled_null" {
+  command = plan
+  variables {
+    enable_telemetry = false
+    location         = null
+  }
+}
+
+run "enabled_region" {
+  command = plan
+  variables {
+    location = "eastus"
+  }
+}
+
+run "enabled_null" {
+  command         = plan
+  expect_failures = [var.location]
+}
+'@
+    (Invoke-TelemetryEngine -Root $root).Status | Should -BeExactly 'pass'
+    $variablesPath = Join-Path $root 'variables.tf'
+    $location = [regex]::Match([IO.File]::ReadAllText($variablesPath), '(?ms)^variable "location" \{.*?^\}').Value
+    $location | Should -Match 'default\s*=\s*null'
+    $location | Should -Not -Match 'nullable\s*=\s*false'
+    $location | Should -Match '!var\.enable_telemetry\s*\|\|\s*var\.location\s*!=\s*null'
+    Assert-TelemetryTerraformValid -Root $root -TestDirectory 'tests/unit'
+    $execution = Invoke-TelemetryProcess -FilePath $script:terraformPath -Root $root `
+        -ArgumentList @('test', '-no-color', '-test-directory=tests/unit')
+    $execution.StdOut | Should -Match '4 passed, 0 failed'
+    $first = Get-TerraformAcceptanceFiles -Root $root
+    $second = Invoke-TelemetryEngine -Root $root
+    $second.Status | Should -BeExactly 'pass'
+    $second.Changed | Should -BeNullOrEmpty
+    Assert-TerraformAcceptanceFiles -Context ([pscustomobject]@{
+            Root = $root
+            ConfigurationDirectories = @()
+        }) -Expected $first
+    (Invoke-TelemetryEngine -Root $root -CheckDrift).Status | Should -BeExactly 'pass'
+    Assert-TerraformAcceptanceFiles -Context ([pscustomobject]@{
+            Root = $root
+            ConfigurationDirectories = @()
+        }) -Expected $first
+}
+
 It 'restores a required location when business code begins using a telemetry-only input' {
     $root = Join-Path $TestDrive 'new-business-location'
     New-TelemetryModule -Root $root

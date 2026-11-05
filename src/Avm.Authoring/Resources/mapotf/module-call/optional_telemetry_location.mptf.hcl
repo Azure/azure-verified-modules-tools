@@ -16,12 +16,20 @@ locals {
     trimspace(local.location_telemetry_resource.location) == "local.main_location",
     false
   )
-  location_optional_children = toset([
-    for name, source in try(data.module_source.local_calls, {}) : name
-    if contains(keys(source.variables), "enable_telemetry") &&
-    !try(source.variables.location.required, true) &&
-    try(source.variables.location.default == null || source.variables.location.default == "null", false)
-  ])
+  location_optional_children = toset(concat(
+    [
+      for name, source in try(data.module_source.local_calls, {}) : name
+      if contains(keys(source.variables), "enable_telemetry") &&
+      !try(source.variables.location.required, true) &&
+      try(source.variables.location.default == null || source.variables.location.default == "null", false)
+    ],
+    [
+      for name, call in data.module.local_calls.result : name
+      if try(trimprefix(lower(call.source), "registry.terraform.io/") == "azure/avm-utl-interfaces/azure", false) &&
+      try(trimspace(trimprefix(call.version, "=")) == "0.10.0", false) &&
+      try(trimspace(call.enable_telemetry) == "var.enable_telemetry", false)
+    ]
+  ))
   location_required_children = [
     for name, call in local.missing_location_calls : name
     if !contains(local.location_optional_children, name)

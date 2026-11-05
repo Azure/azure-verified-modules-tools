@@ -718,8 +718,13 @@ as a required, non-nullable string.
 The dependency-ordered module-call pass makes an instrumented module's string
 `location` optional with `default = null` when native block inspection finds no
 non-telemetry location dependency. This includes global resources and callers
-that only forward location to optional local children. The variable remains
-nullable (the explicit `true` is removed by common formatting) and receives
+that only forward location to optional local children. A call to exactly
+`Azure/avm-utl-interfaces/azure` version `0.10.0` also qualifies when it
+forwards both `location` and `enable_telemetry` directly from the parent.
+The equivalent `registry.terraform.io/` source is supported. Other registry
+sources and versions remain conservative; an optional input alone does not
+prove that a registry module uses location only for telemetry. The variable
+remains nullable (the explicit `true` is removed by common formatting) and receives
 `!var.enable_telemetry || var.location != null` validation. With telemetry off,
 omitted and explicit null locations are accepted; telemetry on, including its
 default, requires a non-null region. Preserve authored descriptions and other
