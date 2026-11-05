@@ -3,9 +3,10 @@
 #
 # Background: `terraform/modules/github/github.rulesets.tf` is the
 # single source of truth for repository-level rulesets on every AVM repo.
-# Three rulesets are managed there:
+# Four rulesets are managed there:
 #   * "Azure Verified Modules"             (target=branch)
 #   * "Only allow v tags"                  (target=tag)
+#   * "Restrict v1+ release tags"           (target=tag)
 #   * "Must not delete/update version tags" (target=tag)
 # Anything else that shows up at the repository scope was created manually
 # (or by some other tool) outside our automation, and silently shadows or
@@ -47,6 +48,7 @@ function Remove-UnmanagedRulesets {
         [string[]]$managedRulesetNames = @(
             "Azure Verified Modules",
             "Only allow v tags",
+            "Restrict v1+ release tags",
             "Must not delete/update version tags"
         )
     )
@@ -61,7 +63,7 @@ function Remove-UnmanagedRulesets {
     # `includes_parents=false` restricts the response to rulesets defined
     # ON the repository itself, so org/enterprise rulesets are never even
     # enumerated here. `per_page=100` is the GitHub maximum and is far
-    # more than realistic AVM repos will ever have (they ship with 3),
+    # more than realistic AVM repos will ever have (they ship with 4),
     # so a single, non-paginated call is sufficient. We deliberately do
     # NOT use `gh api --paginate` because it concatenates per-page JSON
     # arrays back-to-back (e.g. `[..][..]`) which `ConvertFrom-Json`
