@@ -56,6 +56,25 @@ Describe 'Public: Bicep workflow package APIs' -Tag Unit {
         $manual.Include[0].TestFiles.Count | Should -Be 2
     }
 
+    It 'enforces the 256-module limit before discovering module tests' {
+        $paths = @(1..257 | ForEach-Object { "avm/res/mock/module-$_" }) -join ','
+        InModuleScope Avm.Authoring -Parameters @{ ModulePaths = $paths } {
+            param($ModulePaths)
+            Mock Resolve-AvmBicepWorkflowPath { "fixture/$RelativePath" }
+            Mock Test-Path { $true }
+            Mock Get-AvmBicepWorkflowTestFilesInternal {
+                @{ moduleTestFilePaths = '[]'; psRuleModuleTestFilePaths = '[]' }
+            }
+
+            $accepted = Get-AvmBicepWorkflowModuleMatrixInternal -Root fixture `
+                -ModulePaths (($ModulePaths -split ',')[0..255] -join ',')
+            $accepted.include | Should -HaveCount 256
+            { Get-AvmBicepWorkflowModuleMatrixInternal -Root fixture -ModulePaths $ModulePaths } |
+                Should -Throw '*256-job*'
+            Should -Invoke Get-AvmBicepWorkflowTestFilesInternal -Exactly 256
+        }
+    }
+
     It 'returns a structured manual matrix from the package with no workflow script loaded' {
         $result = Initialize-AvmBicepWorkflowMatrix -Root $script:root -EventName workflow_dispatch `
             -TargetCommit $script:target -ModulePaths $script:modulePath -DeploymentValidation:$false -SkipModuleVersionCheck

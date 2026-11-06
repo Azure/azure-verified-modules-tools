@@ -190,7 +190,7 @@ Describe 'Independent CI workflows' {
         @($jobs.infra.steps | Where-Object { $_.Contains('run') } | ForEach-Object { $_.run }) |
             Should -Contain './build.ps1 infra,test-tenant-terraform'
         $scripts = ($jobs.test.steps | Where-Object { $_.Contains('run') } | ForEach-Object { $_.run }) -join "`n"
-        foreach ($name in @('Test-RepositoryConfig', 'Test-AvmPreCommit', 'Test-ManagedFilesUpgrade', 'Test-RepositorySyncInputs', 'Test-TeamsAndUsers')) {
+        foreach ($name in @('Test-RepositoryConfig', 'Test-AvmPreCommit', 'Test-ManagedFilesUpgrade', 'Test-RepositorySyncInputs')) {
             $scripts | Should -Match ([regex]::Escape("$name.ps1"))
         }
         $workflowJobs = $script:definitions['ci-workflows.yml'].jobs

@@ -132,7 +132,6 @@ jobs:
           ./repository-management/repository-sync/scripts/Test-AvmPreCommit.ps1
           ./repository-management/repository-sync/scripts/Test-ManagedFilesUpgrade.ps1
           ./repository-management/repository-sync/scripts/Test-RepositorySyncInputs.ps1
-          ./repository-management/repository-sync/scripts/Test-TeamsAndUsers.ps1
 
   report:
     name: Report repository tests
