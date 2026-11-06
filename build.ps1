@@ -14,6 +14,8 @@
 .EXAMPLE
     ./build.ps1 pre-commit
 .EXAMPLE
+    ./build.ps1 pre-commit-fast
+.EXAMPLE
     ./build.ps1 ci-tests
 .EXAMPLE
     ./build.ps1 lint
