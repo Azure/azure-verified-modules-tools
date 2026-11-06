@@ -122,7 +122,9 @@ New-Item -ItemType SymbolicLink -Path $dst -Target $src
 
 ## 5. Validate the module layout
 
-The post-incident layout check (`Test-AvmModuleLayout`, [spec §12](docs/quality-spec.md#12-module-manifest-rules-post-incident)) enforces that the on-disk folder / file / manifest casing matches `Avm.Authoring` exactly. Run it any time via the `layout` task (it's also the first step of `pre-commit` and `ci`):
+The layout check (`Test-AvmModuleLayout`) enforces that the on-disk folder,
+file, and manifest casing matches `Avm.Authoring` exactly. Run it any time via
+the `layout` task (it's also the first step of `pre-commit` and `ci`):
 
 ```pwsh
 ./build.ps1 layout
@@ -136,7 +138,10 @@ Expected output:
 
 `./build.ps1 build` applies the same hard casing guards while staging, so a green `build` is also a publish-path dry run. The release scripts themselves live in the ADO pipeline (see [§8](#8-cut-a-release-maintainers-only)), not in this repo.
 
-If either throws a casing error, the on-disk folder, file, or manifest casing has drifted from `Avm.Authoring` / `Avm.Authoring.psd1` / `Avm.Authoring.psm1`. Fix the casing on disk (rename the folder via `Move-Item` to a different name, then back to the correct one — see [spec §6.2](docs/quality-spec.md#case-sensitivity)) before retrying.
+If either throws a casing error, the on-disk folder, file, or manifest casing
+has drifted from `Avm.Authoring` / `Avm.Authoring.psd1` /
+`Avm.Authoring.psm1`. Fix the casing on disk (rename the folder via
+`Move-Item` to a different name, then back to the correct one) before retrying.
 
 ---
 
@@ -185,8 +190,8 @@ Only authoring retains the cross-platform matrix; workflow and
 repository-management tests run on Ubuntu. Unrelated documentation-only changes
 intentionally skip CI. Each workflow reports its own results.
 Run the full local `pre-commit` gate before pushing, not a scoped substitute.
-See [scoped CI](docs/quality-spec.md#scoped-ci) for the path-filter and test-group
-contract.
+See the workflow files for the current CI path filters and test groups. The
+quality spec describes the general testing standard.
 
 ---
 
@@ -264,7 +269,7 @@ Remove-Variable key
 Remove-Item (Get-PSReadLineOption).HistorySavePath -Force  # clear the history file just in case
 ```
 
-**Never** pass the API key as a positional argument to `Read-Host -Prompt` or paste it into the chat / commit message / shell history. `./build.ps1 build` asserts the on-disk casing matches the manifest while staging ([spec §12](docs/quality-spec.md#12-module-manifest-rules-post-incident)), so publishing the staged tree keeps that guard — but it is still the pipeline, not this path, that is the sanctioned way to ship.
+**Never** pass the API key as a positional argument to `Read-Host -Prompt` or paste it into the chat / commit message / shell history. `./build.ps1 build` asserts the on-disk casing matches the manifest while staging, so publishing the staged tree keeps that guard — but it is still the pipeline, not this path, that is the sanctioned way to ship.
 
 ---
 
@@ -292,7 +297,7 @@ Remove-Item (Get-PSReadLineOption).HistorySavePath -Force  # clear the history f
 ### macOS
 
 - APFS is case-insensitive *but* case-preserving by default, like NTFS. The PSGallery casing trap from May 2026 reproduces here. Treat as case-sensitive.
-- Apple Silicon is the Tier 1 target ([spec §2](docs/quality-spec.md#operating-systems)); Intel macs run but get smoke tests only in CI.
+- Apple Silicon is the full-matrix target; Intel Macs run smoke tests only in CI.
 
 ---
 
@@ -319,4 +324,3 @@ Remove-Item (Get-PSReadLineOption).HistorySavePath -Force  # clear the history f
 | Purpose, architecture, and engineering rules      | [docs/quality-spec.md](docs/quality-spec.md)                         |
 | Public cmdlet and parameter reference             | [docs/reference/README.md](docs/reference/README.md)                 |
 | Module placeholder details                         | [src/Avm.Authoring/README.md](src/Avm.Authoring/README.md)           |
-| The casing incident (mandatory reading)            | [docs/quality-spec.md §12](docs/quality-spec.md#12-module-manifest-rules-post-incident) |

@@ -2,24 +2,28 @@
 
 This is the repository's only agent instruction file. Read
 [`docs/quality-spec.md`](../docs/quality-spec.md) before changing code. It is
-the single source of truth for the module's purpose, architecture, security
-controls, coding rules, testing model, and release practices.
+the general quality standard for durable engineering principles, not an
+implementation manual or a catalog of current technical contracts. Keep it
+focused on correctness, security, reliability, maintainability, performance,
+testing, and documentation standards. Do not add file layouts, workflow
+matrices, exact implementation behavior, incident histories, or step-by-step
+operational instructions. Keep executable contracts in source, tests, build
+configuration, and workflows; keep contributor procedures in contributor
+documentation. Update this spec only when a durable quality standard changes.
 
 ## Working rules
 
 - Work on the current feature branch. Never push to `main` or force-push.
 - Do not create progress, planning, handoff, or decision-history documents.
-  Git history, issues, and pull requests record completed work. Update the
-  quality spec only when the repository's current mandatory contract changes.
+  Git history, issues, and pull requests record completed work.
 - Keep changes focused and preserve existing behavior unless the requested
   change deliberately alters it.
 - Use PowerShell 7.4+ and the existing helpers and patterns. Do not introduce
   Bash scripts.
 - Every exported function must have complete comment-based help covering its
   purpose, behavior, parameters, examples, and outputs.
-- Keep inline comments rare. Record mandatory, repository-wide implementation
-  practices in `docs/quality-spec.md`; use an inline comment only when the code
-  cannot make a necessary local constraint clear.
+- Keep inline comments rare. Use one only when the code cannot make a necessary
+  local constraint clear.
 
 ## Build and generated documentation
 
