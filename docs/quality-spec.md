@@ -3193,6 +3193,16 @@ Preserve the template exclusion, subscription round-robin, required-feature
 registration and cleanup. Discovery approval occurs before the example count is
 known, so an empty matrix still needs that approval but executes no e2e legs.
 
+Subscription selection passes only shuffled General-pool indices between jobs,
+never the secret subscription JSON. Each authenticated check reconstructs and
+validates its local pool using the same selector, validates the complete index
+permutation, and selects index zero or the e2e matrix index modulo pool size.
+A missing order fails closed; the legacy singleton fallback remains available
+only when no pool is configured. Secrets retain precedence over variables,
+and subscription overrides must belong to the validated General pool.
+Required-feature preflight, Azure login, registration and Terraform execution
+all use the effective subscription after applying that override.
+
 Normal repository sync provisions the execution environment and its exact
 repository/environment/reusable-workflow-bound federation on the existing test
 identity. The execution environment name must not collide with any existing

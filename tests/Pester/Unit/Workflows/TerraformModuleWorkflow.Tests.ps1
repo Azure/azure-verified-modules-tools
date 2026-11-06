@@ -14,14 +14,15 @@ Describe 'terraform-module reusable workflow' {
         $script:discoveryJob = $discoveryMatch.Value
     }
 
-    It 'passes the non-secret subscription ID as a job output without masking it' {
+    It 'passes the subscription ID as a local step output without adding masks' {
         $script:workflow | Should -Match '"subscriptionId=\$\(\$chosen\.id\)"'
         $script:workflow | Should -Not -Match '::add-mask::'
     }
 
-    It 'publishes the shuffled General subscription list for the e2e fan-out' {
-        $script:workflow | Should -Match 'subscriptionIds:\s*\$\{\{ steps\.pick\.outputs\.subscriptionIds \}\}'
-        $script:workflow | Should -Match '"subscriptionIds=\$ordered"'
+    It 'passes only shuffled indices between jobs so GitHub cannot suppress the secret pool' {
+        $script:workflow | Should -Match 'subscriptionOrder:\s*\$\{\{ steps\.pick\.outputs\.subscriptionOrder \}\}'
+        $script:workflow | Should -Not -Match 'needs\.subscriptions\.outputs\.subscription(?:Id|Ids|Name)\b'
+        ([regex]::Matches($script:workflow, 'run: \*select-test-subscription')).Count | Should -Be 3
     }
 
     It 'discovers e2e examples with the machine-readable list surface' {
@@ -60,11 +61,12 @@ Describe 'terraform-module reusable workflow' {
 
     It 'round-robins the subscription across matrix legs using strategy.job-index' {
         $script:workflow | Should -Match 'JOB_INDEX:\s*\$\{\{ strategy\.job-index \}\}'
-        $script:workflow | Should -Match '\$subs\[\$index % \$subs\.Count\]'
+        $script:workflow | Should -Match '\$subs\[\$jobIndex % \$subs\.Count\]'
     }
 
     It 'keeps the single-subscription fallback path for the matrix legs' {
-        $script:workflow | Should -Match 'FALLBACK_SUBSCRIPTION_ID:\s*\$\{\{ needs\.subscriptions\.outputs\.subscriptionId \}\}'
+        $script:e2eJob | Should -Match 'FALLBACK_SUBSCRIPTION_ID_SECRET:\s*\$\{\{ secrets\.ARM_SUBSCRIPTION_ID \}\}'
+        $script:e2eJob | Should -Match 'FALLBACK_SUBSCRIPTION_ID_VAR:\s*\$\{\{ vars\.ARM_SUBSCRIPTION_ID \}\}'
     }
 
     It 'no longer lists per-example e2e targeting as a divergence' {
@@ -77,14 +79,15 @@ Describe 'Terraform General subscription selection' {
         $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..')).Path
         . (Join-Path $script:root 'tests' 'fixtures' 'TestTenant.ps1')
         $workflow = Get-Content -LiteralPath (Join-Path $script:root '.github' 'workflows' 'terraform-module.yml') -Raw
+        $module = Import-Module (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -PassThru
+        $null = & $module { Import-AvmPowerShellModule -Name powershell-yaml -Global }
+        $script:selectionDefinition = ConvertFrom-Yaml -Yaml $workflow
+        $script:selectionScript = [scriptblock]::Create($script:selectionDefinition.jobs.subscriptions.steps[0].run)
         $script:reservationScripts = @{}
         foreach ($job in @('subscriptions', 'pr-check', 'integration-test', 'e2e-test')) {
-            $block = [regex]::Match($workflow, '(?ms)^  ' + [regex]::Escape($job) + ':\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)').Value
             $step = if ($job -ceq 'subscriptions') { 'Shuffle and select a test subscription' } else { 'Prepare test environment' }
-            $run = [regex]::Match($block, '(?ms)^      - name: ' + [regex]::Escape($step) +
-                '\r?\n.*?^        run: \|\r?\n(?<body>(?: {10}[^\r\n]*\r?\n|\r?\n)*)')
-            $run.Success | Should -BeTrue
-            $script:reservationScripts[$job] = [scriptblock]::Create(($run.Groups['body'].Value -replace '(?m)^ {10}', ''))
+            $run = @($script:selectionDefinition.jobs[$job].steps | Where-Object name -EQ $step)[0].run
+            $script:reservationScripts[$job] = [scriptblock]::Create($run)
         }
     }
 
@@ -94,6 +97,7 @@ Describe 'Terraform General subscription selection' {
         foreach ($name in @($script:bundle.Keys) + @(
             'TEST_SUBSCRIPTION_IDS', 'FALLBACK_SUBSCRIPTION_ID_SECRET', 'FALLBACK_SUBSCRIPTION_ID_VAR',
             'GITHUB_OUTPUT', 'GITHUB_ENV', 'GITHUB_WORKSPACE', 'SUBSCRIPTION_IDS', 'SELECTED_SUBSCRIPTION_ID',
+            'SUBSCRIPTION_ORDER', 'JOB_INDEX',
             'SECRETS_CONTEXT', 'VARS_CONTEXT', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL'
         )) {
             $script:previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
@@ -146,6 +150,81 @@ Describe 'Terraform General subscription selection' {
         $json = @($script:written['fixture-output'] | Where-Object { $_.StartsWith('subscriptionIds=') })[0].Substring('subscriptionIds='.Length)
         @((ConvertFrom-Json -InputObject $json).id | Sort-Object) |
             Should -Be @(@($script:general.id, $script:untagged.id) | Sort-Object)
+    }
+
+    It 'rebuilds the exact secret pool locally and round-robins it without a cross-job JSON output' {
+        $script:general.Remove('tag')
+        $env:TEST_SUBSCRIPTION_IDS = ConvertTo-Json -InputObject @($script:general, $script:untagged) -Compress
+        $env:SUBSCRIPTION_ORDER = '1,0'
+        foreach ($index in 0..3) {
+            $env:JOB_INDEX = [string] $index
+            $script:written['fixture-output'].Clear()
+            & $script:selectionScript
+            $expected = if ($index % 2 -eq 0) { $script:untagged.id } else { $script:general.id }
+            $script:written['fixture-output'] | Should -Contain "subscriptionId=$expected"
+            $script:written['fixture-output'] | Should -Contain 'subscriptionOrder=1,0'
+            $pool = @($script:written['fixture-output'] | Where-Object { $_.StartsWith('subscriptionIds=') })[0].Substring('subscriptionIds='.Length)
+            (ConvertFrom-Json -InputObject $pool).id | Should -Be @($script:untagged.id, $script:general.id)
+        }
+    }
+
+    It 'publishes only a permutation of the filtered pool indices' {
+        $env:TEST_SUBSCRIPTION_IDS = ConvertTo-Json -InputObject @($script:reserved, $script:general, $script:untagged) -Compress
+        & $script:selectionScript
+        $order = @($script:written['fixture-output'] | Where-Object { $_.StartsWith('subscriptionOrder=') })[0].Substring('subscriptionOrder='.Length)
+        @($order.Split(',') | Sort-Object) | Should -Be @('0', '1')
+    }
+
+    It 'rejects a missing, invalid, or inconsistent cross-job order: <Order>' -ForEach @(
+        @{ Order = '' }
+        @{ Order = '0' }
+        @{ Order = '0,0' }
+        @{ Order = '0,2' }
+        @{ Order = '-1,0' }
+        @{ Order = '0,a' }
+        @{ Order = '00,1' }
+        @{ Order = '0,2147483648' }
+    ) {
+        $env:TEST_SUBSCRIPTION_IDS = ConvertTo-Json -InputObject @($script:general, $script:untagged) -Compress
+        $env:SUBSCRIPTION_ORDER = $Order
+        $env:JOB_INDEX = '0'
+        { & $script:selectionScript } | Should -Throw '*subscription order*'
+        Should -Invoke Out-File -Exactly 0
+    }
+
+    It 'rebuilds the legacy singleton fallback locally' {
+        $env:FALLBACK_SUBSCRIPTION_ID_SECRET = $script:general.id
+        $env:SUBSCRIPTION_ORDER = '0'
+        $env:JOB_INDEX = '3'
+        & $script:selectionScript
+        $script:written['fixture-output'] | Should -Contain "subscriptionId=$($script:general.id)"
+    }
+
+    It 'rejects an invalid matrix index: <Index>' -ForEach @(
+        @{ Index = '-1' }
+        @{ Index = 'not-an-index' }
+        @{ Index = '2147483648' }
+    ) {
+        $env:TEST_SUBSCRIPTION_IDS = ConvertTo-Json -InputObject @($script:general, $script:untagged) -Compress
+        $env:SUBSCRIPTION_ORDER = '1,0'
+        $env:JOB_INDEX = $Index
+        { & $script:selectionScript } | Should -Throw '*JOB_INDEX must be*'
+        Should -Invoke Out-File -Exactly 0
+    }
+
+    It 'uses the same validated selection script and local pool in <Job>' -ForEach @(
+        @{ Job = 'pr-check'; StepId = 'pick' }
+        @{ Job = 'integration-test'; StepId = 'pick' }
+        @{ Job = 'e2e-test'; StepId = 'leg' }
+    ) {
+        $steps = $script:selectionDefinition.jobs[$Job].steps
+        $selection = @($steps | Where-Object { $_['id'] -eq $StepId })[0]
+        $selection.run | Should -BeExactly $script:selectionScript.ToString()
+        $selection.env.SUBSCRIPTION_ORDER | Should -BeExactly '${{ needs.subscriptions.outputs.subscriptionOrder }}'
+        $selection.env.TEST_SUBSCRIPTION_IDS | Should -BeExactly '${{ secrets.TEST_SUBSCRIPTION_IDS }}'
+        $preparation = @($steps | Where-Object name -EQ 'Prepare test environment')[0]
+        $preparation.env.SUBSCRIPTION_IDS | Should -BeExactly ('${{ steps.' + $StepId + '.outputs.subscriptionIds }}')
+        $preparation.env.SELECTED_SUBSCRIPTION_ID | Should -BeExactly ('${{ steps.' + $StepId + '.outputs.subscriptionId }}')
     }
 
     It 'does not use a legacy fallback for a configured pool without General subscriptions: <Tag>' -ForEach @(
@@ -220,21 +299,33 @@ Describe 'Terraform General subscription selection' {
         Should -Invoke Out-File -Exactly 0
     }
 
-    It 'keeps General overrides and replaces an unfiltered ambient pool for <Job>' -ForEach @(
-        @{ Job = 'pr-check' }
-        @{ Job = 'integration-test' }
-        @{ Job = 'e2e-test' }
+    It 'keeps the <Source> General override and replaces an unfiltered ambient pool for <Job>' -ForEach @(
+        @{ Job = 'pr-check'; Source = 'secret' }
+        @{ Job = 'integration-test'; Source = 'secret' }
+        @{ Job = 'e2e-test'; Source = 'secret' }
+        @{ Job = 'pr-check'; Source = 'variable' }
+        @{ Job = 'integration-test'; Source = 'variable' }
+        @{ Job = 'e2e-test'; Source = 'variable' }
     ) {
         $env:SUBSCRIPTION_IDS = ConvertTo-Json -InputObject @($script:general, $script:untagged) -Compress
         $env:SELECTED_SUBSCRIPTION_ID = $script:general.id
-        $env:VARS_CONTEXT = ConvertTo-Json -InputObject @{ ARM_SUBSCRIPTION_ID = $script:reserved.id } -Compress
-        $env:SECRETS_CONTEXT = ConvertTo-Json -InputObject @{
+        $vars = @{
+            ARM_SUBSCRIPTION_ID = $script:reserved.id
             ARM_SUBSCRIPTION_ID_OVERRIDE = $script:untagged.id
+        }
+        $secrets = @{
             TEST_SUBSCRIPTION_IDS = (ConvertTo-Json -InputObject @($script:reserved, $script:general, $script:untagged) -Compress)
-        } -Compress
+        }
+        if ($Source -eq 'secret') {
+            $vars.ARM_SUBSCRIPTION_ID_OVERRIDE = $script:general.id
+            $secrets.ARM_SUBSCRIPTION_ID_OVERRIDE = $script:untagged.id
+        }
+        $env:VARS_CONTEXT = ConvertTo-Json -InputObject $vars -Compress
+        $env:SECRETS_CONTEXT = ConvertTo-Json -InputObject $secrets -Compress
         & $script:reservationScripts[$Job]
         $writes = $script:written['fixture-environment']
         $writes | Should -Contain "ARM_SUBSCRIPTION_ID=$($script:untagged.id)"
+        $script:written['fixture-output'] | Should -Contain "subscriptionId=$($script:untagged.id)"
         $poolWrite = @($writes | Where-Object { $_.StartsWith('TEST_SUBSCRIPTION_IDS<<') })
         $poolWrite | Should -HaveCount 1
         $poolWrite[0] | Should -Match ([regex]::Escape($env:SUBSCRIPTION_IDS))
@@ -266,6 +357,7 @@ Describe 'Terraform General subscription selection' {
         & $script:reservationScripts[$Job]
         $script:written['fixture-environment'] | Should -Contain "ARM_SUBSCRIPTION_ID=$($script:general.id)"
         $script:written['fixture-environment'] | Should -Not -Contain "ARM_SUBSCRIPTION_ID=$($script:reserved.id)"
+        $script:written['fixture-output'] | Should -Contain "subscriptionId=$($script:general.id)"
     }
 }
 
@@ -508,8 +600,8 @@ Describe 'terraform-module required Azure feature registration' {
     }
 
     It 'uses the effective test identity and the correct selected subscription in <Job>' -ForEach @(
-        @{ Job = 'integration-test'; Selection = 'needs.subscriptions.outputs.subscriptionId' }
-        @{ Job = 'e2e-test'; Selection = 'steps.leg.outputs.subscriptionId' }
+        @{ Job = 'integration-test'; Selection = 'steps.test-environment.outputs.subscriptionId' }
+        @{ Job = 'e2e-test'; Selection = 'steps.test-environment.outputs.subscriptionId' }
     ) {
         $block = $script:jobs[$Job]
         $block | Should -Match 'client-id: \$\{\{ env\.ARM_CLIENT_ID \}\}'

@@ -85,9 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: no-approval
     outputs:
-      subscriptionId: ${{ steps.pick.outputs.subscriptionId }}
-      subscriptionName: ${{ steps.pick.outputs.subscriptionName }}
-      subscriptionIds: ${{ steps.pick.outputs.subscriptionIds }}
+      subscriptionOrder: ${{ steps.pick.outputs.subscriptionOrder }}
     steps:
       - name: Shuffle and select a test subscription
         id: pick
@@ -96,7 +94,7 @@ jobs:
           TEST_SUBSCRIPTION_IDS: ${{ secrets.TEST_SUBSCRIPTION_IDS }}
           FALLBACK_SUBSCRIPTION_ID_SECRET: ${{ secrets.ARM_SUBSCRIPTION_ID }}
           FALLBACK_SUBSCRIPTION_ID_VAR: ${{ vars.ARM_SUBSCRIPTION_ID }}
-        run: |
+        run: &select-test-subscription |
           $ErrorActionPreference = 'Stop'
 
           $raw = $env:TEST_SUBSCRIPTION_IDS
@@ -151,7 +149,6 @@ jobs:
               if ($subs.Count -eq 0) {
                   throw [System.ArgumentException]::new('TEST_SUBSCRIPTION_IDS must contain at least one General subscription; a configured pool never falls back to ARM_SUBSCRIPTION_ID.')
               }
-              $subs = @($subs | Get-Random -Shuffle)
           }
           else {
               $fallback = $env:FALLBACK_SUBSCRIPTION_ID_SECRET
@@ -164,14 +161,39 @@ jobs:
               $subs = @([pscustomobject]@{ id = $fallback; name = $fallback })
           }
 
-          $chosen = $subs[0]
+          if ([string]::IsNullOrWhiteSpace($env:SUBSCRIPTION_ORDER)) {
+              if (-not [string]::IsNullOrWhiteSpace($env:JOB_INDEX)) {
+                  throw [System.InvalidOperationException]::new('No subscription order was published by the subscriptions job.')
+              }
+              $order = @(0..($subs.Count - 1) | Get-Random -Shuffle)
+          }
+          else {
+              $order = @($env:SUBSCRIPTION_ORDER.Split(','))
+              if ($order.Count -ne $subs.Count -or
+                  @($order | Select-Object -Unique).Count -ne $subs.Count) {
+                  throw [System.ArgumentException]::new('The subscription order must contain every General pool index exactly once.')
+              }
+              foreach ($index in $order) {
+                  $parsed = 0
+                  if ($index -cnotmatch '\A(?:0|[1-9][0-9]*)\z' -or
+                      -not [int]::TryParse($index, [ref]$parsed) -or $parsed -ge $subs.Count) {
+                      throw [System.ArgumentException]::new('The subscription order contains an invalid General pool index.')
+                  }
+              }
+              $order = @($order | ForEach-Object { [int] $_ })
+          }
+          $subs = @($order | ForEach-Object { $subs[$_] })
+          $jobIndex = 0
+          if (-not [string]::IsNullOrWhiteSpace($env:JOB_INDEX) -and (
+              -not [int]::TryParse($env:JOB_INDEX, [ref]$jobIndex) -or $jobIndex -lt 0)) {
+              throw [System.ArgumentException]::new('JOB_INDEX must be a nonnegative integer.')
+          }
+          $chosen = $subs[$jobIndex % $subs.Count]
           if ([string]::IsNullOrWhiteSpace([string]$chosen.id)) {
               throw "Selected subscription entry has no 'id' property."
           }
 
-          # The shuffled list feeds the e2e per-example matrix, which picks
-          # subs[job-index % subs.Count] so parallel legs do not all deploy into
-          # the same subscription and collide on quota.
+          # Only indices cross job boundaries; GitHub can suppress the secret JSON pool.
           $ordered = '[{0}]' -f (($subs | ForEach-Object {
                   ConvertTo-Json -Compress -InputObject ([pscustomobject]@{ id = [string]$_.id; name = [string]$_.name })
               }) -join ',')
@@ -179,6 +201,7 @@ jobs:
           "subscriptionId=$($chosen.id)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "subscriptionName=$($chosen.name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "subscriptionIds=$ordered" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "subscriptionOrder=$($order -join ',')" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "Selected test subscription '$($chosen.name)' ($($subs.Count) available)."
 
   unit-test:
@@ -280,11 +303,23 @@ jobs:
           "AVM_HOME=$avmHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "TF_PLUGIN_CACHE_DIR=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Prepare test environment
+      - name: Select test subscription
+        id: pick
         shell: pwsh
         env:
-          SELECTED_SUBSCRIPTION_ID: ${{ needs.subscriptions.outputs.subscriptionId }}
-          SUBSCRIPTION_IDS: ${{ needs.subscriptions.outputs.subscriptionIds }}
+          TEST_SUBSCRIPTION_IDS: ${{ secrets.TEST_SUBSCRIPTION_IDS }}
+          FALLBACK_SUBSCRIPTION_ID_SECRET: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          FALLBACK_SUBSCRIPTION_ID_VAR: ${{ vars.ARM_SUBSCRIPTION_ID }}
+          SUBSCRIPTION_ORDER: ${{ needs.subscriptions.outputs.subscriptionOrder }}
+          JOB_INDEX: '0'
+        run: *select-test-subscription
+
+      - name: Prepare test environment
+        id: test-environment
+        shell: pwsh
+        env:
+          SELECTED_SUBSCRIPTION_ID: ${{ steps.pick.outputs.subscriptionId }}
+          SUBSCRIPTION_IDS: ${{ steps.pick.outputs.subscriptionIds }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -356,6 +391,8 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($subOverride) -and -not [string]::IsNullOrWhiteSpace($env:SELECTED_SUBSCRIPTION_ID)) {
               "ARM_SUBSCRIPTION_ID=$($env:SELECTED_SUBSCRIPTION_ID)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           }
+          $effectiveSubscription = if ([string]::IsNullOrWhiteSpace($subOverride)) { $env:SELECTED_SUBSCRIPTION_ID } else { $subOverride }
+          "subscriptionId=$effectiveSubscription" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Download prepared authoring runtime
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -395,11 +432,23 @@ jobs:
           "AVM_HOME=$avmHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "TF_PLUGIN_CACHE_DIR=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Prepare test environment
+      - name: Select test subscription
+        id: pick
         shell: pwsh
         env:
-          SELECTED_SUBSCRIPTION_ID: ${{ needs.subscriptions.outputs.subscriptionId }}
-          SUBSCRIPTION_IDS: ${{ needs.subscriptions.outputs.subscriptionIds }}
+          TEST_SUBSCRIPTION_IDS: ${{ secrets.TEST_SUBSCRIPTION_IDS }}
+          FALLBACK_SUBSCRIPTION_ID_SECRET: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          FALLBACK_SUBSCRIPTION_ID_VAR: ${{ vars.ARM_SUBSCRIPTION_ID }}
+          SUBSCRIPTION_ORDER: ${{ needs.subscriptions.outputs.subscriptionOrder }}
+          JOB_INDEX: '0'
+        run: *select-test-subscription
+
+      - name: Prepare test environment
+        id: test-environment
+        shell: pwsh
+        env:
+          SELECTED_SUBSCRIPTION_ID: ${{ steps.pick.outputs.subscriptionId }}
+          SUBSCRIPTION_IDS: ${{ steps.pick.outputs.subscriptionIds }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -468,6 +517,8 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($subOverride) -and -not [string]::IsNullOrWhiteSpace($env:SELECTED_SUBSCRIPTION_ID)) {
               "ARM_SUBSCRIPTION_ID=$($env:SELECTED_SUBSCRIPTION_ID)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           }
+          $effectiveSubscription = if ([string]::IsNullOrWhiteSpace($subOverride)) { $env:SELECTED_SUBSCRIPTION_ID } else { $subOverride }
+          "subscriptionId=$effectiveSubscription" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Download prepared authoring runtime
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -479,7 +530,7 @@ jobs:
         id: required-features
         shell: pwsh
         env:
-          SELECTED_SUBSCRIPTION_ID: ${{ needs.subscriptions.outputs.subscriptionId }}
+          SELECTED_SUBSCRIPTION_ID: ${{ steps.test-environment.outputs.subscriptionId }}
         run: &check-required-features |
           $ErrorActionPreference = 'Stop'
           if (-not (Test-Path -LiteralPath '.required-features.json' -PathType Leaf)) {
@@ -520,13 +571,13 @@ jobs:
         with:
           client-id: ${{ env.ARM_CLIENT_ID }}
           tenant-id: ${{ env.ARM_TENANT_ID }}
-          subscription-id: ${{ needs.subscriptions.outputs.subscriptionId }}
+          subscription-id: ${{ steps.test-environment.outputs.subscriptionId }}
 
       - name: Register required features
         if: steps.required-features.outputs.required == 'true'
         shell: pwsh
         env:
-          SELECTED_SUBSCRIPTION_ID: ${{ needs.subscriptions.outputs.subscriptionId }}
+          SELECTED_SUBSCRIPTION_ID: ${{ steps.test-environment.outputs.subscriptionId }}
         run: &register-required-features |
           $ErrorActionPreference = 'Stop'
           Import-Module (Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1') -ErrorAction Stop
@@ -614,41 +665,19 @@ jobs:
         id: leg
         shell: pwsh
         env:
-          SUBSCRIPTION_IDS: ${{ needs.subscriptions.outputs.subscriptionIds }}
-          FALLBACK_SUBSCRIPTION_ID: ${{ needs.subscriptions.outputs.subscriptionId }}
+          TEST_SUBSCRIPTION_IDS: ${{ secrets.TEST_SUBSCRIPTION_IDS }}
+          FALLBACK_SUBSCRIPTION_ID_SECRET: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          FALLBACK_SUBSCRIPTION_ID_VAR: ${{ vars.ARM_SUBSCRIPTION_ID }}
+          SUBSCRIPTION_ORDER: ${{ needs.subscriptions.outputs.subscriptionOrder }}
           JOB_INDEX: ${{ strategy.job-index }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          # GitHub expressions have no modulo operator, so the round-robin is
-          # computed here from strategy.job-index.
-          $subs = @()
-          if (-not [string]::IsNullOrWhiteSpace($env:SUBSCRIPTION_IDS)) {
-              $subs = @($env:SUBSCRIPTION_IDS | ConvertFrom-Json)
-          }
-
-          if ($subs.Count -eq 0) {
-              if ([string]::IsNullOrWhiteSpace($env:FALLBACK_SUBSCRIPTION_ID)) {
-                  throw 'No test subscriptions were published by the subscriptions job.'
-              }
-              $chosen = [pscustomobject]@{ id = $env:FALLBACK_SUBSCRIPTION_ID; name = $env:FALLBACK_SUBSCRIPTION_ID }
-          }
-          else {
-              $index = 0
-              if (-not [string]::IsNullOrWhiteSpace($env:JOB_INDEX)) {
-                  $index = [int] $env:JOB_INDEX
-              }
-              $chosen = $subs[$index % $subs.Count]
-          }
-
-          "subscriptionId=$($chosen.id)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          Write-Host "Example '${{ matrix.example }}' uses subscription '$($chosen.name)'."
+        run: *select-test-subscription
 
       - name: Prepare test environment
+        id: test-environment
         shell: pwsh
         env:
           SELECTED_SUBSCRIPTION_ID: ${{ steps.leg.outputs.subscriptionId }}
-          SUBSCRIPTION_IDS: ${{ needs.subscriptions.outputs.subscriptionIds }}
+          SUBSCRIPTION_IDS: ${{ steps.leg.outputs.subscriptionIds }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -717,6 +746,8 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($subOverride) -and -not [string]::IsNullOrWhiteSpace($env:SELECTED_SUBSCRIPTION_ID)) {
               "ARM_SUBSCRIPTION_ID=$($env:SELECTED_SUBSCRIPTION_ID)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           }
+          $effectiveSubscription = if ([string]::IsNullOrWhiteSpace($subOverride)) { $env:SELECTED_SUBSCRIPTION_ID } else { $subOverride }
+          "subscriptionId=$effectiveSubscription" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Download prepared authoring runtime
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -728,7 +759,7 @@ jobs:
         id: required-features
         shell: pwsh
         env:
-          SELECTED_SUBSCRIPTION_ID: ${{ steps.leg.outputs.subscriptionId }}
+          SELECTED_SUBSCRIPTION_ID: ${{ steps.test-environment.outputs.subscriptionId }}
         run: *check-required-features
 
       - name: Azure login for required features
@@ -737,13 +768,13 @@ jobs:
         with:
           client-id: ${{ env.ARM_CLIENT_ID }}
           tenant-id: ${{ env.ARM_TENANT_ID }}
-          subscription-id: ${{ steps.leg.outputs.subscriptionId }}
+          subscription-id: ${{ steps.test-environment.outputs.subscriptionId }}
 
       - name: Register required features
         if: steps.required-features.outputs.required == 'true'
         shell: pwsh
         env:
-          SELECTED_SUBSCRIPTION_ID: ${{ steps.leg.outputs.subscriptionId }}
+          SELECTED_SUBSCRIPTION_ID: ${{ steps.test-environment.outputs.subscriptionId }}
         run: *register-required-features
 
       - name: Run end-to-end tests
