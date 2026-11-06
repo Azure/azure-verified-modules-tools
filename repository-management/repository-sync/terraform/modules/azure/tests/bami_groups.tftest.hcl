@@ -94,7 +94,7 @@ variables {
   identity_resource_group_name        = "rg-bami-test"
   github_repository_owner             = "Azure"
   github_repository_name              = "terraform-azurerm-avm-ptn-example-repo"
-  github_repository_environment_names = ["pr-check", "integration-test", "examples-test", "examples-test-execution"]
+  github_repository_environment_names = ["pr-check", "integration-test", "examples-test-execution"]
   location                            = "eastus2"
   is_protected_repo                   = true
   github_job_workflow_path            = "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml"
@@ -343,7 +343,7 @@ run "seed_legacy_terraform_identity" {
   variables {
     identity_name                       = "Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent"
     github_repository_name              = "terraform-azurerm-avm-ptn-azuremonitorwindowsagent"
-    github_repository_environment_names = ["pr-check", "integration-test", "examples-test"]
+    github_repository_environment_names = ["pr-check", "integration-test", "examples-test-execution"]
   }
 
   override_resource {
@@ -376,10 +376,10 @@ run "seed_legacy_terraform_identity" {
     }
   }
   override_resource {
-    target = azapi_resource.federated_credentials["module-examples-test"]
+    target = azapi_resource.federated_credentials["module-examples-test-execution"]
     values = {
-      name = "Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-examples-test"
-      id   = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-examples-test"
+      name = "Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-examples-test-execution"
+      id   = "/subscriptions/10000000-0000-4000-8000-000000000003/resourceGroups/rg-bami-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent/federatedIdentityCredentials/Azure-terraform-azurerm-avm-ptn-azuremonitorw5sagent-examples-test-execution"
     }
   }
   override_resource {
@@ -420,7 +420,7 @@ run "rename_legacy_terraform_identity" {
       azapi_resource.identity[0],
       azapi_resource.federated_credentials["module-pr-check"],
       azapi_resource.federated_credentials["module-integration-test"],
-      azapi_resource.federated_credentials["module-examples-test"],
+      azapi_resource.federated_credentials["module-examples-test-execution"],
       azapi_resource.federated_credentials["validation"],
       azuread_group_member.test_permissions["repository-readers"],
       azuread_group_member.test_permissions["repository-owners"]

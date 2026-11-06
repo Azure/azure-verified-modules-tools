@@ -6,6 +6,10 @@ locals {
   identity_resource_id     = local.dedicated_identity ? azapi_resource.identity[0].id : data.azapi_resource.existing_identity[0].id
   identity_properties      = local.dedicated_identity ? azapi_resource.identity[0].output.properties : data.azapi_resource.existing_identity[0].output.properties
   federation_identity_name = local.dedicated_identity ? local.identity_name : "${local.identity_name}-${var.existing_identity.federation_name_key}"
+  caller_subject_patterns = var.github_workflow_ref == null ? [] : [
+    "*:workflow_ref:${split("/.github/workflows/", var.github_workflow_ref)[0]}/.github/workflows/*",
+    "*:workflow_ref:*/.github/workflows/${try(split("/.github/workflows/", var.github_workflow_ref)[1], "")}",
+  ]
   module_subject_patterns = {
     for environment in var.github_repository_environment_names :
     environment => "repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:${environment}:*"
@@ -13,11 +17,11 @@ locals {
   module_federated_credentials = {
     for environment, subject_pattern in local.module_subject_patterns :
     "module-${environment}" => {
-      name                   = "${local.federation_identity_name}-fic-m-${environment}"
-      subject_pattern        = subject_pattern
-      job_workflow_pattern   = "${var.github_job_workflow_path}@*"
-      caller_subject_pattern = var.github_workflow_ref == null ? null : "*:workflow_ref:${var.github_workflow_ref}"
-      repository_id          = var.github_repository_id
+      name                    = "${local.federation_identity_name}-fic-m-${environment}"
+      subject_pattern         = subject_pattern
+      job_workflow_pattern    = "${var.github_job_workflow_path}@*"
+      caller_subject_patterns = local.caller_subject_patterns
+      repository_id           = var.github_repository_id
     }
   }
   validation_federated_credentials = var.existing_identity == null || var.existing_identity.manage_entra_groups ? {
@@ -44,7 +48,7 @@ locals {
     key => concat(
       ["claims['sub'] matches '${credential.subject_pattern}'"],
       try(credential.job_workflow_pattern, null) == null ? [] : ["claims['job_workflow_ref'] matches '${credential.job_workflow_pattern}'"],
-      try(credential.caller_subject_pattern, null) == null ? [] : ["claims['sub'] matches '${credential.caller_subject_pattern}'"],
+      [for pattern in try(credential.caller_subject_patterns, []) : "claims['sub'] matches '${pattern}'"],
       [
         "claims['repository_id'] eq '${credential.repository_id}'",
         "claims['repository_owner_id'] eq '${var.github_organization_id}'",

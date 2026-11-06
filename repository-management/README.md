@@ -206,6 +206,15 @@ same-named variables would not override the current consumers' secrets.
 There is no fallback to retired-tenant settings. See the
 [unified ownership and execution prerequisites](repository-sync/README.md#unified-bami-ownership).
 
+The `examples-test` GitHub environment and its reviewer approval gate remain,
+but it no longer receives an Azure federated credential: matrix discovery is
+approval-only. Normal reconciliation deletes only the existing
+`module-examples-test` credential on each verified Terraform test identity.
+The `examples-test-execution`, `pr-check`, `integration-test`, and Tools
+validation credentials keep their names and addresses. Older callers that
+authenticate in `examples-test` must update their managed workflow files;
+the retired credential is not retained for compatibility.
+
 Bicep variable sync retains its existing eight-field source and five-field
 execution projection. It also publishes a separate, generated module client-ID
 mapping after identity provisioning. Configured Entra names are not Bicep target Variables.

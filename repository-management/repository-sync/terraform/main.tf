@@ -15,7 +15,6 @@ module "bami" {
   github_repository_environment_names = [
     var.github_repository_pr_check_environment_name,
     var.github_repository_integration_test_environment_name,
-    var.github_repository_examples_test_environment_name,
     var.github_repository_examples_test_execution_environment_name,
   ]
   location                      = var.location

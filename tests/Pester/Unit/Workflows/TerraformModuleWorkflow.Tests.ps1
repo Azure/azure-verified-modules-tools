@@ -286,32 +286,97 @@ Describe 'Terraform General subscription selection' {
         $script:written['fixture-output'] | Should -Contain "subscriptionId=$expected"
     }
 
-    It 'rejects an override outside the General pool before <Job> can publish its environment' -ForEach @(
-        @{ Job = 'pr-check' }
-        @{ Job = 'integration-test' }
-        @{ Job = 'e2e-test' }
-    ) {
-        $env:SUBSCRIPTION_IDS = ConvertTo-Json -InputObject @($script:general, $script:untagged) -Compress
+    It 'accepts an external e2e subscription override independently of the test pool' {
+        $env:SUBSCRIPTION_IDS = '[]'
         $env:SELECTED_SUBSCRIPTION_ID = $script:general.id
         $env:SECRETS_CONTEXT = ConvertTo-Json -InputObject @{ ARM_SUBSCRIPTION_ID_OVERRIDE = $script:reserved.id } -Compress
         $env:VARS_CONTEXT = '{}'
-        { & $script:reservationScripts[$Job] } | Should -Throw '*OVERRIDE must belong*General*'
+        & $script:reservationScripts['e2e-test']
+        $script:written['fixture-environment'] | Should -Contain "ARM_SUBSCRIPTION_ID=$($script:reserved.id)"
+        $script:written['fixture-output'] | Should -Contain "subscriptionId=$($script:reserved.id)"
+    }
+
+    It 'rejects an invalid e2e subscription override before publishing its environment: <Value>' -ForEach @(
+        @{ Value = 'not-a-guid' }
+        @{ Value = '00000000-0000-0000-0000-000000000000' }
+    ) {
+        $env:SUBSCRIPTION_IDS = ConvertTo-Json -InputObject @($script:general) -Compress
+        $env:SELECTED_SUBSCRIPTION_ID = $script:general.id
+        $env:SECRETS_CONTEXT = ConvertTo-Json -InputObject @{ ARM_SUBSCRIPTION_ID_OVERRIDE = $Value } -Compress
+        $env:VARS_CONTEXT = '{}'
+        { & $script:reservationScripts['e2e-test'] } | Should -Throw '*OVERRIDE must be a nonempty subscription GUID*'
         Should -Invoke Out-File -Exactly 0
     }
 
-    It 'keeps the <Source> General override and replaces an unfiltered ambient pool for <Job>' -ForEach @(
-        @{ Job = 'pr-check'; Source = 'secret' }
-        @{ Job = 'integration-test'; Source = 'secret' }
-        @{ Job = 'e2e-test'; Source = 'secret' }
-        @{ Job = 'pr-check'; Source = 'variable' }
-        @{ Job = 'integration-test'; Source = 'variable' }
-        @{ Job = 'e2e-test'; Source = 'variable' }
+    It 'ignores <Pool> identity overrides from <Source> in <Job> without exposing them to hooks or Terraform' -ForEach @(
+        @{ Job = 'pr-check'; Source = 'secret'; Pool = 'outside' }
+        @{ Job = 'integration-test'; Source = 'secret'; Pool = 'outside' }
+        @{ Job = 'pr-check'; Source = 'variable'; Pool = 'outside' }
+        @{ Job = 'integration-test'; Source = 'variable'; Pool = 'outside' }
+        @{ Job = 'pr-check'; Source = 'secret'; Pool = 'inside' }
+        @{ Job = 'integration-test'; Source = 'secret'; Pool = 'inside' }
+        @{ Job = 'pr-check'; Source = 'variable'; Pool = 'inside' }
+        @{ Job = 'integration-test'; Source = 'variable'; Pool = 'inside' }
+    ) {
+        $env:SUBSCRIPTION_IDS = ConvertTo-Json -InputObject @($script:general, $script:untagged) -Compress
+        $env:SELECTED_SUBSCRIPTION_ID = $script:general.id
+        $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN = 'oidc-token'
+        $env:ACTIONS_ID_TOKEN_REQUEST_URL = 'oidc-url'
+        $vars = @{
+            ARM_CLIENT_ID = 'variable-client'
+            ARM_TENANT_ID = 'variable-tenant'
+            ARM_SUBSCRIPTION_ID = $script:reserved.id
+            MODULE_SETTING = 'variable-value'
+            PATH = 'unsafe-path'
+        }
+        $secrets = @{
+            ARM_CLIENT_ID = 'standard-client'
+            ARM_TENANT_ID = 'standard-tenant'
+            MODULE_SETTING = 'secret-value'
+            TEST_SUBSCRIPTION_IDS = (ConvertTo-Json -InputObject @($script:reserved, $script:general, $script:untagged) -Compress)
+        }
+        $overrides = @{
+            ARM_CLIENT_ID_OVERRIDE = 'untrusted-client'
+            ARM_TENANT_ID_OVERRIDE = 'untrusted-tenant'
+            ARM_SUBSCRIPTION_ID_OVERRIDE = $(if ($Pool -eq 'inside') { $script:untagged.id } else { $script:reserved.id })
+            TF_VAR_arm_client_id_override = 'untrusted-tf-client'
+            TF_VAR_ARM_TENANT_ID_OVERRIDE = 'untrusted-tf-tenant'
+            TF_VAR_ARM_SUBSCRIPTION_ID_OVERRIDE = 'untrusted-tf-subscription'
+        }
+        if ($Source -eq 'secret') { $overrides.GetEnumerator() | ForEach-Object { $secrets[$_.Key] = $_.Value } }
+        else { $overrides.GetEnumerator() | ForEach-Object { $vars[$_.Key] = $_.Value } }
+        $env:VARS_CONTEXT = ConvertTo-Json -InputObject $vars -Compress
+        $env:SECRETS_CONTEXT = ConvertTo-Json -InputObject $secrets -Compress
+        & $script:reservationScripts[$Job]
+        $writes = $script:written['fixture-environment']
+        ($writes -join "`n") | Should -Not -Match '(?i)untrusted|(?:TF_VAR_)?ARM_(?:CLIENT_ID|TENANT_ID|SUBSCRIPTION_ID)_OVERRIDE'
+        ($writes -join "`n") | Should -Match '(?s)ARM_CLIENT_ID<<[^\n]+\nstandard-client\n'
+        ($writes -join "`n") | Should -Match '(?s)ARM_TENANT_ID<<[^\n]+\nstandard-tenant\n'
+        ($writes -join "`n") | Should -Match '(?s)MODULE_SETTING<<[^\n]+\nsecret-value\n'
+        $writes | Should -Not -Match '^PATH<<'
+        $writes | Should -Contain 'SECRETS_CONTEXT={}'
+        $writes | Should -Contain 'VARS_CONTEXT={}'
+        $writes | Should -Contain 'ARM_OIDC_REQUEST_TOKEN=oidc-token'
+        $writes | Should -Contain 'ARM_OIDC_REQUEST_URL=oidc-url'
+        $writes | Should -Contain "ARM_SUBSCRIPTION_ID=$($script:general.id)"
+        $script:written['fixture-output'] | Should -Contain "subscriptionId=$($script:general.id)"
+        $poolWrite = @($writes | Where-Object { $_.StartsWith('TEST_SUBSCRIPTION_IDS<<') })
+        $poolWrite | Should -HaveCount 1
+        $poolWrite[0] | Should -Match ([regex]::Escape($env:SUBSCRIPTION_IDS))
+        $poolWrite[0] | Should -Not -Match ([regex]::Escape($script:reserved.id))
+    }
+
+    It 'keeps the <Source> General override and replaces an unfiltered ambient pool for e2e' -ForEach @(
+        @{ Source = 'secret' }
+        @{ Source = 'variable' }
     ) {
         $env:SUBSCRIPTION_IDS = ConvertTo-Json -InputObject @($script:general, $script:untagged) -Compress
         $env:SELECTED_SUBSCRIPTION_ID = $script:general.id
         $vars = @{
             ARM_SUBSCRIPTION_ID = $script:reserved.id
             ARM_SUBSCRIPTION_ID_OVERRIDE = $script:untagged.id
+            ARM_CLIENT_ID_OVERRIDE = 'variable-client'
+            ARM_TENANT_ID_OVERRIDE = 'variable-tenant'
         }
         $secrets = @{
             TEST_SUBSCRIPTION_IDS = (ConvertTo-Json -InputObject @($script:reserved, $script:general, $script:untagged) -Compress)
@@ -319,11 +384,17 @@ Describe 'Terraform General subscription selection' {
         if ($Source -eq 'secret') {
             $vars.ARM_SUBSCRIPTION_ID_OVERRIDE = $script:general.id
             $secrets.ARM_SUBSCRIPTION_ID_OVERRIDE = $script:untagged.id
+            $secrets.ARM_CLIENT_ID_OVERRIDE = 'secret-client'
+            $secrets.ARM_TENANT_ID_OVERRIDE = 'secret-tenant'
         }
         $env:VARS_CONTEXT = ConvertTo-Json -InputObject $vars -Compress
         $env:SECRETS_CONTEXT = ConvertTo-Json -InputObject $secrets -Compress
-        & $script:reservationScripts[$Job]
+        & $script:reservationScripts['e2e-test']
         $writes = $script:written['fixture-environment']
+        $client = if ($Source -eq 'secret') { 'secret-client' } else { 'variable-client' }
+        $tenant = if ($Source -eq 'secret') { 'secret-tenant' } else { 'variable-tenant' }
+        $writes | Should -Contain "ARM_CLIENT_ID=$client"
+        $writes | Should -Contain "ARM_TENANT_ID=$tenant"
         $writes | Should -Contain "ARM_SUBSCRIPTION_ID=$($script:untagged.id)"
         $script:written['fixture-output'] | Should -Contain "subscriptionId=$($script:untagged.id)"
         $poolWrite = @($writes | Where-Object { $_.StartsWith('TEST_SUBSCRIPTION_IDS<<') })

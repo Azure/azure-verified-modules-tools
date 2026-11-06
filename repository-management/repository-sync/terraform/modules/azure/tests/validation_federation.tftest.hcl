@@ -37,7 +37,7 @@ variables {
   identity_resource_group_name        = "rg-bami-test"
   github_repository_owner             = "Azure"
   github_repository_name              = "terraform-azurerm-avm-ptn-example-repo"
-  github_repository_environment_names = ["pr-check", "integration-test", "examples-test", "examples-test-execution"]
+  github_repository_environment_names = ["pr-check", "integration-test", "examples-test-execution"]
   location                            = "eastus2"
   is_protected_repo                   = true
   github_job_workflow_path            = "Azure/azure-verified-modules-tools/.github/workflows/terraform-module.yml"
@@ -56,7 +56,7 @@ run "execution_federation_uses_the_configured_workflow_path" {
 
   assert {
     condition = (
-      toset(keys({ for key, credential in azapi_resource.federated_credentials : key => credential if startswith(key, "module-") })) == toset(["module-pr-check", "module-integration-test", "module-examples-test", "module-examples-test-execution"]) &&
+      toset(keys({ for key, credential in azapi_resource.federated_credentials : key => credential if startswith(key, "module-") })) == toset(["module-pr-check", "module-integration-test", "module-examples-test-execution"]) &&
       alltrue([for environment in var.github_repository_environment_names :
         azapi_resource.federated_credentials["module-${trimprefix(environment, "module-")}"].type ==
         "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview" &&
@@ -249,6 +249,7 @@ run "caller_bound_credential_accepts_exactly_120_characters" {
 
   variables {
     identity_name                       = join("", [for index in range(90) : "a"])
+    github_repository_name              = "bicep-registry-modules"
     github_workflow_ref                 = "Azure/bicep-registry-modules/.github/workflows/avm.res.fabric.capacity.yml@refs/heads/main"
     github_repository_environment_names = [join("", [for index in range(23) : "a"])]
   }
@@ -258,7 +259,7 @@ run "caller_bound_credential_accepts_exactly_120_characters" {
       alltrue([for key, credential in azapi_resource.federated_credentials : length(credential.name) == 120 if startswith(key, "module-")]) &&
       alltrue([for key, credential in azapi_resource.federated_credentials :
         credential.body.properties.claimsMatchingExpression.value ==
-        "claims['sub'] matches 'repository_owner_id:6844498:repository_id:1234:environment:${trimprefix(key, "module-")}:*' and claims['job_workflow_ref'] matches '${var.github_job_workflow_path}@*' and claims['sub'] matches '*:workflow_ref:${var.github_workflow_ref}' and claims['repository_id'] eq '1234' and claims['repository_owner_id'] eq '6844498'"
+        "claims['sub'] matches 'repository_owner_id:6844498:repository_id:1234:environment:${trimprefix(key, "module-")}:*' and claims['job_workflow_ref'] matches '${var.github_job_workflow_path}@*' and claims['sub'] matches '*:workflow_ref:Azure/bicep-registry-modules/.github/workflows/*' and claims['sub'] matches '*:workflow_ref:*/.github/workflows/avm.res.fabric.capacity.yml@refs/heads/main' and claims['repository_id'] eq '1234' and claims['repository_owner_id'] eq '6844498'"
         if startswith(key, "module-")
       ])
     )
@@ -266,11 +267,82 @@ run "caller_bound_credential_accepts_exactly_120_characters" {
   }
 }
 
+run "longest_published_bicep_caller_keeps_exact_bounded_claims" {
+  command = plan
+
+  variables {
+    identity_name                       = "id-test-bicep-avm-res-network-application-gateway-web-application-firewall-policy"
+    github_repository_name              = "bicep-registry-modules"
+    github_repository_id                = "447791597"
+    github_repository_environment_names = ["avm-validation"]
+    github_job_workflow_path            = "Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml"
+    github_workflow_ref                 = "Azure/bicep-registry-modules/.github/workflows/avm.res.network.application-gateway-web-application-firewall-policy.yml@refs/heads/main"
+    bicep_registry_federation_enabled   = true
+  }
+
+  assert {
+    condition = (
+      length(var.github_workflow_ref) == 134 &&
+      length(local.caller_subject_patterns) == 2 &&
+      local.caller_subject_patterns[0] == "*:workflow_ref:Azure/bicep-registry-modules/.github/workflows/*" &&
+      local.caller_subject_patterns[1] == "*:workflow_ref:*/.github/workflows/avm.res.network.application-gateway-web-application-firewall-policy.yml@refs/heads/main" &&
+      length(local.caller_subject_patterns[1]) == 122 &&
+      azapi_resource.federated_credentials["module-avm-validation"].body.properties.claimsMatchingExpression.value ==
+      "claims['sub'] matches 'repository_owner_id:6844498:repository_id:447791597:environment:avm-validation:*' and claims['job_workflow_ref'] matches '${var.github_job_workflow_path}@*' and claims['sub'] matches '${local.caller_subject_patterns[0]}' and claims['sub'] matches '${local.caller_subject_patterns[1]}' and claims['repository_id'] eq '447791597' and claims['repository_owner_id'] eq '6844498'" &&
+      toset(keys(azapi_resource.federated_credentials)) == toset(["module-avm-validation", "validation", "bicep-registry"])
+    )
+    error_message = "Long callers must retain the complete filename, trusted main, immutable IDs and existing credential addresses within each comparand limit."
+  }
+}
+
+run "caller_workflow_comparand_accepts_exactly_128_characters" {
+  command = plan
+
+  variables {
+    github_workflow_ref = "Azure/terraform-azurerm-avm-ptn-example-repo/.github/workflows/${join("", [for index in range(73) : "a"])}.yml@refs/heads/main"
+  }
+
+  assert {
+    condition     = length(local.caller_subject_patterns[1]) == 128
+    error_message = "The complete caller filename must be accepted at the comparand boundary."
+  }
+}
+
 run "overlong_caller_workflow_comparand_is_rejected" {
   command = plan
 
   variables {
-    github_workflow_ref = "Azure/bicep-registry-modules/.github/workflows/${join("", [for index in range(100) : "a"])}.yml@refs/heads/main"
+    github_workflow_ref = "Azure/terraform-azurerm-avm-ptn-example-repo/.github/workflows/${join("", [for index in range(74) : "a"])}.yml@refs/heads/main"
+  }
+
+  expect_failures = [var.github_workflow_ref]
+}
+
+run "caller_from_another_repository_is_rejected" {
+  command = plan
+
+  variables {
+    github_workflow_ref = "Azure/foreign/.github/workflows/module.yml@refs/heads/main"
+  }
+
+  expect_failures = [var.github_workflow_ref]
+}
+
+run "caller_filename_wildcard_is_rejected" {
+  command = plan
+
+  variables {
+    github_workflow_ref = "Azure/terraform-azurerm-avm-ptn-example-repo/.github/workflows/*.yml@refs/heads/main"
+  }
+
+  expect_failures = [var.github_workflow_ref]
+}
+
+run "caller_non_main_ref_is_rejected" {
+  command = plan
+
+  variables {
+    github_workflow_ref = "Azure/terraform-azurerm-avm-ptn-example-repo/.github/workflows/module.yml@refs/heads/feature"
   }
 
   expect_failures = [var.github_workflow_ref]
@@ -291,6 +363,7 @@ run "overlong_caller_bound_credential_is_rejected" {
 
   variables {
     identity_name                       = join("", [for index in range(90) : "a"])
+    github_repository_name              = "bicep-registry-modules"
     github_workflow_ref                 = "Azure/bicep-registry-modules/.github/workflows/avm.res.fabric.capacity.yml@refs/heads/main"
     github_repository_environment_names = [join("", [for index in range(24) : "a"])]
   }

@@ -178,7 +178,21 @@ function Get-AvmBamiModuleFederationExpression {
         "claims['job_workflow_ref'] matches '$JobWorkflowPath@*'"
     )
     if ($WorkflowRef) {
-        $clauses += "claims['sub'] matches '*:workflow_ref:$WorkflowRef'"
+        $caller = [regex]::Match($WorkflowRef,
+            '\A([A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+)/\.github/workflows/([A-Za-z0-9][A-Za-z0-9_.-]*\.ya?ml@refs/heads/main)\z')
+        if (-not $caller.Success) {
+            throw [System.ArgumentException]::new('Caller federation requires an exact fully qualified trusted-main workflow.')
+        }
+        $patterns = @(
+            "*:workflow_ref:$($caller.Groups[1].Value)/.github/workflows/*"
+            "*:workflow_ref:*/.github/workflows/$($caller.Groups[2].Value)"
+        )
+        foreach ($pattern in $patterns) {
+            if ($pattern.Length -gt 128) {
+                throw [System.ArgumentException]::new('Caller federation subject comparands must be at most 128 characters.')
+            }
+            $clauses += "claims['sub'] matches '$pattern'"
+        }
     }
     $clauses += @(
         "claims['repository_id'] eq '$RepositoryId'",
@@ -222,6 +236,7 @@ function Test-AvmBamiModuleFederation {
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Values,
         [Parameter(Mandatory)] [string] $Expression,
         [string] $LegacySubjectPattern,
+        [string] $WorkflowRef,
         [switch] $AllowLegacy
     )
 
@@ -232,11 +247,21 @@ function Test-AvmBamiModuleFederation {
     $properties = $Values['body']['properties']
     $audiences = @($properties['audiences'])
     $claimExpression = $properties['claimsMatchingExpression']
+    $previousExpression = $null
+    if ($AllowLegacy -and $WorkflowRef) {
+        $clauses = @($Expression -split ' and ')
+        if ($clauses.Count -eq 6) {
+            $previousExpression = (@($clauses[0..1]) +
+                "claims['sub'] matches '*:workflow_ref:$WorkflowRef'" + @($clauses[4..5])) -join ' and '
+        }
+    }
     if ($Values['type'] -ceq 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview' -and
         $properties.Count -eq 3 -and $properties['issuer'] -ceq 'https://token.actions.githubusercontent.com' -and
         $audiences.Count -eq 1 -and $audiences[0] -ceq 'api://AzureADTokenExchange' -and
         $claimExpression -is [System.Collections.IDictionary] -and $claimExpression.Count -eq 2 -and
-        $claimExpression['languageVersion'] -eq 1 -and $claimExpression['value'] -ceq $Expression) {
+        $claimExpression['languageVersion'] -eq 1 -and
+        ($claimExpression['value'] -ceq $Expression -or
+            ($null -ne $previousExpression -and $claimExpression['value'] -ceq $previousExpression))) {
         return $true
     }
     return $AllowLegacy -and
@@ -244,6 +269,31 @@ function Test-AvmBamiModuleFederation {
         $properties.Count -eq 3 -and $properties['issuer'] -ceq 'https://token.actions.githubusercontent.com' -and
         $audiences.Count -eq 1 -and $audiences[0] -ceq 'api://AzureADTokenExchange' -and
         $properties['subject'] -is [string] -and $properties['subject'] -cmatch $LegacySubjectPattern
+}
+
+function Test-AvmRetiredExamplesTestFederationChange {
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Change,
+        [Parameter(Mandatory)] [string] $ModuleAddress,
+        [Parameter(Mandatory)] [string] $IdentityName,
+        [AllowNull()] [string] $IdentityId
+    )
+
+    $before = $Change['change']['before']
+    $address = "$ModuleAddress.azapi_resource.federated_credentials[`"module-examples-test`"]"
+    $name = "$IdentityName-fic-m-examples-test"
+    return $ModuleAddress -cmatch '^module\.(azure|bami\[0\])$' -and
+        -not [string]::IsNullOrEmpty($IdentityId) -and
+        $Change['address'] -ceq $address -and
+        $Change['mode'] -ceq 'managed' -and $Change['type'] -ceq 'azapi_resource' -and
+        $Change['provider_name'] -ceq 'registry.terraform.io/azure/azapi' -and
+        (@($Change['change']['actions']) -join ',') -ceq 'delete' -and
+        $null -eq $Change['change']['after'] -and $null -eq $Change['change']['importing'] -and
+        (-not $Change.Contains('previous_address') -or $Change['previous_address'] -ceq $address) -and
+        $before -is [System.Collections.IDictionary] -and
+        $before['type'] -ceq 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview' -and
+        $before['name'] -ceq $name -and $before['parent_id'] -ieq $IdentityId -and
+        ($null -eq $before['id'] -or $before['id'] -ieq "$IdentityId/federatedIdentityCredentials/$name")
 }
 
 function Assert-AvmExternalBamiIdentityPlan {
@@ -261,7 +311,7 @@ function Assert-AvmExternalBamiIdentityPlan {
         [string] $ModuleAddress = 'module.azure',
         [string] $WorkflowRef,
         [switch] $BicepRegistryFederation,
-        [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test', 'examples-test-execution')
+        [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test-execution')
     )
 
     if (($Plan.Contains('errored') -and $Plan['errored'] -ne $false) -or
@@ -411,6 +461,9 @@ function Assert-AvmExternalBamiIdentityPlan {
     }
     foreach ($change in $changes.Values) {
         if ($change['address'] -cin $allowed) { continue }
+        if ($Environments -cnotcontains 'examples-test' -and
+            (Test-AvmRetiredExamplesTestFederationChange -Change $change -ModuleAddress $ModuleAddress `
+                -IdentityName $federationName -IdentityId $Identity['resource_id'])) { continue }
         $expected = $legacyFederation[$change['address']]
         $currentChange = if ($null -ne $expected) { $changes[$expected.CurrentAddress] } else { $null }
         $before = $change['change']['before']
@@ -466,12 +519,15 @@ function Assert-AvmBamiIdentityPlan {
         [switch] $BicepRegistryFederation,
         [AllowNull()] [System.Collections.IDictionary] $ExistingIdentity,
         [ValidatePattern('^[a-z][a-z0-9-]*$')]
-        [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test', 'examples-test-execution'),
+        [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test-execution'),
         [switch] $PassThru
     )
 
     $Settings = Get-AvmBamiSettings -Values $Settings
     $EntraGroupNames = ConvertTo-AvmEntraGroupNames -Names $EntraGroupNames
+    if ($WorkflowRef -and -not $WorkflowRef.StartsWith("$Repository/.github/workflows/", [System.StringComparison]::Ordinal)) {
+        throw [System.ArgumentException]::new('Caller federation must bind the configured repository.')
+    }
     if ($null -ne $ExistingIdentity) {
         Assert-AvmExternalBamiIdentityPlan -Plan $Plan -Settings $Settings -Repository $Repository `
             -RepositoryId $RepositoryId -RepositoryOwnerId $RepositoryOwnerId `
@@ -791,7 +847,7 @@ function Assert-AvmBamiIdentityPlan {
             $values = $side.Values
             $isValidModuleFederation = Test-AvmBamiModuleFederation -Values $values `
                 -Expression $federation[$address].Expression `
-                -LegacySubjectPattern $federation[$address].LegacySubjectPattern -AllowLegacy:$side.Previous
+                -LegacySubjectPattern $federation[$address].LegacySubjectPattern -WorkflowRef $WorkflowRef -AllowLegacy:$side.Previous
             $validName = $values -is [System.Collections.IDictionary] -and $values['name'] -cin $side.Names
             if ($values -isnot [System.Collections.IDictionary] -or
                 -not $validName -or $values['name'].Length -gt 120 -or
@@ -814,6 +870,9 @@ function Assert-AvmBamiIdentityPlan {
         if ($change['address'] -cin $allowed -and $actions -notcontains 'delete' -and
             $null -eq $change['change']['before']) { continue }
         if ($change['mode'] -ceq 'data' -and $actions.Count -eq 1 -and $actions[0] -cin @('no-op', 'read')) { continue }
+        if ($Environments -cnotcontains 'examples-test' -and
+            (Test-AvmRetiredExamplesTestFederationChange -Change $change -ModuleAddress $ModuleAddress `
+                -IdentityName ($renaming ? $previousName : $name) -IdentityId $previousIdentityId)) { continue }
         $before = $change['change']['before']
         if ($legacyFederation.ContainsKey($change['address'])) {
             $currentAddress = $legacyFederation[$change['address']]

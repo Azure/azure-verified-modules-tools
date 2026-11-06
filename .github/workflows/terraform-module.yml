@@ -19,8 +19,11 @@
 #
 # `secrets: inherit` is required for normal branches, not forks.
 # The "Prepare test environment" step fans the
-# full secret + variable sets into $GITHUB_ENV so terraform and example hooks
-# inherit them. This replaces the governance cred-prep script's curated
+# secret + variable sets into $GITHUB_ENV so terraform and example hooks
+# inherit them. Identity overrides apply only to e2e and may target a separate
+# subscription; PR check and integration use the standard identity and
+# selected General subscription. This replaces
+# the governance cred-prep script's curated
 # `AVM_*` / `TF_VAR_*` subset forwarding - and makes the old `AVM_BARE_` prefix
 # escape hatch redundant, so it is intentionally dropped here.
 #
@@ -320,7 +323,7 @@ jobs:
         env:
           SELECTED_SUBSCRIPTION_ID: ${{ steps.pick.outputs.subscriptionId }}
           SUBSCRIPTION_IDS: ${{ steps.pick.outputs.subscriptionIds }}
-        run: |
+        run: &prepare-standard-test-environment |
           $ErrorActionPreference = 'Stop'
 
           $protected = @(
@@ -352,15 +355,11 @@ jobs:
               $env:SELECTED_SUBSCRIPTION_ID -notin @($allowedSubscriptions.id)) {
               throw [System.InvalidOperationException]::new('The selected subscription must belong to the published General test pool.')
           }
-          $subOverride = [string] $combined['ARM_SUBSCRIPTION_ID_OVERRIDE']
-          if (-not [string]::IsNullOrWhiteSpace($subOverride) -and
-              $subOverride -notin @($allowedSubscriptions.id)) {
-              throw [System.ArgumentException]::new('ARM_SUBSCRIPTION_ID_OVERRIDE must belong to the selected General test pool.')
-          }
           $combined['TEST_SUBSCRIPTION_IDS'] = $env:SUBSCRIPTION_IDS
 
           foreach ($key in $combined.Keys) {
               if ($key -eq 'github_token') { continue }
+              if ($key -match '^(?:TF_VAR_)?ARM_(?:CLIENT_ID|TENANT_ID|SUBSCRIPTION_ID)_OVERRIDE$') { continue }
               if ($protected -contains $key.ToUpperInvariant()) {
                   Write-Host "Skipping protected name '$key'."
                   continue
@@ -378,21 +377,10 @@ jobs:
               "ARM_OIDC_REQUEST_URL=$($env:ACTIONS_ID_TOKEN_REQUEST_URL)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           }
 
-          # ARM_*_OVERRIDE precedence (governance convention).
-          foreach ($name in 'ARM_CLIENT_ID', 'ARM_TENANT_ID', 'ARM_SUBSCRIPTION_ID') {
-              $override = [string] $combined["${name}_OVERRIDE"]
-              if (-not [string]::IsNullOrWhiteSpace($override)) {
-                  "$name=$override" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-              }
-          }
-
-          # Selected test subscription wins unless an explicit override was set.
-          $subOverride = [string] $combined['ARM_SUBSCRIPTION_ID_OVERRIDE']
-          if ([string]::IsNullOrWhiteSpace($subOverride) -and -not [string]::IsNullOrWhiteSpace($env:SELECTED_SUBSCRIPTION_ID)) {
-              "ARM_SUBSCRIPTION_ID=$($env:SELECTED_SUBSCRIPTION_ID)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          }
-          $effectiveSubscription = if ([string]::IsNullOrWhiteSpace($subOverride)) { $env:SELECTED_SUBSCRIPTION_ID } else { $subOverride }
-          "subscriptionId=$effectiveSubscription" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          'SECRETS_CONTEXT={}' | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          'VARS_CONTEXT={}' | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ARM_SUBSCRIPTION_ID=$($env:SELECTED_SUBSCRIPTION_ID)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "subscriptionId=$($env:SELECTED_SUBSCRIPTION_ID)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Download prepared authoring runtime
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -449,76 +437,7 @@ jobs:
         env:
           SELECTED_SUBSCRIPTION_ID: ${{ steps.pick.outputs.subscriptionId }}
           SUBSCRIPTION_IDS: ${{ steps.pick.outputs.subscriptionIds }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $protected = @(
-              'PATH','HOME','USER','PWD','SHELL','LANG','LC_ALL','TMPDIR','TEMP','TMP',
-              'CI','GITHUB_ACTIONS','GITHUB_ENV','GITHUB_PATH','GITHUB_OUTPUT',
-              'GITHUB_STATE','GITHUB_STEP_SUMMARY','GITHUB_WORKSPACE','GITHUB_TOKEN',
-              'RUNNER_TEMP','RUNNER_TOOL_CACHE','RUNNER_WORKSPACE','RUNNER_OS',
-              'RUNNER_ARCH','RUNNER_NAME','RUNNER_DEBUG',
-              'ACTIONS_ID_TOKEN_REQUEST_TOKEN','ACTIONS_ID_TOKEN_REQUEST_URL',
-              'ACTIONS_RUNTIME_TOKEN','ACTIONS_RUNTIME_URL','ACTIONS_CACHE_URL',
-              'AVM_HOME','TF_PLUGIN_CACHE_DIR'
-          )
-
-          function ConvertFrom-Context {
-              param([string] $Json)
-              if ([string]::IsNullOrWhiteSpace($Json)) { return @{} }
-              return ($Json | ConvertFrom-Json -AsHashtable)
-          }
-
-          $secretsMap = ConvertFrom-Context $env:SECRETS_CONTEXT
-          $varsMap = ConvertFrom-Context $env:VARS_CONTEXT
-
-          $combined = @{}
-          foreach ($k in $varsMap.Keys) { $combined[$k] = $varsMap[$k] }
-          foreach ($k in $secretsMap.Keys) { $combined[$k] = $secretsMap[$k] }
-
-          $allowedSubscriptions = @($env:SUBSCRIPTION_IDS | ConvertFrom-Json)
-          if ($allowedSubscriptions.Count -eq 0 -or
-              $env:SELECTED_SUBSCRIPTION_ID -notin @($allowedSubscriptions.id)) {
-              throw [System.InvalidOperationException]::new('The selected subscription must belong to the published General test pool.')
-          }
-          $subOverride = [string] $combined['ARM_SUBSCRIPTION_ID_OVERRIDE']
-          if (-not [string]::IsNullOrWhiteSpace($subOverride) -and
-              $subOverride -notin @($allowedSubscriptions.id)) {
-              throw [System.ArgumentException]::new('ARM_SUBSCRIPTION_ID_OVERRIDE must belong to the selected General test pool.')
-          }
-          $combined['TEST_SUBSCRIPTION_IDS'] = $env:SUBSCRIPTION_IDS
-
-          foreach ($key in $combined.Keys) {
-              if ($key -eq 'github_token') { continue }
-              if ($protected -contains $key.ToUpperInvariant()) {
-                  Write-Host "Skipping protected name '$key'."
-                  continue
-              }
-              $value = [string] $combined[$key]
-              $delim = "AVM_ENV_$([guid]::NewGuid().ToString('N'))"
-              "$key<<$delim`n$value`n$delim" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          }
-
-          if (-not [string]::IsNullOrWhiteSpace($env:ACTIONS_ID_TOKEN_REQUEST_TOKEN)) {
-              "ARM_OIDC_REQUEST_TOKEN=$($env:ACTIONS_ID_TOKEN_REQUEST_TOKEN)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          }
-          if (-not [string]::IsNullOrWhiteSpace($env:ACTIONS_ID_TOKEN_REQUEST_URL)) {
-              "ARM_OIDC_REQUEST_URL=$($env:ACTIONS_ID_TOKEN_REQUEST_URL)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          }
-
-          foreach ($name in 'ARM_CLIENT_ID', 'ARM_TENANT_ID', 'ARM_SUBSCRIPTION_ID') {
-              $override = [string] $combined["${name}_OVERRIDE"]
-              if (-not [string]::IsNullOrWhiteSpace($override)) {
-                  "$name=$override" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-              }
-          }
-
-          $subOverride = [string] $combined['ARM_SUBSCRIPTION_ID_OVERRIDE']
-          if ([string]::IsNullOrWhiteSpace($subOverride) -and -not [string]::IsNullOrWhiteSpace($env:SELECTED_SUBSCRIPTION_ID)) {
-              "ARM_SUBSCRIPTION_ID=$($env:SELECTED_SUBSCRIPTION_ID)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          }
-          $effectiveSubscription = if ([string]::IsNullOrWhiteSpace($subOverride)) { $env:SELECTED_SUBSCRIPTION_ID } else { $subOverride }
-          "subscriptionId=$effectiveSubscription" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+        run: *prepare-standard-test-environment
 
       - name: Download prepared authoring runtime
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -705,15 +624,19 @@ jobs:
           foreach ($k in $varsMap.Keys) { $combined[$k] = $varsMap[$k] }
           foreach ($k in $secretsMap.Keys) { $combined[$k] = $secretsMap[$k] }
 
-          $allowedSubscriptions = @($env:SUBSCRIPTION_IDS | ConvertFrom-Json)
-          if ($allowedSubscriptions.Count -eq 0 -or
-              $env:SELECTED_SUBSCRIPTION_ID -notin @($allowedSubscriptions.id)) {
-              throw [System.InvalidOperationException]::new('The selected subscription must belong to the published General test pool.')
-          }
           $subOverride = [string] $combined['ARM_SUBSCRIPTION_ID_OVERRIDE']
-          if (-not [string]::IsNullOrWhiteSpace($subOverride) -and
-              $subOverride -notin @($allowedSubscriptions.id)) {
-              throw [System.ArgumentException]::new('ARM_SUBSCRIPTION_ID_OVERRIDE must belong to the selected General test pool.')
+          if ([string]::IsNullOrWhiteSpace($subOverride)) {
+              $allowedSubscriptions = @($env:SUBSCRIPTION_IDS | ConvertFrom-Json)
+              if ($allowedSubscriptions.Count -eq 0 -or
+                  $env:SELECTED_SUBSCRIPTION_ID -notin @($allowedSubscriptions.id)) {
+                  throw [System.InvalidOperationException]::new('The selected subscription must belong to the published General test pool.')
+              }
+          }
+          else {
+              $subscription = [guid]::Empty
+              if (-not [guid]::TryParseExact($subOverride, 'D', [ref]$subscription) -or $subscription -eq [guid]::Empty) {
+                  throw [System.ArgumentException]::new('ARM_SUBSCRIPTION_ID_OVERRIDE must be a nonempty subscription GUID.')
+              }
           }
           $combined['TEST_SUBSCRIPTION_IDS'] = $env:SUBSCRIPTION_IDS
 

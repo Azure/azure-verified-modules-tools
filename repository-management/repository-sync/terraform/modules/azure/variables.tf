@@ -72,15 +72,17 @@ variable "existing_identity" {
 
 variable "github_workflow_ref" {
   type        = string
-  description = "Optional top-level caller workflow binding in addition to the reusable job workflow."
+  description = "Optional exact trusted-main caller in this repository, matched by bounded repository and complete workflow-path subject clauses."
   default     = null
 
   validation {
     condition = var.github_workflow_ref == null ? true : (
-      can(regex("^[^/\\s@]+/[^/\\s@]+/\\.github/workflows/[^/\\s@]+\\.ya?ml@refs/heads/main$", var.github_workflow_ref)) &&
-      length("*:workflow_ref:${var.github_workflow_ref}") <= 128
+      can(regex("^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+/\\.github/workflows/[A-Za-z0-9][A-Za-z0-9_.-]*\\.ya?ml@refs/heads/main$", var.github_workflow_ref)) &&
+      startswith(var.github_workflow_ref, "${var.github_repository_owner}/${var.github_repository_name}/.github/workflows/") &&
+      length("*:workflow_ref:${split("/.github/workflows/", var.github_workflow_ref)[0]}/.github/workflows/*") <= 128 &&
+      length("*:workflow_ref:*/.github/workflows/${try(split("/.github/workflows/", var.github_workflow_ref)[1], "")}") <= 128
     )
-    error_message = "The caller workflow must be a fully qualified trusted-main workflow ref whose claims expression comparand is at most 128 characters."
+    error_message = "The caller workflow must be an exact fully qualified trusted-main workflow in this repository; each subject comparand must be at most 128 characters."
   }
 }
 

@@ -148,7 +148,7 @@ identity replacement changes client IDs and invalidates the old federation.
 
 Registry and Tools use `include_claim_keys` in this order:
 `repository_owner_id`, `repository_id`, `context`. Neither workflow claim is
-included. The producer adds one `<identity>-registry-avm-validation` credential
+included. The producer adds one `<identity>-fic-r-avm-validation` credential
 per module for the registry's current subject:
 
 ```text
@@ -156,9 +156,10 @@ repository_owner_id:{Azure ID}:repository_id:{registry ID}:environment:avm-valid
 ```
 
 The issuer remains `https://token.actions.githubusercontent.com`, and the sole
-audience is `api://AzureADTokenExchange`. This uses the existing federation API;
-no flexible credential, GitHub subject change or tools-SHA-bound credential is
-needed. Future workflow restrictions are a separate change.
+audience is `api://AzureADTokenExchange`. The flexible credential matches this
+exact subject plus the immutable owner and repository IDs; it needs no GitHub
+subject change or tools-SHA-bound credential. Future workflow restrictions are
+a separate change.
 
 The same registry subject is accepted by every module identity. Strict workflow
 selection of `VALIDATE_MODULE_CLIENT_IDS` is therefore a code-level control,
@@ -167,18 +168,33 @@ select the canonical root's client for both Azure CLI and PowerShell; child
 modules share that entry. Existing opt-in labels and internal-fork controls
 remain unchanged, including generic pull-request runs.
 
-The `<identity>-module-avm-validation` credential uses the flexible federation
+The `<identity>-fic-m-avm-validation` credential uses the flexible federation
 API. Its reusable workflow path comes from `bicep-config/config.json` without
 a Git ref; the `@*` pattern allows the caller's reviewed workflow pin while
 requiring that exact path:
 
 ```text
-claims['sub'] matches 'repository_owner_id:{Azure ID}:repository_id:{registry ID}:environment:avm-validation:job_workflow_ref:{configured workflow path}@*:workflow_ref:Azure/bicep-registry-modules/.github/workflows/{module.path}.yml@refs/heads/main'
+claims['sub'] matches 'repository_owner_id:{Azure ID}:repository_id:{registry ID}:environment:avm-validation:*'
+and claims['job_workflow_ref'] matches '{configured workflow path}@*'
+and claims['sub'] matches '*:workflow_ref:Azure/bicep-registry-modules/.github/workflows/*'
+and claims['sub'] matches '*:workflow_ref:*/.github/workflows/{module.path}.yml@refs/heads/main'
 and claims['repository_id'] eq '{registry ID}'
 and claims['repository_owner_id'] eq '{Azure ID}'
 ```
 
-The distinct `<identity>-avm-validation` credential still binds the Tools
+Every comparand remains within 128 characters. GitHub's caller `workflow_ref`
+has one repository followed by `.github/workflows/<filename>@<ref>`; workflow
+files cannot be nested below that directory. Both caller clauses must match
+the same final subject field: the first fixes the repository and directory,
+and the second fixes the complete filename and trusted `main` ref. Together
+they do not wildcard the caller filename. Inputs reject nested paths, wildcard
+filenames, other repositories and non-main caller refs. The separate immutable
+ID clauses remain mandatory. GitHub `workflow_ref` itself is not an
+[FFL-supported claim](https://learn.microsoft.com/entra/workload-id/workload-identities-flexible-federated-identity-credentials#issuer-urls-supported-claims-and-operators-by-platform),
+so caller matching stays in the customized subject instead of an unsupported
+raw-claim comparison.
+
+The distinct `<identity>-fic-v-avm-validation` credential still binds the Tools
 repository ID, not the registry, and cannot substitute for registry
 authentication. The producer leaves `VALIDATE_CLIENT_ID`, the shared
 `id-avm-bicep` identity, its federation and permissions untouched.
