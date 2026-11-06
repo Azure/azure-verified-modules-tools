@@ -23,6 +23,7 @@ function Get-AvmBicepResourceLocation {
     $unavailable = @($UnavailableRegions | ForEach-Object { ($_ -replace '\s', '').ToLowerInvariant() })
     $excluded = @($ExcludedRegions | ForEach-Object { ($_ -replace '\s', '').ToLowerInvariant() }) + $unavailable
     $allowed = @($AllowedRegions | ForEach-Object { ($_ -replace '\s', '').ToLowerInvariant() })
+    $candidates = @($allowed | Where-Object { $_ -notin $excluded -and -not [string]::IsNullOrWhiteSpace($_) })
     if (-not [string]::IsNullOrWhiteSpace($ResourceType)) {
         if (-not (Test-AvmMetadataResourceType -CanonicalType $ResourceType)) {
             throw [AvmConfigurationException]::new('Automatic resource location selection requires a canonical ARM resource type.')
@@ -63,36 +64,34 @@ function Get-AvmBicepResourceLocation {
                     "No location metadata was returned for '$ResourceType'; supply an explicit resource location.")
             }
         }
-        if ($providerLocations.Count -eq 0 -or
-            ($providerLocations.Count -eq 1 -and $providerLocations[0] -eq 'global')) {
+        if ($providerLocations.Count -eq 1 -and $providerLocations[0] -eq 'global') {
             $location = ($MetadataLocation -replace '\s', '').ToLowerInvariant()
             if ([string]::IsNullOrWhiteSpace($location) -or $location -in $unavailable) {
                 throw [AvmConfigurationException]::new('The global resource requires a metadata location that has not failed validation.')
             }
             return [pscustomobject]@{ Location = $location; IsGlobal = $true }
         }
-        $locations = Invoke-AvmBicepRead -Activity 'Read Azure location metadata' -Read {
-            Get-AzLocation -ErrorAction Stop
-        }
-        $candidates = @(
-            foreach ($entry in $locations) {
-                $location = [string](Get-AvmPropertyValue -InputObject $entry -Name 'Location')
-                $displayName = [string](Get-AvmPropertyValue -InputObject $entry -Name 'DisplayName')
-                $pairedRegion = Get-AvmPropertyValue -InputObject $entry -Name 'PairedRegion'
-                $category = Get-AvmPropertyValue -InputObject $entry -Name 'RegionCategory'
-                $location = ($location -replace '\s', '').ToLowerInvariant()
-                if (($location -in $providerLocations -or
-                        ($displayName -replace '\s', '').ToLowerInvariant() -in $providerLocations) -and
-                    $location -in $allowed -and $location -notin $excluded -and
-                    $null -ne $pairedRegion -and "$pairedRegion" -ne '{}' -and
-                    "$pairedRegion".Length -gt 0 -and $category -eq 'Recommended') {
-                    $location
-                }
+        if ($providerLocations.Count -gt 0) {
+            $locations = Invoke-AvmBicepRead -Activity 'Read Azure location metadata' -Read {
+                Get-AzLocation -ErrorAction Stop
             }
-        )
-    }
-    else {
-        $candidates = @($allowed | Where-Object { $_ -notin $excluded -and -not [string]::IsNullOrWhiteSpace($_) })
+            $candidates = @(
+                foreach ($entry in $locations) {
+                    $location = [string](Get-AvmPropertyValue -InputObject $entry -Name 'Location')
+                    $displayName = [string](Get-AvmPropertyValue -InputObject $entry -Name 'DisplayName')
+                    $pairedRegion = Get-AvmPropertyValue -InputObject $entry -Name 'PairedRegion'
+                    $category = Get-AvmPropertyValue -InputObject $entry -Name 'RegionCategory'
+                    $location = ($location -replace '\s', '').ToLowerInvariant()
+                    if (($location -in $providerLocations -or
+                            ($displayName -replace '\s', '').ToLowerInvariant() -in $providerLocations) -and
+                        $location -in $allowed -and $location -notin $excluded -and
+                        $null -ne $pairedRegion -and "$pairedRegion" -ne '{}' -and
+                        "$pairedRegion".Length -gt 0 -and $category -eq 'Recommended') {
+                        $location
+                    }
+                }
+            )
+        }
     }
     $candidates = @($candidates | Sort-Object -Unique)
     if ($candidates.Count -eq 0) {
