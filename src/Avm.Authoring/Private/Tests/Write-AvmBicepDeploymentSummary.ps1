@@ -14,7 +14,7 @@ function Write-AvmBicepDeploymentSummary {
     $profileOptions = @{}
     if ($PSBoundParameters.ContainsKey('DefaultProfile')) { $profileOptions.DefaultProfile = $DefaultProfile }
     try {
-        $response = Invoke-AvmBicepRead -Activity 'Read final deployment summary' -Read {
+        $response = Invoke-AvmBicepRead -Activity 'Read final deployment summary' -RetryAuthorizationPropagation -Read {
             Invoke-AzRestMethod -Method GET -Path ($DeploymentId + '?api-version=2021-04-01') @profileOptions -ErrorAction Stop
         }
         $document = ConvertFrom-AvmBicepRestResponse -Response $response -Activity 'Read final deployment summary'

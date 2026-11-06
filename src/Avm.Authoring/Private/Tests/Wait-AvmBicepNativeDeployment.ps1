@@ -3,7 +3,7 @@ function Wait-AvmBicepNativeDeployment {
     .SYNOPSIS
         Watches one submitted deployment until it is terminal, without resubmitting it.
     .DESCRIPTION
-        Used after a request timeout, exact nested read 404 or management-group HTTP 403. Returns the
+        Used after a request timeout, transport failure, nested read 404 or HTTP 403. Returns the
         exact deployment's terminal state and outputs, or throws when its outcome
         cannot be confirmed. An explicit profile preserves the submission context.
     #>
@@ -48,7 +48,7 @@ function Wait-AvmBicepNativeDeployment {
     for ($poll = 0; $poll -lt $maximumPolls -and (Get-Date -AsUTC) -lt $deadline; $poll++) {
         $response = $null
         try {
-            $response = Invoke-AzRestMethod @request
+            $response = Invoke-AvmBicepAuthorizationRead -DeadlineUtc $deadline -Read { Invoke-AzRestMethod @request }
             $consecutiveTimeouts = 0
         }
         catch {

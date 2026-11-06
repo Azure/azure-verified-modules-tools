@@ -164,19 +164,29 @@ function New-AvmBicepNativeDeployment {
             throw
         }
         $canObserve = Test-AvmBicepRetryErrorRecord -ErrorRecord $_ -Kind MetadataTimeout
-        if (-not $submissionReturned -and $DeploymentInput.Scope -eq 'mg' -and $kind -eq 'Forbidden') { $canObserve = $true }
+        if (-not $notSubmitted -and -not $submissionReturned -and $kind -eq 'Transport') {
+            $canObserve = Test-AvmBicepRetryErrorRecord -ErrorRecord $_ -Kind SubmissionTransport
+        }
+        if (-not $notSubmitted -and -not $submissionReturned -and $DeploymentInput.Scope -in @('sub', 'mg') -and
+            $kind -eq 'Forbidden') { $canObserve = $true }
         if (-not $notSubmitted -and -not $submissionReturned -and $DeploymentInput.Scope -eq 'sub' -and $kind -eq 'Other') {
             $canObserve = Test-AvmBicepNestedDeploymentReadFailure -ErrorRecord $_ -DeploymentId $id -DefaultProfile $submissionProfile
+            if (-not $canObserve) {
+                $canObserve = Test-AvmBicepObservedNestedReadFailure -ErrorRecord $_ -DeploymentId $id `
+                    -DefaultProfile $submissionProfile -Observed $observed
+            }
         }
         if ($canObserve -and $entry['status'] -eq 'Unknown') {
             Save-AvmBicepCleanupState -State $State -Path $StatePath -Confirm:$false
-            Write-AvmLog -Level Warning -Message "Request for deployment '$name' returned $kind; watching it without resubmitting."
+            if ($kind -ne 'Forbidden' -or -not $observed.Contains('__operationsForbidden')) {
+                Write-AvmLog -Level Warning -Message "Request for deployment '$name' returned $kind; watching it without resubmitting."
+            }
             try {
                 $recovered = Wait-AvmBicepNativeDeployment -DeploymentId $id @observationOptions
                 $entry['status'] = $recovered.State
                 $failureQueryAllowed = $false
                 if ($kind -eq 'Forbidden' -and $recovered.State -ne 'Succeeded') {
-                    throw [AvmProcessException]::new("The original management-group deployment '$id' failed after HTTP 403.")
+                    throw [AvmProcessException]::new("The original deployment '$id' failed after HTTP 403.")
                 }
                 $outputs = $recovered.Outputs
                 $recoveredFailure = $recovered.State -eq 'Failed'

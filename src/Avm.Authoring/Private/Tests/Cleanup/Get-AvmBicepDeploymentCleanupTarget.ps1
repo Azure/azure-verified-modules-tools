@@ -74,7 +74,7 @@ function Get-AvmBicepDeploymentCleanupTarget {
                     if (-not $visitedPages.Add($nextPath) -or $visitedPages.Count -gt 1000) {
                         throw [AvmProcessException]::new("Repeated or excessive deployment operations page: $nextPath")
                     }
-                    $response = Invoke-AvmBicepRead -Activity 'Read cleanup operation page' -Read {
+                    $response = Invoke-AvmBicepRead -Activity 'Read cleanup operation page' -RetryAuthorizationPropagation -Read {
                         Invoke-AzRestMethod -Method GET -Path $nextPath -ErrorAction Stop
                     }
                     $document = ConvertFrom-AvmBicepRestResponse -Response $response -Activity 'Read cleanup operation page' `

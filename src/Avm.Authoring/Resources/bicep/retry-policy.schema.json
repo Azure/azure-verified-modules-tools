@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "limits", "modes", "reads", "observation", "regions", "wrappers", "rules"],
+  "required": ["schemaVersion", "limits", "modes", "reads", "authorizationPropagation", "nestedRead", "observation", "regions", "wrappers", "rules"],
   "properties": {
     "schemaVersion": { "const": 1 },
     "modes": {
@@ -33,6 +33,31 @@
       "properties": {
         "attempts": { "type": "integer", "minimum": 1, "maximum": 3 },
         "initialDelaySeconds": { "type": "integer", "minimum": 0, "maximum": 60 }
+      }
+    },
+    "authorizationPropagation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["attempts", "timeoutSeconds", "pollIntervalSeconds", "statusCode", "errorCode", "nonRetryableCategories"],
+      "properties": {
+        "attempts": { "type": "integer", "minimum": 1, "maximum": 12 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 60 },
+        "pollIntervalSeconds": { "type": "integer", "minimum": 1, "maximum": 60 },
+        "statusCode": { "type": "integer", "minimum": 403, "maximum": 499 },
+        "errorCode": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,199}$" },
+        "nonRetryableCategories": {
+          "type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true,
+          "items": { "enum": ["AuthenticationError", "SecurityError"] }
+        }
+      }
+    },
+    "nestedRead": {
+      "type": "object", "additionalProperties": false, "required": ["messagePattern", "nonRetryableCategories"],
+      "properties": {
+        "messagePattern": { "$ref": "#/definitions/pattern" },
+        "nonRetryableCategories": {
+          "type": "array", "minItems": 3, "maxItems": 3, "uniqueItems": true,
+          "items": { "enum": ["AuthenticationError", "PermissionDenied", "SecurityError"] }
+        }
       }
     },
     "observation": {

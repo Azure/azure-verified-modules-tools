@@ -123,7 +123,7 @@ function Invoke-AvmBicepCleanup {
                 $group = Invoke-AvmBicepAzureContext -SubscriptionId $groupSubscription -TenantId $TenantId -ScriptBlock {
                     Invoke-AvmBicepCleanupLookup -Command 'Get-AzResourceGroup' -Parameters @{
                         Name = $owned['id'].Split('/')[-1]
-                    }
+                    } -RetryAuthorizationPropagation
                 } -Confirm:$false
                 if ($null -ne $group) {
                     $actualId = Get-AvmPropertyValue -InputObject $group -Name 'ResourceId'

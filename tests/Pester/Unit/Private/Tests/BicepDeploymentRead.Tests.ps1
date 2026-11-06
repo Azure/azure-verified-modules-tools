@@ -57,6 +57,28 @@ Describe 'Bicep native nested deployment read evidence' {
         }
     }
 
+    It 'recognizes structured nested GET404 evidence promoted in a thread job' {
+        $job = Start-ThreadJob -ArgumentList $script:failure.Exception -ScriptBlock {
+            param($failure)
+            Write-Error -Exception $failure -ErrorAction Stop
+        }
+        try {
+            $null = Wait-Job -Job $job
+            $threadFailure = $null
+            try { Receive-Job -Job $job -ErrorAction Stop }
+            catch { $threadFailure = $_ }
+            $threadFailure | Should -Not -BeNullOrEmpty
+            InModuleScope Avm.Authoring -Parameters @{ Record = $threadFailure; Root = $script:root; Profile = $script:profile } {
+                param($Record, $Root, $Profile)
+                Test-AvmBicepNestedDeploymentReadFailure -ErrorRecord $Record -DeploymentId $Root -DefaultProfile $Profile |
+                    Should -BeTrue
+            }
+        }
+        finally {
+            Remove-Job -Job $job -Force
+        }
+    }
+
     It 'rejects unsafe or ambiguous nested read evidence: <Invalid>' -ForEach @(
         @{ Invalid = 'foreign subscription' }, @{ Invalid = 'foreign profile' }, @{ Invalid = 'same root name' }
         @{ Invalid = 'foreign authority' }, @{ Invalid = 'HTTP' }, @{ Invalid = 'userinfo' }, @{ Invalid = 'fragment' }
@@ -114,6 +136,104 @@ Describe 'Bicep native nested deployment read evidence' {
             param($Record, $Root, $Profile)
             Test-AvmBicepNestedDeploymentReadFailure -ErrorRecord $Record -DeploymentId $Root -DefaultProfile $Profile |
                 Should -BeFalse
+        }
+    }
+}
+
+Describe 'Bicep observed nested read evidence' {
+    BeforeEach {
+        InModuleScope Avm.Authoring {
+            $script:root = '/subscriptions/00000000-0000-0000-0000-000000000001/providers/Microsoft.Resources/deployments/root'
+            $script:child = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Resources/deployments/module'
+            $script:profile = @{ Subscription = @{ Id = '00000000-0000-0000-0000-000000000001' } }
+            $script:observed = @{
+                ('resource:' + $script:child) = @{ Id = $script:child; Type = 'Microsoft.Resources/deployments' }
+            }
+            $script:message = "Deployment 'module' could not be found. StatusCode: 404 ReasonPhrase: Not Found OperationID : 977df3b0-c3a3-4d11-aeef-ec13e22668a1"
+        }
+    }
+
+    It 'recognizes a message-only 404 for one previously observed nested deployment from a thread job' {
+        InModuleScope Avm.Authoring {
+            $job = Start-ThreadJob -ArgumentList $script:message -ScriptBlock {
+                param($message)
+                Write-Error -Message $message -ErrorAction Stop
+            }
+            try {
+                $null = Wait-Job -Job $job
+                $failure = $null
+                try { Receive-Job -Job $job -ErrorAction Stop }
+                catch { $failure = $_ }
+                $failure | Should -Not -BeNullOrEmpty
+                Test-AvmBicepObservedNestedReadFailure -ErrorRecord $failure -DeploymentId $script:root `
+                    -DefaultProfile $script:profile -Observed $script:observed | Should -BeTrue
+            }
+            finally { Remove-Job -Job $job -Force }
+        }
+    }
+
+    It 'uses the configured nested message pattern and blocked categories' {
+        InModuleScope Avm.Authoring {
+            $script:retryPolicy = Get-AvmBicepRetryPolicy
+            $script:retryPolicy['nestedRead']['messagePattern'] = '\AUnavailable: (?<name>[a-z]+)\z'
+            $script:retryPolicy = Get-AvmBicepRetryPolicy -InputObject $script:retryPolicy
+            Mock Get-AvmBicepRetryPolicy { $script:retryPolicy }
+            $fault = [InvalidOperationException]::new('Unavailable: module')
+            $record = [Management.Automation.ErrorRecord]::new($fault, 'Fixture', 'InvalidResult', $null)
+            Test-AvmBicepObservedNestedReadFailure -ErrorRecord $record -DeploymentId $script:root `
+                -DefaultProfile $script:profile -Observed $script:observed | Should -BeTrue
+            $blocked = [Management.Automation.ErrorRecord]::new($fault, 'Fixture', 'PermissionDenied', $null)
+            Test-AvmBicepObservedNestedReadFailure -ErrorRecord $blocked -DeploymentId $script:root `
+                -DefaultProfile $script:profile -Observed $script:observed | Should -BeFalse
+            $previous = [InvalidOperationException]::new($script:message)
+            $previousRecord = [Management.Automation.ErrorRecord]::new($previous, 'Fixture', 'InvalidResult', $null)
+            Test-AvmBicepObservedNestedReadFailure -ErrorRecord $previousRecord -DeploymentId $script:root `
+                -DefaultProfile $script:profile -Observed $script:observed | Should -BeFalse
+            $script:retryPolicy['nestedRead']['nonRetryableCategories'] = @('InvalidResult')
+            Test-AvmBicepObservedNestedReadFailure -ErrorRecord $record -DeploymentId $script:root `
+                -DefaultProfile $script:profile -Observed $script:observed | Should -BeFalse
+        }
+    }
+
+    It 'rejects message-only evidence with <Invalid>' -ForEach @(
+        @{ Invalid = 'a different deployment' }, @{ Invalid = 'no observed child' }
+        @{ Invalid = 'another subscription' }, @{ Invalid = 'another profile' }
+        @{ Invalid = 'ambiguous children' }, @{ Invalid = 'a different status' }
+        @{ Invalid = 'an extra message' }, @{ Invalid = 'a malformed operation ID' }
+        @{ Invalid = 'a conflicting response' }, @{ Invalid = 'mixed exceptions' }
+        @{ Invalid = 'a permission category' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Invalid = $Invalid } {
+            param($Invalid)
+            $message = $script:message
+            $category = [Management.Automation.ErrorCategory]::OperationStopped
+            switch ($Invalid) {
+                'a different deployment' { $message = $message.Replace("'module'", "'other'") }
+                'no observed child' { $script:observed.Clear() }
+                'another subscription' {
+                    $other = $script:child.Replace('000000000001', '000000000003')
+                    $script:observed = @{ ('resource:' + $other) = @{ Id = $other; Type = 'Microsoft.Resources/deployments' } }
+                }
+                'another profile' { $script:profile.Subscription.Id = '00000000-0000-0000-0000-000000000003' }
+                'ambiguous children' {
+                    $other = $script:child.Replace('/resourceGroups/test/', '/resourceGroups/other/')
+                    $script:observed['resource:' + $other] = @{ Id = $other; Type = 'Microsoft.Resources/deployments' }
+                }
+                'a different status' { $message = $message.Replace('404', '403') }
+                'an extra message' { $message += ' Authorization failed.' }
+                'a malformed operation ID' { $message = $message.Replace('977df3b0-c3a3-4d11-aeef-ec13e22668a1', 'invalid') }
+                'a permission category' { $category = [Management.Automation.ErrorCategory]::PermissionDenied }
+            }
+            $fault = [InvalidOperationException]::new($message)
+            if ($Invalid -eq 'a conflicting response') {
+                $fault | Add-Member -NotePropertyName Response -NotePropertyValue @{ StatusCode = 403 }
+            }
+            if ($Invalid -eq 'mixed exceptions') {
+                $fault = [AggregateException]::new([Exception[]]@($fault, [InvalidOperationException]::new('Other failure.')))
+            }
+            $record = [Management.Automation.ErrorRecord]::new($fault, 'Fixture', $category, $null)
+            Test-AvmBicepObservedNestedReadFailure -ErrorRecord $record -DeploymentId $script:root `
+                -DefaultProfile $script:profile -Observed $script:observed | Should -BeFalse
         }
     }
 }

@@ -21,7 +21,7 @@ function Assert-AvmBicepCleanupGroupOwnership {
             continue
         }
         $group = Invoke-AvmBicepCleanupLookup -Command Get-AzResourceGroup `
-            -Parameters @{ Name = $owned['id'].Split('/')[-1] }
+            -Parameters @{ Name = $owned['id'].Split('/')[-1] } -RetryAuthorizationPropagation
         if ($null -eq $group -and $RequireExisting) {
             throw [AvmConfigurationException]::new('The verified attempt-owned group is missing before submission.')
         }

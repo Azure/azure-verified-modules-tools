@@ -5,18 +5,20 @@ function Test-AvmBicepRetryErrorRecord {
         [Parameter(Mandatory)]
         [System.Management.Automation.ErrorRecord] $ErrorRecord,
 
-        [ValidateSet('Regional', 'Transient', 'MetadataTimeout')]
+        [ValidateSet('Regional', 'Transient', 'MetadataTimeout', 'SubmissionTransport')]
         [string] $Kind = 'Regional'
     )
 
     Set-StrictMode -Version 3.0
     $errorKind = Get-AvmBicepDeploymentErrorKind -ErrorRecord $ErrorRecord
     if (($Kind -eq 'MetadataTimeout' -and $errorKind -ne 'Timeout') -or
-        ($Kind -ne 'MetadataTimeout' -and $errorKind -ne 'Other')) {
+        ($Kind -eq 'SubmissionTransport' -and $errorKind -ne 'Transport') -or
+        ($Kind -in @('Regional', 'Transient') -and $errorKind -ne 'Other')) {
         return $false
     }
     $pending = [System.Collections.Generic.Queue[object]]::new()
     $visited = [System.Collections.Generic.HashSet[object]]::new()
+    $hasTransport = $false
     $pending.Enqueue($ErrorRecord)
     while ($pending.Count -gt 0) {
         $item = $pending.Dequeue()
@@ -24,7 +26,8 @@ function Test-AvmBicepRetryErrorRecord {
         if ($visited.Count -gt 100) { return $false }
         if ($item -is [System.Management.Automation.ErrorRecord]) {
             if ($item.CategoryInfo.Category -in @('AuthenticationError', 'PermissionDenied', 'SecurityError') -or
-                ($item -eq $ErrorRecord -and $Kind -ne 'MetadataTimeout' -and $item.CategoryInfo.Category -eq 'OperationStopped')) {
+                ($item -eq $ErrorRecord -and $Kind -in @('Regional', 'Transient') -and
+                $item.CategoryInfo.Category -eq 'OperationStopped')) {
                 return $false
             }
             $pending.Enqueue($item.Exception)
@@ -35,6 +38,13 @@ function Test-AvmBicepRetryErrorRecord {
             $item -is [System.Security.SecurityException] -or
             $item -is [System.Management.Automation.PipelineStoppedException]) {
             return $false
+        }
+        if ($Kind -eq 'SubmissionTransport') {
+            if ($item -is [System.Net.Http.HttpRequestException]) { $hasTransport = $true }
+            elseif ($item -isnot [System.Management.Automation.RuntimeException] -and
+                $item -isnot [System.AggregateException] -and $item -isnot [System.IO.IOException] -and
+                $item -isnot [System.Net.Sockets.SocketException]) { return $false }
+            if ($item -is [System.AggregateException] -and $item.InnerExceptions.Count -ne 1) { return $false }
         }
         $containers = @($item)
         $responseProperty = $item.PSObject.Properties['Response']
@@ -49,7 +59,7 @@ function Test-AvmBicepRetryErrorRecord {
                 $status = $property.Value
             }
             if ($null -eq $status) { continue }
-            if ($Kind -eq 'MetadataTimeout') { return $false }
+            if ($Kind -in @('MetadataTimeout', 'SubmissionTransport')) { return $false }
             if ($status -isnot [int] -and $status -isnot [System.Net.HttpStatusCode]) { return $false }
             if ([int]$status -in @(401, 403)) { return $false }
             $allowed = if ($Kind -eq 'Transient') { @(400, 409, 500, 503) } else { @(400, 409, 503) }
@@ -71,5 +81,5 @@ function Test-AvmBicepRetryErrorRecord {
             $pending.Enqueue($item.ErrorRecord)
         }
     }
-    return $true
+    return $Kind -ne 'SubmissionTransport' -or $hasTransport
 }
