@@ -128,8 +128,7 @@ Describe 'State identity wiring' {
         $worker.Groups['header'].Value | Should -Match "(?m)^    if: needs.generate-matrix.result == 'success'"
         $workflow | Should -Not -Match '(?m)^    uses:'
         $worker.Groups['header'].Value | Should -Match 'include: \$\{\{ fromJson\(needs\.generate-matrix\.outputs\.matrix\) \}\}'
-        $workflow | Should -Match '(?m)^  group: repository-sync\r?$'
-        $workflow | Should -Match '(?m)^  cancel-in-progress: false\r?$'
+        $workflow | Should -Not -Match '(?m)^concurrency:'
         $dispatch = [regex]::Match($workflow, '(?ms)^  workflow_dispatch:\r?\n.*?(?=^  \S|\z)')
         $dispatch.Success | Should -BeTrue
         $planOnly = [regex]::Match($dispatch.Value, '(?ms)^      plan_only:\r?\n.*?(?=^      \S|\z)')
@@ -237,7 +236,6 @@ Describe 'State identity wiring' {
         $workflow | Should -Not -Match 'stateResourceGroupName|STORAGE_ACCOUNT_RESOURCE_GROUP_NAME'
         $workflow | Should -Not -Match '(?<![A-Z_])STORAGE_ACCOUNT_(CONTAINER_)?NAME'
         $workflow | Should -Not -Match 'ARM_BACKEND_ENVIRONMENT_VARIABLE_SUFFIX|ARM_OIDC_TOKEN:'
-        $workflow | Should -Match '(?m)^  cancel-in-progress: false\r?$'
         $workflow | Should -Not -Match 'AVM_SYNC_PAUSED'
     }
 
@@ -245,6 +243,8 @@ Describe 'State identity wiring' {
         $workflow = Get-Content -LiteralPath (Join-Path $script:repoRoot (
             '.github/workflows/repository-management-sync.yml'
         )) -Raw
+        $workflow | Should -Not -Match '(?m)^concurrency:'
+        ([regex]::Matches($workflow, '(?m)^\s*concurrency:')).Count | Should -Be 1
         $worker = [regex]::Match($workflow, '(?ms)^  sync-repository:.*?(?=^  [a-z][a-z0-9-]+:|\z)').Value
         $concurrency = [regex]::Match($worker, '(?ms)^    concurrency:\r?\n(?<settings>.*?)(?=^    \S|\z)')
         $concurrency.Success | Should -BeTrue

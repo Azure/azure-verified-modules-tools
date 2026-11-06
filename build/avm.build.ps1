@@ -12,7 +12,7 @@
       test        - Run Pester unit tests (excludes Component and Integration).
                     By default this tier shards across up to 6 pwsh child
                     processes. Set AVM_UNIT_SHARD_COUNT to override.
-      coverage    - Run unit and component tests with coverage; fails below the spec §18 floor.
+      coverage    - Run unit and component tests with coverage; fails below the configured line-coverage floor.
       test-workflows - Run workflow-definition and bootstrap tests.
       component   - Run Pester tests under tests/Pester/Component/ (real FS + real subprocess, stub binaries, no network).
                     By default this tier shards across up to 6 pwsh child

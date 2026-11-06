@@ -44,10 +44,6 @@ permissions:
   id-token: write
   contents: read
 
-concurrency:
-  group: repository-sync
-  cancel-in-progress: false
-
 jobs:
   generate-matrix:
     name: Generate matrix
