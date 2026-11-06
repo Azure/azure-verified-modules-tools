@@ -502,7 +502,7 @@ The lock schema accepts an optional `platformAliases` map for tools whose releas
 
 ## Tool cache layout
 
-Installed tools live under `<Data>/tools/` (resolved by `Get-AvmFolder -Kind Tools` per `docs/quality-spec.md` §10):
+Installed tools live under `<Data>/tools/` (resolved by `Get-AvmFolder -Kind Tools`):
 
 ```
 <Data>/tools/<name>/
