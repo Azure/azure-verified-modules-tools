@@ -66,6 +66,28 @@ executable-toolchain change before running commands with privileged access.
 After loading an overridden PowerShell module, use a fresh PowerShell session
 when returning to the default version.
 
+## CI diagnostics
+
+AVM logs use plain text by default in GitHub Actions. The reusable Terraform
+workflow also disables forced terminal colour and limits the full secrets and
+variables contexts to the environment-preparation steps, rather than attaching
+them to every step. GitHub still renders and masks those necessary step inputs;
+the tooling does not print the context payloads.
+
+Failed gauntlet steps narrate the error headline. The final result, workflow
+annotation, step summary and typed exception retain the diagnostic, while the
+terminating PowerShell error shows only the command summary instead of replaying
+the entire failure again. Local interactive colour and explicit `CLICOLOR_FORCE`
+remain available; `NO_COLOR` takes precedence.
+
+PR checks and integration pair the selected General test subscription with the
+standard `ARM_CLIENT_ID` and `ARM_TENANT_ID`; `ARM_*_OVERRIDE` inputs apply only
+to e2e. A provider's explicit subscription or `TF_VAR_*` input can select a
+different target. `InvalidAuthenticationTokenTenant` is an identity/target
+mismatch, not a logging failure: check those inputs and the configured pool
+without switching accounts or granting access. Updating the reusable workflow
+ref does not update a separately pinned Gallery authoring runtime.
+
 ## Verify the signature
 
 Every `.ps1`, `.psm1` and `.psd1` in a released build is Authenticode-signed by Microsoft. To check what you installed:

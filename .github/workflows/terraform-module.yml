@@ -59,16 +59,11 @@ permissions:
   contents: read
 
 env:
-  # Exposed to the "Prepare test environment" step, which fans these out into
-  # $GITHUB_ENV. Requires the caller to invoke this workflow with
-  # `secrets: inherit`.
-  SECRETS_CONTEXT: ${{ toJson(secrets) }}
-  VARS_CONTEXT: ${{ toJson(vars) }}
   # terraform automation defaults (parity with the governance template).
   ARM_USE_OIDC: 'true'
   TF_IN_AUTOMATION: '1'
   TF_VAR_enable_telemetry: 'false'
-  FORCE_COLOR: '1'
+  NO_COLOR: '1'
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
@@ -321,6 +316,8 @@ jobs:
         id: test-environment
         shell: pwsh
         env:
+          SECRETS_CONTEXT: ${{ toJson(secrets) }}
+          VARS_CONTEXT: ${{ toJson(vars) }}
           SELECTED_SUBSCRIPTION_ID: ${{ steps.pick.outputs.subscriptionId }}
           SUBSCRIPTION_IDS: ${{ steps.pick.outputs.subscriptionIds }}
         run: &prepare-standard-test-environment |
@@ -435,6 +432,8 @@ jobs:
         id: test-environment
         shell: pwsh
         env:
+          SECRETS_CONTEXT: ${{ toJson(secrets) }}
+          VARS_CONTEXT: ${{ toJson(vars) }}
           SELECTED_SUBSCRIPTION_ID: ${{ steps.pick.outputs.subscriptionId }}
           SUBSCRIPTION_IDS: ${{ steps.pick.outputs.subscriptionIds }}
         run: *prepare-standard-test-environment
@@ -595,6 +594,8 @@ jobs:
         id: test-environment
         shell: pwsh
         env:
+          SECRETS_CONTEXT: ${{ toJson(secrets) }}
+          VARS_CONTEXT: ${{ toJson(vars) }}
           SELECTED_SUBSCRIPTION_ID: ${{ steps.leg.outputs.subscriptionId }}
           SUBSCRIPTION_IDS: ${{ steps.leg.outputs.subscriptionIds }}
         run: |

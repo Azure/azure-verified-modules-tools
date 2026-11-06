@@ -556,7 +556,7 @@ Describe 'Invoke-Avm clean failure reporting (F24)' {
     It 'renders a one-line failure summary without a source-line stack trace' {
         $result = Invoke-AvmChildVerb -Mode File -Body "[pscustomobject]@{ Status = 'fail' }"
         $result.ExitCode | Should -Not -Be 0
-        $result.Output | Should -Match "reported Status 'fail'"
+        $result.Output | Should -Match 'avm spec-verb failed \(fail\)\.'
         $result.Output | Should -Not -Match 'Invoke-Avm\.ps1:\d+'
         $result.Output | Should -Not -Match '~~~~'
     }
@@ -567,7 +567,7 @@ Describe 'Invoke-Avm clean failure reporting (F24)' {
         # F47: the positive anchor is load-bearing. Without it the negative below
         # passes on an empty capture, so a tool that failed while printing nothing
         # would satisfy the only assertion guarding the failure summary.
-        $result.Output | Should -Match "reported Status 'error'"
+        $result.Output | Should -Match 'avm spec-verb failed \(error\)\.'
         $result.Output | Should -Not -Match 'Invoke-Avm\.ps1:\d+'
     }
 }

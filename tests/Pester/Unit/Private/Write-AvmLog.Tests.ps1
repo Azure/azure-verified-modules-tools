@@ -175,25 +175,25 @@ Describe 'Write-AvmLog' {
             @($messages) | Should -Contain '::error::it broke'
         }
 
-        It 'renders Fail in red without creating an error annotation' {
+        It 'renders Fail as plain text without creating an error annotation' {
             $messages = InModuleScope 'Avm.Authoring' {
                 $captured = @()
                 Write-AvmLog 'check failed' -Level Fail -InformationVariable captured
                 @($captured | ForEach-Object { [string]$_.MessageData })
             }
-            $escape = [char]27
-            @($messages) | Should -Contain "$escape[31mcheck failed$escape[0m"
+            @($messages) | Should -Contain 'check failed'
+            ($messages -join "`n") | Should -Not -Match ([string][char]27)
             @($messages | Where-Object { $_ -like '::error*' }).Count | Should -Be 0
         }
 
-        It 'uses semantic colours for ordinary log lines' {
+        It 'uses plain text for ordinary log lines without NO_COLOR' {
             $messages = InModuleScope 'Avm.Authoring' {
                 $captured = @()
                 Write-AvmLog 'passed' -Level Pass -InformationVariable captured
                 @($captured | ForEach-Object { [string]$_.MessageData })
             }
-            $escape = [char]27
-            @($messages) | Should -Contain "$escape[32mpassed$escape[0m"
+            @($messages) | Should -Contain 'passed'
+            ($messages -join "`n") | Should -Not -Match ([string][char]27)
         }
 
         It 'honours NO_COLOR for ordinary log lines' {

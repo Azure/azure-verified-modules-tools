@@ -227,6 +227,26 @@ Describe 'Terraform General subscription selection' {
         $preparation.env.SELECTED_SUBSCRIPTION_ID | Should -BeExactly ('${{ steps.' + $StepId + '.outputs.subscriptionId }}')
     }
 
+    It 'limits full contexts to environment preparation and keeps Terraform workflow output plain' {
+        $script:selectionDefinition.env.Keys | Should -Not -Contain 'SECRETS_CONTEXT'
+        $script:selectionDefinition.env.Keys | Should -Not -Contain 'VARS_CONTEXT'
+        $script:selectionDefinition.env.Keys | Should -Not -Contain 'FORCE_COLOR'
+        $script:selectionDefinition.env.NO_COLOR | Should -BeExactly '1'
+        foreach ($job in $script:selectionDefinition.jobs.Values) {
+            if (-not $job.Contains('steps')) { continue }
+            foreach ($step in $job.steps) {
+                if ($step.name -eq 'Prepare test environment') {
+                    $step.env.SECRETS_CONTEXT | Should -BeExactly '${{ toJson(secrets) }}'
+                    $step.env.VARS_CONTEXT | Should -BeExactly '${{ toJson(vars) }}'
+                }
+                elseif ($step.Contains('env')) {
+                    $step.env.Keys | Should -Not -Contain 'SECRETS_CONTEXT'
+                    $step.env.Keys | Should -Not -Contain 'VARS_CONTEXT'
+                }
+            }
+        }
+    }
+
     It 'does not use a legacy fallback for a configured pool without General subscriptions: <Tag>' -ForEach @(
         @{ Tag = 'Azure Local' }
         @{ Tag = 'Another reservation' }

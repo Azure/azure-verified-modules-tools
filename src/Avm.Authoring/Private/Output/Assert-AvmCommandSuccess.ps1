@@ -19,6 +19,9 @@ function Assert-AvmCommandSuccess {
         anchored on the failing file when the diagnostic carries a position.
         An inline-presented headline is not annotated again; its full detail
         remains in the typed exception and structured result.
+
+        The terminating ErrorRecord displays only the summary; the diagnostic
+        was already rendered and remains available on the typed exception.
     #>
     [CmdletBinding()]
     param(
@@ -74,7 +77,10 @@ function Assert-AvmCommandSuccess {
         Write-AvmLog ('  {0}' -f $detail) -Level Error @anchor
     }
 
-    . ([scriptblock]::Create('param($e) throw $e')) $exception
+    $errorRecord = [System.Management.Automation.ErrorRecord]::new(
+        $exception, $exception.Code, [System.Management.Automation.ErrorCategory]::InvalidOperation, $null)
+    $errorRecord.ErrorDetails = [System.Management.Automation.ErrorDetails]::new($summary)
+    . ([scriptblock]::Create('param($e) throw $e')) $errorRecord
 }
 
 function Assert-AvmCleanFailure {

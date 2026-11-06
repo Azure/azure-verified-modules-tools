@@ -390,7 +390,8 @@ function Invoke-AvmPrCheck {
         if ($stepStatus -in @('fail', 'error') -and -not [string]::IsNullOrWhiteSpace($stepError)) {
             # F41: narration only. Assert-AvmCommandSuccess promotes the same
             # text to the single GitHub Actions annotation for the run.
-            Write-AvmLog ('  {0}: {1}' -f $def.Name, $stepError) -Level Fail | Out-Null
+            $headline = ($stepError -split "`r?`n", 2)[0]
+            Write-AvmLog ('  {0}: {1}' -f $def.Name, $headline) -Level Fail | Out-Null
         }
 
         $steps.Add([pscustomobject][ordered]@{
