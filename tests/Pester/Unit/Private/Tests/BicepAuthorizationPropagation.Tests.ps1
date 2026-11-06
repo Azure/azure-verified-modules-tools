@@ -49,8 +49,8 @@ Describe 'Bicep authorization propagation reads' {
                 @{ StatusCode = 403; Content = '{"error":{"code":"AuthorizationFailed"}}' }
             }
             $response.StatusCode | Should -Be 403
-            $script:calls | Should -Be 12
-            Should -Invoke Start-Sleep -Exactly 11
+            $script:calls | Should -Be 61
+            Should -Invoke Start-Sleep -Exactly 60
         }
     }
 
@@ -166,8 +166,8 @@ Describe 'Bicep authorization propagation reads' {
                 throw $fault
             }
             { Invoke-AvmBicepAuthorizationRead -Read $action } | Should -Throw '*Denied*'
-            $script:calls | Should -Be 12
-            Should -Invoke Start-Sleep -Exactly 11
+            $script:calls | Should -Be 61
+            Should -Invoke Start-Sleep -Exactly 60
         }
     }
 
@@ -204,8 +204,8 @@ Describe 'Bicep authorization propagation reads' {
                 @{ StatusCode = 403; Content = '{"error":{"code":"AuthorizationFailed"}}' }
             }
             $response.StatusCode | Should -Be 403
-            $script:startTimes.Count | Should -Be 3
-            $script:startTimes[-1] | Should -BeLessThan ([datetime]::new(2026, 1, 1, 0, 1, 0, [DateTimeKind]::Utc))
+            $script:startTimes.Count | Should -Be 13
+            $script:startTimes[-1] | Should -BeLessThan ([datetime]::new(2026, 1, 1, 0, 5, 0, [DateTimeKind]::Utc))
         }
     }
 

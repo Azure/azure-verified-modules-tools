@@ -4,8 +4,8 @@
   "modes": { "InPlace": { "location": "Preserve" }, "Fresh": { "location": "NextEligible" } },
   "reads": { "attempts": 3, "initialDelaySeconds": 5 },
   "authorizationPropagation": {
-    "attempts": 12,
-    "timeoutSeconds": 60,
+    "attempts": 61,
+    "timeoutSeconds": 300,
     "pollIntervalSeconds": 5,
     "statusCode": 403,
     "errorCode": "AuthorizationFailed",

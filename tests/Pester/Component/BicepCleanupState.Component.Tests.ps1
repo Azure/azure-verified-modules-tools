@@ -512,7 +512,7 @@ Describe 'Component: Bicep cleanup state and context' -Tag Component {
             $second = Invoke-AvmBicepCleanup @parameters
             $second.Cleaned | Should -BeTrue
             (Read-AvmBicepCleanupState -Path $File).status | Should -BeExactly 'Complete'
-            Should -Invoke Invoke-AzRestMethod -Exactly 13
+            Should -Invoke Invoke-AzRestMethod -Exactly 62
             Should -Invoke Remove-AvmBicepResource -Exactly 2
         }
     }

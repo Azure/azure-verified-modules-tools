@@ -243,7 +243,7 @@ Describe 'Bicep deployment progress logging' {
             Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed -DefaultProfile $profile
             $script:rootState = 'Succeeded'
             Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed -DefaultProfile $profile
-            $expectedOperationsReads = if ($Form -eq 'response') { 12 } else { 1 }
+            $expectedOperationsReads = if ($Form -eq 'response') { 61 } else { 1 }
             Should -Invoke Invoke-AzRestMethod -Exactly $expectedOperationsReads -ParameterFilter { $Path -like '*/operations?*' }
             Should -Invoke Invoke-AzRestMethod -Exactly 3 -ParameterFilter {
                 $Path -ceq "$($script:id)?api-version=2021-04-01" -and
