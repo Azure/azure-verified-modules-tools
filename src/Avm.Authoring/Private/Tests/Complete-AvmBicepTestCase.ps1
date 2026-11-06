@@ -84,7 +84,7 @@ function Complete-AvmBicepTestCase {
             if ($succeeded) {
                 Write-AvmLog -Level Info -Message "Running post-deployment tests for '$($Item.Case.RelativeDirectory)' using the recorded deployment outputs."
                 $assertion = Invoke-AvmBicepAzureContext -SubscriptionId $SubscriptionId -TenantId $TenantId -ScriptBlock {
-                    $response = Invoke-AvmBicepRead -Activity 'Read assertion deployment outputs' -Read {
+                    $response = Invoke-AvmBicepRead -Activity 'Read assertion deployment outputs' -RetryAuthorizationPropagation -Read {
                         Invoke-AzRestMethod -Method GET -Path ($deployment['id'] + '?api-version=2021-04-01') -ErrorAction Stop
                     }
                     $document = ConvertFrom-AvmBicepRestResponse -Response $response -Activity 'Read assertion deployment outputs'

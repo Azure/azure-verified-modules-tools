@@ -9,7 +9,7 @@ function Test-AvmBicepNestedDeploymentReadFailure {
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
-    if ($ErrorRecord.CategoryInfo.Category -in @('AuthenticationError', 'PermissionDenied', 'SecurityError', 'OperationStopped') -or
+    if ($ErrorRecord.CategoryInfo.Category -in @('AuthenticationError', 'PermissionDenied', 'SecurityError') -or
         (Get-AvmBicepDeploymentErrorKind -ErrorRecord $ErrorRecord) -ne 'Other' -or
         $DeploymentId -notmatch '\A/subscriptions/(?<subscription>[0-9a-f-]{36})/providers/Microsoft\.Resources/deployments/(?<name>[a-z0-9_.()-]+)\z') {
         return $false
@@ -85,7 +85,7 @@ function Test-AvmBicepNestedDeploymentReadFailure {
         }
         $next = $exception.InnerException
         if ($exception -is [System.Management.Automation.RuntimeException] -and $null -ne $exception.ErrorRecord) {
-            if ($exception.ErrorRecord.CategoryInfo.Category -in @('AuthenticationError', 'PermissionDenied', 'SecurityError', 'OperationStopped')) {
+            if ($exception.ErrorRecord.CategoryInfo.Category -in @('AuthenticationError', 'PermissionDenied', 'SecurityError')) {
                 return $false
             }
             $recordException = $exception.ErrorRecord.Exception

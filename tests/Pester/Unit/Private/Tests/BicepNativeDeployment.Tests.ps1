@@ -201,6 +201,8 @@ Describe 'Bicep native deployment retries' {
     It 'forwards one absolute deadline through <Route> recovery' -ForEach @(
         @{ Route = 'timeout'; Scope = 'sub' }
         @{ Route = 'nested read'; Scope = 'sub' }
+        @{ Route = 'transport'; Scope = 'sub' }
+        @{ Route = 'subscription 403'; Scope = 'sub' }
         @{ Route = 'management-group 403'; Scope = 'mg' }
     ) {
         InModuleScope Avm.Authoring -Parameters @{ Route = $Route; Scope = $Scope } {
@@ -212,6 +214,7 @@ Describe 'Bicep native deployment retries' {
                 switch ($Route) {
                     'timeout' { throw [TimeoutException]::new('Original timeout.') }
                     'nested read' { throw [InvalidOperationException]::new('Original nested-read error.') }
+                    'transport' { throw [Net.Http.HttpRequestException]::new('Original transport error.') }
                     default { throw [Net.Http.HttpRequestException]::new('Original forbidden error.', $null, [Net.HttpStatusCode]::Forbidden) }
                 }
             }
@@ -271,6 +274,55 @@ Describe 'Bicep native deployment retries' {
                 'Failed' { $script:state.deployments[0].status | Should -Be 'Failed' }
                 default { $result.Outcome | Should -Be 'Unknown'; $result.ErrorKind | Should -Be 'Timeout' }
             }
+        }
+    }
+
+    It 'observes transport loss without replay when recovery is <Recovered>' -ForEach @(
+        @{ Recovered = 'Succeeded'; Outcome = 'Succeeded'; Status = 'pass' }
+        @{ Recovered = 'Failed'; Outcome = 'Failed'; Status = 'fail' }
+        @{ Recovered = 'unreadable'; Outcome = 'Unknown'; Status = 'fail' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters $_ {
+            param($Recovered, $Outcome, $Status)
+            Mock Invoke-AvmBicepNativeArmOperation { throw [Net.Http.HttpRequestException]::new('Transport failed.') }
+            Mock Wait-AvmBicepNativeDeployment {
+                if ($Recovered -eq 'unreadable') { throw [TimeoutException]::new('Recovery timed out.') }
+                @{ State = $Recovered; Outputs = @{} }
+            }
+            Mock Get-AvmBicepDeploymentRetryKind { 'None' }
+            $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' `
+                -DeploymentInput $script:inputOptions -ClassifyRetry
+            $result.Status | Should -BeExactly $Status
+            $result.Outcome | Should -BeExactly $Outcome
+            $result.RetryMode | Should -BeExactly ''
+            Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
+            Should -Invoke Wait-AvmBicepNativeDeployment -Exactly 1
+        }
+    }
+
+    It 'does not observe unsafe or mixed transport failure <Case>' -ForEach @(
+        @{ Case = 'HTTP 401' }, @{ Case = 'HTTP 500' }, @{ Case = 'mixed exception' }
+        @{ Case = 'authentication' }, @{ Case = 'unclassified' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Case = $Case } {
+            param($Case)
+            Mock Invoke-AvmBicepNativeArmOperation {
+                $failure = switch ($Case) {
+                    'HTTP 401' { [Net.Http.HttpRequestException]::new('Denied.', $null, [Net.HttpStatusCode]::Unauthorized) }
+                    'HTTP 500' { [Net.Http.HttpRequestException]::new('Server failure.', $null, [Net.HttpStatusCode]::InternalServerError) }
+                    'mixed exception' { [AggregateException]::new([Exception[]]@([Net.Http.HttpRequestException]::new('Transport.'), [InvalidOperationException]::new('Other.'))) }
+                    'authentication' { [Net.Http.HttpRequestException]::new('Transport.', [Security.Authentication.AuthenticationException]::new('Denied.')) }
+                    default { [InvalidOperationException]::new('Transport failed.') }
+                }
+                throw $failure
+            }
+            Mock Wait-AvmBicepNativeDeployment { throw 'Unexpected observation.' }
+            Mock Write-AvmBicepDeploymentDiagnostic { '' }
+            $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'state.json' -DeploymentInput $script:inputOptions
+            $result.Status | Should -BeExactly 'fail'
+            $result.Outcome | Should -BeExactly 'Unknown'
+            Should -Invoke Wait-AvmBicepNativeDeployment -Exactly 0
+            Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
         }
     }
 
@@ -583,7 +635,7 @@ Describe 'Bicep native deployment retries' {
         }
 
         It 'does not extend HTTP 403 observation to <Scope> submissions' -ForEach @(
-            @{ Scope = 'group' }, @{ Scope = 'sub' }, @{ Scope = 'tenant' }
+            @{ Scope = 'group' }, @{ Scope = 'tenant' }
         ) {
             InModuleScope Avm.Authoring -Parameters @{ Scope = $Scope } {
                 param($Scope)
@@ -595,6 +647,30 @@ Describe 'Bicep native deployment retries' {
                 Should -Invoke Get-AzContext -Exactly $(if ($Scope -eq 'sub') { 1 } else { 0 })
                 Should -Invoke Invoke-AzRestMethod -Exactly 0
                 Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
+            }
+        }
+
+        It 'observes subscription HTTP 403 without replay when recovery is <Recovery>' -ForEach @(
+            @{ Recovery = 'Succeeded'; Outcome = 'Succeeded'; Status = 'pass' }
+            @{ Recovery = 'Failed'; Outcome = 'Failed'; Status = 'fail' }
+            @{ Recovery = 'missing'; Outcome = 'Unknown'; Status = 'fail' }
+            @{ Recovery = 'forbidden'; Outcome = 'Unknown'; Status = 'fail' }
+        ) {
+            InModuleScope Avm.Authoring -Parameters $_ {
+                param($Recovery, $Outcome, $Status)
+                $script:inputOptions.Scope = 'sub'
+                $script:recoveryMode = $Recovery
+                $result = New-AvmBicepNativeDeployment -State $script:state -StatePath state.json `
+                    -DeploymentInput $script:inputOptions -ClassifyRetry
+                $result.Status | Should -BeExactly $Status
+                $result.Outcome | Should -BeExactly $Outcome
+                $result.RetryMode | Should -BeExactly ''
+                Should -Invoke Invoke-AvmBicepNativeArmOperation -Exactly 1
+                Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter {
+                    $Path -ceq "$($result.DeploymentId)?api-version=2021-04-01" -and
+                    [object]::ReferenceEquals($DefaultProfile, $script:submittedProfile)
+                }
+                Should -Invoke Get-AvmBicepDeploymentRetryKind -Exactly 0
             }
         }
 

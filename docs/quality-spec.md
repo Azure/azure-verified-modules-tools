@@ -1661,6 +1661,12 @@ message-only failure disqualifies the read retry. Traverse both inner exceptions
 and distinct RuntimeException error-record causes. This exception to the normal
 Azure SDK retry boundary does not change shared retry defaults or apply to
 mutations.
+For explicitly identified, run-submitted deployments and run-owned group
+lookups only, retry a read-only 403 with structured `AuthorizationFailed`
+evidence for at most 12 attempts and 60 seconds, respecting an earlier recovery
+deadline. Do not retry other authorization failures or general Azure reads.
+Exhaustion preserves the original response or error; incomplete discovery
+still blocks cleanup and retains state. Never retry a mutation.
 
 Regional evidence includes the registry's captured small Linux container-group
 capacity message, wrapped ML/Cosmos high-demand response, AKS preflight
@@ -1688,7 +1694,10 @@ deployment ID. Deployment retries require an exact Failed root and complete
 eligible operation evidence, not preflight rejection alone. A submission
 timeout watches the same deployment
 under one absolute UTC deadline shared by every attempt and recovery route
-in the case. `observation.coordinatorTimeoutSeconds` defaults to four hours
+in the case. A submission-side typed transport failure without an HTTP status,
+authentication, cancellation or unrelated causes also watches the same
+deployment; transport evidence alone never permits resubmission.
+`observation.coordinatorTimeoutSeconds` defaults to four hours
 and can only be lowered. Do not reset the deadline on a fresh/in-place attempt,
 start another status read at/after it, or accept a terminal result returned
 at/after it. Clamp the final sleep to the fractional time remaining.
@@ -1708,10 +1717,14 @@ before recording an attempt and use that profile for submission and status reads
 At subscription scope, an exact SDK nested-operation GET 404 may also observe
 the original root: require matching request, typed HTTP status, SDK body and
 strict JSON evidence for a different deployment in the same subscription and
-original cloud authority. It never authorizes another submission itself.
+original cloud authority. If structured evidence is absent, the exact
+message-only nested 404 can observe the original root only when the named
+child was already observed as a unique deployment in that same subscription
+and no conflicting failure evidence is present. Neither path authorizes
+another submission itself or weakens cleanup discovery.
 Only separately confirmed Failed state and eligible operation evidence can
 permit retry after recovery; successful recovery never enters classification.
-For management-group submissions, an actual typed HTTP 403 may only observe
+For subscription and management-group submissions, an actual typed HTTP 403 may only observe
 that same deployment within the
 existing recovery budget: success requires its exact ID, scalar state and
 valid outputs. Failed, missing, malformed or unreadable recovery never permits
@@ -1748,7 +1761,14 @@ fails before invocation retains its earlier failed deployment record. Once
 invocation may have begun, its outcome remains ambiguous until Azure confirms
 otherwise. Show deduplicated resource state changes in observation order, with
 compact durations, without printing operation bodies. Treat an initial
-`DeploymentNotFound` progress response as waiting, not a warning. Bound nesting and pagination, validate nested
+`DeploymentNotFound` progress response as waiting, not a warning. If a
+previously discovered nested deployment is not yet visible, keep its parent
+progress and retry the child on the next poll. When operations reads return a
+typed HTTP 403, warn once and show the exact root deployment state instead of
+requesting operations again. This is advisory only: cleanup still requires
+operations read access for all deployment scopes and fails closed, retaining
+state, if discovery is incomplete.
+Bound nesting and pagination, validate nested
 deployment IDs and follow only the original subscription or management scope.
 Azure context selection and restoration and advisory progress reads retry a
 direct Azure operation cancellation at most three times; an exhausted progress

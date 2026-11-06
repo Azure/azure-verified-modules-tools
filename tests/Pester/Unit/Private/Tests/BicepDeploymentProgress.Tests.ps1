@@ -35,6 +35,7 @@ Describe 'Bicep deployment progress logging' {
             $script:messages = [Collections.Generic.List[string]]::new()
             $script:id = '/subscriptions/00000000-0000-0000-0000-000000000001/providers/Microsoft.Resources/deployments/root'
             Mock Write-AvmLog { $script:messages.Add($Message) }
+            Mock Start-Sleep {}
         }
 
     }
@@ -165,6 +166,103 @@ Describe 'Bicep deployment progress logging' {
             $script:stage = 'waiting'
             Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed
             ($script:messages -join ' ') | Should -Match 'progress is incomplete.*DeploymentNotFound'
+        }
+    }
+
+    It 'keeps polling the root when a nested deployment is not yet visible' {
+        InModuleScope Avm.Authoring {
+            $child = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Resources/deployments/nested'
+            $script:childReady = $false
+            Mock Invoke-AzRestMethod {
+                if ($Path -like "$child/operations?*") {
+                    if (-not $script:childReady) {
+                        return @{ StatusCode = 404; Content = '{"error":{"code":"DeploymentNotFound"}}' }
+                    }
+                    return @{ StatusCode = 200; Content = '{"value":[]}' }
+                }
+                $body = @{ value = @(@{ properties = @{ provisioningState = 'Running'; targetResource = @{
+                                    id = $child; resourceType = 'Microsoft.Resources/deployments'; resourceName = 'nested'
+                                } } }) }
+                @{ StatusCode = 200; Content = ($body | ConvertTo-Json -Depth 10 -Compress) }
+            }
+            $observed = @{}
+            Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed
+            $script:childReady = $true
+            Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed
+            Should -Invoke Invoke-AzRestMethod -Exactly 2 -ParameterFilter { $Path -like "$child/operations?*" }
+            Should -Invoke Invoke-AzRestMethod -Exactly 2 -ParameterFilter { $Path -like "$script:id/operations?*" }
+            ($script:messages -join ' ') | Should -Not -Match 'progress is incomplete'
+        }
+    }
+
+    It 'does not suppress a nested 404 with <Case>' -ForEach @(
+        @{ Case = 'another error'; Body = '{"error":{"code":"ResourceNotFound"}}' }
+        @{ Case = 'additional error details'; Body = '{"error":{"code":"DeploymentNotFound","details":[{"code":"AuthorizationFailed"}]}}' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Body = $Body } {
+            param($Body)
+            $child = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Resources/deployments/nested'
+            Mock Invoke-AzRestMethod {
+                if ($Path -like "$child/operations?*") {
+                    return @{ StatusCode = 404; Content = $Body }
+                }
+                $body = @{ value = @(@{ properties = @{ provisioningState = 'Running'; targetResource = @{
+                                    id = $child; resourceType = 'Microsoft.Resources/deployments'; resourceName = 'nested'
+                                } } }) }
+                @{ StatusCode = 200; Content = ($body | ConvertTo-Json -Depth 10 -Compress) }
+            }
+            Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed @{}
+            ($script:messages -join ' ') | Should -Match 'progress is incomplete.*HTTP 404'
+        }
+    }
+
+    It 'switches to deduplicated root status on operation 403 in <Form>' -ForEach @(
+        @{ Form = 'response' }, @{ Form = 'exception' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Form = $Form } {
+            param($Form)
+            $script:rootState = 'Running'
+            $profile = @{ Tenant = @{ Id = 'original' } }
+            Mock Invoke-AzRestMethod {
+                if ($Path -like '*/operations?*') {
+                    if ($Form -eq 'exception') {
+                        throw [Net.Http.HttpRequestException]::new('Forbidden.', $null, [Net.HttpStatusCode]::Forbidden)
+                    }
+                    return @{ StatusCode = 403; Content = '{"error":{"code":"AuthorizationFailed"}}' }
+                }
+                $body = @{ id = $script:id; properties = @{ provisioningState = $script:rootState } }
+                @{ StatusCode = 200; Content = ($body | ConvertTo-Json -Compress) }
+            }
+            $observed = @{}
+            Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed -DefaultProfile $profile
+            Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed -DefaultProfile $profile
+            $script:rootState = 'Succeeded'
+            Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed -DefaultProfile $profile
+            $expectedOperationsReads = if ($Form -eq 'response') { 12 } else { 1 }
+            Should -Invoke Invoke-AzRestMethod -Exactly $expectedOperationsReads -ParameterFilter { $Path -like '*/operations?*' }
+            Should -Invoke Invoke-AzRestMethod -Exactly 3 -ParameterFilter {
+                $Path -ceq "$($script:id)?api-version=2021-04-01" -and
+                [object]::ReferenceEquals($DefaultProfile, $profile)
+            }
+            @($script:messages | Where-Object { $_ -match 'operations are unavailable' }).Count | Should -Be 1
+            @($script:messages | Where-Object { $_ -eq 'Deployment root: Running.' }).Count | Should -Be 1
+            @($script:messages | Where-Object { $_ -eq 'Deployment root: Succeeded.' }).Count | Should -Be 1
+        }
+    }
+
+    It 'does not trust a malformed root progress response after operations 403' {
+        InModuleScope Avm.Authoring {
+            Mock Invoke-AzRestMethod {
+                if ($Path -like '*/operations?*') {
+                    return @{ StatusCode = 403; Content = '{"error":{"code":"AuthorizationFailed"}}' }
+                }
+                @{ StatusCode = 200; Content = '{"id":"/wrong","properties":{"provisioningState":"Succeeded"}}' }
+            }
+            $observed = @{}
+            Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed
+            Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed
+            @($script:messages | Where-Object { $_ -match 'Root deployment progress is incomplete' }).Count | Should -Be 1
+            ($script:messages -join ' ') | Should -Not -Match 'Deployment root: Succeeded'
         }
     }
 
@@ -454,6 +552,68 @@ Describe 'Bicep asynchronous deployment submission' {
             $pending.Pending.Count | Should -Be 0
             Should -Invoke Write-AvmBicepDeploymentDiagnostic -Exactly 1 -ParameterFilter { -not $ReadDeployment }
             Should -Invoke Write-AvmBicepDeploymentSummary -Exactly 0
+        }
+    }
+
+    It 'does not observe a transport failure before the deployment cmdlet is invoked' {
+        InModuleScope Avm.Authoring {
+            Mock Start-AvmBicepNativeDeploymentJob {
+                Start-ThreadJob -ScriptBlock { throw [Net.Http.HttpRequestException]::new('Import transport failure.') }
+            }
+            Mock Wait-AvmBicepNativeDeployment { throw 'Unexpected status observation.' }
+            $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'unused' `
+                -DeploymentInput $script:options -ShowProgress -ClassifyRetry
+            $result.Outcome | Should -BeExactly 'NotSubmitted'
+            Should -Invoke Wait-AvmBicepNativeDeployment -Exactly 0
+            Should -Invoke Start-AvmBicepNativeDeploymentJob -Exactly 1
+        }
+    }
+
+    It 'observes typed transport failure from a submitted thread job without resubmitting' {
+        InModuleScope Avm.Authoring {
+            Mock Start-AvmBicepNativeDeploymentJob {
+                $SubmissionState.Invoked = $true
+                Start-ThreadJob -ScriptBlock {
+                    $failure = [Net.Http.HttpRequestException]::new('Sending the request failed.', [IO.IOException]::new('Connection reset.'))
+                    Write-Error -Exception $failure -ErrorAction Stop
+                }
+            }
+            Mock Wait-AvmBicepNativeDeployment { @{ State = 'Succeeded'; Outputs = @{} } }
+            $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'unused' `
+                -DeploymentInput $script:options -ShowProgress -ClassifyRetry
+            $result.Outcome | Should -BeExactly 'Succeeded'
+            Should -Invoke Wait-AvmBicepNativeDeployment -Exactly 1 -ParameterFilter {
+                $DeploymentId -ceq $result.DeploymentId -and
+                $DefaultProfile.Tenant.Id -ceq '00000000-0000-0000-0000-000000000002'
+            }
+            Should -Invoke Start-AvmBicepNativeDeploymentJob -Exactly 1
+        }
+    }
+
+    It 'observes the exact root after a message-only 404 for an observed nested deployment' {
+        InModuleScope Avm.Authoring {
+            $child = "/subscriptions/$($script:state.subscriptionId)/resourceGroups/test/providers/Microsoft.Resources/deployments/module"
+            Mock Get-AzContext {
+                @{ Tenant = @{ Id = '00000000-0000-0000-0000-000000000002' }; Subscription = @{ Id = $script:state.subscriptionId } }
+            }
+            Mock Test-AvmBicepNestedDeploymentReadFailure { $false }
+            Mock Write-AvmBicepDeploymentProgress {
+                $Observed['resource:' + $child] = @{ Id = $child; Type = 'Microsoft.Resources/deployments' }
+            }
+            Mock Start-AvmBicepNativeDeploymentJob {
+                $SubmissionState.Invoked = $true
+                Start-ThreadJob -ScriptBlock {
+                    Write-Error -Message "Deployment 'module' could not be found. StatusCode: 404 ReasonPhrase: Not Found OperationID : 977df3b0-c3a3-4d11-aeef-ec13e22668a1" -ErrorAction Stop
+                }
+            }
+            Mock Wait-AvmBicepNativeDeployment { @{ State = 'Succeeded'; Outputs = @{} } }
+            $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'unused' `
+                -DeploymentInput $script:options -ShowProgress -ClassifyRetry
+            $result.Outcome | Should -BeExactly 'Succeeded'
+            Should -Invoke Wait-AvmBicepNativeDeployment -Exactly 1 -ParameterFilter {
+                $DeploymentId -ceq $result.DeploymentId -and $DefaultProfile.Subscription.Id -ceq $script:state.subscriptionId
+            }
+            Should -Invoke Start-AvmBicepNativeDeploymentJob -Exactly 1
         }
     }
 

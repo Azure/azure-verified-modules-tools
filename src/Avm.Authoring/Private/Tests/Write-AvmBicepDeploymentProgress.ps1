@@ -9,6 +9,10 @@ function Write-AvmBicepDeploymentProgress {
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
+    if ($Observed.Contains('__operationsForbidden')) {
+        Write-AvmBicepDeploymentRootProgress @PSBoundParameters
+        return
+    }
     $profileOptions = @{}
     if ($PSBoundParameters.ContainsKey('DefaultProfile')) { $profileOptions.DefaultProfile = $DefaultProfile }
     $subscription = [regex]::Match($DeploymentId, '^/subscriptions/([^/]+)/', 'IgnoreCase')
@@ -32,7 +36,7 @@ function Write-AvmBicepDeploymentProgress {
                     throw [AvmProcessException]::new('Deployment progress pagination exceeded its limit.')
                 }
                 try {
-                    $response = Invoke-AvmBicepRead -Activity 'Read deployment progress' -Read {
+                    $response = Invoke-AvmBicepRead -Activity 'Read deployment progress' -RetryAuthorizationPropagation -Read {
                         Invoke-AvmBicepAzureOperation -Activity 'Deployment progress read' -Operation {
                             Invoke-AzRestMethod -Method GET -Path $next @profileOptions -ErrorAction Stop
                         }
@@ -48,18 +52,29 @@ function Write-AvmBicepDeploymentProgress {
                     return
                 }
                 $status = Get-AvmPropertyValue -InputObject $response -Name 'StatusCode' -NoEnumerate
-                if ($current -ieq $DeploymentId -and -not $Observed.Contains('__progressStarted') -and
-                    ($status -is [int] -or $status -is [System.Net.HttpStatusCode]) -and [int]$status -eq 404) {
+                if ($response -isnot [System.Collections.IList] -and
+                    ($status -is [int] -or $status -is [System.Net.HttpStatusCode]) -and [int]$status -eq 403) {
+                    $Observed['__operationsForbidden'] = $true
+                    Write-AvmLog -Level Warning -Message 'Deployment operations are unavailable (HTTP 403); watching root deployment status instead.'
+                    Write-AvmBicepDeploymentRootProgress @PSBoundParameters
+                    return
+                }
+                if (($status -is [int] -or $status -is [System.Net.HttpStatusCode]) -and [int]$status -eq 404) {
                     $missing = ConvertFrom-AvmBicepRestResponse -Response $response `
                         -Activity 'Read deployment progress' -AllowedStatus @(404)
                     $errorBody = Get-AvmPropertyValue -InputObject $missing -Name 'error' -NoEnumerate
                     $errorCode = Get-AvmPropertyValue -InputObject $errorBody -Name 'code' -NoEnumerate
                     if ($errorCode -ceq 'DeploymentNotFound') {
-                        if (-not $Observed.Contains('__waitingForDeployment')) {
-                            Write-AvmLog -Level Info -Message 'Waiting for the deployment to start.'
-                            $Observed['__waitingForDeployment'] = 'shown'
+                        if ($current -ine $DeploymentId -and $missing.Count -eq 1 -and
+                            $errorBody -is [System.Collections.IDictionary] -and
+                            @($errorBody.Keys | Where-Object { $_ -cnotin @('code', 'message', 'target') }).Count -eq 0) { break }
+                        if (-not $Observed.Contains('__progressStarted')) {
+                            if (-not $Observed.Contains('__waitingForDeployment')) {
+                                Write-AvmLog -Level Info -Message 'Waiting for the deployment to start.'
+                                $Observed['__waitingForDeployment'] = 'shown'
+                            }
+                            return
                         }
-                        return
                     }
                 }
                 $page = ConvertFrom-AvmBicepRestResponse -Response $response -Activity 'Read deployment progress'
@@ -107,7 +122,14 @@ function Write-AvmBicepDeploymentProgress {
         }
     }
     catch {
-        if ((Get-AvmBicepDeploymentErrorKind -ErrorRecord $_) -eq 'Cancellation') { throw }
+        $kind = Get-AvmBicepDeploymentErrorKind -ErrorRecord $_
+        if ($kind -eq 'Cancellation') { throw }
+        if ($kind -eq 'Forbidden') {
+            $Observed['__operationsForbidden'] = $true
+            Write-AvmLog -Level Warning -Message 'Deployment operations are unavailable (HTTP 403); watching root deployment status instead.'
+            Write-AvmBicepDeploymentRootProgress @PSBoundParameters
+            return
+        }
         $detail = Protect-AvmBicepDiagnosticText -Text $_.Exception.Message -SensitiveValues $SensitiveValues
         if (-not $Observed.Contains('__readFailure') -or $Observed['__readFailure'] -cne $detail) {
             Write-AvmLog -Level Warning -Message "Deployment progress is incomplete: $detail"

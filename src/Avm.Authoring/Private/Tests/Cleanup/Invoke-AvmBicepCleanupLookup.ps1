@@ -7,7 +7,9 @@ function Invoke-AvmBicepCleanupLookup {
         [string] $Command,
 
         [Parameter(Mandatory)]
-        [hashtable] $Parameters
+        [hashtable] $Parameters,
+
+        [switch] $RetryAuthorizationPropagation
     )
 
     Set-StrictMode -Version 3.0
@@ -16,7 +18,12 @@ function Invoke-AvmBicepCleanupLookup {
     $inputParameters = @{} + $Parameters
     $inputParameters.ErrorAction = 'Stop'
     try {
-        & $Command @inputParameters
+        if ($RetryAuthorizationPropagation) {
+            Invoke-AvmBicepRead -Activity 'Read owned cleanup resource' -RetryAuthorizationPropagation -Read {
+                & $Command @inputParameters
+            }
+        }
+        else { & $Command @inputParameters }
     }
     catch {
         $status = Get-AvmBicepAzureErrorStatus -ErrorRecord $_

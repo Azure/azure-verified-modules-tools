@@ -23,7 +23,7 @@ function Get-AvmBicepDeploymentRetryKind {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    $response = Invoke-AvmBicepRead -Activity 'Read failed deployment state' -Read {
+    $response = Invoke-AvmBicepRead -Activity 'Read failed deployment state' -RetryAuthorizationPropagation -Read {
         Invoke-AzRestMethod -Method GET -Path ($DeploymentId + '?api-version=2021-04-01') -ErrorAction Stop
     }
     $deployment = ConvertFrom-AvmBicepRestResponse -Response $response -Activity 'Read failed deployment state'
@@ -45,7 +45,7 @@ function Get-AvmBicepDeploymentRetryKind {
         if (-not $visitedPages.Add($nextPath) -or $visitedPages.Count -gt 1000) {
             throw [AvmProcessException]::new("Deployment returned repeated or excessive operation pages: $DeploymentId")
         }
-        $page = Invoke-AvmBicepRead -Activity 'Read deployment operation page' -Read {
+        $page = Invoke-AvmBicepRead -Activity 'Read deployment operation page' -RetryAuthorizationPropagation -Read {
             Invoke-AzRestMethod -Method GET -Path $nextPath -ErrorAction Stop
         }
         $document = ConvertFrom-AvmBicepRestResponse -Response $page -Activity 'Read deployment operation page'

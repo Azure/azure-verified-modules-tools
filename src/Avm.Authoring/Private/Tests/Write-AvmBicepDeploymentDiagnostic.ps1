@@ -25,7 +25,7 @@ function Write-AvmBicepDeploymentDiagnostic {
         try {
             $profileOptions = @{}
             if ($PSBoundParameters.ContainsKey('DefaultProfile')) { $profileOptions.DefaultProfile = $DefaultProfile }
-            $response = Invoke-AvmBicepRead -Activity 'Read deployment diagnostics' -Read {
+            $response = Invoke-AvmBicepRead -Activity 'Read deployment diagnostics' -RetryAuthorizationPropagation -Read {
                 Invoke-AzRestMethod -Method GET -Path ($DeploymentId + '?api-version=2021-04-01') @profileOptions -ErrorAction Stop
             }
             $document = ConvertFrom-AvmBicepRestResponse -Response $response -Activity 'Read deployment diagnostics'
@@ -58,7 +58,7 @@ function Write-AvmBicepDeploymentDiagnostic {
                     if (-not $visited.Add($nextPath) -or $visited.Count -gt 40) {
                         throw [AvmProcessException]::new('Deployment diagnostic operation pagination exceeded its limit.')
                     }
-                    $page = Invoke-AvmBicepRead -Activity 'Read deployment diagnostic operations' -Read {
+                    $page = Invoke-AvmBicepRead -Activity 'Read deployment diagnostic operations' -RetryAuthorizationPropagation -Read {
                         Invoke-AzRestMethod -Method GET -Path $nextPath @profileOptions -ErrorAction Stop
                     }
                     $result = ConvertFrom-AvmBicepRestResponse -Response $page -Activity 'Read deployment diagnostic operations'

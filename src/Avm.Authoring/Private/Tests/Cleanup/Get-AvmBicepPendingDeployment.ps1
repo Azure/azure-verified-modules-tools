@@ -29,7 +29,7 @@ function Get-AvmBicepPendingDeployment {
             $id = $entry['id']
             if (-not $pending.ContainsKey($id)) { continue }
             try {
-                $response = Invoke-AvmBicepRead -Activity 'Read pending deployment state' -Read {
+                $response = Invoke-AvmBicepRead -Activity 'Read pending deployment state' -RetryAuthorizationPropagation -Read {
                     Invoke-AzRestMethod -Method GET -Path ($id + '?api-version=2021-04-01') -ErrorAction Stop
                 }
                 $body = ConvertFrom-AvmBicepRestResponse -Response $response -Activity 'Read pending deployment state' -AllowedStatus @(200, 404)

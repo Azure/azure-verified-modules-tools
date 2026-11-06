@@ -16,7 +16,7 @@ function Assert-AvmBicepCleanupDeploymentTerminal {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    $response = Invoke-AvmBicepRead -Activity 'Read terminal deployment history' -Read {
+    $response = Invoke-AvmBicepRead -Activity 'Read terminal deployment history' -RetryAuthorizationPropagation -Read {
         Invoke-AzRestMethod -Method GET -Path ($Record.Id + '?api-version=2021-04-01') -ErrorAction Stop
     }
     $state = ConvertFrom-AvmBicepDeploymentRecordResponse -Response $response -DeploymentId $Record.Id
