@@ -159,13 +159,17 @@ task 'test-tenant-terraform' {
                         throw [System.IO.InvalidDataException]::new('Expected one actual unified mocked apply state.')
                     }
                     $appliedResources = @(Get-AvmTerraformPlannedResource -Module $applied[0]['test_state']['root_module'])
-                    $secret = @($appliedResources | Where-Object {
-                        $_['type'] -ceq 'github_actions_secret' -and $_['values']['secret_name'] -ceq 'ARM_CLIENT_ID'
+                    $variable = @($appliedResources | Where-Object {
+                        $_['type'] -ceq 'github_actions_variable' -and $_['values']['variable_name'] -ceq 'ARM_CLIENT_ID'
+                    })
+                    $mirror = @($appliedResources | Where-Object {
+                        $_['type'] -ceq 'github_dependabot_secret' -and $_['values']['secret_name'] -ceq 'ARM_CLIENT_ID'
                     })
                     $identity = @($appliedResources | Where-Object { $_['address'] -ceq 'module.bami[0].azapi_resource.identity[0]' })
-                    if ($secret.Count -ne 1 -or $identity.Count -ne 1 -or
-                        $secret[0]['values']['value'] -cne $identity[0]['values']['output']['properties']['clientId']) {
-                        throw [System.IO.InvalidDataException]::new('The single mocked apply must publish its own execution client ID through the GitHub secret.')
+                    if ($variable.Count -ne 1 -or $mirror.Count -ne 1 -or $identity.Count -ne 1 -or
+                        $variable[0]['values']['value'] -cne $identity[0]['values']['output']['properties']['clientId'] -or
+                        $mirror[0]['values']['value'] -cne $variable[0]['values']['value']) {
+                        throw [System.IO.InvalidDataException]::new('The single mocked apply must publish its own execution client ID through the Actions variable and Dependabot secret.')
                     }
                     Write-Build Green '  unified plan passes the ownership guard; one apply resolves GitHub and identity dependencies'
                 }

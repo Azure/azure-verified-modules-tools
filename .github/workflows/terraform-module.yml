@@ -89,7 +89,7 @@ jobs:
         id: pick
         shell: pwsh
         env:
-          TEST_SUBSCRIPTION_IDS: ${{ secrets.TEST_SUBSCRIPTION_IDS }}
+          TEST_SUBSCRIPTION_IDS: ${{ vars.TEST_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS }}
           FALLBACK_SUBSCRIPTION_ID_SECRET: ${{ secrets.ARM_SUBSCRIPTION_ID }}
           FALLBACK_SUBSCRIPTION_ID_VAR: ${{ vars.ARM_SUBSCRIPTION_ID }}
         run: &select-test-subscription |
@@ -154,7 +154,7 @@ jobs:
                   $fallback = $env:FALLBACK_SUBSCRIPTION_ID_VAR
               }
               if ([string]::IsNullOrWhiteSpace($fallback)) {
-                  throw 'No test subscriptions configured. Set the TEST_SUBSCRIPTION_IDS secret (JSON array of { id, name }) or an ARM_SUBSCRIPTION_ID secret/variable.'
+                  throw 'No test subscriptions configured. Set the TEST_SUBSCRIPTION_IDS variable (JSON array of { id, name }), its legacy secret, or an ARM_SUBSCRIPTION_ID secret/variable.'
               }
               $subs = @([pscustomobject]@{ id = $fallback; name = $fallback })
           }
@@ -305,7 +305,7 @@ jobs:
         id: pick
         shell: pwsh
         env:
-          TEST_SUBSCRIPTION_IDS: ${{ secrets.TEST_SUBSCRIPTION_IDS }}
+          TEST_SUBSCRIPTION_IDS: ${{ vars.TEST_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS }}
           FALLBACK_SUBSCRIPTION_ID_SECRET: ${{ secrets.ARM_SUBSCRIPTION_ID }}
           FALLBACK_SUBSCRIPTION_ID_VAR: ${{ vars.ARM_SUBSCRIPTION_ID }}
           SUBSCRIPTION_ORDER: ${{ needs.subscriptions.outputs.subscriptionOrder }}
@@ -346,6 +346,11 @@ jobs:
           $combined = @{}
           foreach ($k in $varsMap.Keys) { $combined[$k] = $varsMap[$k] }
           foreach ($k in $secretsMap.Keys) { $combined[$k] = $secretsMap[$k] }
+          foreach ($name in 'ARM_CLIENT_ID', 'ARM_TENANT_ID', 'TEST_SUBSCRIPTION_IDS') {
+              if (-not [string]::IsNullOrEmpty([string] $varsMap[$name])) {
+                  $combined[$name] = $varsMap[$name]
+              }
+          }
 
           $allowedSubscriptions = @($env:SUBSCRIPTION_IDS | ConvertFrom-Json)
           if ($allowedSubscriptions.Count -eq 0 -or
@@ -421,7 +426,7 @@ jobs:
         id: pick
         shell: pwsh
         env:
-          TEST_SUBSCRIPTION_IDS: ${{ secrets.TEST_SUBSCRIPTION_IDS }}
+          TEST_SUBSCRIPTION_IDS: ${{ vars.TEST_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS }}
           FALLBACK_SUBSCRIPTION_ID_SECRET: ${{ secrets.ARM_SUBSCRIPTION_ID }}
           FALLBACK_SUBSCRIPTION_ID_VAR: ${{ vars.ARM_SUBSCRIPTION_ID }}
           SUBSCRIPTION_ORDER: ${{ needs.subscriptions.outputs.subscriptionOrder }}
@@ -583,7 +588,7 @@ jobs:
         id: leg
         shell: pwsh
         env:
-          TEST_SUBSCRIPTION_IDS: ${{ secrets.TEST_SUBSCRIPTION_IDS }}
+          TEST_SUBSCRIPTION_IDS: ${{ vars.TEST_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS }}
           FALLBACK_SUBSCRIPTION_ID_SECRET: ${{ secrets.ARM_SUBSCRIPTION_ID }}
           FALLBACK_SUBSCRIPTION_ID_VAR: ${{ vars.ARM_SUBSCRIPTION_ID }}
           SUBSCRIPTION_ORDER: ${{ needs.subscriptions.outputs.subscriptionOrder }}
@@ -624,6 +629,11 @@ jobs:
           $combined = @{}
           foreach ($k in $varsMap.Keys) { $combined[$k] = $varsMap[$k] }
           foreach ($k in $secretsMap.Keys) { $combined[$k] = $secretsMap[$k] }
+          foreach ($name in 'ARM_CLIENT_ID', 'ARM_TENANT_ID', 'TEST_SUBSCRIPTION_IDS') {
+              if (-not [string]::IsNullOrEmpty([string] $varsMap[$name])) {
+                  $combined[$name] = $varsMap[$name]
+              }
+          }
 
           $subOverride = [string] $combined['ARM_SUBSCRIPTION_ID_OVERRIDE']
           if ([string]::IsNullOrWhiteSpace($subOverride)) {

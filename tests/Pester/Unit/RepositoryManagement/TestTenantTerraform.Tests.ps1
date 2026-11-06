@@ -1124,23 +1124,36 @@ Describe 'Terraform effective contract and state wiring' {
         $azure | Should -Match 'condition\s*=\s*local.member_is_repository_identity'
     }
 
-    It 'continues writing repository secrets that actually override legacy variables' {
+    It 'publishes only the three standard noncredential settings as Actions variables and retains Dependabot mirrors' {
         $secrets = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'github' 'github.actions_secrets.tf')
+        $variables = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'github' 'github.repository.variables.tf')
+        $dependabot = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'github' 'github.dependabot_secrets.tf')
         foreach ($name in @('ARM_TENANT_ID', 'ARM_CLIENT_ID', 'TEST_SUBSCRIPTION_IDS')) {
-            $secrets | Should -Match ('secret_name\s*=\s*"' + $name + '"')
+            $variables | Should -Match ('variable_name\s*=\s*"' + $name + '"')
+            $dependabot | Should -Match ('secret_name\s*=\s*"' + $name + '"')
+            $secrets | Should -Not -Match ('secret_name\s*=\s*"' + $name + '"')
         }
-        ([regex]::Matches($secrets, 'resource "github_actions_secret"')).Count | Should -Be 5
+        ([regex]::Matches($variables, 'count\s*=\s*var.repository_creation_mode_enabled \? 0 : 1')).Count | Should -Be 3
+        ([regex]::Matches($dependabot, 'resource "github_dependabot_secret"')).Count | Should -Be 3
+        ([regex]::Matches($secrets, 'resource "github_actions_secret"')).Count | Should -Be 2
         foreach ($name in @('TF_VAR_subscription_billing_scope', 'TF_VAR_subscription_management_group_id')) {
             $secrets | Should -Match ('secret_name\s*=\s*"' + $name + '"')
         }
+        $variables | Should -Match 'value\s*=\s*var.arm_tenant_id'
+        $variables | Should -Match 'value\s*=\s*var.arm_client_id'
+        $variables | Should -Match 'value\s*=\s*jsonencode\(var.test_subscription_ids\)'
+        $variables | Should -Not -Match 'ARM_CLIENT_SECRET|TOKEN|PASSWORD|OVERRIDE|TF_VAR_'
         $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'terraform-module.yml')
-        $merge = [regex]::Match($workflow, '(?s)\$combined = @\{\}\s+foreach \(\$k in \$varsMap.Keys\) \{.*?\}\s+foreach \(\$k in \$secretsMap.Keys\) \{.*?\}')
-        $merge.Success | Should -BeTrue
-        $varsMap = @{ ARM_TENANT_ID = 'legacy'; ARM_CLIENT_ID = 'legacy'; TEST_SUBSCRIPTION_IDS = 'legacy' }
-        $secretsMap = @{ ARM_TENANT_ID = 'candidate'; ARM_CLIENT_ID = 'dedicated-repo'; TEST_SUBSCRIPTION_IDS = 'candidate-pool' }
-        $merged = & ([scriptblock]::Create($merge.Value + "`nreturn `$combined"))
-        foreach ($name in $secretsMap.Keys) { $merged[$name] | Should -Be $secretsMap[$name] }
-        $workflow | Should -Match 'TEST_SUBSCRIPTION_IDS: \$\{\{ secrets.TEST_SUBSCRIPTION_IDS \}\}'
+        ([regex]::Matches($workflow, 'TEST_SUBSCRIPTION_IDS: \$\{\{ vars.TEST_SUBSCRIPTION_IDS \|\| secrets.TEST_SUBSCRIPTION_IDS \}\}')).Count | Should -Be 4
+    }
+
+    It 'forgets only the three legacy Actions settings without deleting values needed by older caller pins' {
+        $secrets = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'github' 'github.actions_secrets.tf')
+        $removals = [regex]::Matches($secrets, '(?s)removed \{\s*from = github_actions_secret\.(\w+)\s*lifecycle \{\s*destroy = false\s*\}\s*\}')
+        $removals | Should -HaveCount 3
+        @($removals | ForEach-Object { $_.Groups[1].Value } | Sort-Object) |
+            Should -Be @('arm_client_id', 'arm_tenant_id', 'test_subscription_ids')
+        $secrets | Should -Not -Match 'from = github_dependabot_secret|destroy = true'
     }
 
     It 'removes retired Azure execution from the ordinary root while keeping BAMI providers and backend independent' {

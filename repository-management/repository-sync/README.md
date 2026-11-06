@@ -75,8 +75,9 @@ the created identity's client ID feeds GitHub test settings through Terraform
 references. PowerShell and managed-file generation do not need to provision an
 identity first. The eight-field producer and five-field Bicep projection remain
 unchanged. This is not a shared state for all repositories.
-The full BAMI input retains optional subscription tags. Actions and Dependabot
-test-pool secrets receive only the ordered `General` projection, including legacy
+The full BAMI input retains optional subscription tags. Actions test-pool
+variables and Dependabot secret mirrors receive only the ordered `General`
+projection, including legacy
 untagged entries; no General subscriptions is an error before plan/apply or
 publication. This is default/test selection isolation, not a permission change.
 
@@ -234,9 +235,12 @@ assignment alone does not establish Graph API readiness; offline checks do
 not prove the role-only route or effective live permissions.
 
 Coordinate approved reconciliation through the serialized sync workflow.
-Explicit `ARM_*_OVERRIDE` values and environment-level secrets retain their
-existing consumer precedence; audit them when verifying a repository's effective
-test identity. Do not run another writer outside the serialized sync workflow.
+Explicit `ARM_*_OVERRIDE` values retain their E2E consumer precedence; all
+non-migrated secrets keep their existing precedence. The standard
+`ARM_CLIENT_ID`, `ARM_TENANT_ID`, and `TEST_SUBSCRIPTION_IDS` repository variables
+precede legacy secrets, including environment-level copies; audit both when
+verifying a repository's effective test identity. Do not run another writer
+outside the serialized sync workflow.
 Do not change the backend, move state, grant permissions, or reuse the
 controller as an execution identity to bypass a failed prerequisite.
 
@@ -307,7 +311,8 @@ only each dedicated test identity's membership edges, never the shared groups'
 complete membership lists or their Azure/directory role assignments.
 The root's private `test_group_contract` output exposes only observed
 provider identifiers and allow-listed group metadata, not group members,
-owners, or credentials. `test_identity` and consumer secrets are unchanged.
+owners, or credentials. `test_identity` and the published consumer settings are
+unchanged by group reconciliation.
 
 The checked-in default and Fabric selection are:
 
