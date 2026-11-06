@@ -517,6 +517,96 @@ Describe 'Component: Bicep cleanup state and context' -Tag Component {
         }
     }
 
+    It 'retains containers after a denied nested read and resumes after transient authorization' {
+        InModuleScope Avm.Authoring -Parameters @{ File = $script:statePath } {
+            param($File)
+            $created = New-AvmBicepCleanupState -Path $File -Environment AzureCloud `
+                -SubscriptionId '00000000-0000-0000-0000-000000000001' `
+                -TenantId '00000000-0000-0000-0000-000000000002'
+            $script:root = '/providers/Microsoft.Management/managementGroups/existing/providers/Microsoft.Resources/deployments/root'
+            $script:managementGroup = '/providers/Microsoft.Management/managementGroups/created'
+            $script:child = "$script:managementGroup/providers/Microsoft.Resources/deployments/nested"
+            $script:group = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test'
+            $script:known = '/providers/Microsoft.Management/managementGroups/existing/providers/Microsoft.Authorization/roleAssignments/00000000-0000-0000-0000-000000000010'
+            $script:discovered = "$script:managementGroup/providers/Microsoft.Authorization/roleAssignments/00000000-0000-0000-0000-000000000011"
+            $created.State.deployments.Add(@{ id = $script:root; status = 'Succeeded'; preflightRejected = $false })
+            foreach ($resource in ConvertTo-AvmBicepCleanupResource -ResourceIds @($script:group, $script:managementGroup, $script:known)) {
+                $created.State.resources.Add(@{
+                        id = $resource.resourceId; type = $resource.type
+                        removed = $false; postProcessed = $false; metadataCaptured = $false
+                        managedResourceGroupIds = @(); originalSoftDeleteFeatureState = ''
+                    })
+            }
+            Save-AvmBicepCleanupState -State $created.State -Path $File
+            Mock Assert-AvmBicepAzureDependency {}
+            Mock Assert-AvmBicepAzureIdentity {}
+            Mock Get-Command { [pscustomobject]@{ Source = 'fake-az' } }
+            $script:resume = $false
+            $script:childReads = 0
+            $script:messages = [Collections.Generic.List[string]]::new()
+            Mock Write-AvmLog { $script:messages.Add($Message) }
+            Mock Invoke-AzRestMethod {
+                if ($Path.StartsWith("$script:root/operations")) {
+                    return @{
+                        StatusCode = 200
+                        Content = (@{ value = @(@{ properties = @{
+                                            provisioningOperation = 'Create'; targetResource = @{ id = $script:child }
+                                        } }) } | ConvertTo-Json -Depth 8)
+                    }
+                }
+                if (-not $Path.StartsWith("$script:child/operations")) { throw "Unexpected path: $Path" }
+                $script:childReads++
+                if (-not $script:resume -or $script:childReads -eq 1) {
+                    return @{ StatusCode = 403; Content = '{"error":{"code":"AuthorizationFailed"}}' }
+                }
+                @{
+                    StatusCode = 200
+                    Content = (@{ value = @(@{ properties = @{
+                                        provisioningOperation = 'Create'; targetResource = @{ id = $script:discovered }
+                                    } }) } | ConvertTo-Json -Depth 8)
+                }
+            }
+            Mock Initialize-AvmBicepCleanupResource { param($Resource) $Resource['metadataCaptured'] = $true }
+            Mock Remove-AvmBicepResource {}
+            Mock Remove-AvmBicepResourceRemainder {}
+            $parameters = @{
+                StatePath = $File
+                SubscriptionId = '00000000-0000-0000-0000-000000000001'
+                TenantId = '00000000-0000-0000-0000-000000000002'
+                SearchRetryLimit = 1
+                RemovalRetryLimit = 1
+                RemovalRetryInterval = 0
+            }
+            $first = Invoke-AvmBicepCleanup @parameters
+            $first.Cleaned | Should -BeFalse
+            $first.Pending | Should -Contain $script:child
+            $first.Pending | Should -Contain $script:group
+            $first.Pending | Should -Contain $script:managementGroup
+            Should -Invoke Remove-AvmBicepResource -Exactly 1 -ParameterFilter { $ResourceId -eq $script:known }
+            Should -Invoke Remove-AvmBicepResource -Exactly 0 -ParameterFilter {
+                $ResourceId -in @($script:group, $script:managementGroup)
+            }
+            (Read-AvmBicepCleanupState -Path $File).status | Should -BeExactly 'CleanupPending'
+
+            $script:resume = $true
+            $script:childReads = 0
+            $second = Invoke-AvmBicepCleanup @parameters
+            $second.Cleaned | Should -BeTrue
+            $script:childReads | Should -Be 2
+            (Read-AvmBicepCleanupState -Path $File).status | Should -BeExactly 'Complete'
+            Should -Invoke Remove-AvmBicepResource -Exactly 1 -ParameterFilter { $ResourceId -eq $script:known }
+            Should -Invoke Remove-AvmBicepResource -Exactly 1 -ParameterFilter { $ResourceId -eq $script:discovered }
+            $summaries = @($script:messages | Where-Object { $_ -like 'Authorization read finished:*' })
+            $summaries.Count | Should -Be 2
+            $firstTarget = [regex]::Match($summaries[0], 'target-sha256=([A-F0-9]{64})').Groups[1].Value
+            $secondTarget = [regex]::Match($summaries[1], 'target-sha256=([A-F0-9]{64})').Groups[1].Value
+            $firstTarget | Should -Not -BeNullOrEmpty
+            $firstTarget | Should -BeExactly $secondTarget
+            $summaries[0] | Should -Match 'attempts=61; matched=61; .*outcome=exhausted; HTTP 403;'
+            $summaries[1] | Should -Match 'attempts=2; matched=1; .*outcome=returned; HTTP 200;'
+        }
+    }
+
     It 'blocks an unverified owned group and all of its discovered children' {
         InModuleScope Avm.Authoring -Parameters @{ File = $script:statePath } {
             param($File)

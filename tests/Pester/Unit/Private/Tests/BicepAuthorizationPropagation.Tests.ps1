@@ -24,6 +24,96 @@ Describe 'Bicep authorization propagation reads' {
         InModuleScope Avm.Authoring {
             $script:calls = 0
             Mock Start-Sleep {}
+            Mock Write-AvmLog {}
+        }
+    }
+
+    It 'logs bounded retry diagnostics without exposing target, activity, response content or query strings' {
+        InModuleScope Avm.Authoring {
+            $script:messages = [Collections.Generic.List[string]]::new()
+            $script:clock = [datetime]::new(2026, 1, 1, 0, 0, 0, [DateTimeKind]::Utc)
+            Mock Get-Date { $script:clock }
+            Mock Start-Sleep { $script:clock = $script:clock.AddSeconds($Seconds) }
+            Mock Write-AvmLog { $script:messages.Add($Message) }
+            $response = Invoke-AvmBicepRead -Activity 'secret-activity?sig=secret-query' `
+                -DiagnosticTarget '/deployments/secret-name?sig=secret-query' -RetryAuthorizationPropagation -Read {
+                $script:calls++
+                if ($script:calls -lt 3) {
+                    return @{
+                        StatusCode = 403
+                        Content = '{"error":{"code":"AuthorizationFailed","message":"secret-body"}}'
+                        Headers = @{ 'x-ms-request-id' = '11111111-2222-3333-4444-555555555555' }
+                    }
+                }
+                @{
+                    StatusCode = 200
+                    Content = '{"value":[]}'
+                    Headers = @{ 'x-ms-request-id' = 'not-a-guid?sig=secret-header' }
+                }
+            }
+            $response.StatusCode | Should -Be 200
+            $script:messages.Count | Should -Be 2
+            $script:messages[0] | Should -Match 'activity=Azure read; target-sha256=[A-F0-9]{64}; HTTP 403; code=AuthorizationFailed; request-id=11111111-2222-3333-4444-555555555555'
+            $script:messages[1] | Should -Match 'attempts=3; matched=2; elapsed-seconds=10; outcome=returned; HTTP 200; request-id=unavailable'
+            ($script:messages -join ' ') | Should -Not -Match 'secret|sig=|/deployments/'
+        }
+    }
+
+    It 'logs a non-retryable authorization response without exposing its body' {
+        InModuleScope Avm.Authoring {
+            $script:messages = [Collections.Generic.List[string]]::new()
+            Mock Write-AvmLog { $script:messages.Add($Message) }
+            $response = Invoke-AvmBicepRead -Activity 'Read cleanup operation page' `
+                -DiagnosticTarget '/deployments/example?sig=secret-query' -RetryAuthorizationPropagation -Read {
+                $script:calls++
+                @{ StatusCode = 403; Content = '{"error":{"code":"AuthorizationFailed","details":[{"code":"secret-body"}]}}' }
+            }
+            $response.StatusCode | Should -Be 403
+            $script:calls | Should -Be 1
+            $script:messages.Count | Should -Be 1
+            $script:messages[0] | Should -Match 'activity=cleanup operation page; target-sha256=[A-F0-9]{64}; attempts=1; matched=0;'
+            $script:messages[0] | Should -Match 'outcome=not retryable; HTTP 403; request-id=unavailable'
+            $script:messages[0] | Should -Not -Match 'secret|sig=|/deployments/'
+            Should -Invoke Start-Sleep -Exactly 0
+        }
+    }
+
+    It 'keeps the read result when optional request ID extraction fails' {
+        InModuleScope Avm.Authoring {
+            $script:messages = [Collections.Generic.List[string]]::new()
+            Mock Write-AvmLog { $script:messages.Add($Message) }
+            Mock Get-AvmBicepResponseRequestId { throw 'untrusted header failure' }
+            $response = Invoke-AvmBicepRead -Activity 'Read cleanup operation page' `
+                -DiagnosticTarget '/deployments/example' -RetryAuthorizationPropagation -Read {
+                $script:calls++
+                if ($script:calls -eq 1) {
+                    return @{ StatusCode = 403; Content = '{"error":{"code":"AuthorizationFailed"}}' }
+                }
+                @{ StatusCode = 200; Content = '{"value":[]}' }
+            }
+            $response.StatusCode | Should -Be 200
+            $script:calls | Should -Be 2
+            $script:messages.Count | Should -Be 2
+            ($script:messages -join ' ') | Should -Match 'request-id=unavailable'
+            ($script:messages -join ' ') | Should -Not -Match 'untrusted header failure'
+        }
+    }
+
+    It 'uses the same target fingerprint when only the query string changes' {
+        InModuleScope Avm.Authoring {
+            $script:messages = [Collections.Generic.List[string]]::new()
+            Mock Write-AvmLog { $script:messages.Add($Message) }
+            foreach ($target in @('/deployments/Example?sig=first', '/DEPLOYMENTS/example?sig=second')) {
+                $null = Invoke-AvmBicepRead -Activity 'Read cleanup operation page' -DiagnosticTarget $target `
+                    -RetryAuthorizationPropagation -Read {
+                    @{ StatusCode = 403; Content = '{"error":{"code":"AuthorizationFailed","details":[]}}' }
+                }
+            }
+            $script:messages.Count | Should -Be 2
+            $first = [regex]::Match($script:messages[0], 'target-sha256=([A-F0-9]{64})').Groups[1].Value
+            $second = [regex]::Match($script:messages[1], 'target-sha256=([A-F0-9]{64})').Groups[1].Value
+            $first | Should -Not -BeNullOrEmpty
+            $first | Should -BeExactly $second
         }
     }
 
@@ -44,6 +134,8 @@ Describe 'Bicep authorization propagation reads' {
 
     It 'returns the persistent 403 after a bounded number of reads' {
         InModuleScope Avm.Authoring {
+            $script:messages = [Collections.Generic.List[string]]::new()
+            Mock Write-AvmLog { $script:messages.Add($Message) }
             $response = Invoke-AvmBicepRead -Activity 'Owned deployment read' -RetryAuthorizationPropagation -Read {
                 $script:calls++
                 @{ StatusCode = 403; Content = '{"error":{"code":"AuthorizationFailed"}}' }
@@ -51,6 +143,8 @@ Describe 'Bicep authorization propagation reads' {
             $response.StatusCode | Should -Be 403
             $script:calls | Should -Be 61
             Should -Invoke Start-Sleep -Exactly 60
+            $script:messages.Count | Should -Be 2
+            $script:messages[1] | Should -Match 'attempts=61; matched=61; .*outcome=exhausted; HTTP 403;'
         }
     }
 
