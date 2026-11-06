@@ -168,6 +168,57 @@ Describe 'Bicep deployment progress logging' {
         }
     }
 
+    It 'retries a canceled progress request and skips an exhausted poll without partial results' {
+        InModuleScope Avm.Authoring {
+            $script:requestCount = 0
+            Mock Start-Sleep {}
+            Mock Invoke-AzRestMethod {
+                $script:requestCount++
+                if ($script:requestCount -lt 3) { throw [OperationCanceledException]::new('request canceled') }
+                @{ StatusCode = 200; Content = '{"value":[]}' }
+            }
+            Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed @{}
+            Should -Invoke Invoke-AzRestMethod -Exactly 3
+            Should -Invoke Start-Sleep -Exactly 2
+            ($script:messages -join ' ') | Should -Not -Match 'progress is incomplete'
+
+            $script:requestCount = 0
+            $script:messages.Clear()
+            Mock Invoke-AzRestMethod {
+                $script:requestCount++
+                if ($script:requestCount -eq 1) {
+                    $body = @{
+                        value = @(@{ properties = @{ provisioningState = 'Running'; targetResource = @{
+                                            id = '/subscriptions/example/providers/Microsoft.KeyVault/vaults/one'
+                                            resourceType = 'Microsoft.KeyVault/vaults'; resourceName = 'one'
+                                        } } })
+                        nextLink = "$script:id/operations?page=2"
+                    }
+                    return @{ StatusCode = 200; Content = ($body | ConvertTo-Json -Depth 10 -Compress) }
+                }
+                throw [OperationCanceledException]::new('request canceled')
+            }
+            $observed = @{}
+            Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed $observed
+            $script:requestCount | Should -Be 4
+            ($script:messages -join ' ') | Should -Match 'Deployment progress is incomplete'
+            ($script:messages -join ' ') | Should -Not -Match 'one \(Microsoft.KeyVault/vaults\)'
+            @($observed.Keys | Where-Object { $_ -like 'resource:*' }).Count | Should -Be 0
+        }
+    }
+
+    It 'does not suppress an ambiguous cancellation with another inner failure' {
+        InModuleScope Avm.Authoring {
+            Mock Start-Sleep {}
+            Mock Invoke-AzRestMethod {
+                throw [OperationCanceledException]::new('cancelled', [InvalidOperationException]::new('another failure'))
+            }
+            { Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed @{} } | Should -Throw
+            Should -Invoke Invoke-AzRestMethod -Exactly 1
+            Should -Invoke Start-Sleep -Exactly 0
+        }
+    }
+
     It 'orders and deduplicates nested resource observations without replaying older states' {
         InModuleScope Avm.Authoring {
             $child = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Resources/deployments/nested'
@@ -441,6 +492,53 @@ Describe 'Bicep asynchronous deployment submission' {
             }
             Should -Invoke Start-AvmBicepNativeDeploymentJob -Exactly 1
             Should -Invoke Write-AvmBicepDeploymentDiagnostic -Exactly 0
+        }
+    }
+}
+
+Describe 'Bicep asynchronous deployment with canceled progress' {
+    It 'reports the real job result when progress reads repeatedly cancel: <Outcome>' -ForEach @(
+        @{ Outcome = 'Succeeded' }, @{ Outcome = 'Failed' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Outcome = $Outcome } {
+            param($Outcome)
+            $script:state = @{
+                subscriptionId = '00000000-0000-0000-0000-000000000001'
+                runId = '00000000000000000000000000000010'; deployments = @()
+            }
+            $options = @{ Scope = 'sub'; TemplatePath = 'fixture.json'; MetadataLocation = 'westus'; Parameters = @{} }
+            Mock Get-AzContext { @{ Tenant = @{ Id = '00000000-0000-0000-0000-000000000002' } } }
+            Mock Save-AvmBicepCleanupState {}
+            Mock Write-AvmBicepWhatIf {}
+            Mock Write-AvmBicepDeploymentSummary {}
+            Mock Write-AvmBicepDeploymentDiagnostic { '' }
+            Mock Test-AvmBicepNestedDeploymentReadFailure { $false }
+            Mock Get-AvmBicepAzModuleManifest { @() }
+            Mock Start-Sleep {}
+            Mock Write-AvmLog {}
+            Mock Invoke-AzRestMethod { throw [OperationCanceledException]::new('progress read canceled') }
+            $script:expectedOutcome = $Outcome
+            Mock Start-AvmBicepNativeDeploymentJob {
+                $SubmissionState.Invoked = $true
+                $id = "/subscriptions/$($script:state.subscriptionId)/providers/Microsoft.Resources/deployments/$($DeploymentInput.DeploymentName)"
+                Start-ThreadJob -ArgumentList $id, $script:expectedOutcome -ScriptBlock {
+                    param($id, $outcome)
+                    if ($outcome -eq 'Failed') { throw [InvalidOperationException]::new('Azure submission failed') }
+                    @{ Id = $id; ProvisioningState = 'Succeeded'; Outputs = @{} }
+                }
+            }
+            $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'unused' `
+                -DeploymentInput $options -ShowProgress
+            if ($Outcome -eq 'Succeeded') {
+                $result.Status | Should -BeExactly 'pass'
+                $script:state.deployments[0].status | Should -BeExactly 'Succeeded'
+            }
+            else {
+                $result.Status | Should -BeExactly 'fail'
+                $result.ErrorRecord.Exception.Message | Should -Match 'Azure submission failed'
+            }
+            Should -Invoke Invoke-AzRestMethod -Times 3
+            Should -Invoke Start-AvmBicepNativeDeploymentJob -Exactly 1
         }
     }
 }

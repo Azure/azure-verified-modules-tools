@@ -54,8 +54,10 @@ Describe 'Bicep ARM test token helpers' {
             $generated['tenantId'] | Should -Be $tenantId
             $generated['avmE2eRunId'] | Should -Be $runId
             $generated['avmE2eSuffix'] | Should -Be '0123456789'
-            $generated['namePrefix'] | Should -Match '^[a-z][a-z0-9]{4}$'
-            "dep-$($generated['namePrefix'])-kv-esancmk-2ff".Length | Should -BeLessOrEqual 24
+            $generated['namePrefix'] | Should -Match '^[a-z][a-z0-9]{2}$'
+            "dep-$($generated['namePrefix'])-kv-abcdefgh-xyz".Length | Should -Be 23
+            (Get-AvmBicepTestTokenMap -Root $R -SubscriptionId $S `
+                    -TenantId $tenantId -RunId $runId)['namePrefix'] | Should -BeExactly $generated['namePrefix']
             $next = Get-AvmBicepTestTokenMap -Root $R -SubscriptionId $S `
                 -TenantId $tenantId -RunId '1123456789abcdef0123456789abcdef'
             $next['namePrefix'] | Should -Not -Be $generated['namePrefix']

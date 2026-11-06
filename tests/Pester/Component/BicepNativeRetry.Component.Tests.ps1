@@ -208,12 +208,19 @@ Describe 'Component: Bicep native attempt contexts and finalization' -Tag Compon
         }
         else {
             $creates[1].DeploymentName | Should -Not -Be $creates[0].DeploymentName
-            $creates[1].Parameters.generatedName | Should -Not -Be $creates[0].Parameters.generatedName
             $creates[1].Parameters.runName | Should -Not -Be $creates[0].Parameters.runName
             $stored.attempts[1].namingId | Should -Not -Be $stored.attempts[0].namingId
             $stored.deployments.Count | Should -Be 2
             foreach ($index in 0, 1) {
                 $creates[$index].Parameters.runName | Should -BeExactly $stored.attempts[$index].namingId
+                $expectedPrefix = InModuleScope Avm.Authoring -Parameters @{
+                    RunId = $stored.attempts[$index].namingId; Root = $script:fixture.Directory
+                    Subscription = $script:options.SubscriptionId
+                } {
+                    param($RunId, $Root, $Subscription)
+                    (Get-AvmBicepTestTokenMap -Root $Root -SubscriptionId $Subscription -RunId $RunId)['namePrefix']
+                }
+                $creates[$index].Parameters.generatedName | Should -BeExactly $expectedPrefix
                 ($creates[$index].Content | ConvertFrom-Json).resources[0].name |
                     Should -BeExactly $creates[$index].Parameters.generatedName
             }
