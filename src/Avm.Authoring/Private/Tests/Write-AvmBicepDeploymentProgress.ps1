@@ -31,8 +31,21 @@ function Write-AvmBicepDeploymentProgress {
                 if (-not $pages.Add($next) -or $pages.Count -gt 40) {
                     throw [AvmProcessException]::new('Deployment progress pagination exceeded its limit.')
                 }
-                $response = Invoke-AvmBicepRead -Activity 'Read deployment progress' -Read {
-                    Invoke-AzRestMethod -Method GET -Path $next @profileOptions -ErrorAction Stop
+                try {
+                    $response = Invoke-AvmBicepRead -Activity 'Read deployment progress' -Read {
+                        Invoke-AvmBicepAzureOperation -Activity 'Deployment progress read' -Operation {
+                            Invoke-AzRestMethod -Method GET -Path $next @profileOptions -ErrorAction Stop
+                        }
+                    }
+                }
+                catch [System.OperationCanceledException] {
+                    if (-not (Test-AvmBicepAzureOperationCancellation -Exception $_.Exception)) { throw }
+                    $detail = Protect-AvmBicepDiagnosticText -Text $_.Exception.Message -SensitiveValues $SensitiveValues
+                    if (-not $Observed.Contains('__readFailure') -or $Observed['__readFailure'] -cne $detail) {
+                        Write-AvmLog -Level Warning -Message "Deployment progress is incomplete: $detail"
+                        $Observed['__readFailure'] = $detail
+                    }
+                    return
                 }
                 $status = Get-AvmPropertyValue -InputObject $response -Name 'StatusCode' -NoEnumerate
                 if ($current -ieq $DeploymentId -and -not $Observed.Contains('__progressStarted') -and
