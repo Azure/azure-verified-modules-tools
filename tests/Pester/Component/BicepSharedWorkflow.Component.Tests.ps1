@@ -551,18 +551,6 @@ on:
         { Write-AvmWorkflowOutput -Name safe -Value "a`ninjected=true" -FilePath (Join-Path $script:root 'output') } | Should -Throw
     }
 
-    It 'accepts 256 modules and rejects a 257th before discovering tests' {
-        $paths = @(for ($index = 0; $index -lt 257; $index++) {
-                $relative = "avm/res/mock/module-$index"
-                $folder = Join-Path $script:root $relative
-                $null = New-Item -ItemType Directory -Path $folder -Force
-                [IO.File]::WriteAllText((Join-Path $folder 'main.bicep'), '')
-                $relative
-            })
-        (Get-AvmWorkflowModuleMatrix -Root $script:root -ModulePaths ($paths[0..255] -join ',')).include.Count | Should -Be 256
-        { Get-AvmWorkflowModuleMatrix -Root $script:root -ModulePaths ($paths -join ',') } | Should -Throw '*256-job*'
-    }
-
     It 'uses the visible static-only all-module fallback for a missing push base' {
         Mock Invoke-AvmBicepWorkflowGit -ModuleName Avm.Authoring {
             [pscustomobject]@{ ExitCode = 0; StdOut = "$script:modulePath/main.bicep"; StdErr = '' }

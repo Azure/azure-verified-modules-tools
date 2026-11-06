@@ -7,6 +7,11 @@ BeforeAll {
 }
 
 Describe 'Repository metadata owner reconciliation' {
+    It 'does not expose the removed forceUserRemoval parameter' {
+        (Get-Command Remove-DirectCollaborators).Parameters.ContainsKey('forceUserRemoval') |
+            Should -BeFalse
+    }
+
     BeforeEach {
         $script:users = @(
             [pscustomobject]@{ login = 'first-owner'; role_name = 'admin' }

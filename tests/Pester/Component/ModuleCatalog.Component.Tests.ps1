@@ -58,11 +58,7 @@ Describe 'Component: module catalog helpers' -Tag Component {
         Test-Json -Json (ConvertTo-AvmCatalogJson -Value $catalog) -SchemaFile $schema | Should -BeTrue
     }
 
-    It 'retains mixed helper inventories in JSON but not any <Destination> CSV' -TestCases @(
-        @{ Destination = 'preview' }
-        @{ Destination = 'canonical' }
-    ) {
-        param($Destination)
+    It 'retains mixed helper inventories in JSON but not CSV' {
         $fixture = New-CatalogFixture -AdoptAll
         $helpers = [System.Collections.Generic.List[object]]::new()
         foreach ($family in @($fixture.Modules)) {
@@ -85,9 +81,6 @@ Describe 'Component: module catalog helpers' -Tag Component {
             }
         }
         $raw = Read-AvmCatalogJson -Path (Join-Path $catalogScripts '..' 'config.json')
-        if ($Destination -eq 'preview') {
-            foreach ($csv in $raw.outputs | Where-Object kind -eq 'csv') { $csv.file = "test-$($csv.sourceFile)" }
-        }
         $configurationPath = Join-Path $fixture.Root 'catalog-manifest.json'
         Save-CatalogJson -Path $configurationPath -Data $raw
         $configuration = Read-AvmCatalogConfiguration -Path $configurationPath
@@ -136,6 +129,26 @@ Describe 'Component: module catalog helpers' -Tag Component {
             -Inventory (Get-CatalogFixtureInventory -Fixture $fixture -Configuration $configuration)
         foreach ($file in $bundle.Files.Keys) {
             $again.Files[$file] | Should -BeExactly $bundle.Files[$file]
+        }
+
+        $previewRaw = Read-AvmCatalogJson -Path (Join-Path $catalogScripts '..' 'config.json')
+        foreach ($csv in $previewRaw.outputs | Where-Object kind -eq 'csv') {
+            $csv.file = "test-$($csv.sourceFile)"
+        }
+        $previewConfigurationPath = Join-Path $fixture.Root 'catalog-manifest-preview.json'
+        Save-CatalogJson -Path $previewConfigurationPath -Data $previewRaw
+        $previewConfiguration = Read-AvmCatalogConfiguration -Path $previewConfigurationPath
+        $previewBundle = Get-CatalogFixtureBundle -Fixture $fixture `
+            -Inventory (Get-CatalogFixtureInventory -Fixture $fixture -Configuration $previewConfiguration)
+        $previewBundle.Files['docs/v1/modules.json'] | Should -BeExactly $bundle.Files['docs/v1/modules.json']
+        $previewBundle.Report.csvRowRemovals | Should -HaveCount 0
+        foreach ($output in $previewConfiguration.outputs | Where-Object kind -eq 'csv') {
+            $previewRows = @($previewBundle.Files[$output.bundlePath] | ConvertFrom-Csv)
+            $canonicalOutput = @($configuration.outputs | Where-Object {
+                    $_.kind -eq 'csv' -and $_.ecosystem -eq $output.ecosystem -and $_.moduleType -eq $output.moduleType
+                })[0]
+            $canonicalRows = @($bundle.Files[$canonicalOutput.bundlePath] | ConvertFrom-Csv)
+            $previewRows.ModuleName | Should -Be $canonicalRows.ModuleName
         }
     }
 
