@@ -15,6 +15,11 @@ BeforeAll {
             param($Name, $Location, $TemplateFile, $TemplateParameterObject, $SkipTemplateParameterPrompt, $DefaultProfile)
             throw 'Unexpected Azure deployment.'
         }
+        function script:New-AzManagementGroupDeployment {
+            [CmdletBinding(SupportsShouldProcess)]
+            param($Name, $Location, $ManagementGroupId, $TemplateFile, $TemplateParameterObject, $SkipTemplateParameterPrompt, $DefaultProfile)
+            throw 'Unexpected Azure deployment.'
+        }
         foreach ($scope in @('ResourceGroup', 'Subscription', 'ManagementGroup', 'Tenant')) {
             Set-Item -Path "function:script:Get-Az${scope}DeploymentWhatIfResult" -Value {
                 [CmdletBinding()] param($Name, $TemplateFile, $TemplateParameterObject, $SkipTemplateParameterPrompt,
@@ -540,6 +545,7 @@ Describe 'Bicep asynchronous deployment submission' {
 
     It 'records a failed job initialization as not submitted without polling cleanup' {
         InModuleScope Avm.Authoring {
+            Mock Write-AvmLog {}
             Mock Start-AvmBicepNativeDeploymentJob {
                 Start-ThreadJob -ScriptBlock { throw [InvalidOperationException]::new('Azure module import failed') }
             }
@@ -552,6 +558,7 @@ Describe 'Bicep asynchronous deployment submission' {
             $pending.Pending.Count | Should -Be 0
             Should -Invoke Write-AvmBicepDeploymentDiagnostic -Exactly 1 -ParameterFilter { -not $ReadDeployment }
             Should -Invoke Write-AvmBicepDeploymentSummary -Exactly 0
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter { $Message -like '*was not submitted*' }
         }
     }
 
@@ -744,6 +751,26 @@ Describe 'Bicep submission with mocked Azure commands' {
             Should -Invoke New-AzSubscriptionDeployment -Exactly 1 -ParameterFilter {
                 $DefaultProfile.Tenant.Id -eq '00000000-0000-0000-0000-000000000002'
             }
+        }
+    }
+
+    It 'submits a management-group deployment after an advisory What-If authorization failure' {
+        InModuleScope Avm.Authoring {
+            $script:options.Scope = 'mg'
+            $script:options.ManagementGroupId = 'avm-test'
+            Mock Get-AzManagementGroupDeploymentWhatIfResult {
+                throw [InvalidOperationException]::new('DeploymentWhatIfResourceError: AuthorizationFailed')
+            }
+            Mock New-AzManagementGroupDeployment {
+                $id = "/providers/Microsoft.Management/managementGroups/$ManagementGroupId/providers/Microsoft.Resources/deployments/$Name"
+                @{ Id = $id; ProvisioningState = 'Succeeded'; Outputs = @{} }
+            }
+            $result = New-AvmBicepNativeDeployment -State $script:state -StatePath 'unused' `
+                -DeploymentInput $script:options -ShowProgress -Confirm:$false
+            $result.Status | Should -BeExactly 'pass'
+            $result.Outcome | Should -BeExactly 'Succeeded'
+            Should -Invoke Get-AzManagementGroupDeploymentWhatIfResult -Exactly 1
+            Should -Invoke New-AzManagementGroupDeployment -Exactly 1
         }
     }
 

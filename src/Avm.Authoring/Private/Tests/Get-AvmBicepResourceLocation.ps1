@@ -41,23 +41,30 @@ function Get-AvmBicepResourceLocation {
                 Get-AvmPropertyValue -InputObject $provider -Name 'ResourceTypes'
             }
         )
+        $matchingTypes = @($resourceTypes | Where-Object {
+                (Get-AvmPropertyValue -InputObject $_ -Name 'ResourceTypeName') -eq $typeName
+            })
         $providerLocations = @(
-            foreach ($type in $resourceTypes) {
-                if ((Get-AvmPropertyValue -InputObject $type -Name 'ResourceTypeName') -eq $typeName) {
-                    foreach ($location in (Get-AvmPropertyValue -InputObject $type -Name 'Locations')) {
-                        if ($location -is [string] -and -not [string]::IsNullOrWhiteSpace($location)) {
-                            ($location -replace '\s', '').ToLowerInvariant()
-                        }
+            foreach ($type in $matchingTypes) {
+                foreach ($location in (Get-AvmPropertyValue -InputObject $type -Name 'Locations')) {
+                    if ($location -is [string] -and -not [string]::IsNullOrWhiteSpace($location)) {
+                        ($location -replace '\s', '').ToLowerInvariant()
                     }
                 }
             }
         ) | Sort-Object -Unique
         $providerLocations = @($providerLocations)
         if ($providerLocations.Count -eq 0) {
-            throw [AvmConfigurationException]::new(
-                "No location metadata was returned for '$ResourceType'; supply an explicit resource location.")
+            if ($matchingTypes.Count -eq 0 -or @($matchingTypes | Where-Object {
+                        $locations = Get-AvmPropertyValue -InputObject $_ -Name 'Locations' -NoEnumerate
+                        $null -eq $locations -or @($locations).Count -gt 0
+                    }).Count -gt 0) {
+                throw [AvmConfigurationException]::new(
+                    "No location metadata was returned for '$ResourceType'; supply an explicit resource location.")
+            }
         }
-        if ($providerLocations.Count -eq 1 -and $providerLocations[0] -eq 'global') {
+        if ($providerLocations.Count -eq 0 -or
+            ($providerLocations.Count -eq 1 -and $providerLocations[0] -eq 'global')) {
             $location = ($MetadataLocation -replace '\s', '').ToLowerInvariant()
             if ([string]::IsNullOrWhiteSpace($location) -or $location -in $unavailable) {
                 throw [AvmConfigurationException]::new('The global resource requires a metadata location that has not failed validation.')

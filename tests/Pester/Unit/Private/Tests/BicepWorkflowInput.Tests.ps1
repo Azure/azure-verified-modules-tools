@@ -312,13 +312,17 @@ Describe 'Bicep workflow resource location selection' {
         }
     }
 
-    It 'uses the fixed metadata location only for explicit global availability' {
-        InModuleScope Avm.Authoring {
+    It 'uses the fixed metadata location for <Availability>' -ForEach @(
+        @{ Availability = 'explicit global availability'; Locations = @('Global') }
+        @{ Availability = 'an explicitly empty location list'; Locations = @() }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Locations = $Locations } {
+            param($Locations)
             Mock Get-AzResourceProvider {
-                @{ ProviderNamespace = 'Microsoft.Authorization'; ResourceTypes = @(@{ ResourceTypeName = 'roleDefinitions'; Locations = @('Global') }) }
+                @{ ProviderNamespace = 'Microsoft.Authorization'; ResourceTypes = @(@{ ResourceTypeName = 'policyAssignments'; Locations = $Locations }) }
             }
             Mock Get-AzLocation { throw 'Global resources must not select another region.' }
-            $actual = Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Authorization/roleDefinitions' `
+            $actual = Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Authorization/policyAssignments' `
                 -MetadataLocation 'West US'
             $actual.Location | Should -Be 'westus'
             $actual.IsGlobal | Should -BeTrue
@@ -326,10 +330,36 @@ Describe 'Bicep workflow resource location selection' {
         }
     }
 
+    It 'rejects unavailable metadata locations for a location-less resource' {
+        InModuleScope Avm.Authoring {
+            Mock Get-AzResourceProvider {
+                @{ ProviderNamespace = 'Microsoft.Authorization'; ResourceTypes = @(@{ ResourceTypeName = 'policyAssignments'; Locations = @() }) }
+            }
+            { Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Authorization/policyAssignments' `
+                    -MetadataLocation 'West US' -UnavailableRegions 'westus' } |
+                Should -Throw -ExpectedMessage '*metadata location that has not failed validation*'
+        }
+    }
+
     It 'rejects absent provider location metadata rather than treating it as global' {
         InModuleScope Avm.Authoring {
             Mock Get-AzResourceProvider { @{ ProviderNamespace = 'Microsoft.Storage'; ResourceTypes = @() } }
             { Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Storage/storageAccounts' -MetadataLocation 'westus' } |
+                Should -Throw -ExpectedMessage '*No location metadata*'
+        }
+    }
+
+    It 'rejects malformed or missing provider locations rather than treating them as empty' {
+        InModuleScope Avm.Authoring {
+            Mock Get-AzResourceProvider {
+                @{ ProviderNamespace = 'Microsoft.Authorization'; ResourceTypes = @(@{ ResourceTypeName = 'policyAssignments'; Locations = @(' ') }) }
+            }
+            { Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Authorization/policyAssignments' -MetadataLocation 'westus' } |
+                Should -Throw -ExpectedMessage '*No location metadata*'
+            Mock Get-AzResourceProvider {
+                @{ ProviderNamespace = 'Microsoft.Authorization'; ResourceTypes = @(@{ ResourceTypeName = 'policyAssignments' }) }
+            }
+            { Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Authorization/policyAssignments' -MetadataLocation 'westus' } |
                 Should -Throw -ExpectedMessage '*No location metadata*'
         }
     }
