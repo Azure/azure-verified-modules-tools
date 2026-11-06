@@ -460,6 +460,18 @@ Describe 'Terraform workflow required-feature preflight' -Tag Component {
         Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
     }
 
+    It 'allows feature preflight for an external effective e2e subscription' {
+        Set-Content -LiteralPath 'terraform.tf' -Value 'terraform {}' -Encoding utf8NoBOM
+        Set-Content -LiteralPath '.required-features.json' `
+            -Value '["Microsoft.Compute/EncryptionAtHost"]' -Encoding utf8NoBOM
+        $env:SELECTED_SUBSCRIPTION_ID = $script:otherSubscription
+        $env:ARM_SUBSCRIPTION_ID = $script:otherSubscription
+        & $script:preflight
+        (Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw).Trim() | Should -BeExactly 'required=true'
+        Should -Invoke Resolve-AvmAzureCli -ModuleName Avm.Authoring -Exactly 0
+        Should -Invoke Invoke-AvmAzureCli -ModuleName Avm.Authoring -Exactly 0
+    }
+
     It 'validates every declared feature offline and announces that Azure registration follows login' {
         Set-Content -LiteralPath 'terraform.tf' -Value 'terraform {}' -Encoding utf8NoBOM
         Set-Content -LiteralPath '.required-features.json' -Encoding utf8NoBOM -Value (

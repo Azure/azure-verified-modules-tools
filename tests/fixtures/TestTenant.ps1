@@ -96,7 +96,7 @@ function New-AvmTestBamiPlan {
         [string] $PrincipalId = '10000000-0000-4000-8000-000000000007',
         [string] $WorkflowRef,
         [switch] $BicepRegistryFederation,
-        [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test', 'examples-test-execution')
+        [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test-execution')
     )
 
     $condition = @'
