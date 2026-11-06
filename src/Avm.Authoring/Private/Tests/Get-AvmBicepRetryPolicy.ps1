@@ -23,6 +23,18 @@ function Get-AvmBicepRetryPolicy {
     if (-not (Test-Json -Json $json -Schema $schema -ErrorAction SilentlyContinue)) {
         throw [AvmConfigurationException]::new('The Bicep retry policy has invalid fields, modes or execution limits.')
     }
+    $nestedPattern = $policy['nestedRead']['messagePattern']
+    try {
+        $nestedRegex = [regex]::new($nestedPattern, [System.Text.RegularExpressions.RegexOptions]::None,
+            [timespan]::FromMilliseconds(100))
+    }
+    catch [System.ArgumentException] {
+        throw [AvmConfigurationException]::new('Invalid nested deployment read pattern.', $_.Exception)
+    }
+    if (-not $nestedPattern.StartsWith('\A') -or -not $nestedPattern.EndsWith('\z') -or
+        $nestedRegex.GetGroupNames() -cnotcontains 'name') {
+        throw [AvmConfigurationException]::new('The nested deployment read pattern must be anchored and capture the deployment name.')
+    }
     $ids = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($rule in $policy['rules']) {
         if (-not $ids.Add($rule['id']) -or

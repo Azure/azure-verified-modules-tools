@@ -54,6 +54,89 @@ Describe 'Bicep authorization propagation reads' {
         }
     }
 
+    It 'uses configured propagation status and code for responses and exceptions' {
+        InModuleScope Avm.Authoring {
+            $policy = Get-AvmBicepRetryPolicy
+            $policy['authorizationPropagation']['statusCode'] = 429
+            $policy['authorizationPropagation']['errorCode'] = 'FixturePropagation'
+            $policy = Get-AvmBicepRetryPolicy -InputObject $policy
+            $response = @{ StatusCode = 429; Content = '{"error":{"code":"FixturePropagation"}}' }
+            Test-AvmBicepAuthorizationFailed -Response $response -Policy $policy | Should -BeTrue
+            Test-AvmBicepAuthorizationFailed -Response @{
+                StatusCode = 403; Content = '{"error":{"code":"AuthorizationFailed"}}'
+            } -Policy $policy | Should -BeFalse
+            $fault = [InvalidOperationException]::new('Denied.')
+            $fault | Add-Member -NotePropertyName Response -NotePropertyValue $response
+            $record = [Management.Automation.ErrorRecord]::new($fault, 'Fixture', 'PermissionDenied', $null)
+            Test-AvmBicepAuthorizationFailed -ErrorRecord $record -Policy $policy | Should -BeTrue
+        }
+    }
+
+    It 'uses configured attempts and poll interval for opted-in reads' {
+        InModuleScope Avm.Authoring {
+            $script:retryPolicy = Get-AvmBicepRetryPolicy
+            $script:retryPolicy['authorizationPropagation']['attempts'] = 3
+            $script:retryPolicy['authorizationPropagation']['pollIntervalSeconds'] = 2
+            $script:retryPolicy = Get-AvmBicepRetryPolicy -InputObject $script:retryPolicy
+            Mock Get-AvmBicepRetryPolicy { $script:retryPolicy }
+            $response = Invoke-AvmBicepRead -Activity 'Owned deployment read' -RetryAuthorizationPropagation -Read {
+                $script:calls++
+                @{ StatusCode = 403; Content = '{"error":{"code":"AuthorizationFailed"}}' }
+            }
+            $response.StatusCode | Should -Be 403
+            $script:calls | Should -Be 3
+            Should -Invoke Start-Sleep -Exactly 2 -ParameterFilter { $Seconds -eq 2 }
+        }
+    }
+
+    It 'uses the configured propagation window for opted-in reads' {
+        InModuleScope Avm.Authoring {
+            $script:retryPolicy = Get-AvmBicepRetryPolicy
+            $script:retryPolicy['authorizationPropagation']['timeoutSeconds'] = 3
+            $script:retryPolicy['authorizationPropagation']['pollIntervalSeconds'] = 1
+            $script:retryPolicy = Get-AvmBicepRetryPolicy -InputObject $script:retryPolicy
+            $script:clock = [datetime]::new(2026, 1, 1, 0, 0, 0, [DateTimeKind]::Utc)
+            Mock Get-AvmBicepRetryPolicy { $script:retryPolicy }
+            Mock Get-Date { $script:clock }
+            Mock Start-Sleep { $script:clock = $script:clock.AddSeconds($Seconds) }
+            $response = Invoke-AvmBicepRead -Activity 'Owned deployment read' -RetryAuthorizationPropagation -Read {
+                $script:calls++
+                @{ StatusCode = 403; Content = '{"error":{"code":"AuthorizationFailed"}}' }
+            }
+            $response.StatusCode | Should -Be 403
+            $script:calls | Should -Be 3
+            $script:clock | Should -Be ([datetime]::new(2026, 1, 1, 0, 0, 3, [DateTimeKind]::Utc))
+        }
+    }
+
+    It 'respects configured non-retryable categories while allowing permission-denied records' {
+        InModuleScope Avm.Authoring {
+            $policy = Get-AvmBicepRetryPolicy
+            $fault = [InvalidOperationException]::new('Denied.')
+            $fault | Add-Member -NotePropertyName Response -NotePropertyValue @{
+                StatusCode = 403; Content = '{"error":{"code":"AuthorizationFailed"}}'
+            }
+            foreach ($category in @('AuthenticationError', 'SecurityError', 'PermissionDenied')) {
+                $record = [Management.Automation.ErrorRecord]::new($fault, 'Fixture', $category, $null)
+                Test-AvmBicepAuthorizationFailed -ErrorRecord $record -Policy $policy |
+                    Should -Be ($category -eq 'PermissionDenied')
+            }
+            $policy['authorizationPropagation']['nonRetryableCategories'] = @('PermissionDenied')
+            Test-AvmBicepAuthorizationFailed -ErrorRecord $record -Policy $policy | Should -BeFalse
+        }
+    }
+
+    It 'does not classify a conflicting response status as authorization propagation' {
+        InModuleScope Avm.Authoring {
+            $fault = [InvalidOperationException]::new('Denied.')
+            $fault | Add-Member -NotePropertyName StatusCode -NotePropertyValue 403
+            $fault | Add-Member -NotePropertyName Response -NotePropertyValue @{ StatusCode = 500 }
+            $fault | Add-Member -NotePropertyName Body -NotePropertyValue @{ Code = 'AuthorizationFailed' }
+            $record = [Management.Automation.ErrorRecord]::new($fault, 'Fixture', 'PermissionDenied', $null)
+            Test-AvmBicepAuthorizationFailed -ErrorRecord $record | Should -BeFalse
+        }
+    }
+
     It 'completes owned deployment discovery when operation authorization propagates' {
         InModuleScope Avm.Authoring {
             $id = '/subscriptions/00000000-0000-0000-0000-000000000001/providers/Microsoft.Resources/deployments/root'
@@ -149,11 +232,13 @@ Describe 'Bicep authorization propagation reads' {
 
     It 'does not retry authorization exceptions mixed with <Case>' -ForEach @(
         @{ Case = 'an unrelated inner cause' }, @{ Case = 'a sibling failure' }, @{ Case = 'cancellation' }
+        @{ Case = 'pipeline cancellation' }
     ) {
         InModuleScope Avm.Authoring -Parameters @{ Case = $Case } {
             param($Case)
             $inner = if ($Case -eq 'an unrelated inner cause') { [InvalidOperationException]::new('Other failure.') }
             elseif ($Case -eq 'cancellation') { [OperationCanceledException]::new('Cancelled.') }
+            elseif ($Case -eq 'pipeline cancellation') { [Management.Automation.PipelineStoppedException]::new() }
             else { $null }
             $fault = [InvalidOperationException]::new('Denied.', $inner)
             $fault | Add-Member -NotePropertyName Response -NotePropertyValue @{

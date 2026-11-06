@@ -15,6 +15,11 @@ Describe 'Bicep retry policy validation and generic matching' {
             $policy['limits']['deploymentAttempts'] | Should -Be 3
             $policy['limits']['regionAttempts'] | Should -Be 3
             $policy['reads']['attempts'] | Should -Be 3
+            $policy['authorizationPropagation']['attempts'] | Should -Be 12
+            $policy['authorizationPropagation']['timeoutSeconds'] | Should -Be 60
+            $policy['authorizationPropagation']['pollIntervalSeconds'] | Should -Be 5
+            $policy['authorizationPropagation']['statusCode'] | Should -Be 403
+            $policy['authorizationPropagation']['errorCode'] | Should -BeExactly 'AuthorizationFailed'
             $policy['observation']['timeoutSeconds'] | Should -Be 3600
             $policy['observation']['coordinatorTimeoutSeconds'] | Should -Be 14400
             $policy['modes']['InPlace']['location'] | Should -BeExactly 'Preserve'
@@ -34,6 +39,12 @@ Describe 'Bicep retry policy validation and generic matching' {
         @{ Invalid = 'absent capture' }, @{ Invalid = 'missing target types' }, @{ Invalid = 'ambiguous empty code' }
         @{ Invalid = 'contradictory targets' }, @{ Invalid = 'contradictory parent' }
         @{ Invalid = 'missing JSON evidence' }, @{ Invalid = 'invalid numeric bounds' }, @{ Invalid = 'case-duplicate field' }
+        @{ Invalid = 'missing propagation' }, @{ Invalid = 'unbounded propagation attempts' }
+        @{ Invalid = 'unbounded propagation window' }, @{ Invalid = 'zero propagation interval' }
+        @{ Invalid = 'invalid propagation status' }, @{ Invalid = 'invalid propagation code' }
+        @{ Invalid = 'missing authorization category' }, @{ Invalid = 'invalid nested category' }
+        @{ Invalid = 'invalid nested pattern' }, @{ Invalid = 'unanchored nested pattern' }
+        @{ Invalid = 'nested pattern without name' }
     ) {
         InModuleScope Avm.Authoring -Parameters @{ Invalid = $Invalid } {
             param($Invalid)
@@ -61,6 +72,17 @@ Describe 'Bicep retry policy validation and generic matching' {
                 'contradictory parent' { $policy['rules'][0]['parentWithoutTarget'] = $true }
                 'missing JSON evidence' { $policy['rules'][0]['jsonMessagePattern'] = '\S' }
                 'invalid numeric bounds' { $policy['rules'][1]['numberCaptures']['cpu']['maximum'] = 0 }
+                'missing propagation' { $policy.Remove('authorizationPropagation') }
+                'unbounded propagation attempts' { $policy['authorizationPropagation']['attempts'] = 13 }
+                'unbounded propagation window' { $policy['authorizationPropagation']['timeoutSeconds'] = 61 }
+                'zero propagation interval' { $policy['authorizationPropagation']['pollIntervalSeconds'] = 0 }
+                'invalid propagation status' { $policy['authorizationPropagation']['statusCode'] = 401 }
+                'invalid propagation code' { $policy['authorizationPropagation']['errorCode'] = '' }
+                'missing authorization category' { $policy['authorizationPropagation']['nonRetryableCategories'] = @('SecurityError') }
+                'invalid nested category' { $policy['nestedRead']['nonRetryableCategories'] = @('AuthenticationError', 'PermissionDenied', 'InvalidResult') }
+                'invalid nested pattern' { $policy['nestedRead']['messagePattern'] = '[' }
+                'unanchored nested pattern' { $policy['nestedRead']['messagePattern'] = '(?<name>.+)' }
+                'nested pattern without name' { $policy['nestedRead']['messagePattern'] = '\A.+\z' }
                 'case-duplicate field' {
                     $copy = [Collections.Specialized.OrderedDictionary]::new([StringComparer]::Ordinal)
                     foreach ($key in $policy.psbase.Keys) { $copy.Add($key, $policy[$key]) }

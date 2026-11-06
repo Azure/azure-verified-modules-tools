@@ -14,8 +14,12 @@ function Invoke-AvmBicepRead {
     $ErrorActionPreference = 'Stop'
     $readAction = $Read
     $retryActivity = $Activity
-    $readPolicy = (Get-AvmBicepRetryPolicy)['reads']
-    $propagationDeadline = if ($RetryAuthorizationPropagation) { (Get-Date -AsUTC).AddSeconds(60) } else { $null }
+    $policy = Get-AvmBicepRetryPolicy
+    $readPolicy = $policy['reads']
+    $propagationDeadline = if ($RetryAuthorizationPropagation) {
+        (Get-Date -AsUTC).AddSeconds($policy['authorizationPropagation']['timeoutSeconds'])
+    }
+    else { $null }
     $networkRead = {
         Invoke-AvmRetry -RetryActivity $retryActivity -RetryMaxAttempts $readPolicy['attempts'] `
             -RetryInitialDelaySeconds $readPolicy['initialDelaySeconds'] -RetryQuiet -RetryAction {
@@ -33,7 +37,7 @@ function Invoke-AvmBicepRead {
         }
     }
     if ($RetryAuthorizationPropagation) {
-        return Invoke-AvmBicepAuthorizationRead -Read $networkRead -DeadlineUtc $propagationDeadline
+        return Invoke-AvmBicepAuthorizationRead -Read $networkRead -DeadlineUtc $propagationDeadline -Policy $policy
     }
     return & $networkRead
 }

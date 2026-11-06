@@ -9,7 +9,8 @@ function Test-AvmBicepObservedNestedReadFailure {
     )
 
     Set-StrictMode -Version 3.0
-    if ($ErrorRecord.CategoryInfo.Category -in @('AuthenticationError', 'PermissionDenied', 'SecurityError') -or
+    $policy = (Get-AvmBicepRetryPolicy)['nestedRead']
+    if ($ErrorRecord.CategoryInfo.Category -in $policy['nonRetryableCategories'] -or
         (Get-AvmBicepDeploymentErrorKind -ErrorRecord $ErrorRecord) -ne 'Other' -or
         $DeploymentId -notmatch '\A/subscriptions/(?<subscription>[0-9a-f-]{36})/providers/Microsoft\.Resources/deployments/(?<name>[a-z0-9_.()-]+)\z') {
         return $false
@@ -22,11 +23,7 @@ function Test-AvmBicepObservedNestedReadFailure {
     if ($profileId -isnot [string] -or -not [guid]::TryParseExact($profileId, 'D', [ref]$selected) -or
         $selected -ne $subscription) { return $false }
 
-    $pattern = @(
-        '\A(?:The running command stopped because the preference variable "ErrorActionPreference" or common parameter is set to Stop: )?'
-        "Deployment '(?<name>[a-zA-Z0-9_.()-]+)' could not be found\. StatusCode: 404 ReasonPhrase: Not Found"
-        '(?: OperationID\s*:\s*[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})?\s*\z'
-    ) -join ''
+    $pattern = $policy['messagePattern']
     $name = $null
     $visited = [System.Collections.Generic.HashSet[System.Exception]]::new()
     $exception = $ErrorRecord.Exception
@@ -48,7 +45,7 @@ function Test-AvmBicepObservedNestedReadFailure {
         $name = $Matches.name
         $next = $exception.InnerException
         if ($exception -is [System.Management.Automation.RuntimeException] -and $null -ne $exception.ErrorRecord) {
-            if ($exception.ErrorRecord.CategoryInfo.Category -in @('AuthenticationError', 'PermissionDenied', 'SecurityError')) {
+            if ($exception.ErrorRecord.CategoryInfo.Category -in $policy['nonRetryableCategories']) {
                 return $false
             }
             $recordException = $exception.ErrorRecord.Exception

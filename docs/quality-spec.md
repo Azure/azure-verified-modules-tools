@@ -20,6 +20,10 @@ boundary.
   trust, platform, or user-facing boundaries explicit.
 - Add abstractions, dependencies, configuration, and public options only when a
   demonstrated need justifies their ongoing cost.
+- Keep classification and tuning values, including error codes, statuses,
+  message patterns, retry limits, timings, and region lists, in versioned
+  resource configuration with a schema rather than inline literals. Tests may
+  use literals.
 - Keep each function focused on one responsibility. Extract a helper to clarify
   or reuse behavior, not merely to shorten a function.
 - Preserve compatibility for existing users. Make intentional public behavior

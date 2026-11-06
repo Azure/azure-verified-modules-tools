@@ -172,6 +172,29 @@ Describe 'Bicep observed nested read evidence' {
         }
     }
 
+    It 'uses the configured nested message pattern and blocked categories' {
+        InModuleScope Avm.Authoring {
+            $script:retryPolicy = Get-AvmBicepRetryPolicy
+            $script:retryPolicy['nestedRead']['messagePattern'] = '\AUnavailable: (?<name>[a-z]+)\z'
+            $script:retryPolicy = Get-AvmBicepRetryPolicy -InputObject $script:retryPolicy
+            Mock Get-AvmBicepRetryPolicy { $script:retryPolicy }
+            $fault = [InvalidOperationException]::new('Unavailable: module')
+            $record = [Management.Automation.ErrorRecord]::new($fault, 'Fixture', 'InvalidResult', $null)
+            Test-AvmBicepObservedNestedReadFailure -ErrorRecord $record -DeploymentId $script:root `
+                -DefaultProfile $script:profile -Observed $script:observed | Should -BeTrue
+            $blocked = [Management.Automation.ErrorRecord]::new($fault, 'Fixture', 'PermissionDenied', $null)
+            Test-AvmBicepObservedNestedReadFailure -ErrorRecord $blocked -DeploymentId $script:root `
+                -DefaultProfile $script:profile -Observed $script:observed | Should -BeFalse
+            $previous = [InvalidOperationException]::new($script:message)
+            $previousRecord = [Management.Automation.ErrorRecord]::new($previous, 'Fixture', 'InvalidResult', $null)
+            Test-AvmBicepObservedNestedReadFailure -ErrorRecord $previousRecord -DeploymentId $script:root `
+                -DefaultProfile $script:profile -Observed $script:observed | Should -BeFalse
+            $script:retryPolicy['nestedRead']['nonRetryableCategories'] = @('InvalidResult')
+            Test-AvmBicepObservedNestedReadFailure -ErrorRecord $record -DeploymentId $script:root `
+                -DefaultProfile $script:profile -Observed $script:observed | Should -BeFalse
+        }
+    }
+
     It 'rejects message-only evidence with <Invalid>' -ForEach @(
         @{ Invalid = 'a different deployment' }, @{ Invalid = 'no observed child' }
         @{ Invalid = 'another subscription' }, @{ Invalid = 'another profile' }
