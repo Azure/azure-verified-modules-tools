@@ -2921,7 +2921,9 @@ This section is the implementation-level expression of the **Security stance** p
   and Bicep sync do not opt in.
 - Use GitHub Actions job concurrency keyed by the canonical repository state ID,
   independent of branch and provider prefix, with `cancel-in-progress: false`.
-  Retain workflow-wide serialization; do not implement custom run/job polling
+  Do not serialize whole workflow runs: only jobs targeting the same repository
+  state wait for one another, while unrelated repositories proceed independently.
+  Do not implement custom run/job polling
   or require an additional Actions read token. Permit any Tools branch in the
   Terraform Sync workflow for the selected repository. Check the initialized
   default-workspace backend against the exact selected key and all configured
@@ -3077,8 +3079,8 @@ are deferred to a separate full-module pre-release check, never reported as
 passed. Normal standalone and module release validation defaults do not change.
 Preparation, validation and publication run as ordered steps directly in the
 `repository-management-sync.yml` matrix job, with one `avm` environment job per
-repository and no nested reusable workflow. Keep workflow-wide and
-repository-state concurrency, independent matrix failures, read-only contents permission and
+repository and no nested reusable workflow. Keep only repository-state job
+concurrency, independent matrix failures, read-only contents permission and
 step-scoped credentials. Validation failure blocks publication; plan-only runs
 validate without publishing. Candidate and receipt artifacts remain diagnostic
 outputs, not inter-job transfers. Keep the candidate identity configuration,
