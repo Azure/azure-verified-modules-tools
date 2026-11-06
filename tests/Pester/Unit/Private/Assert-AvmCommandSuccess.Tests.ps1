@@ -88,4 +88,57 @@ Describe 'Assert-AvmCommandSuccess annotations' {
         $annotations.Count | Should -Be 1
         $annotations[0] | Should -BeExactly '::error::error something broke'
     }
+
+    It 'keeps the diagnostic and result on the exception without replaying them in the terminating error' {
+        InModuleScope 'Avm.Authoring' {
+            $detail = "Process exited with code 1: terraform plan`n  InvalidAuthenticationTokenTenant"
+            $result = [pscustomobject]@{
+                Status = 'error'
+                Steps = @([pscustomobject]@{ Step = 'check policy'; Status = 'error'; Error = $detail })
+            }
+            $captured = @()
+            $caught = $null
+            try {
+                Assert-AvmCommandSuccess -Verb 'pr-check' -Status 'error' -Result $result -InformationVariable captured
+            }
+            catch {
+                $caught = $_
+            }
+            $caught | Should -Not -BeNullOrEmpty
+            $caught.Exception.GetType().Name | Should -Be 'AvmCommandException'
+            $caught.FullyQualifiedErrorId | Should -Match 'AVM1040'
+            [object]::ReferenceEquals($caught.Exception.Result, $result) | Should -BeTrue
+            $caught.Exception.Message | Should -Match 'InvalidAuthenticationTokenTenant'
+            $caught.ErrorDetails.Message | Should -BeExactly 'avm pr-check failed (error).'
+            $annotations = @($captured | ForEach-Object { [string]$_.MessageData } | Where-Object { $_ -like '::error*' })
+            $annotations | Should -HaveCount 1
+            $annotations[0] | Should -Match 'InvalidAuthenticationTokenTenant'
+        }
+    }
+
+    Describe 'Gauntlet failure narration' {
+        It 'narrates only the headline and retains full failure detail for <Command>' -ForEach @(
+            @{ Command = 'Invoke-AvmPrCheck' }
+            @{ Command = 'Invoke-AvmPreCommit' }
+        ) {
+            InModuleScope 'Avm.Authoring' -Parameters @{ Command = $Command } {
+                param($Command)
+                Mock Get-AvmModuleContextInternal { [pscustomobject]@{ Root = 'fixture'; Ecosystem = 'bicep' } }
+                Mock Test-AvmDisableSentinel {}
+                Mock Assert-AvmGitWorkingTreeClean {}
+                Mock Resolve-AvmCommandTool { @() }
+                Mock Test-AvmMetadataModules { [pscustomobject]@{ Status = 'pass' } }
+                Mock Invoke-AvmSync { [pscustomobject]@{ Status = 'pass' } }
+                Mock Invoke-AvmFormat { throw [System.Exception]::new("Tool failed`nDetailed failure cause") }
+                Mock Write-AvmLog {}
+
+                $result = & $Command -Path fixture -Ecosystem bicep -SkipModuleVersionCheck
+
+                $result.Status | Should -Be 'error'
+                $result.Steps[-1].Error | Should -BeExactly "Tool failed`nDetailed failure cause"
+                Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter { $Message -eq '  format: Tool failed' }
+                Should -Invoke Write-AvmLog -Exactly 0 -ParameterFilter { $Message -match 'Detailed failure cause' }
+            }
+        }
+    }
 }

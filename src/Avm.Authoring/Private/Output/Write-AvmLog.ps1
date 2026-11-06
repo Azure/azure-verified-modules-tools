@@ -88,7 +88,7 @@ function Test-AvmColorEnabled {
         return $true
     }
     if (Test-AvmGitHubActionsContext) {
-        return $true
+        return $false
     }
 
     try {
