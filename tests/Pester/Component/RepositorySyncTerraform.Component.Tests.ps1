@@ -120,6 +120,52 @@ Describe 'Repository Terraform saved-plan execution' -Tag Component {
         $script:fixture.Calls.Count | Should -Be 3
     }
 
+    It 'applies a verified variable publication while forgetting only legacy Actions settings and retaining Dependabot mirrors' {
+        $github = @($script:fixture.Plan.planned_values.root_module.child_modules |
+                Where-Object address -EQ 'module.github')[0]
+        $settings = @{
+            arm_tenant_id = @{ name = 'ARM_TENANT_ID'; value = $script:parameters.bamiSettings.TEST_BAMI_TENANT_ID }
+            arm_client_id = @{ name = 'ARM_CLIENT_ID'; value = '10000000-0000-4000-8000-000000000006' }
+            test_subscription_ids = @{
+                name = 'TEST_SUBSCRIPTION_IDS'
+                value = ConvertTo-Json -InputObject @(Get-AvmGeneralTestSubscription -Settings $script:parameters.bamiSettings) -Compress
+            }
+        }
+        foreach ($key in $settings.Keys) {
+            $setting = $settings[$key]
+            $address = "module.github.github_actions_variable.$key[0]"
+            $values = @{ repository = 'terraform-azurerm-avm-ptn-example-repo'; variable_name = $setting.name; value = $setting.value }
+            $github.resources += @{
+                address = $address; mode = 'managed'; type = 'github_actions_variable'; values = $values
+            }
+            $script:fixture.Plan.resource_changes += @{
+                address = $address; mode = 'managed'; type = 'github_actions_variable'
+                provider_name = 'registry.terraform.io/integrations/github'
+                change = @{ actions = @('create'); before = $null; after = $values; after_unknown = @{} }
+            }, @{
+                address = "module.github.github_actions_secret.$key[0]"
+                mode = 'managed'; type = 'github_actions_secret'
+                provider_name = 'registry.terraform.io/integrations/github'
+                change = @{ actions = @('forget'); before = @{ secret_name = $setting.name }; after = $null }
+            }
+            $mirror = @{ repository = $values.repository; secret_name = $setting.name; value = $setting.value }
+            $address = "module.github.github_dependabot_secret.$key[0]"
+            $github.resources += @{
+                address = $address; mode = 'managed'; type = 'github_dependabot_secret'; values = $mirror
+            }
+            $script:fixture.Plan.resource_changes += @{
+                address = $address; mode = 'managed'; type = 'github_dependabot_secret'
+                provider_name = 'registry.terraform.io/integrations/github'
+                change = @{ actions = @('no-op'); before = $mirror; after = $mirror; after_unknown = @{} }
+            }
+        }
+        $null = Invoke-TerraformPlanAndApply @script:parameters
+        $script:fixture.Calls.Count | Should -Be 3
+        @($script:fixture.Plan.resource_changes | Where-Object { $_.change.actions -contains 'delete' }) |
+            Should -HaveCount 0
+        Should -Invoke Start-Process -Exactly 0
+    }
+
     It 'allows cached repository-name aliases when the immutable GitHub ID still matches' {
         $change = $script:fixture.Plan.resource_changes[-1].change
         $change.before.id = 'previous-name'

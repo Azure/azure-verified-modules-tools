@@ -221,7 +221,7 @@ Describe 'Terraform General subscription selection' {
         $selection = @($steps | Where-Object { $_['id'] -eq $StepId })[0]
         $selection.run | Should -BeExactly $script:selectionScript.ToString()
         $selection.env.SUBSCRIPTION_ORDER | Should -BeExactly '${{ needs.subscriptions.outputs.subscriptionOrder }}'
-        $selection.env.TEST_SUBSCRIPTION_IDS | Should -BeExactly '${{ secrets.TEST_SUBSCRIPTION_IDS }}'
+        $selection.env.TEST_SUBSCRIPTION_IDS | Should -BeExactly '${{ vars.TEST_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS }}'
         $preparation = @($steps | Where-Object name -EQ 'Prepare test environment')[0]
         $preparation.env.SUBSCRIPTION_IDS | Should -BeExactly ('${{ steps.' + $StepId + '.outputs.subscriptionIds }}')
         $preparation.env.SELECTED_SUBSCRIPTION_ID | Should -BeExactly ('${{ steps.' + $StepId + '.outputs.subscriptionId }}')
@@ -343,15 +343,15 @@ Describe 'Terraform General subscription selection' {
         $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN = 'oidc-token'
         $env:ACTIONS_ID_TOKEN_REQUEST_URL = 'oidc-url'
         $vars = @{
-            ARM_CLIENT_ID = 'variable-client'
-            ARM_TENANT_ID = 'variable-tenant'
+            ARM_CLIENT_ID = 'standard-client'
+            ARM_TENANT_ID = 'standard-tenant'
             ARM_SUBSCRIPTION_ID = $script:reserved.id
             MODULE_SETTING = 'variable-value'
             PATH = 'unsafe-path'
         }
         $secrets = @{
-            ARM_CLIENT_ID = 'standard-client'
-            ARM_TENANT_ID = 'standard-tenant'
+            ARM_CLIENT_ID = 'legacy-client'
+            ARM_TENANT_ID = 'legacy-tenant'
             MODULE_SETTING = 'secret-value'
             TEST_SUBSCRIPTION_IDS = (ConvertTo-Json -InputObject @($script:reserved, $script:general, $script:untagged) -Compress)
         }
@@ -384,6 +384,56 @@ Describe 'Terraform General subscription selection' {
         $poolWrite | Should -HaveCount 1
         $poolWrite[0] | Should -Match ([regex]::Escape($env:SUBSCRIPTION_IDS))
         $poolWrite[0] | Should -Not -Match ([regex]::Escape($script:reserved.id))
+    }
+
+    It 'prefers only migrated variables while preserving secret precedence for credentials and legacy ARM defaults in <Job>' -ForEach @(
+        @{ Job = 'pr-check' }
+        @{ Job = 'integration-test' }
+        @{ Job = 'e2e-test' }
+    ) {
+        $env:SUBSCRIPTION_IDS = ConvertTo-Json -InputObject @($script:general) -Compress
+        $env:SELECTED_SUBSCRIPTION_ID = $script:general.id
+        $env:VARS_CONTEXT = ConvertTo-Json -InputObject @{
+            ARM_CLIENT_ID = 'variable-client'
+            ARM_TENANT_ID = 'variable-tenant'
+            TEST_SUBSCRIPTION_IDS = $env:SUBSCRIPTION_IDS
+            ARM_CLIENT_SECRET = 'variable-placeholder'
+            MODULE_SETTING = 'variable-setting'
+        } -Compress
+        $env:SECRETS_CONTEXT = ConvertTo-Json -InputObject @{
+            ARM_CLIENT_ID = 'stale-secret-client'
+            ARM_TENANT_ID = 'stale-secret-tenant'
+            TEST_SUBSCRIPTION_IDS = 'stale-secret-pool'
+            ARM_CLIENT_SECRET = 'fixture-secret'
+            MODULE_SETTING = 'secret-setting'
+        } -Compress
+        & $script:reservationScripts[$Job]
+        $writes = $script:written['fixture-environment'] -join "`n"
+        $writes | Should -Match '(?s)ARM_CLIENT_ID<<[^\n]+\nvariable-client\n'
+        $writes | Should -Match '(?s)ARM_TENANT_ID<<[^\n]+\nvariable-tenant\n'
+        $writes | Should -Match '(?s)ARM_CLIENT_SECRET<<[^\n]+\nfixture-secret\n'
+        $writes | Should -Match '(?s)MODULE_SETTING<<[^\n]+\nsecret-setting\n'
+        $writes | Should -Not -Match 'stale-secret|variable-placeholder'
+    }
+
+    It 'keeps legacy identity secrets usable when migrated variables are <State> in <Job>' -ForEach @(
+        @{ Job = 'pr-check'; State = 'absent' }
+        @{ Job = 'integration-test'; State = 'absent' }
+        @{ Job = 'e2e-test'; State = 'absent' }
+        @{ Job = 'pr-check'; State = 'empty' }
+        @{ Job = 'integration-test'; State = 'empty' }
+        @{ Job = 'e2e-test'; State = 'empty' }
+    ) {
+        $env:SUBSCRIPTION_IDS = ConvertTo-Json -InputObject @($script:general) -Compress
+        $env:SELECTED_SUBSCRIPTION_ID = $script:general.id
+        $env:VARS_CONTEXT = if ($State -eq 'absent') { '{}' } else {
+            '{"ARM_CLIENT_ID":"","ARM_TENANT_ID":""}'
+        }
+        $env:SECRETS_CONTEXT = '{"ARM_CLIENT_ID":"legacy-client","ARM_TENANT_ID":"legacy-tenant"}'
+        & $script:reservationScripts[$Job]
+        $writes = $script:written['fixture-environment'] -join "`n"
+        $writes | Should -Match '(?s)ARM_CLIENT_ID<<[^\n]+\nlegacy-client\n'
+        $writes | Should -Match '(?s)ARM_TENANT_ID<<[^\n]+\nlegacy-tenant\n'
     }
 
     It 'keeps the <Source> General override and replaces an unfiltered ambient pool for e2e' -ForEach @(

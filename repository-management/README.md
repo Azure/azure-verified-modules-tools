@@ -200,9 +200,20 @@ membership edges. The controller never joins these groups. See
 [group access and migration](repository-sync/README.md#bami-group-access-and-migration).
 
 Terraform sync uses dedicated per-repository identities, never the controller
-or Bicep client as a test identity. It replaces the existing repository
-**secrets** `ARM_TENANT_ID`, `ARM_CLIENT_ID`, and `TEST_SUBSCRIPTION_IDS`; writing
-same-named variables would not override the current consumers' secrets.
+or Bicep client as a test identity. It publishes repository **variables**
+`ARM_TENANT_ID`, `ARM_CLIENT_ID`, and `TEST_SUBSCRIPTION_IDS`. These noncredential
+settings take precedence over their legacy secrets in compatible Terraform
+consumers. Dependabot secret mirrors remain managed because Dependabot
+configuration has no variables context. All other credentials, explicit E2E
+overrides, and subscription-vending secrets retain their existing behavior.
+Legacy Actions secrets are removed from Terraform state without deletion:
+update the managed caller pin and verify the three variables against the
+canonical settings before deleting only those three Actions secrets as a
+one-off cleanup. Never delete the Dependabot mirrors. Variables are not masked
+in workflow logs; verification should report matches, not the pool JSON.
+Existing same-named variables must be imported into their new Terraform
+addresses before applying; the GitHub provider's variable creation is not an
+upsert. Start with one approved repository and verify before any fleet rollout.
 There is no fallback to retired-tenant settings. See the
 [unified ownership and execution prerequisites](repository-sync/README.md#unified-bami-ownership).
 

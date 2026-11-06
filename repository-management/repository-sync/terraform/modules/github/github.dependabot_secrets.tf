@@ -1,9 +1,5 @@
-# Mirror of the repository-scope Actions secrets defined in
-# `github.actions_secrets.tf` as Dependabot secrets. Dependabot does not
-# share the Actions secret namespace, so any value Dependabot needs (e.g.
-# for authenticating to private registries via `dependabot.yml`) must be
-# duplicated here. Values are sourced from the same variables to keep
-# Actions and Dependabot in lockstep.
+# Dependabot configuration has no variables context, so retain its secret mirrors.
+# Both namespaces use the same verified repository identity and General pool.
 resource "github_dependabot_secret" "arm_tenant_id" {
   count       = var.repository_creation_mode_enabled ? 0 : 1
   repository  = github_repository.this.name
