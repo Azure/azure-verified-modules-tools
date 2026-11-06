@@ -26,6 +26,7 @@
       clean       - Remove ./out.
       docs        - Generate docs/reference from public comment-based help.
       docs-check  - Fail when docs/reference is missing, stale, or has extra pages.
+      pre-commit-fast - Local feedback gate: docs-check + layout + lint + unit tests.
       pre-commit  - Composite: docs-check + layout + lint + test + component.
       ci          - Full local CI gate: docs-check + layout + lint + coverage + component.
       ci-unit     - CI unit-test matrix leg: docs-check + layout + unit tests.
@@ -759,6 +760,7 @@ task qualification build, {
 }
 
 task 'pre-commit' 'docs-check', layout, lint, test, component
+task 'pre-commit-fast' 'docs-check', layout, lint, test
 
 # CI runs unit and component matrices independently so both tiers can use the
 # full job-level parallelism. The combined task remains for local parity.

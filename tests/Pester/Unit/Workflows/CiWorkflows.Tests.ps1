@@ -204,10 +204,24 @@ Describe 'Independent CI workflows' {
         @($jobs.Keys | Sort-Object) | Should -Be @('bicep-integration', 'component', 'integration', 'lint', 'native-qualification', 'report', 'unit')
         @($jobs.unit.strategy.matrix.include.os) | Should -Be @('ubuntu-latest', 'windows-latest', 'macos-latest')
         @($jobs.unit.strategy.matrix.include.task) | Should -Be @('ci-coverage', 'ci-unit', 'ci-unit')
+        @($jobs.unit.steps | Where-Object name -eq 'Run full unit test suite' | ForEach-Object { $_.if }) |
+            Should -BeExactly "matrix.os == 'ubuntu-latest'"
+        @($jobs.unit.steps | Where-Object name -eq 'Run platform-sensitive unit tests' | ForEach-Object { $_.if }) |
+            Should -BeExactly "matrix.os != 'ubuntu-latest'"
+        @($jobs.unit.steps | Where-Object name -eq 'Run platform-sensitive unit tests' | ForEach-Object { $_.run }) |
+            Should -Match 'Get-AvmToolPlatform\*'
+        @($jobs.unit.steps | Where-Object name -eq 'Run platform-sensitive unit tests' | ForEach-Object { $_.run }) |
+            Should -Match '\*AvmAvoidStringThrow\*'
         foreach ($jobName in @('component', 'integration', 'bicep-integration', 'native-qualification')) {
             $jobs[$jobName].strategy.matrix.os | Should -Be @('ubuntu-latest', 'windows-latest', 'macos-latest')
             $jobs[$jobName]['runs-on'] | Should -BeExactly '${{ matrix.os }}'
         }
+        @($jobs.component.steps | Where-Object name -eq 'Run full component test suite' | ForEach-Object { $_.if }) |
+            Should -BeExactly "matrix.os == 'ubuntu-latest'"
+        @($jobs.component.steps | Where-Object name -eq 'Run platform-sensitive component tests' | ForEach-Object { $_.if }) |
+            Should -BeExactly "matrix.os != 'ubuntu-latest'"
+        @($jobs.component.steps | Where-Object name -eq 'Run platform-sensitive component tests' | ForEach-Object { $_.run }) |
+            Should -Match '\*rejects linked sibling sources in module-scoped documentation\*'
         foreach ($jobName in @('integration', 'bicep-integration', 'native-qualification')) {
             $jobs[$jobName]['if'] | Should -BeExactly "github.event_name != 'push'"
         }
@@ -411,6 +425,7 @@ Describe 'CI test inventory selection' {
     It 'preserves the complete local gate and identical serial, coverage and shard selections' {
         $build = Get-Content -LiteralPath (Join-Path $script:repoRoot 'build' 'avm.build.ps1') -Raw
         $build | Should -Match 'task ''pre-commit'' ''docs-check'', layout, lint, test, component'
+        $build | Should -Match 'task ''pre-commit-fast'' ''docs-check'', layout, lint, test\s'
         $build | Should -Match '\[string\] \$TestGroup = ''All'''
         $build | Should -Match '\$config.Run.Path\s+= @\(\$unitFiles.FullName\)'
         $build | Should -Match '\$config.Run.Path\s+= @\(\$componentFiles.FullName\)'

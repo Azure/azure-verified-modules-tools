@@ -118,7 +118,6 @@ jobs:
 
       - name: Install build prerequisites
         shell: pwsh
-        # The matrix still tests our custom analyzer rule on every OS.
         run: ./scripts/Install-AvmBuildPrerequisites.ps1 -IncludePSScriptAnalyzer -Confirm:$false
 
       - name: PowerShell environment
@@ -128,9 +127,29 @@ jobs:
           Get-Module -ListAvailable -Name InvokeBuild, Pester, PSScriptAnalyzer |
               Select-Object Name, Version | Format-Table
 
-      - name: Run unit tests
+      - name: Run full unit test suite
+        if: matrix.os == 'ubuntu-latest'
         shell: pwsh
         run: ./build.ps1 ${{ matrix.task }} -TestGroup Authoring
+
+      - name: Run platform-sensitive unit tests
+        if: matrix.os != 'ubuntu-latest'
+        shell: pwsh
+        run: |
+          ./build.ps1 ci-unit -TestGroup Authoring -TestName @(
+            'Get-AvmToolPlatform*',
+            'Get-AvmFolder*',
+            'Install-AvmTool*',
+            'Resolve-AvmTool*',
+            'Expand-AvmToolArchive*',
+            'Invoke-AvmProcess*',
+            'Resolve-AvmAzureCli*',
+            '*Build analyzer*',
+            '*AvmAvoidStringThrow*',
+            '*uses one lock path for Windows path case variants*',
+            '*preserves case-sensitive directory identities on every platform*',
+            '*uses Terraform UTF-8 filename order rather than platform culture or UTF-16 order*'
+          )
 
       - name: Upload test results
         if: always()
@@ -168,9 +187,33 @@ jobs:
         shell: pwsh
         run: ./scripts/Install-AvmBuildPrerequisites.ps1 -IncludePSScriptAnalyzer -Confirm:$false
 
-      - name: Run component tests
+      - name: Run full component test suite
+        if: matrix.os == 'ubuntu-latest'
         shell: pwsh
         run: ./build.ps1 ci-component -TestGroup Authoring
+
+      - name: Run platform-sensitive component tests
+        if: matrix.os != 'ubuntu-latest'
+        shell: pwsh
+        run: |
+          ./build.ps1 ci-component -TestGroup Authoring -TestName @(
+            '*writes a portable state file without credentials, parameters or outputs*',
+            '*rejects a noncanonical scope path ending in a newline rather than truncating its identity*',
+            '*rejects linked sibling sources in module-scoped documentation*',
+            '*answers * version probes without starting PowerShell on Windows*',
+            '*retries a move refused by a transient file lock*',
+            '*fails after the bounded attempts while the lock persists*',
+            '*does nothing outside Windows*',
+            '*creates a missing fixture root without a check-then-create race*',
+            '*reopens an existing root without replacing its values or children*',
+            '*supports concurrent bootstrap and preserves each worker through Pester teardown*',
+            '*recovers from a native existing-key error without replacing registry data*',
+            '*creates native Windows test module cache parents before fixture initialization*',
+            '*restores the opt-out when GitHub rejects the push and publishes on the next run*',
+            '*keeps inspection dependencies through migration and cleans them after*',
+            '*does not cache linked package contents*',
+            '*writes strict UTF-8 without BOM, LF, and a trailing newline*'
+          )
 
       - name: Upload test results
         if: always()

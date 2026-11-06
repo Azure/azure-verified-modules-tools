@@ -45,7 +45,7 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
         Copy-AvmCatalogBicepSource -Sources @($inventory.Sources | Where-Object Ecosystem -eq 'bicep') -Destination $copy
         [System.IO.File]::ReadAllText((Join-Path $copy 'avm' 'res' 'storage' 'storage-account' 'DEPRECATED.md')) |
             Should -BeExactly 'Retired module.'
-        $null = Get-CatalogFixtureBundle -Fixture $fixture
+        $null = Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory
         Copy-Item -LiteralPath $fixture.Terraform -Destination (Join-Path $snapshot 'sources' 'terraform') -Recurse
         Copy-Item -LiteralPath $fixture.Legacy -Destination (Join-Path $snapshot 'legacy') -Recurse
         foreach ($file in @('registry.json', 'github.json', 'revisions.json')) {
