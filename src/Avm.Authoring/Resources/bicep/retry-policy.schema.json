@@ -39,8 +39,8 @@
       "type": "object", "additionalProperties": false,
       "required": ["attempts", "timeoutSeconds", "pollIntervalSeconds", "statusCode", "errorCode", "nonRetryableCategories"],
       "properties": {
-        "attempts": { "type": "integer", "minimum": 1, "maximum": 12 },
-        "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 60 },
+        "attempts": { "type": "integer", "minimum": 1, "maximum": 61 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 300 },
         "pollIntervalSeconds": { "type": "integer", "minimum": 1, "maximum": 60 },
         "statusCode": { "type": "integer", "minimum": 403, "maximum": 499 },
         "errorCode": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,199}$" },

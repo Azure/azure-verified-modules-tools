@@ -15,8 +15,8 @@ Describe 'Bicep retry policy validation and generic matching' {
             $policy['limits']['deploymentAttempts'] | Should -Be 3
             $policy['limits']['regionAttempts'] | Should -Be 3
             $policy['reads']['attempts'] | Should -Be 3
-            $policy['authorizationPropagation']['attempts'] | Should -Be 12
-            $policy['authorizationPropagation']['timeoutSeconds'] | Should -Be 60
+            $policy['authorizationPropagation']['attempts'] | Should -Be 61
+            $policy['authorizationPropagation']['timeoutSeconds'] | Should -Be 300
             $policy['authorizationPropagation']['pollIntervalSeconds'] | Should -Be 5
             $policy['authorizationPropagation']['statusCode'] | Should -Be 403
             $policy['authorizationPropagation']['errorCode'] | Should -BeExactly 'AuthorizationFailed'
@@ -73,8 +73,8 @@ Describe 'Bicep retry policy validation and generic matching' {
                 'missing JSON evidence' { $policy['rules'][0]['jsonMessagePattern'] = '\S' }
                 'invalid numeric bounds' { $policy['rules'][1]['numberCaptures']['cpu']['maximum'] = 0 }
                 'missing propagation' { $policy.Remove('authorizationPropagation') }
-                'unbounded propagation attempts' { $policy['authorizationPropagation']['attempts'] = 13 }
-                'unbounded propagation window' { $policy['authorizationPropagation']['timeoutSeconds'] = 61 }
+                'unbounded propagation attempts' { $policy['authorizationPropagation']['attempts'] = 62 }
+                'unbounded propagation window' { $policy['authorizationPropagation']['timeoutSeconds'] = 301 }
                 'zero propagation interval' { $policy['authorizationPropagation']['pollIntervalSeconds'] = 0 }
                 'invalid propagation status' { $policy['authorizationPropagation']['statusCode'] = 401 }
                 'invalid propagation code' { $policy['authorizationPropagation']['errorCode'] = '' }

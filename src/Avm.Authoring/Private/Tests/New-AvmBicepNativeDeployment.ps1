@@ -149,6 +149,7 @@ function New-AvmBicepNativeDeployment {
         '(?:Showing \d+ out of \d+ error\(s\)\. Status Message: (?:(?!\(Code:)[^\r\n])* )?\(Code: DeploymentFailed\)(?:\s|$)'
         if ($notSubmitted) {
             $entry['status'] = if ($Mode -eq 'InPlace') { 'Failed' } else { 'NotSubmitted' }
+            Write-AvmLog -Level Warning -Message "Deployment attempt '$name' was not submitted; the Azure deployment command was not invoked."
         }
         elseif (Test-AvmBicepDeploymentPreflightRejection -ErrorRecord $_ -DeploymentName $name) {
             $entry['status'] = 'Rejected'

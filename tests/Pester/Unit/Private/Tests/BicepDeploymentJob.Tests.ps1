@@ -16,9 +16,13 @@ Describe 'Bicep in-process deployment job' {
         @(
             ". '$($script:armOperationPath.Replace("'", "''"))'"
             'function Write-AvmLog { param($Level, $Message) }'
-            'function New-AzSubscriptionDeployment {'
+            'function New-AzManagementGroupDeployment {'
             '    [CmdletBinding(SupportsShouldProcess)]'
-            '    param($Name, $Location, $TemplateFile, $TemplateParameterObject, $SkipTemplateParameterPrompt, $DefaultProfile)'
+            '    param($Name, $Location, $ManagementGroupId, $TemplateFile, $TemplateParameterObject, $SkipTemplateParameterPrompt, $DefaultProfile)'
+            "    if (-not `$PSBoundParameters.ContainsKey('Confirm') -or `$PSBoundParameters.Confirm -or"
+            "        -not `$PSBoundParameters.ContainsKey('WhatIf') -or `$PSBoundParameters.WhatIf) {"
+            "        throw 'Implicit What-If would block submission.'"
+            '    }'
             "    Write-Information 'deployment information' -InformationAction Continue"
             '    [pscustomobject]@{'
             '        Name = $Name'
@@ -31,7 +35,8 @@ Describe 'Bicep in-process deployment job' {
         InModuleScope Avm.Authoring -Parameters @{ FixturePath = $fixturePath; Profile = $profile } {
             param($FixturePath, $Profile)
             $inputOptions = @{
-                Scope = 'sub'; DeploymentName = 'fixture'; TemplatePath = 'fixture.json'; MetadataLocation = 'westus'
+                Scope = 'mg'; ManagementGroupId = 'fixture-mg'; DeploymentName = 'fixture'
+                TemplatePath = 'fixture.json'; MetadataLocation = 'westus'
                 Parameters = @{ profile = $Profile }; DefaultProfile = $Profile
             }
             $submission = [hashtable]::Synchronized(@{ Invoked = $false })
@@ -106,7 +111,7 @@ Describe 'Bicep in-process deployment job' {
             ". '$($script:armOperationPath.Replace("'", "''"))'"
             'function Write-AvmLog { param($Level, $Message) }'
             'function New-AzSubscriptionDeployment {'
-            '    [CmdletBinding()]'
+            '    [CmdletBinding(SupportsShouldProcess)]'
             '    param($Name, $Location, $TemplateFile, $TemplateParameterObject, $SkipTemplateParameterPrompt)'
             "    throw [System.Management.Automation.ParameterBindingException]::new('failure after invocation')"
             '}'

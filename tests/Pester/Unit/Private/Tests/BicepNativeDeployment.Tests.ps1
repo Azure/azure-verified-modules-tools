@@ -17,7 +17,7 @@ BeforeAll {
             throw 'Unexpected Azure context lookup.'
         }
         function script:New-AzResourceGroupDeployment {
-            [CmdletBinding()]
+            [CmdletBinding(SupportsShouldProcess)]
             param($Name, $ResourceGroupName, $Mode, $Force, $TemplateFile, $TemplateParameterObject, $SkipTemplateParameterPrompt)
             throw 'Unexpected Azure deployment.'
         }
@@ -27,17 +27,17 @@ BeforeAll {
             throw 'Unexpected Azure validation.'
         }
         function script:New-AzSubscriptionDeployment {
-            [CmdletBinding()]
+            [CmdletBinding(SupportsShouldProcess)]
             param($Name, $Location, $TemplateFile, $TemplateParameterObject, $SkipTemplateParameterPrompt)
             throw 'Unexpected Azure deployment.'
         }
         function script:New-AzManagementGroupDeployment {
-            [CmdletBinding()]
+            [CmdletBinding(SupportsShouldProcess)]
             param($Name, $Location, $ManagementGroupId, $TemplateFile, $TemplateParameterObject, $SkipTemplateParameterPrompt, $DefaultProfile)
             throw 'Unexpected Azure deployment.'
         }
         function script:New-AzTenantDeployment {
-            [CmdletBinding()]
+            [CmdletBinding(SupportsShouldProcess)]
             param($Name, $Location, $TemplateFile, $TemplateParameterObject, $SkipTemplateParameterPrompt)
             throw 'Unexpected Azure deployment.'
         }
