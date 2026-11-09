@@ -549,7 +549,7 @@ Describe 'Terraform unit-test migration' {
             @{ Shape = 'partial bindings'; Expression = '{ azapi = azapi }'; Valid = $false }
             @{ Shape = 'remapped binding'; Expression = '{ azapi = azapi.alternate, random = random }'; Valid = $false }
             @{ Shape = 'different provider'; Expression = '{ azapi = random, random = random }'; Valid = $false }
-            @{ Shape = 'aliased key'; Expression = '{ azapi.alternate = azapi, random = random }'; Valid = $false }
+            @{ Shape = 'aliased key mapped to default'; Expression = '{ azapi.alternate = azapi, random = random }'; Valid = $false }
             @{ Shape = 'additional binding'; Expression = '{ azapi = azapi, random = random, time = time }'; Valid = $false }
             @{ Shape = 'duplicate binding'; Expression = '{ azapi = azapi, random = random, random = random }'; Valid = $false }
             @{ Shape = 'literal rather than reference'; Expression = '{ azapi = "azapi", random = random }'; Valid = $false }
@@ -580,6 +580,17 @@ Describe 'Terraform unit-test migration' {
             }
         }
 
+        It 'preserves complete bindings with known aliased target keys' {
+            InModuleScope Avm.Authoring {
+                $expression = '{ azapi = azapi, azapi.alternate = azapi.alternate, random = random }'
+                $mapping = ConvertFrom-AvmTerraformUnitTestProviderMapping -Expression $expression `
+                    -ProviderNames @('azapi', 'random') -MockProviderNames @('azapi', 'azapi.alternate', 'random')
+                $mapping.Expression | Should -BeExactly $expression
+                $mapping.Changed | Should -BeFalse
+                $mapping.Bindings['azapi.alternate'] | Should -BeExactly 'azapi.alternate'
+            }
+        }
+
         It 'retires only proven unused same-provider alias bindings' {
             InModuleScope Avm.Authoring {
                 $expression = '{ azapi = azapi.unit, modtm = modtm.unit, random = random.unit }'
@@ -593,6 +604,12 @@ Describe 'Terraform unit-test migration' {
                 $invalid = ConvertFrom-AvmTerraformUnitTestProviderMapping -Expression '{ azapi = azapi.unit, modtm = azapi.unit }' `
                     -ProviderNames @('azapi') -MockProviderNames @('azapi.unit') -RetiredProviderNames @('modtm')
                 $invalid | Should -BeNullOrEmpty
+                $aliasedRetired = ConvertFrom-AvmTerraformUnitTestProviderMapping `
+                    -Expression '{ azapi = azapi.unit, random.unit = random.unit }' `
+                    -ProviderNames @('azapi') -MockProviderNames @('azapi.unit', 'random.unit') `
+                    -RetiredProviderNames @('random')
+                $aliasedRetired.Expression | Should -Not -Match 'random'
+                $aliasedRetired.RetiredReferences.random | Should -Be 2
             }
         }
 

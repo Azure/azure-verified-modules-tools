@@ -2086,6 +2086,17 @@ Context 'migration decisions' {
                 }
             }
 
+            It 'preserves known aliased target bindings while retiring unused providers' {
+                $script:fixture.After.test.runs.root.mptf.attributes.providers =
+                    '{ azapi = azapi.alternate, azapi.alternate = azapi.alternate, modtm = modtm, random = random }'
+                Invoke-UnitMigrationFixture -Fixture $script:fixture
+                Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                    $UnitTestPlans[0].MockMigrationValidated -and
+                    $UnitTestPlans[0].ProviderMockBindings.root -ceq '{ azapi = azapi.alternate, azapi.alternate = azapi.alternate,       }' -and
+                    $UnitTestPlans[0].TelemetrySubscriptionResourceIds['azapi.alternate'] -ceq '/subscriptions/22222222-2222-2222-2222-222222222222'
+                }
+            }
+
             It 'retains a rewritten alias binding for run label <Label>' -ForEach @(
                 @{ Label = 'keys' }
                 @{ Label = 'Values' }
