@@ -17,7 +17,7 @@ module "state_resource_group" {
 
 module "backend_identity" {
   source  = "Azure/avm-res-managedidentity-userassignedidentity/azurerm"
-  version = "0.5.2"
+  version = "0.6.0"
 
   name                = var.backend_identity_name
   location            = var.location
@@ -37,7 +37,7 @@ module "backend_identity" {
 
 module "state_storage" {
   source  = "Azure/avm-res-storage-storageaccount/azurerm"
-  version = "0.10.0"
+  version = "0.11.0"
 
   name             = local.storage_account_name
   location         = var.location
