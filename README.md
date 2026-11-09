@@ -6,21 +6,42 @@ One `avm` CLI, two ecosystems, no Docker / `make` / `porch` required for the wir
 
 ## Install
 
-The module is published to the PowerShell Gallery as [`Avm.Authoring`](https://www.powershellgallery.com/packages/Avm.Authoring). PowerShell 7.4+ is required.
+Install `Avm.Authoring` from Microsoft Artifact Registry (MAR). PowerShell 7.4+ and `Microsoft.PowerShell.PSResourceGet` 1.2.0 or later are required. If needed, upgrade PSResourceGet using the version bundled with PowerShell:
 
 ```pwsh
-# Modern — Microsoft.PowerShell.PSResourceGet (ships with PowerShell 7.4+)
-Install-PSResource Avm.Authoring
-
-# Classic — PowerShellGet v2
-Install-Module Avm.Authoring -Scope CurrentUser
+Install-PSResource -Name Microsoft.PowerShell.PSResourceGet `
+    -Version 1.2.0 `
+    -Repository PSGallery `
+    -Scope CurrentUser
 ```
 
-Then import it and confirm it loaded:
+Start a new PowerShell session after upgrading. Register MAR once; it is not registered by default:
+
+```pwsh
+Import-Module Microsoft.PowerShell.PSResourceGet -MinimumVersion 1.2.0
+Register-PSResourceRepository -Name MAR `
+    -Uri 'https://mcr.microsoft.com' `
+    -ApiVersion ContainerRegistry `
+    -Trusted
+Install-PSResource -Name avm.authoring `
+    -Repository MAR `
+    -Scope CurrentUser
+```
+
+Use lowercase `avm.authoring` for the registry lookup. MAR downloads are public and need no Azure sign-in. Then import it and confirm it loaded:
 
 ```pwsh
 Import-Module Avm.Authoring
 avm version
+```
+
+To update from MAR, run the following, then start a new PowerShell session. The built-in `avm update` / `avm upgrade` commands still use PowerShell Gallery.
+
+```pwsh
+Install-PSResource -Name avm.authoring `
+    -Repository MAR `
+    -Scope CurrentUser `
+    -Reinstall
 ```
 
 > **Heads-up.** The Terraform authoring chain is wired and usable today; the Bicep facade is still in active development. To run the latest in-development build, import it from a clone — see [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -98,7 +119,7 @@ Get-ChildItem (Get-Module Avm.Authoring -ListAvailable).ModuleBase -Recurse -Inc
     Group-Object Status, { $_.SignerCertificate.Subject }
 ```
 
-Expect a single group with status `Valid` and a `Microsoft Corporation` subject. Anything reporting `NotSigned`, `HashMismatch` or `UnknownError` means the file has been modified or came from somewhere other than the gallery.
+Expect a single group with status `Valid` and a `Microsoft Corporation` subject. Anything reporting `NotSigned`, `HashMismatch` or `UnknownError` means the file has been modified or came from somewhere other than the signed release.
 
 The release `.zip` attached to each [GitHub Release](https://github.com/Azure/azure-verified-modules-tools/releases) ships alongside a `SHA256SUMS` file:
 

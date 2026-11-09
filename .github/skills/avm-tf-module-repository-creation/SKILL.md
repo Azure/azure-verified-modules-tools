@@ -40,11 +40,18 @@ gh auth status --hostname github.com
 - Install or update the module, then import it:
 
   ```pwsh
-  Install-PSResource -Name Avm.Authoring -Repository PSGallery -TrustRepository
+  Import-Module Microsoft.PowerShell.PSResourceGet -MinimumVersion 1.2.0
+  Register-PSResourceRepository -Name MAR `
+      -Uri 'https://mcr.microsoft.com' `
+      -ApiVersion ContainerRegistry `
+      -Trusted
+  Install-PSResource -Name avm.authoring `
+      -Repository MAR `
+      -Scope CurrentUser
   Import-Module Avm.Authoring
   ```
 
-  Run `avm upgrade` instead when an older release is already installed.
+  MAR is not registered by default; register it once. If PSResourceGet is older than 1.2.0, follow the [installation prerequisite](../../../README.md#install) and start a new PowerShell session first. For an existing installation, use the same `Install-PSResource` command with `-Reinstall`, then start a new PowerShell session. `avm upgrade` still uses PowerShell Gallery.
 - The user needs AVM core team approval to create the repository, a GitHub account linked in the [Open Source Portal](https://repos.opensource.microsoft.com/link), and membership of the `Azure` organization. They also need to be able to fork `microsoft/github-operations`, because the app installation pull request is opened from their fork.
 
 ## 2. Collect the inputs
