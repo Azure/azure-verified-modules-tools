@@ -31,6 +31,24 @@ function Test-AvmModuleVersion {
     }
 
     try {
+        $mcrVersion = Get-AvmMcrAuthoringVersion -Refresh:$RefreshLatestVersion
+    }
+    catch {
+        $detail = if ($_.Exception -is [System.Net.Http.HttpRequestException]) {
+            'The MCR request failed.'
+        }
+        elseif ($_.Exception -is [System.TimeoutException] -or
+            $_.Exception -is [System.Threading.Tasks.TaskCanceledException]) {
+            'The MCR request timed out.'
+        }
+        else {
+            'The MCR response was invalid.'
+        }
+        Write-Warning "Unable to check MCR for the latest Avm.Authoring version. Continuing with configured PowerShell repositories. $detail"
+        $mcrVersion = $null
+    }
+
+    try {
         $latestVersion = Get-AvmLatestModuleVersion -Refresh:$RefreshLatestVersion
     }
     catch {
@@ -58,6 +76,27 @@ function Test-AvmModuleVersion {
     if (-not $currentModule) {
         Write-Warning 'Unable to determine the running Avm.Authoring version. Continuing without enforcing the repository version.'
         return
+    }
+
+    if ($null -ne $mcrVersion -and
+        $latestVersion -lt $mcrVersion -and
+        $currentModule.Version -lt $mcrVersion) {
+        $message = @(
+            "Installed version: $($currentModule.Version)"
+            "Latest configured repository version: $latestVersion"
+            "Latest stable MAR version: $mcrVersion"
+            ''
+            'PSResourceGet 1.2.0 or later is required. Register MAR and update the module:'
+            "  Register-PSResourceRepository -Name MAR -Uri 'https://mcr.microsoft.com' -ApiVersion ContainerRegistry -Trusted"
+            '  Install-PSResource -Name avm.authoring -Repository MAR -Scope CurrentUser -Reinstall'
+            "  Import-Module Avm.Authoring -Force"
+            ''
+            'You can restart PowerShell instead of reloading it.'
+        ) -join "`n"
+        throw [AvmModuleVersionException]::new(
+            $currentModule.Version,
+            $mcrVersion,
+            $message)
     }
 
     Write-AvmLog (
