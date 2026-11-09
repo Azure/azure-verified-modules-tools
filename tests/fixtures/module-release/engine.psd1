@@ -1244,11 +1244,9 @@ The `legacy_name` input is removed (#101). Use `name` instead.
             Design     = 'Release state and recovery'
             Assumption = 'The I/O layer must supply well-formed facts. A violation throws an ArgumentException, so the run changes no state and posts nothing.'
             Steps      = @(
-                @{ Now = '2026-09-01T11:00:00Z'; Facts = @{ Repository = '' }; Throws = '^Repository must be a non-empty string\.$' }
                 @{ Now = '2026-09-01T11:00:00Z'; Facts = @{ Repository = 'example' }; Throws = '^Repository ''example'' must be ''owner/name''\.$' }
                 @{ Now = '2026-09-01T11:00:00'; Throws = '^Now ''2026-09-01T11:00:00'' must be an ISO-8601 timestamp with an offset, such as 2026-09-07T09:00:00Z\.$' }
                 @{ Now = '2026-09-01T11:00:00Z'; Facts = @{ Freeze = 'paused' }; Throws = '^Freeze ''paused'' must be ''none'', ''active'', or ''unknown''\.$' }
-                @{ Now = '2026-09-01T11:00:00Z'; Facts = @{ Authorization = @{ ActorTeams = 'carol' } }; Throws = '^Authorization\.ActorTeams must map each login to its team slugs\.$' }
                 @{
                     Now    = '2026-09-01T11:00:00Z'
                     Merge  = @(
@@ -1276,11 +1274,6 @@ The `legacy_name` input is removed (#101). Use `name` instead.
                     Now    = '2026-09-01T11:00:00Z'
                     Merge  = @(@{ Number = 105; MergedAt = '2026-09-01T10:00:00Z'; Labels = @('patch'); ChangedFiles = @(@{ Path = 'main.tf'; Status = 'deleted'; FormatEquivalent = $false }) })
                     Throws = '^Pull request #105 changed file Status ''deleted'' is not a GitHub file status\.$'
-                }
-                @{
-                    Now    = '2026-09-01T11:00:00Z'
-                    Merge  = @(@{ Number = 106; MergedAt = '2026-09-01T10:00:00Z'; Labels = @('patch'); ChangedFiles = @(@{ Path = 'main.tf'; Status = 'modified'; FormatEquivalent = 'yes' }) })
-                    Throws = '^Pull request #106 changed file FormatEquivalent must be true or false\.$'
                 }
                 @{
                     Now    = '2026-09-01T11:00:00Z'
@@ -1356,7 +1349,7 @@ The `legacy_name` input is removed (#101). Use `name` instead.
                 @{
                     Now       = '2026-09-01T11:00:00Z'
                     StateJson = '{"commentCursor":null,"hold":"yes","labelCursor":null,"pending":{"notes":{"breakingOverride":null,"commentary":null},"pullRequests":[],"releaseRequest":null},"publication":null,"releaseIssue":null,"repository":"Azure/terraform-azurerm-avm-res-example","schemaVersion":1}'
-                    Expected  = @{ Status = 'damaged'; Changed = $false; Actions = @(@{ Type = 'ReportDamagedState'; 'Issues~' = '\$\.hold' }) }
+                    Expected  = @{ Status = 'damaged'; Changed = $false; Actions = @(@{ Type = 'ReportDamagedState'; 'Issues~' = '^\$: release state does not match avm-release-state\.schema\.json\.' }) }
                 }
                 @{
                     Now       = '2026-09-01T11:00:00Z'

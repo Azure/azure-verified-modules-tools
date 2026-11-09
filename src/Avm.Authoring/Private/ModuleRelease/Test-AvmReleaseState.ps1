@@ -4,11 +4,10 @@ function Test-AvmReleaseState {
         Find damage in a release state document.
 
     .DESCRIPTION
-        Checks a parsed state.json document against schema version 1 and the rules that keep it consistent. Damage includes:
+        Checks a parsed state.json document against avm-release-state.schema.json with Test-AvmReleaseDocument, then against the rules that keep it consistent. Damage includes:
 
         - A missing or unsupported schema version.
-        - Missing, unknown, or wrongly typed properties.
-        - Malformed timestamps, versions, labels, or commit SHAs.
+        - Anything the JSON Schema rejects, such as unknown properties or malformed timestamps.
         - A pull request listed twice, or listed as both pending and publishing.
         - A pull request whose trigger fields contradict its kind.
         - A hold that started after its latest update.
@@ -59,7 +58,7 @@ function Test-AvmReleaseState {
         return "`$.schemaVersion: version '$schemaVersion' is not supported. Expected $($policy.SchemaVersion)."
     }
 
-    Test-AvmReleaseShape -Value $State -Schema (Get-AvmReleaseSchema -Kind State) -Path '$' -Issues $issues
+    $issues.AddRange([string[]]@(Test-AvmReleaseDocument -Document $State -Kind State))
     if ($issues.Count -gt 0) {
         return $issues.ToArray()
     }

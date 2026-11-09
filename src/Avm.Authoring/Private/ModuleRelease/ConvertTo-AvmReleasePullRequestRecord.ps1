@@ -55,7 +55,8 @@ function ConvertTo-AvmReleasePullRequestRecord {
     }
     else {
         foreach ($label in $labelsAtMerge) {
-            $authorization = Get-AvmReleaseActorAuthorization -Actor $label['AddedBy'] -Authorization $Authorization
+            $addedBy = [string]$label['AddedBy']
+            $authorization = Test-AvmReleaseActorAuthorized -Actor $addedBy -Owners $Authorization['Owners'] -ActorTeams $Authorization['ActorTeams'][$addedBy] -CoreTeam $Authorization['CoreTeam']
             if (-not $authorization.Authorized) {
                 $message = 'Only module owners and the core AVM team can opt in a bot pull request.'
                 if ($authorization.Reason -eq 'bot') {

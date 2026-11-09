@@ -74,7 +74,8 @@ function Resolve-AvmReleaseCommand {
         }
     }
 
-    $authorization = Get-AvmReleaseActorAuthorization -Actor $author -Authorization $Facts['Authorization']
+    $access = $Facts['Authorization']
+    $authorization = Test-AvmReleaseActorAuthorized -Actor $author -Owners $access['Owners'] -ActorTeams $access['ActorTeams'][[string]$author] -CoreTeam $access['CoreTeam']
     if (-not $authorization.Authorized) {
         return & $acknowledge -Accepted $false -Reason 'not-authorized' -Message "Only module owners and the core AVM team can use #$($command.Name)."
     }

@@ -4,7 +4,7 @@ function Test-AvmReleaseRecord {
         Find damage in a release record document.
 
     .DESCRIPTION
-        Checks a parsed releases/vX.Y.Z.json document against schema version 1. A release record is written once at the publication cutoff and never changes afterwards. Damage includes a missing or unsupported schema version, missing, unknown, or wrongly typed properties, a version equal to the previous version, a pull request listed twice, and a release-triggering pull request without a version label.
+        Checks a parsed releases/vX.Y.Z.json document against avm-release-record.schema.json with Test-AvmReleaseDocument, then against the rules that keep it consistent. A release record is written once at the publication cutoff and never changes afterwards. Damage includes a missing or unsupported schema version, anything the JSON Schema rejects, a version equal to the previous version, a pull request listed twice, and a release-triggering pull request without a version label.
 
     .PARAMETER Record
         The parsed release record.
@@ -44,7 +44,7 @@ function Test-AvmReleaseRecord {
         return "`$.schemaVersion: version '$schemaVersion' is not supported. Expected $($policy.SchemaVersion)."
     }
 
-    Test-AvmReleaseShape -Value $Record -Schema (Get-AvmReleaseSchema -Kind Record) -Path '$' -Issues $issues
+    $issues.AddRange([string[]]@(Test-AvmReleaseDocument -Document $Record -Kind Record))
     if ($issues.Count -gt 0) {
         return $issues.ToArray()
     }
