@@ -19,6 +19,7 @@ function Invoke-AvmWebRequest {
         [string] $UserAgent,
         [string] $OutFile,
         [int] $MaximumRedirection = -1,
+        [int] $RetryMaxAttempts = 0,
         [switch] $SkipHttpErrorCheck
     )
 
@@ -46,7 +47,7 @@ function Invoke-AvmWebRequest {
     [System.Net.ServicePointManager]::SecurityProtocol = $protocols
 
     $statusCodes = (Get-AvmNetworkRetryPolicy).TransientStatusCodes
-    Invoke-AvmRetry -RetryActivity $Label -RetryAction {
+    Invoke-AvmRetry -RetryActivity $Label -RetryMaxAttempts $RetryMaxAttempts -RetryAction {
         $response = Invoke-WebRequest @requestParameters
         if ($SkipHttpErrorCheck -and $null -ne $response -and $statusCodes -contains [int]$response.StatusCode) {
             $transient = [System.Exception]::new("$Label returned HTTP $([int]$response.StatusCode).")

@@ -35,6 +35,9 @@ boundary.
   external services.
 - Report failures clearly and preserve useful error context. Do not hide
   failures, silently ignore invalid input, or return success-shaped fallbacks.
+- Use the shared bounded retry policy for idempotent network reads when
+  transient transport or HTTP failures occur. Do not retry permanent failures,
+  or mutations whose effects may be ambiguous.
 - Make repeated operations safe where practical. Do not retry a write unless
   its effects are known to be safe to repeat.
 - Protect user data: stage and verify changes before replacing existing data,

@@ -62,7 +62,9 @@ function Get-AvmMcrAuthoringVersion {
 
     $uri = 'https://mcr.microsoft.com/v2/psresource/avm.authoring/tags/list'
     $response = Invoke-AvmWebRequest -Uri $uri -Headers @{ Accept = 'application/json' } `
-        -MaximumRedirection 0 -TimeoutSec 20 -Label 'MCR Avm.Authoring tag-list request'
+        -MaximumRedirection 0 -SkipHttpErrorCheck -TimeoutSec 20 `
+        -RetryMaxAttempts (Get-AvmNetworkRetryPolicy).AdvisoryMaxAttempts `
+        -Label 'MCR Avm.Authoring tag-list request'
     if ([int]$response.StatusCode -ne 200) {
         throw [AvmGalleryLookupException]::new(
             "MCR Avm.Authoring tag-list request returned HTTP $($response.StatusCode).")
