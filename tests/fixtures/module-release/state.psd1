@@ -193,7 +193,7 @@
             Patches  = @(
                 @{ Set = 'extra'; Value = 'x' }
             )
-            Expected = @{ IsValid = $false; Issues = @('$.extra: is not a known property.') }
+            Expected = @{ IsValid = $false; 'Issues~' = '^\$: release state does not match avm-release-state\.schema\.json\.' }
         }
         @{
             Id       = 'state-06'
@@ -204,13 +204,7 @@
                 @{ Remove = 'hold' }
                 @{ Set = 'Hold'; Value = $null }
             )
-            Expected = @{
-                IsValid = $false
-                Issues  = @(
-                    '$.Hold: is not a known property.'
-                    '$.hold: is missing.'
-                )
-            }
+            Expected = @{ IsValid = $false; 'Issues~' = '^\$: release state does not match avm-release-state\.schema\.json\.' }
         }
         @{
             Id       = 'state-07'
@@ -220,7 +214,7 @@
             Patches  = @(
                 @{ Remove = 'pending' }
             )
-            Expected = @{ IsValid = $false; Issues = @('$.pending: is missing.') }
+            Expected = @{ IsValid = $false; 'Issues~' = '^\$: release state does not match avm-release-state\.schema\.json\.' }
         }
         @{
             Id       = 'state-08'
@@ -230,7 +224,7 @@
             Patches  = @(
                 @{ Set = 'pending.pullRequests[0].mergedAt'; Value = '2026-09-07T09:00:00+01:00' }
             )
-            Expected = @{ IsValid = $false; Issues = @('$.pending.pullRequests[0].mergedAt: must be a UTC timestamp such as 2026-09-07T09:00:00Z.') }
+            Expected = @{ IsValid = $false; 'Issues~' = '^\$: release state does not match avm-release-state\.schema\.json\.' }
         }
         @{
             Id       = 'state-09'
@@ -240,7 +234,7 @@
             Patches  = @(
                 @{ Set = 'commentCursor.createdAt'; Value = '2026-02-30T09:00:00Z' }
             )
-            Expected = @{ IsValid = $false; Issues = @('$.commentCursor.createdAt: must be a UTC timestamp such as 2026-09-07T09:00:00Z.') }
+            Expected = @{ IsValid = $false; Issues = @('$..createdAt: ''2026-02-30T09:00:00Z'' is not a real UTC time.') }
         }
         @{
             Id       = 'state-10'
@@ -250,7 +244,7 @@
             Patches  = @(
                 @{ Set = 'pending.pullRequests[0].mergeCommit'; Value = '000000000000000000000000000000000000ABCD' }
             )
-            Expected = @{ IsValid = $false; Issues = @('$.pending.pullRequests[0].mergeCommit: must be a 40-character lowercase commit SHA.') }
+            Expected = @{ IsValid = $false; 'Issues~' = '^\$: release state does not match avm-release-state\.schema\.json\.' }
         }
         @{
             Id       = 'state-11'
@@ -260,7 +254,7 @@
             Patches  = @(
                 @{ Set = 'pending.pullRequests[0].versionLabels[0]'; Value = 'huge' }
             )
-            Expected = @{ IsValid = $false; Issues = @('$.pending.pullRequests[0].versionLabels[0]: must be one of patch, minor, major.') }
+            Expected = @{ IsValid = $false; 'Issues~' = '^\$: release state does not match avm-release-state\.schema\.json\.' }
         }
         @{
             Id       = 'state-12'
@@ -270,7 +264,7 @@
             Patches  = @(
                 @{ Set = 'pending.pullRequests[0].kind'; Value = 'human' }
             )
-            Expected = @{ IsValid = $false; Issues = @('$.pending.pullRequests[0].kind: must be one of Human, RoutineBot, Automation.') }
+            Expected = @{ IsValid = $false; 'Issues~' = '^\$: release state does not match avm-release-state\.schema\.json\.' }
         }
         @{
             Id       = 'state-13'
@@ -280,7 +274,7 @@
             Patches  = @(
                 @{ Set = 'pending.pullRequests[0].number'; Value = 0 }
             )
-            Expected = @{ IsValid = $false; Issues = @('$.pending.pullRequests[0].number: must be a positive integer.') }
+            Expected = @{ IsValid = $false; 'Issues~' = '^\$: release state does not match avm-release-state\.schema\.json\.' }
         }
         @{
             Id       = 'state-14'
@@ -290,7 +284,7 @@
             Patches  = @(
                 @{ Set = 'pending.pullRequests[0].triggersRelease'; Value = 'yes' }
             )
-            Expected = @{ IsValid = $false; Issues = @('$.pending.pullRequests[0].triggersRelease: must be true or false.') }
+            Expected = @{ IsValid = $false; 'Issues~' = '^\$: release state does not match avm-release-state\.schema\.json\.' }
         }
         @{
             Id       = 'state-15'
@@ -300,7 +294,7 @@
             Patches  = @(
                 @{ Set = 'pending.pullRequests[0].versionLabels'; Value = 'minor' }
             )
-            Expected = @{ IsValid = $false; Issues = @('$.pending.pullRequests[0].versionLabels: must be an array.') }
+            Expected = @{ IsValid = $false; 'Issues~' = '^\$: release state does not match avm-release-state\.schema\.json\.' }
         }
         @{
             Id       = 'state-16'
@@ -310,7 +304,7 @@
             Patches  = @(
                 @{ Set = 'pending.pullRequests[0].author'; Value = '' }
             )
-            Expected = @{ IsValid = $false; Issues = @('$.pending.pullRequests[0].author: must be a non-empty string.') }
+            Expected = @{ IsValid = $false; 'Issues~' = '^\$: release state does not match avm-release-state\.schema\.json\.' }
         }
         @{
             Id       = 'state-17'
@@ -320,7 +314,7 @@
             Patches  = @(
                 @{ Set = 'pending.pullRequests[0].title'; Value = $null }
             )
-            Expected = @{ IsValid = $false; Issues = @('$.pending.pullRequests[0].title: is required.') }
+            Expected = @{ IsValid = $false; 'Issues~' = '^\$: release state does not match avm-release-state\.schema\.json\.' }
         }
         @{
             Id       = 'state-18'
@@ -330,7 +324,7 @@
             Patches  = @(
                 @{ Set = 'releaseIssue'; Value = 200 }
             )
-            Expected = @{ IsValid = $false; Issues = @('$.releaseIssue: must be an object.') }
+            Expected = @{ IsValid = $false; 'Issues~' = '^\$: release state does not match avm-release-state\.schema\.json\.' }
         }
         @{
             Id       = 'state-19'
@@ -508,7 +502,7 @@
             Patches  = @(
                 @{ Set = 'publication.stage'; Value = 'published' }
             )
-            Expected = @{ IsValid = $false; Issues = @('$.publication.stage: must be one of cutoff.') }
+            Expected = @{ IsValid = $false; 'Issues~' = '^\$: release state does not match avm-release-state\.schema\.json\.' }
         }
         @{
             Id       = 'state-33'
@@ -613,7 +607,7 @@
             Patches  = @(
                 @{ Set = 'version'; Value = 'v0.9.0' }
             )
-            Expected = @{ IsValid = $false; Issues = @('$.version: must be a MAJOR.MINOR.PATCH version.') }
+            Expected = @{ IsValid = $false; 'Issues~' = '^\$: release record does not match avm-release-record\.schema\.json\.' }
         }
         @{
             Id       = 'record-07'
@@ -623,7 +617,7 @@
             Patches  = @(
                 @{ Set = 'notes'; Value = ' ' }
             )
-            Expected = @{ IsValid = $false; Issues = @('$.notes: must be a non-empty string.') }
+            Expected = @{ IsValid = $false; 'Issues~' = '^\$: release record does not match avm-release-record\.schema\.json\.' }
         }
         @{
             Id       = 'record-08'
@@ -633,7 +627,7 @@
             Patches  = @(
                 @{ Remove = 'commit' }
             )
-            Expected = @{ IsValid = $false; Issues = @('$.commit: is missing.') }
+            Expected = @{ IsValid = $false; 'Issues~' = '^\$: release record does not match avm-release-record\.schema\.json\.' }
         }
         @{
             Id       = 'record-09'

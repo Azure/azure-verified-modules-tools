@@ -87,7 +87,8 @@ function Resolve-AvmReleaseLabelEvent {
         return $action
     }
 
-    $authorization = Get-AvmReleaseActorAuthorization -Actor $LabelEvent['Actor'] -Authorization $Authorization
+    $actor = [string]$LabelEvent['Actor']
+    $authorization = Test-AvmReleaseActorAuthorized -Actor $actor -Owners $Authorization['Owners'] -ActorTeams $Authorization['ActorTeams'][$actor] -CoreTeam $Authorization['CoreTeam']
     if (-not $authorization.Authorized) {
         $action.Type = 'IgnoreLabelChange'
         $action.Reason = $authorization.Reason
