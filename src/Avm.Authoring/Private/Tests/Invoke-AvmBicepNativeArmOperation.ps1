@@ -78,6 +78,8 @@ function Invoke-AvmBicepNativeArmOperation {
         "Running $command for deployment '$DeploymentName' at '$Scope' scope with template '$TemplatePath' and location '$MetadataLocation'. " +
         'Template parameter values are not logged.')
     if ($Operation -eq 'Create') {
+        $arguments.Confirm = $false
+        $arguments.WhatIf = $false
         $deploymentCommand = Get-Command -Name $command -ErrorAction Stop
         if ($null -ne $SubmissionState) { $SubmissionState['Invoked'] = $true }
         try {

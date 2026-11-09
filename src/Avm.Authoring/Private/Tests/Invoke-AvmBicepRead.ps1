@@ -7,6 +7,8 @@ function Invoke-AvmBicepRead {
         [Parameter(Mandatory)]
         [string] $Activity,
 
+        [string] $DiagnosticTarget,
+
         [switch] $RetryAuthorizationPropagation
     )
 
@@ -37,7 +39,8 @@ function Invoke-AvmBicepRead {
         }
     }
     if ($RetryAuthorizationPropagation) {
-        return Invoke-AvmBicepAuthorizationRead -Read $networkRead -DeadlineUtc $propagationDeadline -Policy $policy
+        return Invoke-AvmBicepAuthorizationRead -Read $networkRead -DeadlineUtc $propagationDeadline -Policy $policy `
+            -Activity $Activity -DiagnosticTarget $DiagnosticTarget
     }
     return & $networkRead
 }
