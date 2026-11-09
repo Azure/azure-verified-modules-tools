@@ -309,6 +309,43 @@ Describe 'Bicep workflow cleanup group absence' {
 }
 
 Describe 'Bicep workflow cleanup locks and failures' {
+    It 'identifies lock validation failures without deleting the resource: HTTP <Status>' -ForEach @(
+        @{ Status = 403 }, @{ Status = 404 }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Status = $Status } {
+            param($Status)
+            $script:lockStatus = [Net.HttpStatusCode]$Status
+            Mock Remove-AvmBicepResourceLock {
+                throw [Net.Http.HttpRequestException]::new('Lock validation failed.', $null, $script:lockStatus)
+            }
+            Mock Remove-AzResource {}
+            try {
+                Remove-AvmBicepResource `
+                    -ResourceId '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Storage/storageAccounts/account' `
+                    -Type 'Microsoft.Storage/storageAccounts'
+                throw 'Expected lock validation to fail.'
+            }
+            catch {
+                $_.FullyQualifiedErrorId.Split(',')[0] | Should -Be 'AvmBicepLockValidationFailed'
+                $_.Exception.StatusCode | Should -Be $script:lockStatus
+            }
+            Should -Invoke Remove-AzResource -Exactly 0
+        }
+    }
+
+    It 'propagates cancellation during lock validation' {
+        InModuleScope Avm.Authoring {
+            Mock Remove-AvmBicepResourceLock { throw [OperationCanceledException]::new('Cancelled.') }
+            Mock Remove-AzResource {}
+            {
+                Remove-AvmBicepResource `
+                    -ResourceId '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Storage/storageAccounts/account' `
+                    -Type 'Microsoft.Storage/storageAccounts'
+            } | Should -Throw -ExceptionType ([OperationCanceledException])
+            Should -Invoke Remove-AzResource -Exactly 0
+        }
+    }
+
     It 'deletes the exact resource-scoped role assignment without querying nested locks' {
         InModuleScope Avm.Authoring {
             $script:target = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Network/privateEndpoints/endpoint/providers/Microsoft.Authorization/roleAssignments/11111111-1111-4111-8111-111111111111'

@@ -555,4 +555,6 @@ Invoke-AvmTestE2e -Path . -Ecosystem bicep -RequireResourceIsolation -Subscripti
 
 - `Engine result with Status, Issues and run counts. Bicep also returns
 Phase, AssertionResults, PostResults, CleanupPending, CleanupDeferred
-and CleanupStatePaths. Deployment outputs and parameters are not returned.`
+and CleanupStatePaths. Cleanup failures are warnings and retain state for
+recovery; later cases continue. Deployment and assertion failures remain
+errors. Outputs and parameters are not returned.`

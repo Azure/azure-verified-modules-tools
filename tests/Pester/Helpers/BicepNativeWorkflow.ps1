@@ -131,7 +131,9 @@ function New-NativeBicepWorkflowFixture {
             }
             $null = $state.StatePaths.Add($path)
             $stored = Read-AvmBicepCleanupState -Path $path
-            $stored['ownedResourceGroups'].Count | Should -Be ($state.Groups.Count + 1)
+            @($stored['ownedResourceGroups'] | Where-Object {
+                    $_['id'] -eq "/subscriptions/$($state.CurrentSubscription)/resourceGroups/$Name"
+                }).Count | Should -Be 1
             $stored['ownedResourceGroups'][-1]['runId'] | Should -BeExactly $runId
             $stored['ownedResourceGroups'][-1]['id'] | Should -BeExactly "/subscriptions/$($state.CurrentSubscription)/resourceGroups/$Name"
             $group = @{

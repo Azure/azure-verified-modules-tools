@@ -256,7 +256,8 @@ function Invoke-AvmBicepNativeTestCase {
         if ($null -ne $completion) {
             foreach ($issue in $completion.Issues) { $issues.Add($issue) }
         }
-        $passed = $null -ne $deployed -and $deployed.Status -eq 'pass' -and $issues.Count -eq 0 -and
+        $passed = $null -ne $deployed -and $deployed.Status -eq 'pass' -and
+        @($issues | Where-Object Severity -EQ 'error').Count -eq 0 -and
         ($executionOptions.Phase -eq 'Deploy' -or ($null -ne $completion -and $completion.Status -eq 'pass'))
         [pscustomobject]@{
             Status           = if ($passed) { 'pass' } else { 'fail' }

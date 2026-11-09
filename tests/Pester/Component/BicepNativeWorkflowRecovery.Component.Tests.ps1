@@ -50,7 +50,7 @@ Describe 'Component: Bicep native workflow recovery boundaries' -Tag Component {
     It 'rechecks ownership before removal and purge after tags change during metadata capture' {
         $script:fixture.RetagDuringMetadata = $true
         $result = Invoke-AvmTestE2e @script:options
-        $result.Status | Should -Be 'fail'
+        $result.Status | Should -Be 'pass'
         $result.CleanupPending.Count | Should -Be 2
         @($script:fixture.Calls | Where-Object { $_ -match '^(remove|purge):' }).Count | Should -Be 0
         (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).status | Should -Be 'CleanupPending'
@@ -62,7 +62,7 @@ Describe 'Component: Bicep native workflow recovery boundaries' -Tag Component {
         $target = '/providers/Microsoft.Management/managementGroups/test-management-group'
         $script:fixture.AdditionalRootResources = @($target)
         $result = Invoke-AvmTestE2e @script:options
-        $result.Status | Should -Be 'fail'
+        $result.Status | Should -Be 'pass'
         $result.CleanupPending | Should -Contain $target
         $script:fixture.Calls | Should -Not -Contain ('remove:' + $target)
         $script:fixture.Calls | Should -Contain ('remove:' + $script:fixture.CreatedId)
