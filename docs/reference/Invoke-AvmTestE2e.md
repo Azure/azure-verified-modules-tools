@@ -55,7 +55,7 @@ required post-removal metadata are saved in an atomic local JSON file
 before submission or removal. The state contains no credentials,
 parameters or outputs, and survives temporary-template removal.
 Final cleanup covers every attempt, including failed attempts.
-Incomplete cleanup reports pending IDs and stops subsequent cases.
+Incomplete cleanup warns, reports pending IDs and allows later cases to run.
 The reaper is a fallback, not the normal cleanup mechanism.
 
 All runs the complete lifecycle. Deploy retains all attempts and state
