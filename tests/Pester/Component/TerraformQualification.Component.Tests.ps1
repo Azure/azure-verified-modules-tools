@@ -176,7 +176,7 @@ Describe 'Native Terraform qualification mock boundary' -Tag Component {
         @{ Unsafe = 'an omitted Azure mapping'; Expected = '*requires complete known same-provider mock mappings*' }
         @{ Unsafe = 'an unknown alias'; Expected = '*requires complete known same-provider mock mappings*' }
         @{ Unsafe = 'a cross-provider binding'; Expected = '*requires complete known same-provider mock mappings*' }
-        @{ Unsafe = 'an aliased target key'; Expected = '*requires complete known same-provider mock mappings*' }
+        @{ Unsafe = 'a mismatched aliased target key'; Expected = '*requires complete known same-provider mock mappings*' }
         @{ Unsafe = 'a computed mapping'; Expected = '*requires complete known same-provider mock mappings*' }
         @{ Unsafe = 'an unknown selected target'; Expected = '*requires a known local target*' }
         @{ Unsafe = 'JSON test configuration'; Expected = '*cannot establish mock coverage for JSON tests*' }
@@ -197,7 +197,7 @@ Describe 'Native Terraform qualification mock boundary' -Tag Component {
             'an omitted Azure mapping' { $script:test.runs.root.mptf.attributes.providers = '{ terraform = terraform }' }
             'an unknown alias' { $script:test.runs.root.mptf.attributes.providers = '{ azapi = azapi.unknown }' }
             'a cross-provider binding' { $script:test.runs.root.mptf.attributes.providers = '{ azapi = terraform }' }
-            'an aliased target key' { $script:test.runs.root.mptf.attributes.providers = '{ azapi.unit = azapi }' }
+            'a mismatched aliased target key' { $script:test.runs.root.mptf.attributes.providers = '{ azapi.unit = azapi }' }
             'a computed mapping' { $script:test.runs.root.mptf.attributes.providers = 'var.providers' }
             'an unknown selected target' { $script:test.run_modules.root.dir = Join-Path $script:root 'uninspected' }
             'JSON test configuration' { Set-Content -LiteralPath (Join-Path $script:root 'tests' 'unit' 'extra.tftest.json') -Value '{}' }

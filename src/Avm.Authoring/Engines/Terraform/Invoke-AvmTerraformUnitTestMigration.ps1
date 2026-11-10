@@ -502,9 +502,10 @@ function ConvertFrom-AvmTerraformUnitTestProviderMapping {
     }
     $trivia = '(?>(?:\s|#[^\r\n]*|//[^\r\n]*|/\*[\s\S]*?\*/)*)'
     $identifier = '[A-Za-z_][A-Za-z0-9_-]*'
-    $entry = '(?<entry>(?:"(?<name>' + $identifier + ')"|(?<name>' + $identifier + '))' +
+    $providerKey = $identifier + '(?:\.' + $identifier + ')?'
+    $entry = '(?<entry>(?:"(?<name>' + $providerKey + ')"|(?<name>' + $providerKey + '))' +
     '(?<before_equals>' + $trivia + ')=(?<after_equals>' + $trivia + ')' +
-    '(?<reference>' + $identifier + '(?:\.' + $identifier + ')?)' +
+    '(?<reference>' + $providerKey + ')' +
     '(?<after_reference>' + $trivia + ')(?:,)?(?<after_separator>' + $trivia + '))'
     $pattern = '\A' + $trivia + '\{' + $trivia + '(?:' + $entry + ')*\}' + $trivia + '\z'
     $match = [regex]::Match($Expression, $pattern,
@@ -518,16 +519,19 @@ function ConvertFrom-AvmTerraformUnitTestProviderMapping {
     for ($index = 0; $index -lt $match.Groups['name'].Captures.Count; $index++) {
         $name = $match.Groups['name'].Captures[$index].Value
         $reference = $match.Groups['reference'].Captures[$index].Value
+        $providerName = ($name -split '\.', 2)[0]
+        $referenceProvider = ($reference -split '\.', 2)[0]
         if (-not $bindings.TryAdd($name, $reference) -or
             (-not $AllowUnlistedProviders -and $reference -cnotin $MockProviderNames) -or
-            ($reference -cne $name -and -not $reference.StartsWith("$name.", [System.StringComparison]::Ordinal))) {
+            $referenceProvider -cne $providerName -or
+            ($name -cne $providerName -and $reference -cne $name)) {
             return $null
         }
-        if ($name -cin $RetiredProviderNames) {
+        if ($providerName -cin $RetiredProviderNames) {
             $retiredEntries.Add($index)
         }
         else {
-            $null = $retained.Add($name)
+            $null = $retained.Add($providerName)
         }
     }
     if (-not $AllowUnlistedProviders -and -not $retained.SetEquals($ProviderNames)) { return $null }
@@ -1554,7 +1558,8 @@ function Invoke-AvmTerraformUnitTestMigration {
                         $originalMapping = ConvertFrom-AvmTerraformUnitTestProviderMapping `
                             -Expression $expression -ProviderNames $originalNames `
                             -MockProviderNames $originalProviderNames
-                        if ($null -ne $originalMapping -and -not $originalMapping.Bindings.ContainsKey('azapi')) {
+                        if ($null -ne $originalMapping -and
+                            @($originalMapping.Bindings.Keys | Where-Object { ($_ -split '\.', 2)[0] -ceq 'azapi' }).Count -eq 0) {
                             $uncovered = @(
                                 foreach ($source in $snapshot.ProviderSources[$targetPath] | Where-Object { $_ -notmatch '/builtin/' }) {
                                     if (@(Get-AvmTerraformUnitTestMockProviderName -ProviderNames @(@($originalMapping.Bindings.Keys) + @($preservedBindings.Keys)) `
@@ -1602,7 +1607,7 @@ function Invoke-AvmTerraformUnitTestMigration {
                             $name
                             continue
                         }
-                        if ($mapping.Bindings.ContainsKey('azapi')) {
+                        if (@($mapping.Bindings.Keys | Where-Object { ($_ -split '\.', 2)[0] -ceq 'azapi' }).Count -gt 0) {
                             $null = $mappedAzapiRuns.Add($name)
                         }
                         if ($mapping.Changed) {
@@ -1625,7 +1630,7 @@ function Invoke-AvmTerraformUnitTestMigration {
             if (($after.test.runs.get_Count() -gt 0 -and -not $hasAzureMock) -or $realProviders.Count -gt 0 -or
                 $unsafeMappings.Count -gt 0) {
                 throw [AvmConfigurationException]::new(
-                    "Cannot automatically migrate unit test '$($scope.File.FullName)': introduced providers need default mocks or complete known alias bindings; run provider mappings must use the same provider, without real providers, unknown aliases, or aliased target keys.")
+                    "Cannot automatically migrate unit test '$($scope.File.FullName)': introduced providers need default mocks or complete known alias bindings; run provider mappings must use the same provider, without real providers, unknown aliases, or mismatched target aliases.")
             }
         }
         $encoded = (ConvertTo-Json -InputObject @($newLocations) -Compress).Replace('${', '$${').Replace('%{', '%%{')
