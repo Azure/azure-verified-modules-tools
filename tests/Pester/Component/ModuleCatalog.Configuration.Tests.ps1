@@ -104,11 +104,13 @@ Describe 'Component: module catalog artifact manifest' -Tag Component {
             param($c)
             $c.repositories.docs = 'Azure/catalog-fixture'
             $c.repositories.bicep = 'Azure/bicep-fixture'
+            $c.destinations.docs.path = 'docs/fixture-indexes'
         }
         $outputPath = Join-Path $TestDrive 'workflow-output'
         $result = & (Join-Path $script:catalogScripts 'Get-ModuleCatalogConfiguration.ps1') `
             -ConfigurationPath $path -GitHubOutputPath $outputPath -Confirm:$false
         $result.'documentation-repository' | Should -BeExactly 'Azure/catalog-fixture'
+        $result.'documentation-index-path' | Should -BeExactly 'docs/fixture-indexes'
         $result.'bicep-repository' | Should -BeExactly 'Azure/bicep-fixture'
         $result.'publication-repositories' | Should -BeExactly 'catalog-fixture'
         $text = [System.IO.File]::ReadAllText($outputPath)

@@ -492,15 +492,54 @@ Describe 'Component: module catalog immutable source snapshots' -Tag Component {
         }
     }
 
-    It 'fetches commit-pinned blobs, verifies their Git hashes and preserves invalid metadata bytes for the shared validator' {
+    It 'downloads only commit-pinned metadata, verifies its Git hash and records source presence without downloading source' {
         $root = Join-Path $TestDrive 'source-copy'
         $result = Save-AvmCatalogTerraformSource -Repository $script:sourceRepository -Destination $root -Confirm:$false
         $result.commit | Should -BeExactly $script:sourceCommit
         $result.archived | Should -BeFalse
         [System.IO.File]::ReadAllBytes((Join-Path $root 'metadata.json')) | Should -Be $script:sourceBytes['metadata.json']
+        (Join-Path $root '.avm-source-present') | Should -Exist
+        (Join-Path $root 'main.tf') | Should -Not -Exist
         Should -Invoke Invoke-AvmCatalogRequestSet -Times 1 -ParameterFilter {
-            @($Requests | Where-Object { [string]$_.Uri -like "https://raw.githubusercontent.com/*/$script:sourceCommit/*" }).Count -eq 2
+            @($Requests | Where-Object { [string]$_.Uri -like "https://raw.githubusercontent.com/*/$script:sourceCommit/metadata.json" }).Count -eq 1
         }
+        Should -Invoke Invoke-AvmCatalogRequestSet -Times 0 -Exactly -ParameterFilter {
+            @($Requests | Where-Object { [string]$_.Uri -match '\.tf(\.json)?$' }).Count -gt 0
+        }
+    }
+
+    It 'discovers source-only roots and children from trees without fetching empty, nonempty or oversized source blobs: <Size>' -TestCases @(
+        @{ Size = 0 }
+        @{ Size = 100 }
+        @{ Size = 6MB }
+    ) {
+        param($Size)
+        $script:sourceEntries = @(
+            @{ path = 'locals.tf'; type = 'blob'; mode = '100644'; size = $Size; sha = 'c' * 40 }
+            @{ path = 'modules/child/main.tf.json'; type = 'blob'; mode = '100644'; size = $Size; sha = 'd' * 40 }
+        )
+        $terraform = Join-Path $TestDrive 'terraform'
+        $bicep = Join-Path $TestDrive 'bicep'
+        $null = [System.IO.Directory]::CreateDirectory($bicep)
+        $root = Join-Path $terraform $script:sourceRepository.Substring('Azure/'.Length)
+        $null = Save-AvmCatalogTerraformSource -Repository $script:sourceRepository -Destination $root -Confirm:$false
+        $sources = Get-AvmCatalogSources -BicepRoot $bicep -TerraformRoot $terraform
+        $sources | Should -HaveCount 2
+        @($sources | Where-Object SourcePending) | Should -HaveCount 0
+        $sources.ModulePath | Should -Contain '.'
+        $sources.ModulePath | Should -Contain 'modules/child'
+        @(Get-ChildItem -LiteralPath $root -Recurse -File -Force | Where-Object Name -ne '.avm-source-present') | Should -HaveCount 0
+        Should -Invoke Invoke-AvmCatalogRequestSet -Times 0 -Exactly -ParameterFilter {
+            @($Requests | Where-Object { [string]$_.Uri -like 'https://raw.githubusercontent.com/*' }).Count -gt 0
+        }
+    }
+
+    It 'retains metadata-only modules as source-pending without creating a source marker' {
+        $script:sourceEntries = @($script:sourceEntries | Where-Object path -eq 'metadata.json')
+        $root = Join-Path $TestDrive 'metadata-only'
+        $null = Save-AvmCatalogTerraformSource -Repository $script:sourceRepository -Destination $root -Confirm:$false
+        (Join-Path $root 'metadata.json') | Should -Exist
+        (Join-Path $root '.avm-source-present') | Should -Not -Exist
     }
 
     It 'records an archived repository without skipping its source' {
@@ -509,7 +548,7 @@ Describe 'Component: module catalog immutable source snapshots' -Tag Component {
         $result = Save-AvmCatalogTerraformSource -Repository $script:sourceRepository -Destination $root -Confirm:$false
         $result.archived | Should -BeTrue
         $result.status | Should -Be 'collected'
-        (Join-Path $root 'main.tf') | Should -Exist
+        (Join-Path $root '.avm-source-present') | Should -Exist
     }
 
     It 'rejects unknown archive state instead of defaulting it to active: <Value>' -TestCases @(
@@ -619,7 +658,7 @@ Describe 'Component: module catalog immutable source snapshots' -Tag Component {
         $results[0].repository | Should -BeExactly $script:sourceRepository
         $results[1].repository | Should -BeExactly $second
         foreach ($entry in $target) {
-            (Join-Path $entry.Destination 'main.tf') | Should -Exist
+            (Join-Path $entry.Destination '.avm-source-present') | Should -Exist
         }
         Should -Invoke Invoke-AvmCatalogRequestSet -Times 3 -Exactly
         Should -Invoke Invoke-AvmCatalogRequestSet -Times 1 -Exactly -ParameterFilter {

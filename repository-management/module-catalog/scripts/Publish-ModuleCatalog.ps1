@@ -81,6 +81,8 @@ try {
         $root = Join-Path $state $role
         $null = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('clone', '--filter=blob:none', '--no-checkout', '--branch', 'main', "https://github.com/$repository", $root) `
             -WorkingDirectory $state -EnvVars $processEnvironment
+        $null = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('sparse-checkout', 'set', '--cone', '--', $configuration.destinations[$role].path) `
+            -WorkingDirectory $root -EnvVars $processEnvironment
         $null = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('checkout', 'main') -WorkingDirectory $root -EnvVars $processEnvironment
         Assert-AvmCatalogPublicationBase -Root $root -BaseFiles $plan[$role].baseFiles
         $removals = Get-AvmCatalogPublicationRowRemovals -BundlePath $BundlePath -Configuration $configuration -SourceRoot $root

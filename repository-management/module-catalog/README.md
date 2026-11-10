@@ -53,7 +53,12 @@ approved `BicepMARModules.json` mirror), `sources/bicep/`, source-bearing
 `sources/terraform/terraform-{azurerm,azapi,azure}-avm-*/` repositories,
 `registry.json`, `github.json`, and `revisions.json`. Repository revisions include
 the boolean GitHub `archived` flag for every available Terraform repository.
-Bicep snapshots preserve each module's `DEPRECATED.md` alongside its source.
+Bicep and Terraform source presence is recorded with `.avm-source-present`
+markers derived from immutable Git trees; module source contents are not downloaded
+or copied into the snapshot. Metadata is retained, including Git blob verification
+for downloaded Terraform metadata. Bicep deprecation is represented by empty
+`DEPRECATED.md` markers from the Git tree. Its sparse checkout downloads only
+metadata; neither source contents nor unused `version.json` files are needed.
 `Get-ModuleCatalogSnapshot.ps1` collects these read-only; `GH_TOKEN` is its
 authentication boundary. Only trusted local code is imported. Fetched module
 files are data, never scripts, builds, Terraform plans, or Bicep compilations.

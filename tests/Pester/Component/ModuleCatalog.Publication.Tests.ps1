@@ -787,6 +787,13 @@ Describe 'Component: module catalog workflow safety' -Tag Component {
         $bicep | Should -Match "(?m)^    - cron: '33 2-23/4 \* \* \*'$"
     }
 
+    It 'limits checkouts to trusted catalog code, configured indexes and Bicep metadata' {
+        [regex]::Matches($workflow, '(?m)^          sparse-checkout: \|\n            src\n            repository-management/module-catalog$').Count |
+            Should -Be 3
+        $workflow | Should -Match 'sparse-checkout: \$\{\{ steps.manifest.outputs.documentation-index-path \}\}'
+        $workflow | Should -Match '(?m)^          sparse-checkout-cone-mode: false\n          sparse-checkout: \|\n            metadata.json$'
+    }
+
     It 'routes scheduled events directly to publication and merging independently of manual plan-only defaults' {
         $publication = $workflow.Substring($workflow.IndexOf("  publish:`n"))
         $condition = [regex]::Match($publication, '(?s)\n    if: >-\n(.*?)\n    outputs:').Groups[1].Value

@@ -16,6 +16,7 @@ if ($env:GITHUB_ACTIONS -eq 'true' -and $env:GITHUB_REPOSITORY -cne $configurati
 }
 $outputs = [ordered]@{
     'documentation-repository' = $configuration.repositories.docs
+    'documentation-index-path' = $configuration.destinations.docs.path
     'bicep-repository' = $configuration.repositories.bicep
     'tools-repository' = $configuration.repositories.tools
     'owner' = $configuration.repositories.tools.Split('/')[0]

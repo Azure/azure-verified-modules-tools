@@ -145,7 +145,7 @@ function Get-AvmCatalogSources {
             $relative -match '(^|/)(tests|examples|modules|\.test|\.git|\.github|\.avm|\.terraform|\.vscode)(/|$)') {
             continue
         }
-        if ($file.Name -ieq 'main.bicep' -or $file.Name -ieq 'metadata.json') {
+        if ($file.Name -ieq 'main.bicep' -or $file.Name -ieq 'metadata.json' -or $file.Name -ceq '.avm-source-present') {
             $null = $bicepPaths.Add($relative.Substring(0, $relative.LastIndexOf('/')))
         }
     }
@@ -153,8 +153,8 @@ function Get-AvmCatalogSources {
         $identity = New-AvmCatalogIdentity -Ecosystem bicep -Repository $Configuration.repositories.bicep -ModulePath $modulePath -Configuration $Configuration
         $directory = Join-Path $BicepRoot $modulePath
         $mainFile = @(Get-ChildItem -LiteralPath $directory -File | Where-Object { $_.Name -ieq 'main.bicep' })
-        $hasMain = $mainFile.Count -gt 0
-        if ($hasMain -and $mainFile[0].Name -cne 'main.bicep') {
+        $hasMain = $mainFile.Count -gt 0 -or (Test-Path -LiteralPath (Join-Path $directory '.avm-source-present') -PathType Leaf)
+        if ($mainFile.Count -gt 0 -and $mainFile[0].Name -cne 'main.bicep') {
             throw [System.IO.InvalidDataException]::new("Bicep module has no main.bicep: $modulePath")
         }
         $identity.SourcePending = -not $hasMain
@@ -198,7 +198,7 @@ function Get-AvmCatalogSources {
         $hasRoot = $false
         foreach ($scope in $scopes) {
             $files = @(Get-ChildItem -LiteralPath $scope.Directory -File -Force)
-            $hasSource = @($files | Where-Object { $_.Name -cmatch '\.tf(\.json)?$' }).Count -gt 0
+            $hasSource = @($files | Where-Object { $_.Name -cmatch '\.tf(\.json)?$' -or $_.Name -ceq '.avm-source-present' }).Count -gt 0
             $hasMetadata = @($files | Where-Object { $_.Name -ieq 'metadata.json' }).Count -gt 0
             if (-not $hasSource -and -not $hasMetadata) {
                 continue
