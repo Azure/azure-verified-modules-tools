@@ -17,10 +17,7 @@ function Get-AvmAppInstallationMissingConfiguration {
 
         [string] $OperationsRepository = 'microsoft/github-operations',
 
-        [string[]] $ConfigurationPath = @(
-            'apps/azure/azure-verified-modules.yaml',
-            'apps/azure/terraform-cloud.yaml'
-        )
+        [string[]] $ConfigurationPath = @('apps/azure/repository-groups/azure-verified-modules.yaml')
     )
 
     Set-StrictMode -Version 3.0

@@ -323,8 +323,9 @@ stops the run:
    published, and a `main` that already holds module files is never
    overwritten. When `main` already has `metadata.json`, the run checks that
    `terraform.tf`, `_header.md`, an example folder, and `tests/` exist too.
-1. Open a pull request in `microsoft/github-operations` for the AVM and
-   Terraform Cloud app installations, unless the repository is listed or an
+1. Open a pull request in `microsoft/github-operations` that adds the repository
+   to the `azure-verified-modules` repository group, unless the repository is
+   listed or an
    open request exists. Repository sync finishes the setup after installation.
 1. Clone the repository into the folder when it is empty or holds only the
    published `metadata.json`. The clone is made beside the folder and then

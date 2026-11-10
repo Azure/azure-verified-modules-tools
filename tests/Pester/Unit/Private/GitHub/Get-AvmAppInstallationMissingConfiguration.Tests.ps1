@@ -11,23 +11,27 @@ AfterAll {
 }
 
 Describe 'Get-AvmAppInstallationMissingConfiguration' {
-    It 'returns only the configuration files on main that do not list the repository' {
+    It 'returns the repository group file on main when it does not list the repository' {
         $missing = InModuleScope 'Avm.Authoring' {
-            $encode = { param($names) @{ content = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes(
-                            ((@('repositories:') + @($names | ForEach-Object { "  - $_" })) -join "`n"))) } }
-            $listed = & $encode @('a-repo', 'Terraform-Azure-AVM-Res-Web-Site')
-            $unlisted = & $encode @('a-repo')
-            Mock Invoke-AvmGitHubApi -MockWith ({ $listed }.GetNewClosure()) -ParameterFilter {
-                $Endpoint -eq 'repos/microsoft/github-operations/contents/apps/azure/azure-verified-modules.yaml?ref=main'
-            }
+            $unlisted = @{ content = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes("repositories:`n  - a-repo`n")) }
             Mock Invoke-AvmGitHubApi -MockWith ({ $unlisted }.GetNewClosure()) -ParameterFilter {
-                $Endpoint -eq 'repos/microsoft/github-operations/contents/apps/azure/terraform-cloud.yaml?ref=main'
+                $Endpoint -eq 'repos/microsoft/github-operations/contents/apps/azure/repository-groups/azure-verified-modules.yaml?ref=main'
             }
             Mock Invoke-AvmGitHubApi { throw "Unexpected call: $Endpoint" }
             Get-AvmAppInstallationMissingConfiguration -Repository 'terraform-azure-avm-res-web-site'
         }
 
-        @($missing) | Should -Be @('apps/azure/terraform-cloud.yaml')
+        @($missing) | Should -Be @('apps/azure/repository-groups/azure-verified-modules.yaml')
+    }
+
+    It 'returns nothing when the group file lists the repository' {
+        $missing = InModuleScope 'Avm.Authoring' {
+            $listed = @{ content = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes("repositories:`n  - Terraform-Azure-AVM-Res-Web-Site`n")) }
+            Mock Invoke-AvmGitHubApi -MockWith ({ $listed }.GetNewClosure())
+            Get-AvmAppInstallationMissingConfiguration -Repository 'terraform-azure-avm-res-web-site'
+        }
+
+        @($missing).Count | Should -Be 0
     }
 
     It 'checks only the requested configuration files' {
