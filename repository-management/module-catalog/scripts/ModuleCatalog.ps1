@@ -112,7 +112,6 @@ function New-AvmCatalogIdentity {
         FamilyModule = $ModulePath
         Directory    = $null
         Metadata     = $null
-        MetadataIssues = @()
         Deprecated   = $false
         SourcePending = $false
     }
@@ -234,19 +233,17 @@ function Get-AvmCatalogSources {
                 -ModuleType $source.ModuleType -ChildModule:($null -ne $source.ParentModule) `
                 -SkipModuleVersionCheck
             if ($result.Status -cne 'pass') {
-                $source.MetadataIssues = @($result.Issues | ForEach-Object { $_.Message })
-                continue
+                $messages = @($result.Issues | ForEach-Object { $_.Message }) -join '; '
+                throw [System.IO.InvalidDataException]::new("Invalid present metadata for $($source.Key): $messages")
             }
             $source.Metadata = $result.Metadata
         }
     }
     foreach ($source in $sources) {
-        if ($null -ne $source.ParentModule -and $source.MetadataIssues.Count -eq 0) {
+        if ($null -ne $source.Metadata -and $null -ne $source.ParentModule) {
             $familyKey = Get-AvmCatalogKey -Ecosystem $source.Ecosystem -Repository $source.Repository -ModulePath $source.FamilyModule
-            $family = $byKey[$familyKey]
-            if ($null -eq $family.Metadata -and ($null -ne $source.Metadata -or $family.MetadataIssues.Count -gt 0)) {
-                $source.MetadataIssues = @("Cannot adopt child: family root metadata is missing or invalid ($familyKey).")
-                $source.Metadata = $null
+            if ($null -eq $byKey[$familyKey].Metadata) {
+                throw [System.IO.InvalidDataException]::new("Cannot adopt child $($source.Key): family root metadata is missing.")
             }
         }
     }
@@ -388,8 +385,7 @@ function Get-AvmCatalogInventory {
         [Parameter(Mandatory)][string] $BicepRoot,
         [Parameter(Mandatory)][string] $TerraformRoot,
         [Parameter(Mandatory)][string] $LegacyPath,
-        [System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration),
-        [string] $DiagnosticsPath
+        [System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration)
     )
 
     $csvOutputs = @($Configuration.outputs | Where-Object { $_.kind -ceq 'csv' })
@@ -417,10 +413,8 @@ function Get-AvmCatalogInventory {
     $rowReasons = [ordered]@{}
     $renames = [System.Collections.Generic.List[object]]::new()
     $unresolved = [System.Collections.Generic.List[object]]::new()
-    $indexed = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    $indexedTerraform = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($source in $sources) {
-        if ($null -eq $source.Metadata -and $source.MetadataIssues.Count -eq 0) {
+        if ($null -eq $source.Metadata) {
             $missing[$source.Key] = [ordered]@{
                 ecosystem = $source.Ecosystem; repository = $source.Repository
                 modulePath = $source.ModulePath; reason = 'metadata-not-present'
@@ -441,10 +435,6 @@ function Get-AvmCatalogInventory {
             $identity = $null
             try {
                 $identity = Get-AvmCatalogLegacyIdentity -Row $row -Ecosystem $output.ecosystem -Configuration $Configuration
-                $null = $indexed.Add($identity.Key)
-                if ($identity.Ecosystem -ceq 'terraform') {
-                    $null = $indexedTerraform.Add(('{0}|{1}' -f $identity.RepositoryId, $identity.ModulePath))
-                }
                 if ($identity.ModuleType -cne $output.moduleType) {
                     throw [System.ArgumentException]::new('Legacy module kind disagrees with its CSV.')
                 }
@@ -493,66 +483,6 @@ function Get-AvmCatalogInventory {
         }
     }
 
-    $catalogOutput = Get-AvmCatalogOutput -Configuration $Configuration -Kind catalog
-    $catalogPath = Join-Path $LegacyPath $catalogOutput.file
-    if (Test-Path -LiteralPath $catalogPath -PathType Leaf) {
-        $catalog = Read-AvmCatalogJson -Path $catalogPath
-        $schema = Join-Path ([System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' '..' '..'))) $catalogOutput.schema
-        if (-not (Test-Json -Json (ConvertTo-AvmCatalogJson -Value $catalog) -SchemaFile $schema -ErrorAction Stop)) {
-            throw [System.IO.InvalidDataException]::new('The existing catalog index does not conform to the packaged output schema.')
-        }
-        foreach ($group in $catalog.modules.Values) {
-            foreach ($record in @($group.bicep) + @($group.terraform)) {
-                $identity = New-AvmCatalogIdentity -Ecosystem $record.ecosystem -Repository $record.repository `
-                    -ModulePath $record.modulePath -Configuration $Configuration
-                $null = $indexed.Add($identity.Key)
-                if ($identity.Ecosystem -ceq 'terraform') {
-                    $null = $indexedTerraform.Add(('{0}|{1}' -f $identity.RepositoryId, $identity.ModulePath))
-                }
-            }
-        }
-    }
-
-    $marOutput = Get-AvmCatalogOutput -Configuration $Configuration -Kind mar
-    $mar = Read-AvmCatalogJson -Path (Join-Path $LegacyPath $marOutput.file)
-    if ($mar -isnot [array]) {
-        throw [System.IO.InvalidDataException]::new("$($marOutput.file) must remain an array of module-name strings.")
-    }
-    foreach ($name in $mar) {
-        if ($name -isnot [string] -or $name -cnotmatch '^avm/(res|ptn|utl)/[a-z0-9/-]+$') {
-            throw [System.IO.InvalidDataException]::new("$($marOutput.file) contains an unsupported module name.")
-        }
-        $identity = New-AvmCatalogIdentity -Ecosystem bicep -Repository $Configuration.repositories.bicep `
-            -ModulePath $name -Configuration $Configuration
-        $null = $indexed.Add($identity.Key)
-    }
-
-    $invalidMetadata = @(
-        foreach ($source in $sources | Where-Object { $_.MetadataIssues.Count -gt 0 }) {
-            [ordered]@{
-                key = $source.Key
-                ecosystem = $source.Ecosystem
-                repository = $source.Repository
-                modulePath = $source.ModulePath
-                indexed = $indexed.Contains($source.Key) -or ($source.Ecosystem -ceq 'terraform' -and
-                    $indexedTerraform.Contains(('{0}|{1}' -f $source.RepositoryId, $source.ModulePath)))
-                reasons = @($source.MetadataIssues)
-            }
-        }
-    )
-    if ($invalidMetadata.Count -gt 0) {
-        $details = Format-AvmCatalogMetadataIssues -Issues $invalidMetadata
-        if ($DiagnosticsPath) {
-            $null = [System.IO.Directory]::CreateDirectory($DiagnosticsPath)
-            [System.IO.File]::WriteAllText((Join-Path $DiagnosticsPath 'invalid-metadata.json'),
-                (ConvertTo-AvmCatalogJson -Value @{ invalidMetadata = $invalidMetadata }), [System.Text.UTF8Encoding]::new($false))
-        }
-        if (@($invalidMetadata | Where-Object indexed).Count -gt 0) {
-            throw [System.IO.InvalidDataException]::new("Invalid present metadata affects an existing index entry. No catalog outputs may be published.`n$details")
-        }
-        Write-Warning "Excluding new modules with invalid metadata. The run must fail after other outputs are processed.`n$details"
-    }
-
     foreach ($source in $sources) {
         if ($null -eq $source.Metadata) {
             continue
@@ -593,6 +523,16 @@ function Get-AvmCatalogInventory {
         }
     }
 
+    $marOutput = Get-AvmCatalogOutput -Configuration $Configuration -Kind mar
+    $mar = Read-AvmCatalogJson -Path (Join-Path $LegacyPath $marOutput.file)
+    if ($mar -isnot [array]) {
+        throw [System.IO.InvalidDataException]::new("$($marOutput.file) must remain an array of module-name strings.")
+    }
+    foreach ($name in $mar) {
+        if ($name -isnot [string] -or $name -cnotmatch '^avm/(res|ptn|utl)/[a-z0-9/-]+$') {
+            throw [System.IO.InvalidDataException]::new("$($marOutput.file) contains an unsupported module name.")
+        }
+    }
     return [pscustomobject]@{
         Configuration = $Configuration
         Sources = $sources
@@ -604,20 +544,10 @@ function Get-AvmCatalogInventory {
         Report = [ordered]@{
             schemaVersion = 1
             missingMetadata = @((Get-AvmCatalogOrdinal -Values @($missing.Keys)) | ForEach-Object { $missing[$_] })
-            invalidMetadata = $invalidMetadata
             unresolvedLegacy = $unresolved.ToArray()
             parity = [ordered]@{ bicepOnly = @(); terraformOnly = @() }
         }
     }
-}
-
-function Format-AvmCatalogMetadataIssues {
-    [CmdletBinding()]
-    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Issues)
-
-    return (@($Issues | ForEach-Object {
-                '{0}: {1}' -f $_.key, ((@($_.reasons) -join '; ') -replace '[\r\n]+', ' ')
-            }) -join "`n")
 }
 
 function Resolve-AvmCatalogOwnerProfiles {

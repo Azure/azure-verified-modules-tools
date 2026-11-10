@@ -133,21 +133,6 @@ BeforeAll {
 }
 
 Describe 'Component: module catalog publication boundaries' -Tag Component {
-    It 'refuses a bundle reporting indexed faulty metadata even with force' {
-        $root = New-CatalogPublicationFixture
-        $output = Get-AvmCatalogOutput -Configuration (Read-AvmCatalogConfiguration) -Kind migration-report
-        $report = Read-AvmCatalogJson -Path (Join-Path $root $output.bundlePath)
-        $report['invalidMetadata'] = @(@{
-                key = 'terraform:azure/terraform-azure-avm-ptn-example:modules/child'
-                indexed = $true
-                reasons = @('Invalid telemetry prefix.')
-            })
-        Save-CatalogPublicationFixtureFile -Root $root -RelativePath $output.bundlePath -Text (ConvertTo-AvmCatalogJson -Value $report)
-        foreach ($force in @($false, $true)) {
-            { Test-AvmCatalogPublicationBundle -Path $root -Force:$force } | Should -Throw '*existing index entry*Invalid telemetry prefix*'
-        }
-    }
-
     It 'validates a complete fixed-path hashed bundle without network or remote changes' {
         $root = New-CatalogPublicationFixture
         $plan = Test-AvmCatalogPublicationBundle -Path $root
@@ -533,7 +518,6 @@ Describe 'Component: module catalog publication merging' -Tag Component {
 
     It 'publishes the intended tree and verifies the merge: <Case>' -TestCases @(
         @{ Case = 'new candidate'; Existing = $false; LegacyReport = $false; BaseReport = $false; Failure = '' }
-        @{ Case = 'new faulty module excluded'; Existing = $false; LegacyReport = $false; BaseReport = $false; Failure = ''; MetadataExclusion = $true }
         @{ Case = 'unchanged pending candidate'; Existing = $true; LegacyReport = $false; BaseReport = $false; Failure = '' }
         @{ Case = 'CSV-only candidate'; Existing = $false; LegacyReport = $false; BaseReport = $false; Failure = ''; JsonUnchanged = $true }
         @{ Case = 'pending CSV-only candidate'; Existing = $true; LegacyReport = $false; BaseReport = $false; Failure = ''; JsonUnchanged = $true }
@@ -550,22 +534,12 @@ Describe 'Component: module catalog publication merging' -Tag Component {
         @{ Case = 'verified deprecated exclusion'; Existing = $false; LegacyReport = $false; BaseReport = $false; Failure = ''; Exclude = $true }
         @{ Case = 'exclusion with unrelated held-back output'; Existing = $false; LegacyReport = $false; BaseReport = $false; Failure = ''; Exclude = $true; HoldUnrelated = $true }
     ) {
-        param($Existing, $LegacyReport, $BaseReport, $Failure, $NoChange = $false, $Exclude = $false, $HoldUnrelated = $false, $JsonUnchanged = $false, $NoJsonInMerge = $false, $MetadataExclusion = $false)
+        param($Existing, $LegacyReport, $BaseReport, $Failure, $NoChange = $false, $Exclude = $false, $HoldUnrelated = $false, $JsonUnchanged = $false, $NoJsonInMerge = $false)
 
         $configuration = Read-AvmCatalogConfiguration
         $bundle = New-CatalogPublicationFixture
         $outputPath = Join-Path $TestDrive ("catalog-output-$([guid]::NewGuid().ToString('N'))")
         Set-CatalogPublicationFixtureRows -Root $bundle -SourceRows @() -OutputRows @($sourceRow)
-        if ($MetadataExclusion) {
-            $output = Get-AvmCatalogOutput -Configuration $configuration -Kind migration-report
-            $report = Read-AvmCatalogJson -Path (Join-Path $bundle $output.bundlePath)
-            $report['invalidMetadata'] = @(@{
-                    key = 'terraform:azure/terraform-azure-avm-ptn-example:modules/new'
-                    indexed = $false
-                    reasons = @('Invalid telemetry prefix.')
-                })
-            Save-CatalogPublicationFixtureFile -Root $bundle -RelativePath $output.bundlePath -Text (ConvertTo-AvmCatalogJson -Value $report)
-        }
         $source = New-CatalogPublicationSourceFixture
         $paths = Get-AvmCatalogPublicationPaths -Configuration $configuration
         $reportTarget = 'docs/static/module-indexes/v1/migration-report.json'
@@ -772,15 +746,6 @@ Describe 'Component: module catalog publication merging' -Tag Component {
             $published.TrimEnd() | Should -BeExactly ([System.IO.File]::ReadAllText($expectedPath).TrimEnd())
         }
         $state.Calls | Should -Contain $(if ($Existing) { 'PATCH' } else { 'POST' })
-        if ($MetadataExclusion) {
-            $diagnostics = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
-            $null = [System.IO.Directory]::CreateDirectory($diagnostics)
-            [System.IO.File]::WriteAllText((Join-Path $diagnostics 'invalid-metadata.json'),
-                (ConvertTo-AvmCatalogJson -Value @{ invalidMetadata = $report.invalidMetadata }))
-            $state.Calls | Should -Contain 'merge'
-            { & (Join-Path $catalogScripts 'Assert-ModuleCatalogPublication.ps1') -DiagnosticsPath $diagnostics } |
-                Should -Throw '*Faulty metadata excluded 1 new module*modules/new*Invalid telemetry prefix*'
-        }
     }
 }
 

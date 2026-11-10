@@ -685,7 +685,7 @@ Describe 'Component: module catalog publication inputs' -Tag Component {
         $roots = @{ docs = Join-Path $root 'docs'; tools = Join-Path $root 'tools' }
         $snapshot = Join-Path $root 'snapshot'
         $originals = @{}
-        foreach ($output in $configuration.outputs | Where-Object { $_.kind -in @('csv', 'mar', 'catalog') }) {
+        foreach ($output in $configuration.outputs | Where-Object { $_.kind -in @('csv', 'mar') }) {
             $sourcePath = if ($output.kind -eq 'csv') { $output.sourcePath } else { $output.targetPath }
             $file = Join-Path $roots[$output.destination] $sourcePath
             $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($file))
@@ -704,9 +704,6 @@ Describe 'Component: module catalog publication inputs' -Tag Component {
         [System.IO.File]::WriteAllText($oldPreview, 'Not a CSV input.')
         $previewHash = (Get-FileHash -LiteralPath $oldPreview -Algorithm SHA256).Hash.ToLowerInvariant()
         $plan = Copy-AvmCatalogInputFile -Configuration $configuration -RepositoryRoots $roots -SnapshotPath $snapshot
-        $catalog = Get-AvmCatalogOutput -Configuration $configuration -Kind catalog
-        (Get-FileHash -LiteralPath (Join-Path $snapshot 'legacy' $catalog.file) -Algorithm SHA256).Hash.ToLowerInvariant() |
-            Should -BeExactly $originals[$catalog.targetPath]
         foreach ($csv in $csvs) {
             $copied = Join-Path $snapshot 'legacy' $csv.sourceFile
             (Get-FileHash -LiteralPath $copied -Algorithm SHA256).Hash.ToLowerInvariant() | Should -BeExactly $originals[$csv.sourcePath]

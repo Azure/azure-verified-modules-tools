@@ -70,17 +70,8 @@ variant. Publication always reads the trusted tools-checkout manifest, never a
 configuration supplied inside the generated bundle.
 
 Only valid module metadata creates catalog entries and eligible CSV rows. There are no
-ecosystem mode options or full legacy-record fallback. Faulty metadata for any module
-already present in a source CSV, `BicepMARModules.json`, or `v1/modules.json` stops
-the run before any publication, even with `force=true`. Faulty metadata for new
-modules excludes those modules (including children unable to inherit valid family
-metadata), while other eligible updates proceed. After publication, the reporting
-job fails with every excluded module identity and validation reason. Plan-only
-runs produce the same diagnostics and fail reporting without publishing.
-Diagnostics are retained in `invalid-metadata.json`; successful generation also
-records exclusions in the migration report. The collected snapshot includes the
-existing JSON index for membership checks.
-Catalog collection does not enforce parity with Bicep source
+ecosystem mode options or full legacy-record fallback. Present metadata must pass
+the packaged validator; catalog collection does not enforce parity with Bicep source
 literals. Reduced children require family-root
 metadata and inherit owners. The JSON catalog also includes the
 family's alternative names and comments; child CSV cells for those two fields
@@ -233,7 +224,7 @@ Terraform metadata creation, the direct Bicep metadata file change, Terraform te
 refreshing the private-source MAR mirror, and approval of any source-row removals
 remain rollout dependencies. Update the internal Azure-Verified-Modules-Docs
 team catalog how-to with the Bicep child-removal and multi-scope status rules,
-exclusion warnings, deletion recommendation, and indexed-versus-new faulty metadata policy;
+exclusion warnings, and deletion recommendation;
 generated catalogs do not belong there.
 Track rollout sequencing in the relevant issue and pull requests. Production
 workflow pauses, enablement, and first runs require explicit operator approval.

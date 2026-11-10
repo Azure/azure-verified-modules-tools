@@ -359,10 +359,7 @@ function Copy-AvmCatalogInputFile {
         $path = Join-Path $RepositoryRoots[$output.destination] $output.targetPath
         $exists = Test-Path -LiteralPath $path -PathType Leaf
         $publication[$output.destination].baseFiles[$output.targetPath] = if ($exists) { (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
-        if ($output.kind -in @('csv', 'mar', 'catalog')) {
-            if ($output.kind -eq 'catalog' -and -not $exists) {
-                continue
-            }
+        if ($output.kind -in @('csv', 'mar')) {
             if ($output.kind -eq 'csv') {
                 $path = Join-Path $RepositoryRoots[$output.destination] $output.sourcePath
                 $exists = Test-Path -LiteralPath $path -PathType Leaf

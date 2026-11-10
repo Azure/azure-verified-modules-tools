@@ -1,0 +1,89 @@
+---
+name: 'Repos: Maintenance Alerts'
+
+on:
+  workflow_run:
+    workflows:
+      - 'Repos: Catalog Sync'
+      - 'Repos: Terraform Sync'
+      - 'Repos: Bicep Sync'
+      - 'Repos: Module List Sync'
+      - 'Repos: Label Sync'
+      - 'Repos: Issue Routing'
+      - 'Repos: PR Routing'
+      - 'Repos: Workflow Failures'
+    branches: [main]
+    types: [completed]
+  schedule:
+    - cron: '47 5 * * *'
+  workflow_dispatch:
+    inputs:
+      what_if:
+        description: 'Report planned failure issue updates without changing issues or notifying the team.'
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      what_if:
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+concurrency:
+  group: repository-management-maintenance-alerts
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  manage-issues:
+    name: Manage maintenance workflow failure issues
+    if: >-
+      github.repository == 'Azure/azure-verified-modules-tools' &&
+      (github.event_name != 'workflow_run' ||
+        (github.event.workflow_run.head_repository.full_name == github.repository &&
+          github.event.workflow_run.event != 'pull_request' &&
+          github.event.workflow_run.event != 'pull_request_target'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout trusted maintenance reporting code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.ref || github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: |
+            src
+            repository-management/workflow-failure-issues
+            repository-management/repository-sync/scripts/lib
+            repository-management/reviewer-routing/scripts/lib
+
+      - name: Manage shared maintenance failure issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WHAT_IF: ${{ inputs.what_if }}
+          NOTIFY_TEAM: Azure/azure-verified-modules-engineering-owners
+          FAILURE_THRESHOLD: '3'
+          MONITORED_WORKFLOWS: >-
+            ["Repos: Catalog Sync", "Repos: Terraform Sync", "Repos: Bicep Sync",
+             "Repos: Module List Sync", "Repos: Label Sync", "Repos: Issue Routing",
+             "Repos: PR Routing", "Repos: Workflow Failures"]
+        run: |
+          Import-Module (Join-Path $env:GITHUB_WORKSPACE 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force -ErrorAction Stop
+          $workflowNames = @($env:MONITORED_WORKFLOWS | ConvertFrom-Json)
+          $whatIf = $env:WHAT_IF -eq 'true'
+
+          ./repository-management/workflow-failure-issues/scripts/Invoke-AvmWorkflowFailureIssues.ps1 `
+            -Repository $env:GITHUB_REPOSITORY `
+            -WorkflowName $workflowNames `
+            -PlatformTeam $env:NOTIFY_TEAM `
+            -FailureThreshold ([int]$env:FAILURE_THRESHOLD) `
+            -WhatIf:$whatIf
+
+          $global:LASTEXITCODE = 0

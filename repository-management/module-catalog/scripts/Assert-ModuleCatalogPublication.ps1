@@ -13,28 +13,6 @@ $toolsRoot = Join-Path $PSScriptRoot '..' '..' '..'
 Import-Module -Name (Join-Path $toolsRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
 . (Join-Path $PSScriptRoot 'ModuleCatalog.ps1')
 
-$invalidMetadata = @()
-$metadataReport = Join-Path $DiagnosticsPath 'invalid-metadata.json'
-if (Test-Path -LiteralPath $metadataReport -PathType Leaf) {
-    $metadataData = Read-AvmCatalogJson -Path $metadataReport
-    $invalidMetadata = @($metadataData.invalidMetadata)
-}
-$metadataDetails = Format-AvmCatalogMetadataIssues -Issues $invalidMetadata
-if ($invalidMetadata.Count -gt 0) {
-    Write-AvmCatalogProgress ("Excluded {0} module(s) with faulty metadata:`n{1}" -f $invalidMetadata.Count, $metadataDetails)
-    if ($SummaryPath) {
-        $summary = @(
-            '## Modules excluded for faulty metadata'
-            ''
-            'These modules were excluded. Other eligible catalog outputs were processed before this reporting job. The run fails until their metadata is corrected.'
-            ''
-        ) + @($invalidMetadata | ForEach-Object {
-                '- ' + [System.Net.WebUtility]::HtmlEncode((Format-AvmCatalogMetadataIssues -Issues @($_)))
-            })
-        Add-Content -LiteralPath $SummaryPath -Value ($summary -join "`n")
-    }
-}
-
 $removals = @()
 $held = [System.Collections.Generic.List[string]]::new()
 $report = Join-Path $DiagnosticsPath 'csv-row-removals.json'
@@ -61,9 +39,6 @@ if (Test-Path -LiteralPath $ownerReport -PathType Leaf) {
 }
 
 if ($held.Count -eq 0) {
-    if ($invalidMetadata.Count -gt 0) {
-        throw [System.IO.InvalidDataException]::new("Faulty metadata excluded $($invalidMetadata.Count) new module(s).`n$metadataDetails")
-    }
     Write-AvmCatalogProgress ('All catalog outputs were published: {0} row removal(s) and 0 missing owner(s) recorded.' -f $removals.Count)
     return
 }
@@ -111,5 +86,4 @@ if ($SummaryPath) {
 }
 
 throw [System.IO.InvalidDataException]::new(
-    ('{0} source CSV file(s) were held back: {1} row(s) would be removed and {2} module(s) name a GitHub owner that no longer exists. Fix the module sources or owners, or re-run with force=true to accept them.' -f $held.Count, $removals.Count, $owners.Count) +
-    $(if ($invalidMetadata.Count -gt 0) { "`nFaulty metadata also excluded $($invalidMetadata.Count) new module(s):`n$metadataDetails" }))
+    ('{0} source CSV file(s) were held back: {1} row(s) would be removed and {2} module(s) name a GitHub owner that no longer exists. Fix the module sources or owners, or re-run with force=true to accept them.' -f $held.Count, $removals.Count, $owners.Count))

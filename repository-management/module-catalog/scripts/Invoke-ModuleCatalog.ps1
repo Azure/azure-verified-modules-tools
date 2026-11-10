@@ -17,26 +17,10 @@ Import-Module -Name (Join-Path $toolsRoot 'src' 'Avm.Authoring' 'Avm.Authoring.p
 . (Join-Path $PSScriptRoot 'ModuleCatalog.ps1')
 
 $configuration = Read-AvmCatalogConfiguration -Path $ConfigurationPath
-$publicationPath = Join-Path $InputPath 'publication.json'
-$plan = $null
-if (Test-Path -LiteralPath $publicationPath -PathType Leaf) {
-    $plan = Read-AvmCatalogJson -Path $publicationPath
-    if ($plan['manifestHash'] -cne $configuration.hash) {
-        throw [System.IO.InvalidDataException]::new('The catalog manifest changed after collection. Collect a new snapshot.')
-    }
-    $catalogOutput = Get-AvmCatalogOutput -Configuration $configuration -Kind catalog
-    $baselineHash = $plan[$catalogOutput.destination].baseFiles[$catalogOutput.targetPath]
-    $baselinePath = Join-Path $InputPath 'legacy' $catalogOutput.file
-    if ($null -ne $baselineHash -and (
-            -not (Test-Path -LiteralPath $baselinePath -PathType Leaf) -or
-            (Get-FileHash -LiteralPath $baselinePath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $baselineHash)) {
-        throw [System.IO.InvalidDataException]::new('The existing JSON index is missing or changed in the snapshot. Collect a new snapshot before checking module membership.')
-    }
-}
 Write-AvmCatalogProgress 'Reading the collected snapshot inventory.'
 $inventory = Get-AvmCatalogInventory -BicepRoot (Join-Path $InputPath 'sources' 'bicep') `
     -TerraformRoot (Join-Path $InputPath 'sources' 'terraform') -LegacyPath (Join-Path $InputPath 'legacy') `
-    -Configuration $configuration -DiagnosticsPath $DiagnosticsPath
+    -Configuration $configuration
 Write-AvmCatalogProgress ("Inventory loaded: {0} catalog item(s)." -f $inventory.Items.Count)
 Write-AvmCatalogProgress 'Building and validating the catalog bundle.'
 $bundle = New-AvmCatalogBundle -Inventory $inventory `
@@ -46,8 +30,13 @@ $bundle = New-AvmCatalogBundle -Inventory $inventory `
     -DiagnosticsPath $DiagnosticsPath
 Write-AvmCatalogProgress ("Bundle validated: {0} output file(s)." -f $bundle.Files.Count)
 
-if ($null -ne $plan) {
+$publicationPath = Join-Path $InputPath 'publication.json'
+if (Test-Path -LiteralPath $publicationPath -PathType Leaf) {
     Write-AvmCatalogProgress 'Recording publication plan output hashes.'
+    $plan = Read-AvmCatalogJson -Path $publicationPath
+    if ($plan['manifestHash'] -cne $configuration.hash) {
+        throw [System.IO.InvalidDataException]::new('The catalog manifest changed after collection. Collect a new snapshot.')
+    }
     $plan['outputHashes'] = [ordered]@{}
     foreach ($relative in $bundle.Files.Keys) {
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($bundle.Files[$relative])
