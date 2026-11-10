@@ -39,6 +39,9 @@ jobs:
         with:
           path: tools
           persist-credentials: false
+          sparse-checkout: |
+            src
+            repository-management/module-catalog
 
       - name: Read the trusted catalog manifest
         id: manifest
@@ -53,14 +56,18 @@ jobs:
           ref: main
           path: input-docs
           persist-credentials: false
+          sparse-checkout: ${{ steps.manifest.outputs.documentation-index-path }}
 
-      - name: Checkout Bicep sources as data
+      - name: Checkout Bicep metadata as data
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ steps.manifest.outputs.bicep-repository }}
           ref: main
           path: input-bicep
           persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            metadata.json
 
       - name: Create read-only collection token
         id: reader
@@ -146,6 +153,9 @@ jobs:
         with:
           path: tools
           persist-credentials: false
+          sparse-checkout: |
+            src
+            repository-management/module-catalog
 
       - name: Read the trusted publication manifest
         id: manifest
@@ -213,6 +223,9 @@ jobs:
         with:
           path: tools
           persist-credentials: false
+          sparse-checkout: |
+            src
+            repository-management/module-catalog
 
       - name: Download source CSV row-removal diagnostics
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

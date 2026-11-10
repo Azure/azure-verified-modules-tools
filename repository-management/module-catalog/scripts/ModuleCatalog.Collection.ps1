@@ -400,6 +400,62 @@ function Get-AvmCatalogResponseJson {
     return ConvertFrom-Json -InputObject $Response.Content -AsHashtable -Depth 100 -NoEnumerate
 }
 
+function Get-AvmCatalogBicepTreeSource {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $Root,
+        [System.Collections.IDictionary] $Configuration = (Read-AvmCatalogConfiguration)
+    )
+
+    $git = (Get-Command -Name git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $tree = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList @('ls-tree', '-r', '-z', 'HEAD', '--', 'avm') -WorkingDirectory $Root
+    $modules = @{}
+    $deprecated = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($entry in $tree.StdOut.Split([char]0, [System.StringSplitOptions]::RemoveEmptyEntries)) {
+        if ($entry -cnotmatch '^(?<mode>[0-9]+) (?<type>[a-z]+) [0-9a-f]+\t(?<path>.+)$') {
+            throw [System.IO.InvalidDataException]::new('Git returned an unsupported Bicep tree entry.')
+        }
+        $mode = $Matches.mode
+        $type = $Matches.type
+        $path = $Matches.path
+        if ($path -cnotmatch '^avm/(res|ptn|utl)/' -or
+            $path -match '(^|/)(tests|examples|modules|\.test|\.git|\.github|\.avm|\.terraform|\.vscode)(/|$)' -or
+            $path -inotmatch '/(main\.bicep|metadata\.json|DEPRECATED\.md)$|/DEPRECATED\.md/') {
+            continue
+        }
+        if ($path -imatch '/DEPRECATED\.md/' -or
+            ($path -imatch '/DEPRECATED\.md$' -and -not $path.EndsWith('/DEPRECATED.md', [StringComparison]::Ordinal))) {
+            throw [System.IO.InvalidDataException]::new("Deprecation requires one regular file named DEPRECATED.md with exact casing: $path")
+        }
+        if ($type -cne 'blob' -or $mode -cnotin @('100644', '100755')) {
+            throw [System.IO.InvalidDataException]::new("Unsupported Bicep source entry (link or submodule): $path")
+        }
+        $modulePath = $path.Substring(0, $path.LastIndexOf('/'))
+        if ($path.EndsWith('/DEPRECATED.md', [StringComparison]::Ordinal)) {
+            $null = $deprecated.Add($modulePath)
+            continue
+        }
+        if (-not $modules.ContainsKey($modulePath)) {
+            $modules[$modulePath] = New-AvmCatalogIdentity -Ecosystem bicep -Repository $Configuration.repositories.bicep -ModulePath $modulePath -Configuration $Configuration
+            $modules[$modulePath].Directory = Join-Path $Root $modulePath
+            $modules[$modulePath].SourcePending = $true
+        }
+        if ($path -imatch '/main\.bicep$') {
+            if (-not $path.EndsWith('/main.bicep', [StringComparison]::Ordinal)) {
+                throw [System.IO.InvalidDataException]::new("Bicep module has no main.bicep: $modulePath")
+            }
+            $modules[$modulePath].SourcePending = $false
+        }
+        elseif (-not (Test-Path -LiteralPath (Join-Path $Root $path) -PathType Leaf)) {
+            throw [System.IO.FileNotFoundException]::new("Bicep metadata from the Git tree is missing from the checkout: $path")
+        }
+    }
+    foreach ($module in $modules.Values) {
+        $module.Deprecated = $deprecated.Contains($module.ModulePath)
+    }
+    return @($modules.Values)
+}
+
 function Copy-AvmCatalogBicepSource {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -408,12 +464,31 @@ function Copy-AvmCatalogBicepSource {
     )
 
     foreach ($source in $Sources) {
+        if (Test-Path -LiteralPath $source.Directory -PathType Container) {
+            $links = @(Get-Item -LiteralPath $source.Directory
+                Get-ChildItem -LiteralPath $source.Directory -Force) |
+                Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint }
+            if ($links) {
+                throw [System.IO.InvalidDataException]::new("Source snapshots must not contain links: $($source.Directory)")
+            }
+        }
+    }
+    foreach ($source in $Sources) {
         $directory = Join-Path $Destination $source.ModulePath
-        if ($PSCmdlet.ShouldProcess($directory, 'Copy Bicep source and deprecation evidence into the catalog snapshot')) {
+        if ($PSCmdlet.ShouldProcess($directory, 'Save Bicep source-presence and metadata evidence into the catalog snapshot')) {
             $null = [System.IO.Directory]::CreateDirectory($directory)
-            foreach ($file in @(Get-ChildItem -LiteralPath $source.Directory -File |
-                    Where-Object { $_.Name -cin @('main.bicep', 'metadata.json', 'version.json', 'DEPRECATED.md') })) {
-                [System.IO.File]::Copy($file.FullName, (Join-Path $directory $file.Name))
+            if (-not $source.SourcePending) {
+                [System.IO.File]::WriteAllBytes((Join-Path $directory '.avm-source-present'), [byte[]]@())
+            }
+            if ($source.Deprecated) {
+                [System.IO.File]::WriteAllBytes((Join-Path $directory 'DEPRECATED.md'), [byte[]]@())
+            }
+            if (Test-Path -LiteralPath $source.Directory -PathType Container) {
+                $null = Test-AvmCatalogDeprecationMarker -Path $source.Directory
+                foreach ($file in @(Get-ChildItem -LiteralPath $source.Directory -File |
+                        Where-Object { $_.Name -ieq 'metadata.json' })) {
+                    [System.IO.File]::Copy($file.FullName, (Join-Path $directory $file.Name))
+                }
             }
         }
     }
@@ -869,20 +944,26 @@ function Save-AvmCatalogTerraformSourceSet {
         })
     $blobRequests = [System.Collections.Generic.List[hashtable]]::new()
     $blobOwners = [System.Collections.Generic.List[hashtable]]::new()
+    $sourceMarkers = [System.Collections.Generic.List[string]]::new()
     for ($index = 0; $index -lt $trees.Count; $index++) {
         $entry = $trees[$index]
         $files = Get-AvmCatalogTerraformSourcePath -Repository $entry.Repository -Tree (Get-AvmCatalogResponseJson -Response $treeResponses[$index])
         foreach ($path in (Get-AvmCatalogOrdinal -Values @($files.Keys))) {
             $file = $files[$path]
-            if ($file.type -cne 'blob' -or $file.mode -cnotin @('100644', '100755') -or $file.size -gt 5MB) {
+            $isSource = $path -cmatch '\.tf(\.json)?$'
+            if ($file.type -cne 'blob' -or $file.mode -cnotin @('100644', '100755') -or (-not $isSource -and $file.size -gt 5MB)) {
                 throw [System.IO.InvalidDataException]::new("Unsupported source entry (link, submodule or oversized blob): $($entry.Repository)/$path")
+            }
+            if ($isSource) {
+                $sourceMarkers.Add((Join-Path ([System.IO.Path]::GetDirectoryName((Join-Path $entry.Destination $path))) '.avm-source-present'))
+                continue
             }
             $blobRequests.Add((New-AvmCatalogRequest -Uri "https://raw.githubusercontent.com/$($entry.Repository)/$($entry.Commit)/$path" -Accept 'text/plain'))
             $blobOwners.Add(@{ Entry = $entry; Path = $path; Sha = $file.sha })
         }
         $revisions[$entry.Repository] = [ordered]@{ repository = $entry.Repository; commit = $entry.Commit; status = 'collected'; archived = $entry.Archived }
     }
-    $blobResponses = Invoke-AvmCatalogRequestSet -Activity 'Terraform source blobs' -GitHubToken $GitHubToken -Requests @($blobRequests)
+    $blobResponses = Invoke-AvmCatalogRequestSet -Activity 'Terraform metadata blobs' -GitHubToken $GitHubToken -Requests @($blobRequests)
     for ($index = 0; $index -lt $blobOwners.Count; $index++) {
         $owner = $blobOwners[$index]
         $content = $blobResponses[$index]
@@ -901,6 +982,12 @@ function Save-AvmCatalogTerraformSourceSet {
             $target = Join-Path $owner.Entry.Destination $owner.Path
             $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($target))
             [System.IO.File]::WriteAllBytes($target, $owner.Bytes)
+        }
+    }
+    foreach ($marker in $sourceMarkers) {
+        if ($PSCmdlet.ShouldProcess($marker, 'Save source-presence evidence from the immutable Git tree')) {
+            $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($marker))
+            [System.IO.File]::WriteAllBytes($marker, [byte[]]@())
         }
     }
     return , @($repositories | ForEach-Object { $revisions[$_] })

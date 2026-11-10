@@ -10,6 +10,84 @@ AfterAll {
 }
 
 Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
+    It 'preserves generated indexes when both ecosystems use source-presence markers instead of source contents' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $expected = Get-CatalogFixtureBundle -Fixture $fixture
+        foreach ($module in $fixture.Modules) {
+            $source = if ($module.Ecosystem -eq 'bicep') { 'main.bicep' } else { 'main.tf' }
+            [System.IO.File]::Delete((Join-Path $module.Directory $source))
+            [System.IO.File]::WriteAllBytes((Join-Path $module.Directory '.avm-source-present'), [byte[]]@())
+        }
+        $actual = Get-CatalogFixtureBundle -Fixture $fixture
+        foreach ($path in $expected.Files.Keys) {
+            $actual.Files[$path] | Should -BeExactly $expected.Files[$path]
+        }
+    }
+
+    It 'collects Bicep source-only and metadata-only modules from a metadata-only sparse checkout' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $pending = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' `
+            -ModulePath 'avm/res/test/pending' -Canonical 'Microsoft.Test/pending' -Adopt -SourcePending
+        $sourceOnly = 'avm/res/test/source-only'
+        $sourceDirectory = Join-Path $fixture.Bicep $sourceOnly
+        $null = [System.IO.Directory]::CreateDirectory((Join-Path $sourceDirectory 'tests'))
+        [System.IO.File]::WriteAllText((Join-Path $sourceDirectory 'main.bicep'), 'targetScope = ''resourceGroup''')
+        [System.IO.File]::WriteAllText((Join-Path $sourceDirectory 'tests' 'main.bicep'), 'targetScope = ''subscription''')
+        [System.IO.File]::WriteAllText((Join-Path $sourceDirectory 'version.json'), '{"version":"1.0.0"}')
+        [System.IO.File]::WriteAllText((Join-Path $sourceDirectory 'DEPRECATED.md'), 'Use the replacement.')
+        $git = (Get-Command git -CommandType Application | Select-Object -First 1).Source
+        try {
+            foreach ($arguments in @(
+                    @('init', '-b', 'main'),
+                    @('add', '.'),
+                    @('-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', 'fixture')
+                )) {
+                $null = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList $arguments -WorkingDirectory $fixture.Bicep
+            }
+            $workflow = [System.IO.File]::ReadAllText((Join-Path $repoRoot '.github' 'workflows' 'module-metadata-sync.yml'))
+            $checkout = [regex]::Match($workflow, '(?ms)^      - name: Checkout Bicep metadata as data\r?\n(?<step>.*?)(?=^      - name:|\z)')
+            $match = [regex]::Match($checkout.Groups['step'].Value, '(?m)^          sparse-checkout: \|\r?\n(?<patterns>(?:            .+\r?\n)+)')
+            $match.Success | Should -BeTrue
+            $patterns = @($match.Groups['patterns'].Value.Trim() -split '\r?\n' | ForEach-Object { $_.Trim() })
+            $null = Invoke-AvmCatalogProcess -FilePath $git -ArgumentList (@('sparse-checkout', 'set', '--no-cone', '--') + $patterns) -WorkingDirectory $fixture.Bicep
+            @(Get-ChildItem -LiteralPath $fixture.Bicep -Recurse -Filter '*.bicep') | Should -HaveCount 0
+            @(Get-ChildItem -LiteralPath $fixture.Bicep -Recurse -Filter 'version.json') | Should -HaveCount 0
+            @(Get-ChildItem -LiteralPath $fixture.Bicep -Recurse -Filter 'DEPRECATED.md') | Should -HaveCount 0
+            $sources = @(Get-AvmCatalogBicepTreeSource -Root $fixture.Bicep)
+            $sources | Should -HaveCount 5
+            @($sources | Where-Object SourcePending) | Should -HaveCount 1
+            $copy = Join-Path $fixture.Root 'bicep-snapshot'
+            Copy-AvmCatalogBicepSource -Sources $sources -Destination $copy -Confirm:$false
+            $allSources = Get-AvmCatalogSources -BicepRoot $copy -TerraformRoot $fixture.Terraform
+            $inventory = @($allSources | Where-Object Ecosystem -eq 'bicep')
+            $inventory | Should -HaveCount 5
+            ($inventory | Where-Object ModulePath -eq $sourceOnly).SourcePending | Should -BeFalse
+            ($inventory | Where-Object ModulePath -eq $sourceOnly).Deprecated | Should -BeTrue
+            ($inventory | Where-Object ModulePath -eq $pending.ModulePath).SourcePending | Should -BeTrue
+            @(Get-ChildItem -LiteralPath $copy -Recurse -Filter '*.bicep') | Should -HaveCount 0
+        }
+        finally {
+            $gitDirectory = Join-Path $fixture.Bicep '.git'
+            if (Test-Path -LiteralPath $gitDirectory) {
+                Get-ChildItem -LiteralPath $gitDirectory -Recurse -Force -File |
+                    ForEach-Object { $_.IsReadOnly = $false }
+            }
+        }
+    }
+
+    It 'rejects unsafe Bicep tree evidence: <Case>' -TestCases @(
+        @{ Case = 'linked source'; Mode = '120000'; Path = 'avm/res/test/module/main.bicep'; ExpectedError = '*Unsupported Bicep source entry*' }
+        @{ Case = 'incorrect source casing'; Mode = '100644'; Path = 'avm/res/test/module/Main.bicep'; ExpectedError = '*has no main.bicep*' }
+        @{ Case = 'incorrect deprecation casing'; Mode = '100644'; Path = 'avm/res/test/module/Deprecated.md'; ExpectedError = '*regular file named DEPRECATED.md*' }
+        @{ Case = 'deprecation directory'; Mode = '100644'; Path = 'avm/res/test/module/DEPRECATED.md/file'; ExpectedError = '*regular file named DEPRECATED.md*' }
+        @{ Case = 'missing metadata'; Mode = '100644'; Path = 'avm/res/test/module/metadata.json'; ExpectedError = '*missing from the checkout*' }
+    ) {
+        param($Mode, $Path, $ExpectedError)
+        $script:bicepTreeEntry = "$Mode blob $('a' * 40)`t$Path`0"
+        Mock Invoke-AvmCatalogProcess { [pscustomobject]@{ StdOut = $script:bicepTreeEntry } }
+        { Get-AvmCatalogBicepTreeSource -Root $TestDrive } | Should -Throw $ExpectedError
+    }
+
     It 'deprecates a Bicep <Scope> and descendants but not unrelated modules' -TestCases @(
         @{ Scope = 'root' }
         @{ Scope = 'child' }
@@ -43,8 +121,9 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
         $snapshot = Join-Path $fixture.Root 'snapshot'
         $copy = Join-Path $snapshot 'sources' 'bicep'
         Copy-AvmCatalogBicepSource -Sources @($inventory.Sources | Where-Object Ecosystem -eq 'bicep') -Destination $copy
-        [System.IO.File]::ReadAllText((Join-Path $copy 'avm' 'res' 'storage' 'storage-account' 'DEPRECATED.md')) |
-            Should -BeExactly 'Retired module.'
+        (Join-Path $copy 'avm' 'res' 'storage' 'storage-account' 'main.bicep') | Should -Not -Exist
+        (Join-Path $copy 'avm' 'res' 'storage' 'storage-account' '.avm-source-present') | Should -Exist
+        (Join-Path $copy 'avm' 'res' 'storage' 'storage-account' 'DEPRECATED.md') | Should -Exist
         $null = Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory
         Copy-Item -LiteralPath $fixture.Terraform -Destination (Join-Path $snapshot 'sources' 'terraform') -Recurse
         Copy-Item -LiteralPath $fixture.Legacy -Destination (Join-Path $snapshot 'legacy') -Recurse

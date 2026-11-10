@@ -43,8 +43,8 @@ try {
     Write-AvmCatalogProgress 'Copying source catalog input files.'
     $publication = Copy-AvmCatalogInputFile -Configuration $configuration -RepositoryRoots $roots -SnapshotPath $staging -Confirm:$false
 
-    Write-AvmCatalogProgress 'Copying Bicep module sources.'
-    $bicepSources = Get-AvmCatalogSources -BicepRoot $BicepRoot -TerraformRoot $terraform -Configuration $configuration
+    Write-AvmCatalogProgress 'Collecting Bicep source-presence and metadata evidence.'
+    $bicepSources = @(Get-AvmCatalogBicepTreeSource -Root $BicepRoot -Configuration $configuration)
     Copy-AvmCatalogBicepSource -Sources $bicepSources -Destination $bicep -Confirm:$false
     $revisions = [System.Collections.Generic.List[object]]::new()
     $git = (Get-Command -Name git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
