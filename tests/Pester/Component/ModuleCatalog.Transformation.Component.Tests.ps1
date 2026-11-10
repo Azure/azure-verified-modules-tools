@@ -422,11 +422,14 @@ Describe 'Component: module catalog transformations' -Tag Component {
         }
     }
 
-    It 'refuses a reduced child whose family metadata is missing' {
+    It 'excludes a new reduced child whose family metadata is missing and reports why' {
         $fixture = New-CatalogFixture
         $null = Add-CatalogModule -Fixture $fixture -Ecosystem terraform -Repository 'Azure/terraform-azurerm-avm-res-storage-storageaccount' `
             -ModulePath 'modules/child' -Canonical 'Microsoft.Storage/storageAccounts/blobServices' -Child -Adopt
-        { Get-CatalogFixtureInventory -Fixture $fixture } | Should -Throw '*family root metadata is missing*'
+        $inventory = Get-CatalogFixtureInventory -Fixture $fixture
+        $inventory.Items | Should -HaveCount 0
+        $inventory.Report.invalidMetadata | Should -HaveCount 1
+        $inventory.Report.invalidMetadata[0].reasons[0] | Should -BeLike '*family root metadata is missing*'
     }
 
     It 'supports team-only ownership and telemetry-free utilities without guessing owner names' {

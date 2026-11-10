@@ -10,6 +10,151 @@ AfterAll {
 }
 
 Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
+    It 'refuses a snapshot missing the JSON index required by its publication baseline' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $null = Initialize-CatalogPublicationBase -Fixture $fixture
+        $path = Join-Path $fixture.Root 'publication.json'
+        $plan = Read-AvmCatalogJson -Path $path
+        $output = Get-AvmCatalogOutput -Configuration (Read-AvmCatalogConfiguration) -Kind catalog
+        $plan.docs.baseFiles[$output.targetPath] = 'a' * 64
+        Save-CatalogJson -Path $path -Data $plan
+        { & (Join-Path $catalogScripts 'Invoke-ModuleCatalog.ps1') -InputPath $fixture.Root -OutputPath $fixture.Output } |
+            Should -Throw '*existing JSON index is missing or changed*'
+        Test-Path -LiteralPath $fixture.Output | Should -BeFalse
+    }
+
+    It 'blocks a faulty module found only in the MAR index' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $module = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' `
+            -ModulePath 'avm/res/storage/mar-only' -Canonical 'Microsoft.Storage/storageAccounts' -Adopt
+        $path = Join-Path $fixture.Legacy 'BicepMARModules.json'
+        $mar = Read-AvmCatalogJson -Path $path
+        Save-CatalogJson -Path $path -Data @($mar + @($module.ModulePath))
+        [System.IO.File]::WriteAllText((Join-Path $module.Directory 'metadata.json'), '{}')
+        { Get-CatalogFixtureBundle -Fixture $fixture } | Should -Throw '*existing index entry*mar-only*'
+    }
+
+    It 'blocks every output for faulty indexed <Ecosystem> metadata, even with force' -TestCases @(
+        @{ Ecosystem = 'bicep' }, @{ Ecosystem = 'terraform' }
+    ) {
+        param($Ecosystem)
+        $fixture = New-CatalogFixture -AdoptAll
+        $module = @($fixture.Modules | Where-Object Ecosystem -eq $Ecosystem)[0]
+        [System.IO.File]::WriteAllText((Join-Path $module.Directory 'metadata.json'), '{"invalid":')
+        $diagnostics = Join-Path $fixture.Root 'diagnostics'
+        foreach ($force in @($false, $true)) {
+            { & (Join-Path $catalogScripts 'Invoke-ModuleCatalog.ps1') -InputPath $fixture.Root `
+                    -OutputPath $fixture.Output -DiagnosticsPath $diagnostics -Force:$force -Confirm:$false } |
+                Should -Throw '*existing index entry*No catalog outputs may be published*'
+            Test-Path -LiteralPath $fixture.Output | Should -BeFalse
+        }
+        $report = Read-AvmCatalogJson -Path (Join-Path $diagnostics 'invalid-metadata.json')
+        $report.invalidMetadata | Should -HaveCount 1
+        $report.invalidMetadata[0].indexed | Should -BeTrue
+        $report.invalidMetadata[0].key | Should -BeExactly $module.Identity.Key
+        $report.invalidMetadata[0].reasons | Should -Not -BeNullOrEmpty
+    }
+
+    It 'blocks faulty JSON-only <Kind> metadata and children dependent on a faulty family' -TestCases @(
+        @{ Kind = 'child'; FaultFamily = $false }
+        @{ Kind = 'helper'; FaultFamily = $false }
+        @{ Kind = 'child'; FaultFamily = $true }
+        @{ Kind = 'child'; FaultFamily = $true; InvalidFamily = $true; MissingChild = $true }
+    ) {
+        param($Kind, $FaultFamily, $InvalidFamily = $false, $MissingChild = $false)
+        $fixture = New-CatalogFixture -AdoptAll
+        $family = @($fixture.Modules | Where-Object Ecosystem -eq 'terraform')[0]
+        $child = Add-CatalogModule -Fixture $fixture -Ecosystem terraform -Repository $family.Repository `
+            -ModulePath 'modules/child' -Canonical $(if ($Kind -eq 'helper') { 'helper' } else { 'Microsoft.Storage/storageAccounts/blobServices' }) -Child -Adopt
+        $baseline = Get-CatalogFixtureBundle -Fixture $fixture
+        $null = [System.IO.Directory]::CreateDirectory((Join-Path $fixture.Legacy 'v1'))
+        Save-CatalogJson -Path (Join-Path $fixture.Legacy 'v1' 'modules.json') -Data $baseline.Catalog
+        if ($FaultFamily) {
+            if ($InvalidFamily) {
+                [System.IO.File]::WriteAllText((Join-Path $family.Directory 'metadata.json'), '{}')
+            }
+            else {
+                [System.IO.File]::Delete((Join-Path $family.Directory 'metadata.json'))
+            }
+            if ($MissingChild) {
+                [System.IO.File]::Delete((Join-Path $child.Directory 'metadata.json'))
+            }
+        }
+        else {
+            [System.IO.File]::WriteAllText((Join-Path $child.Directory 'metadata.json'), '{}')
+        }
+        { Get-CatalogFixtureBundle -Fixture $fixture -Force } | Should -Throw "*existing index entry*$($child.Identity.Key)*"
+    }
+
+    It 'protects an indexed Terraform module across a provider-repository rename' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $module = @($fixture.Modules | Where-Object Ecosystem -eq 'terraform')[0]
+        $renamed = Join-Path $fixture.Terraform ($module.Repository.Replace('Azure/terraform-azurerm-', 'terraform-azure-'))
+        [System.IO.Directory]::Move($module.Directory, $renamed)
+        [System.IO.File]::WriteAllText((Join-Path $renamed 'metadata.json'), '{}')
+        { Get-CatalogFixtureBundle -Fixture $fixture -Force } | Should -Throw '*existing index entry*terraform-azure-*'
+    }
+
+    It 'updates valid outputs, excludes new faulty modules and fails final reporting: <Kind>' -TestCases @(
+        @{ Kind = 'json'; Force = $false }, @{ Kind = 'schema'; Force = $true }
+        @{ Kind = 'bom'; Force = $false }
+    ) {
+        param($Kind, $Force)
+        $fixture = New-CatalogFixture -AdoptAll
+        $new = Add-CatalogModule -Fixture $fixture -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' `
+            -ModulePath 'avm/res/storage/new-account' -Canonical 'Microsoft.Storage/storageAccounts' -Adopt
+        $path = Join-Path $new.Directory 'metadata.json'
+        switch ($Kind) {
+            'json' { [System.IO.File]::WriteAllText($path, '{"invalid":') }
+            'schema' { [System.IO.File]::WriteAllText($path, '{}') }
+            'bom' { [System.IO.File]::WriteAllText($path, [System.IO.File]::ReadAllText($path), [System.Text.UTF8Encoding]::new($true)) }
+        }
+        $diagnostics = Join-Path $fixture.Root 'diagnostics'
+        $inventory = Get-AvmCatalogInventory -BicepRoot $fixture.Bicep -TerraformRoot $fixture.Terraform `
+            -LegacyPath $fixture.Legacy -DiagnosticsPath $diagnostics
+        $inventory.Items | Should -HaveCount 6
+        $bundle = Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory -DiagnosticsPath $diagnostics -Force:$Force
+        $bundle.Report.invalidMetadata | Should -HaveCount 1
+        $bundle.Report.invalidMetadata[0].indexed | Should -BeFalse
+        $bundle.HeldBack | Should -HaveCount 0
+        $bundle.Files['docs/v1/modules.json'] | Should -Not -Match 'new-account'
+        $bundle.Files['docs/BicepResourceModules.csv'] | Should -Match 'Authoritative module'
+        & (Join-Path $catalogScripts 'Invoke-ModuleCatalog.ps1') -InputPath $fixture.Root `
+            -OutputPath $fixture.Output -DiagnosticsPath $diagnostics -Force:$Force -Confirm:$false
+        [System.IO.File]::ReadAllText((Join-Path $fixture.Output 'docs' 'v1' 'modules.json')) |
+            Should -BeExactly $bundle.Files['docs/v1/modules.json']
+        $summary = Join-Path $fixture.Root 'summary.md'
+        { & (Join-Path $catalogScripts 'Assert-ModuleCatalogPublication.ps1') -DiagnosticsPath $diagnostics -SummaryPath $summary } |
+            Should -Throw "*Faulty metadata excluded 1 new module*$($new.Identity.Key)*"
+        [System.IO.File]::ReadAllText($summary) | Should -Match 'new-account'
+    }
+
+    It 'aggregates new faults and excludes dependent children without inheriting bad metadata' {
+        $fixture = New-CatalogFixture -AdoptAll
+        $root = Add-CatalogModule -Fixture $fixture -Ecosystem terraform -Repository 'Azure/terraform-azure-avm-ptn-new-family' `
+            -ModulePath '.' -Canonical 'new-family' -Adopt
+        $child = Add-CatalogModule -Fixture $fixture -Ecosystem terraform -Repository $root.Repository `
+            -ModulePath 'modules/child' -Canonical 'new-family/child' -Child -Adopt
+        $badChild = Add-CatalogModule -Fixture $fixture -Ecosystem terraform `
+            -Repository 'Azure/terraform-azurerm-avm-res-storage-storageaccount' `
+            -ModulePath 'modules/bad' -Canonical 'Microsoft.Storage/storageAccounts/blobServices' -Child -Adopt
+        foreach ($module in @($root, $badChild)) {
+            [System.IO.File]::WriteAllText((Join-Path $module.Directory 'metadata.json'), '{}')
+        }
+        $inventory = Get-CatalogFixtureInventory -Fixture $fixture
+        $inventory.Items | Should -HaveCount 6
+        $inventory.Report.invalidMetadata | Should -HaveCount 3
+        $inventory.Report.invalidMetadata.key | Should -Contain $child.Identity.Key
+        @($inventory.Report.invalidMetadata | Where-Object { $_.key -eq $child.Identity.Key })[0].reasons[0] |
+            Should -BeLike '*family root metadata is missing or invalid*'
+        $existing = $fixture.Modules[0]
+        [System.IO.File]::WriteAllText((Join-Path $existing.Directory 'metadata.json'), '{}')
+        $diagnostics = Join-Path $fixture.Root 'diagnostics'
+        { Get-AvmCatalogInventory -BicepRoot $fixture.Bicep -TerraformRoot $fixture.Terraform `
+                -LegacyPath $fixture.Legacy -DiagnosticsPath $diagnostics } | Should -Throw '*existing index entry*'
+        (Read-AvmCatalogJson -Path (Join-Path $diagnostics 'invalid-metadata.json')).invalidMetadata | Should -HaveCount 4
+    }
+
     It 'preserves generated indexes when both ecosystems use source-presence markers instead of source contents' {
         $fixture = New-CatalogFixture -AdoptAll
         $expected = Get-CatalogFixtureBundle -Fixture $fixture

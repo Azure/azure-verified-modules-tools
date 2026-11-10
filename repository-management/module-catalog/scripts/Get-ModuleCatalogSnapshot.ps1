@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory)][string] $DocumentationRoot,
     [Parameter(Mandatory)][string] $BicepRoot,
     [Parameter(Mandatory)][string] $SnapshotPath,
+    [string] $DiagnosticsPath,
     [string] $ConfigurationPath = (Join-Path $PSScriptRoot '..' 'config.json')
 )
 
@@ -65,7 +66,8 @@ try {
         $revisions.Add($result)
     }
     Write-AvmCatalogProgress 'Building the local catalog inventory.'
-    $inventory = Get-AvmCatalogInventory -BicepRoot $bicep -TerraformRoot $terraform -LegacyPath $legacy -Configuration $configuration
+    $inventory = Get-AvmCatalogInventory -BicepRoot $bicep -TerraformRoot $terraform -LegacyPath $legacy `
+        -Configuration $configuration -DiagnosticsPath $DiagnosticsPath
     Write-AvmCatalogProgress ("Inventory built: {0} item(s). Collecting registry and GitHub enrichment." -f $inventory.Items.Count)
     $enrichment = Get-AvmCatalogEnrichment -Inventory $inventory -GitHubToken $token
     Write-AvmCatalogProgress 'Writing the snapshot files.'

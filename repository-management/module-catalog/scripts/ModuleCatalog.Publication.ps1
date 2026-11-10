@@ -95,6 +95,13 @@ function Test-AvmCatalogPublicationBundle {
     if (-not (Test-Json -Json $catalog -SchemaFile $schemaPath -ErrorAction Stop)) {
         throw [System.IO.InvalidDataException]::new('Publication catalog does not conform to the packaged output schema.')
     }
+    $reportOutput = Get-AvmCatalogOutput -Configuration $Configuration -Kind migration-report
+    $report = Read-AvmCatalogJson -Path (Join-Path $Path $reportOutput.bundlePath)
+    if ($report.Contains('invalidMetadata') -and @($report.invalidMetadata | Where-Object indexed).Count -gt 0) {
+        throw [System.IO.InvalidDataException]::new(
+            "Invalid present metadata affects an existing index entry. No catalog outputs may be published.`n" +
+            (Format-AvmCatalogMetadataIssues -Issues @($report.invalidMetadata)))
+    }
     $removals = Get-AvmCatalogPublicationRowRemovals -BundlePath $Path -Configuration $Configuration
     Assert-AvmCatalogCsvRowRetention -Removals $removals -Force:$Force -DiagnosticsPath $DiagnosticsPath `
         -HeldBackOutput (Get-AvmCatalogPublicationHeldBackSourceFile -BundlePath $Path -Configuration $Configuration)
