@@ -57,23 +57,19 @@ Describe 'Request-AvmAppInstallation' {
 
         $result.Status | Should -Be 'pending'
         $result.PullRequest | Should -Be 'https://example.invalid/2'
-        $result.Files | Should -Be @('apps/azure/azure-verified-modules.yaml', 'apps/azure/terraform-cloud.yaml')
+        $result.Files | Should -Be @('apps/azure/repository-groups/azure-verified-modules.yaml')
     }
 
-    It 'commits only unlisted files to a fork branch and opens a pull request' {
+    It 'commits the repository group file to a fork branch and opens a pull request' {
         $result = InModuleScope 'Avm.Authoring' -Parameters @{
             Request  = $script:request
-            Listed   = (ConvertTo-TestContentResponse -Repositories @('terraform-azure-avm-res-network-virtualnetwork'))
             Unlisted = (ConvertTo-TestContentResponse -Repositories @('a-repo', 'z-repo') -Sha 'fork-sha')
         } {
-            param($Request, $Listed, $Unlisted)
+            param($Request, $Unlisted)
             $script:refAttempts = 0
             Mock Start-Sleep {}
-            Mock Invoke-AvmGitHubApi -MockWith ({ $Listed }.GetNewClosure()) -ParameterFilter {
-                $Endpoint -eq 'repos/microsoft/github-operations/contents/apps/azure/azure-verified-modules.yaml?ref=main'
-            }
             Mock Invoke-AvmGitHubApi -MockWith ({ $Unlisted }.GetNewClosure()) -ParameterFilter {
-                $Endpoint -like '*/contents/apps/azure/terraform-cloud.yaml?ref=*'
+                $Endpoint -like '*/contents/apps/azure/repository-groups/azure-verified-modules.yaml?ref=*'
             }
             Mock Invoke-AvmGitHubApi { @{ items = @() } } -ParameterFilter { $Endpoint -like 'search/issues*' }
             Mock Invoke-AvmGitHubApi { @{ full_name = 'someone/github-operations'; owner = @{ login = 'someone' } } } -ParameterFilter {
@@ -102,7 +98,7 @@ Describe 'Request-AvmAppInstallation' {
             }
             Should -Invoke Invoke-AvmGitHubApi -Exactly 1 -ParameterFilter { $Method -eq 'PUT' }
             Should -Invoke Invoke-AvmGitHubApi -Exactly 1 -ParameterFilter {
-                $Method -eq 'PUT' -and $Endpoint -eq 'repos/someone/github-operations/contents/apps/azure/terraform-cloud.yaml' -and
+                $Method -eq 'PUT' -and $Endpoint -eq 'repos/someone/github-operations/contents/apps/azure/repository-groups/azure-verified-modules.yaml' -and
                 $Body.sha -eq 'fork-sha' -and $Body.branch -eq 'chore/app-install-avm/avm-res-network-virtualnetwork' -and
                 $Body.message -eq 'chore: app install avm avm-res-network-virtualnetwork' -and
                 [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($Body.content)) -ceq (
@@ -117,7 +113,7 @@ Describe 'Request-AvmAppInstallation' {
 
         $result.Status | Should -Be 'requested'
         $result.PullRequest | Should -Be 'https://github.com/microsoft/github-operations/pull/9'
-        $result.Files | Should -Be @('apps/azure/terraform-cloud.yaml')
+        $result.Files | Should -Be @('apps/azure/repository-groups/azure-verified-modules.yaml')
     }
 
     It 'reuses the existing fork, branch, and pull request from an interrupted run' {
