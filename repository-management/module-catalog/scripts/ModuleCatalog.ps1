@@ -675,9 +675,6 @@ function New-AvmCatalogBundle {
         if ($deprecated) {
             $item.Row['ModuleStatus'] = 'Deprecated'
         }
-        if ($record.ecosystem -eq 'terraform' -and $null -ne $record.registry.marRegistered) {
-            throw [System.IO.InvalidDataException]::new("Terraform registry snapshot has Bicep-only registration: $($item.Identity.Key)")
-        }
         if ($record.ecosystem -eq 'terraform' -and $record.modulePath -ne '.' -and $record.registry.status -eq 'available') {
             $record.publicRegistryReference = 'https://registry.terraform.io/modules/Azure/{0}/{1}/{2}/submodules/{3}' -f
                 $item.Identity.RepositoryId, $record.provider, $record.registry.currentVersion, $record.modulePath.Substring('modules/'.Length)

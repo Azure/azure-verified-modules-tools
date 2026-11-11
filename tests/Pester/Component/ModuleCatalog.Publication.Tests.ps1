@@ -328,7 +328,7 @@ Describe 'Component: module catalog publication row retention' -Tag Component {
         @{ Case = 'published deprecated module'; Change = { param($report) $report.excludedModules[0].registry = New-AvmCatalogRegistryResult -Version '1.0.0' -FirstPublished ([datetime]'2024-02-01') } }
         @{ Case = 'inconsistent registry version'; Change = { param($report) $report.excludedModules[0].registry.currentVersion = '1.0.0' } }
         @{ Case = 'inconsistent downloads'; Change = { param($report) $report.excludedModules[0].registry.downloads = 1 } }
-        @{ Case = 'invalid legacy registry field'; Change = { param($report) $report.excludedModules[0].registry.marRegistered = 'invalid' } }
+        @{ Case = 'retired registry field'; Change = { param($report) $report.excludedModules[0].registry['marRegistered'] = $null } }
         @{ Case = 'invalid canonical type'; Change = { param($report) $report.excludedModules[0].canonicalType = 'invalid' } }
         @{ Case = 'mismatched module name'; Change = { param($report) $report.excludedModules[0].moduleName = 'avm/res/key-vault/vault' } }
         @{ Case = 'mismatched module path'; Change = { param($report) $report.excludedModules[0].modulePath = 'avm/res/key-vault/vault' } }

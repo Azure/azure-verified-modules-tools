@@ -289,7 +289,7 @@ Describe 'Component: module catalog registry collection' -Tag Component {
         $record.status | Should -BeExactly 'available'
         $record.currentVersion | Should -BeExactly '1.10.0'
         $record.firstPublishedIn | Should -BeExactly '2024-02'
-        $record.marRegistered | Should -BeNullOrEmpty
+        @($record.Keys) | Should -Be @('status', 'currentVersion', 'firstPublishedIn', 'downloads')
         $record.downloads | Should -BeNullOrEmpty
         Should -Invoke Invoke-AvmCatalogRequestSet -Times 1 -ParameterFilter {
             @($Requests | Where-Object { $_.Accept -eq 'application/vnd.oci.image.manifest.v1+json' }).Count -eq 2
@@ -328,7 +328,7 @@ Describe 'Component: module catalog registry collection' -Tag Component {
         $record = Get-AvmCatalogBicepRegistry -Identity $identity
         $record.status | Should -BeExactly 'not-published'
         $record.currentVersion | Should -BeNullOrEmpty
-        $record.marRegistered | Should -BeNullOrEmpty
+        $record.Contains('marRegistered') | Should -BeFalse
     }
 
     It 'treats a Bicep registry with no published versions as unpublished' {
@@ -342,7 +342,7 @@ Describe 'Component: module catalog registry collection' -Tag Component {
         $record.status | Should -BeExactly 'not-published'
         $record.currentVersion | Should -BeNullOrEmpty
         $record.firstPublishedIn | Should -BeNullOrEmpty
-        $record.marRegistered | Should -BeNullOrEmpty
+        $record.Contains('marRegistered') | Should -BeFalse
     }
 
     It 'rejects unsupported publication timestamp data rather than guessing first-published month' {

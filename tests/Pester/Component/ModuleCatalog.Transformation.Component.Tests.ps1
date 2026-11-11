@@ -874,7 +874,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         foreach ($item in $inventory.Items) {
             $registry[$item.Identity.Key] = [ordered]@{
                 status = 'available'; currentVersion = '1.2.3'; firstPublishedIn = '2024-02'
-                downloads = $null; marRegistered = $null
+                downloads = $null
             }
         }
         { New-AvmCatalogBundle -Inventory $inventory -Registry $registry -GitHub ([ordered]@{ users = @{}; teams = @{} }) `

@@ -159,7 +159,6 @@ function Get-CatalogFixtureBundle {
             currentVersion = if ($published) { '1.2.3' } else { $null }
             firstPublishedIn = if ($published) { '2024-02' } else { $null }
             downloads = if ($published -and $item.Identity.Ecosystem -eq 'terraform' -and $item.Identity.ModulePath -eq '.') { 123 } else { $null }
-            marRegistered = $null
         }
     }
     $revisions = @(

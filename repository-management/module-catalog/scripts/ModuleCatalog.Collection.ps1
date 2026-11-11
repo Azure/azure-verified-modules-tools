@@ -537,7 +537,6 @@ function New-AvmCatalogRegistryResult {
         currentVersion = if ($Version) { $Version } else { $null }
         firstPublishedIn = if ($null -ne $FirstPublished) { $FirstPublished.ToString('yyyy-MM', [Globalization.CultureInfo]::InvariantCulture) } else { $null }
         downloads = $Downloads
-        marRegistered = $null
     }
 }
 

@@ -180,9 +180,8 @@ lowest version number. Terraform child availability/dates come from releases
 containing that submodule; per-child download counts are unavailable and remain
 null. Bicep publication status comes only from published versions in MCR;
 the MAR source repository and its JSON mirror are not consulted, validated,
-copied, or published. The legacy v1 `registry.marRegistered` field remains
-nullable for compatibility; new collection emits null rather than claiming
-repository approval.
+copied, or published. The v1 `registry.marRegistered` field is removed from
+results and the schema; this is an intentional breaking change.
 
 `owners` is a flat list of usernames and qualified team handles. CSV user columns
 project the first two usernames, and the existing team column projects the
