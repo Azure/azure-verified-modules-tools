@@ -66,8 +66,12 @@ function Invoke-AvmTransform {
         The Bicep engine compiles root and child main.bicep sources, including
         children under modules/, into main.json. Bicep README generation is
         handled separately by Invoke-AvmDocs. Compiled JSON comparisons ignore
-        only the root metadata._generator.version and templateHash string
-        values. Every other byte, including formatting and encoding, remains
+        only metadata._generator.version and templateHash string values at
+        the root and in inline Microsoft.Resources/deployments object
+        templates, recursively through array or symbolic-name resources.
+        Non-object nested templates and nested generators whose name is a
+        string other than exactly "bicep" remain byte-significant.
+        Every other byte, including formatting and encoding, remains
         significant. Provenance-only differences do not rewrite main.json.
 
         The ecosystem is determined by Get-AvmModuleContext, which honours
@@ -88,7 +92,7 @@ function Invoke-AvmTransform {
 
     .PARAMETER CheckDrift
         When set, compare generated artifacts without leaving module-file
-        changes. Bicep compares build output byte-for-byte except the two root
+        changes. Bicep compares build output byte-for-byte except the template
         generator provenance values described above; Terraform restores
         mapotf changes after detecting drift.
 
