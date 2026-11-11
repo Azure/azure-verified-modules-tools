@@ -271,7 +271,7 @@ Describe 'Component: module catalog registry collection' -Tag Component {
         (Get-AvmCatalogPublicationDate -Value '2024-07-01T00:30:00+01:00' -Identity 'test-release').ToString('yyyy-MM') | Should -BeExactly '2024-06'
     }
 
-    It 'uses MAR membership, semantic current versions and actual minimum publication dates for Bicep' {
+    It 'uses published MCR versions and actual minimum publication dates without a MAR approval mirror' {
         $identity = New-AvmCatalogIdentity -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' -ModulePath 'avm/res/test/module'
         Mock Invoke-AvmCatalogRequestSet {
             foreach ($request in $Requests) {
@@ -285,11 +285,11 @@ Describe 'Component: module catalog registry collection' -Tag Component {
                 [pscustomobject]@{ StatusCode = 200; Content = ConvertTo-AvmCatalogJson -Value $data }
             }
         }
-        $record = Get-AvmCatalogBicepRegistry -Identity $identity -Mar @($identity.ModulePath)
+        $record = Get-AvmCatalogBicepRegistry -Identity $identity
         $record.status | Should -BeExactly 'available'
         $record.currentVersion | Should -BeExactly '1.10.0'
         $record.firstPublishedIn | Should -BeExactly '2024-02'
-        $record.marRegistered | Should -BeTrue
+        @($record.Keys) | Should -Be @('status', 'currentVersion', 'firstPublishedIn', 'downloads')
         $record.downloads | Should -BeNullOrEmpty
         Should -Invoke Invoke-AvmCatalogRequestSet -Times 1 -ParameterFilter {
             @($Requests | Where-Object { $_.Accept -eq 'application/vnd.oci.image.manifest.v1+json' }).Count -eq 2
@@ -313,7 +313,7 @@ Describe 'Component: module catalog registry collection' -Tag Component {
                 [pscustomobject]@{ StatusCode = 200; Content = ConvertTo-AvmCatalogJson -Value $data }
             }
         }
-        $records = Get-AvmCatalogBicepRegistrySet -Identities $identities -Mar @($identities | ForEach-Object { $_.ModulePath })
+        $records = Get-AvmCatalogBicepRegistrySet -Identities $identities
         $records.Count | Should -Be 2
         foreach ($identity in $identities) {
             $records[$identity.Key].currentVersion | Should -BeExactly '1.0.0'
@@ -322,23 +322,27 @@ Describe 'Component: module catalog registry collection' -Tag Component {
         Should -Invoke Invoke-AvmCatalogRequestSet -Times 2 -Exactly
     }
 
-    It 'keeps approved unpublished Bicep modules in the MAR contract' {
+    It 'treats a Bicep registry 404 as unpublished without MAR approval evidence' {
         $identity = New-AvmCatalogIdentity -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' -ModulePath 'avm/res/test/module'
         Mock Invoke-AvmCatalogRequestSet { foreach ($request in $Requests) { [pscustomobject]@{ StatusCode = 404; Content = '{}' } } }
-        $record = Get-AvmCatalogBicepRegistry -Identity $identity -Mar @($identity.ModulePath)
+        $record = Get-AvmCatalogBicepRegistry -Identity $identity
         $record.status | Should -BeExactly 'not-published'
         $record.currentVersion | Should -BeNullOrEmpty
-        $record.marRegistered | Should -BeTrue
+        $record.Contains('marRegistered') | Should -BeFalse
     }
 
-    It 'fails for a published module missing from MAR instead of inventing mirror membership' {
+    It 'treats a Bicep registry with no published versions as unpublished' {
         $identity = New-AvmCatalogIdentity -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' -ModulePath 'avm/res/test/module'
         Mock Invoke-AvmCatalogRequestSet {
             foreach ($request in $Requests) {
-                [pscustomobject]@{ StatusCode = 200; Content = '{"name":"bicep/avm/res/test/module","tags":["1.0.0"]}' }
+                [pscustomobject]@{ StatusCode = 200; Content = '{"name":"bicep/avm/res/test/module","tags":[]}' }
             }
         }
-        { Get-AvmCatalogBicepRegistry -Identity $identity -Mar @() } | Should -Throw '*absent from the approved MAR mirror*'
+        $record = Get-AvmCatalogBicepRegistry -Identity $identity
+        $record.status | Should -BeExactly 'not-published'
+        $record.currentVersion | Should -BeNullOrEmpty
+        $record.firstPublishedIn | Should -BeNullOrEmpty
+        $record.Contains('marRegistered') | Should -BeFalse
     }
 
     It 'rejects unsupported publication timestamp data rather than guessing first-published month' {
@@ -354,7 +358,7 @@ Describe 'Component: module catalog registry collection' -Tag Component {
                 [pscustomobject]@{ StatusCode = 200; Content = $body }
             }
         }
-        { Get-AvmCatalogBicepRegistry -Identity $identity -Mar @($identity.ModulePath) } | Should -Throw '*lacks a supported creation timestamp*'
+        { Get-AvmCatalogBicepRegistry -Identity $identity } | Should -Throw '*lacks a supported creation timestamp*'
     }
 
     It 'derives Terraform child availability and dates from releases containing that submodule, without attributing root downloads' {
@@ -390,7 +394,6 @@ Describe 'Component: module catalog registry collection' -Tag Component {
     It 'caches every migrated user and team across modules with nullable display data' {
         $owners = @('owner-one', '@Azure/avm-core-modules', '@Azure/second-team')
         $inventory = [pscustomobject]@{
-            Mar = @('avm/res/test/module', 'avm/res/test/other')
             Items = @(
                 [pscustomobject]@{ Identity = New-AvmCatalogIdentity -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' -ModulePath 'avm/res/test/module'; Record = @{ metadataSource = 'metadata'; owners = $owners } },
                 [pscustomobject]@{ Identity = New-AvmCatalogIdentity -Ecosystem bicep -Repository 'Azure/bicep-registry-modules' -ModulePath 'avm/res/test/other'; Record = @{ metadataSource = 'metadata'; owners = $owners } }
@@ -685,25 +688,26 @@ Describe 'Component: module catalog publication inputs' -Tag Component {
         $roots = @{ docs = Join-Path $root 'docs'; tools = Join-Path $root 'tools' }
         $snapshot = Join-Path $root 'snapshot'
         $originals = @{}
-        foreach ($output in $configuration.outputs | Where-Object { $_.kind -in @('csv', 'mar') }) {
-            $sourcePath = if ($output.kind -eq 'csv') { $output.sourcePath } else { $output.targetPath }
+        foreach ($output in $configuration.outputs | Where-Object { $_.kind -eq 'csv' }) {
+            $sourcePath = $output.sourcePath
             $file = Join-Path $roots[$output.destination] $sourcePath
             $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($file))
-            $text = if ($output.kind -eq 'csv') {
-                "ModuleName,ModuleDisplayName,RepoURL,ModuleStatus,Description`n"
-            }
-            else {
-                "[]`n"
-            }
+            $text = "ModuleName,ModuleDisplayName,RepoURL,ModuleStatus,Description`n"
             [System.IO.File]::WriteAllText($file, $text, [System.Text.UTF8Encoding]::new($false))
             $originals[$sourcePath] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
         }
         $csvs = @($configuration.outputs | Where-Object kind -eq 'csv')
+        $mirrorPath = "$($configuration.destinations.docs.path)/BicepMARModules.json"
+        $mirror = Join-Path $roots.docs $mirrorPath
+        [System.IO.File]::WriteAllText($mirror, 'Retired mirror; not valid JSON.')
         $previewPath = "$($configuration.destinations.docs.path)/test-$($csvs[0].sourceFile)"
         $oldPreview = Join-Path $roots.docs $previewPath
         [System.IO.File]::WriteAllText($oldPreview, 'Not a CSV input.')
         $previewHash = (Get-FileHash -LiteralPath $oldPreview -Algorithm SHA256).Hash.ToLowerInvariant()
         $plan = Copy-AvmCatalogInputFile -Configuration $configuration -RepositoryRoots $roots -SnapshotPath $snapshot
+        $plan.docs.baseFiles.Contains($mirrorPath) | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $snapshot 'legacy' 'BicepMARModules.json') | Should -BeFalse
+        [System.IO.File]::ReadAllText($mirror) | Should -BeExactly 'Retired mirror; not valid JSON.'
         foreach ($csv in $csvs) {
             $copied = Join-Path $snapshot 'legacy' $csv.sourceFile
             (Get-FileHash -LiteralPath $copied -Algorithm SHA256).Hash.ToLowerInvariant() | Should -BeExactly $originals[$csv.sourcePath]
@@ -715,11 +719,11 @@ Describe 'Component: module catalog publication inputs' -Tag Component {
         if ($Destination -eq 'preview') {
             $plan.docs.baseFiles[$csvs[0].targetPath] | Should -BeExactly $previewHash
             $plan.docs.baseFiles[$csvs[1].targetPath] | Should -BeNullOrEmpty
-            $plan.docs.baseFiles.Count | Should -Be 14
+            $plan.docs.baseFiles.Count | Should -Be 13
         }
         else {
             $plan.docs.baseFiles.Contains($previewPath) | Should -BeFalse
-            $plan.docs.baseFiles.Count | Should -Be 8
+            $plan.docs.baseFiles.Count | Should -Be 7
         }
         { Assert-AvmCatalogPublicationBase -Root $roots.docs -BaseFiles $plan.docs.baseFiles } | Should -Not -Throw
         [System.IO.File]::AppendAllText((Join-Path $roots.docs $csvs[0].sourcePath), 'new canonical input')

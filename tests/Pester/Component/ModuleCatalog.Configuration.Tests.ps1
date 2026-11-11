@@ -20,13 +20,13 @@ BeforeAll {
 Describe 'Component: module catalog artifact manifest' -Tag Component {
     It 'keeps the migration report and publication plan in the artifact only' {
         $configuration = Read-AvmCatalogConfiguration
-        $configuration.outputs | Should -HaveCount 10
-        @($configuration.outputs | Where-Object { $null -ne $_.destination }) | Should -HaveCount 8
+        $configuration.outputs | Should -HaveCount 9
+        @($configuration.outputs | Where-Object { $null -ne $_.destination }) | Should -HaveCount 7
         (Get-AvmCatalogOutput -Configuration $configuration -Kind catalog).file | Should -BeExactly 'v1/modules.json'
         (Get-AvmCatalogOutput -Configuration $configuration -Kind migration-report).file | Should -BeExactly 'v1/migration-report.json'
-        (Get-AvmCatalogOutput -Configuration $configuration -Kind mar).file | Should -BeExactly 'BicepMARModules.json'
+        $configuration.outputs.file | Should -Not -Contain 'BicepMARModules.json'
         $paths = Get-AvmCatalogPublicationPaths -Configuration $configuration
-        $paths.docs.files.Count | Should -Be 8
+        $paths.docs.files.Count | Should -Be 7
         $report = Get-AvmCatalogOutput -Configuration $configuration -Kind migration-report
         $report.destination | Should -BeNullOrEmpty
         $report.targetPath | Should -BeNullOrEmpty
@@ -54,7 +54,7 @@ Describe 'Component: module catalog artifact manifest' -Tag Component {
             $paths.docs.basePaths | Should -Contain $csv.sourcePath
             @($paths.docs.files.Values) | Should -Not -Contain "docs/static/module-indexes/test-$($csv.file)"
         }
-        $paths.docs.basePaths | Should -HaveCount 8
+        $paths.docs.basePaths | Should -HaveCount 7
     }
 
     It 'supports separate preview filenames in a custom manifest while retaining canonical source hashes' {
@@ -65,7 +65,7 @@ Describe 'Component: module catalog artifact manifest' -Tag Component {
             }
         }
         $configuration = Read-AvmCatalogConfiguration -Path $path
-        (Get-AvmCatalogPublicationPaths -Configuration $configuration).docs.basePaths | Should -HaveCount 14
+        (Get-AvmCatalogPublicationPaths -Configuration $configuration).docs.basePaths | Should -HaveCount 13
     }
 
     It 'rejects incomplete, ambiguous, unsafe, or unused configuration: <Case>' -TestCases @(
@@ -84,15 +84,16 @@ Describe 'Component: module catalog artifact manifest' -Tag Component {
         @{ Case = 'executable output'; Change = { param($c) $c.outputs[0].file = 'run.ps1' } }
         @{ Case = 'wrong destination'; Change = { param($c) $c.outputs[0].destination = 'tools' } }
         @{ Case = 'retired tier output'; Change = { param($c) $c.outputs += @{ kind = 'tier-configuration'; file = 'config.json'; destination = 'tools' } } }
+        @{ Case = 'retired MAR mirror'; Change = { param($c) $c.outputs += @{ kind = 'mar'; file = 'BicepMARModules.json'; destination = 'docs' } } }
         @{ Case = 'published control plan'; Change = { param($c) $c.outputs[-1].destination = 'docs' } }
         @{ Case = 'published migration report'; Change = { param($c) $c.outputs[-2].destination = 'docs' } }
         @{ Case = 'foreign owner'; Change = { param($c) $c.repositories.docs = 'Other/catalog' } }
         @{ Case = 'duplicate repository roles'; Change = { param($c) $c.repositories.docs = $c.repositories.tools } }
         @{ Case = 'unsafe publication root'; Change = { param($c) $c.destinations.docs.path = '.github/workflows' } }
-        @{ Case = 'schema outside package'; Change = { param($c) $c.outputs[7].schema = 'untrusted/schema.json' } }
+        @{ Case = 'schema outside package'; Change = { param($c) ($c.outputs | Where-Object kind -eq 'catalog').schema = 'untrusted/schema.json' } }
         @{ Case = 'unknown top-level field'; Change = { param($c) $c['ignored'] = 'not allowed' } }
         @{ Case = 'ignored output override'; Change = { param($c) $c.outputs[0]['bundlePath'] = 'unexpected.csv' } }
-        @{ Case = 'file-directory collision'; Change = { param($c) $c.outputs[7].file = 'BicepResourceModules.csv/child.json' } }
+        @{ Case = 'file-directory collision'; Change = { param($c) ($c.outputs | Where-Object kind -eq 'catalog').file = 'BicepResourceModules.csv/child.json' } }
     ) {
         param($Change)
         $path = New-ManifestFixture -Change $Change

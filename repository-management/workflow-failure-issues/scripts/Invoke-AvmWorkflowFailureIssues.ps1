@@ -7,7 +7,10 @@
 param(
     [string] $Repository = 'Azure/bicep-registry-modules',
     [string] $Branch = 'main',
-    [string] $DefaultRef = 'main'
+    [string] $DefaultRef = 'main',
+    [string[]] $WorkflowName = @(),
+    [ValidatePattern('^[A-Za-z0-9-]+/[a-z0-9-]+$')][string] $PlatformTeam,
+    [ValidateRange(1, 100)][int] $FailureThreshold = 1
 )
 
 Set-StrictMode -Version 3.0
@@ -27,7 +30,8 @@ $libDir = Join-Path $PSScriptRoot 'lib'
 . (Join-Path $libDir 'WorkflowFailureIssues.ps1')
 
 try {
-    Invoke-AvmWorkflowFailureIssues -Repository $Repository -Branch $Branch -DefaultRef $DefaultRef -WhatIf:$WhatIfPreference
+    Invoke-AvmWorkflowFailureIssues -Repository $Repository -Branch $Branch -DefaultRef $DefaultRef `
+        -WorkflowName $WorkflowName -PlatformTeam $PlatformTeam -FailureThreshold $FailureThreshold -WhatIf:$WhatIfPreference
 }
 catch {
     # Defense-in-depth: guarantee full exception detail always reaches the workflow log,

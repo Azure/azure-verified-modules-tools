@@ -22,6 +22,23 @@ Describe 'Get-AvmWorkflowFailureModuleReference' {
 }
 
 Describe 'Get-AvmWorkflowFailureWorkflows' {
+    It 'selects explicit maintenance workflow names without enabling unrelated CI workflows' {
+        Mock Invoke-RepositoryGitHub {
+            @([pscustomobject]@{
+                    workflows = @(
+                        [pscustomobject]@{ id = 1; name = 'Repos: Terraform Sync'; state = 'active' }
+                        [pscustomobject]@{ id = 2; name = 'Repos: Bicep Sync'; state = 'active' }
+                        [pscustomobject]@{ id = 3; name = 'Authoring: CI'; state = 'active' }
+                    )
+                })
+        }
+        $selected = @(Get-AvmWorkflowFailureWorkflows -Repository 'Azure/azure-verified-modules-tools' `
+                -WorkflowName @('Repos: Terraform Sync', 'Repos: Bicep Sync'))
+        $selected.name | Should -Be @('Repos: Terraform Sync', 'Repos: Bicep Sync')
+        { Get-AvmWorkflowFailureWorkflows -Repository 'Azure/azure-verified-modules-tools' -WorkflowName @('Repos: Missing') } |
+            Should -Throw '*missing or inactive*Repos: Missing*'
+    }
+
     It 'slurps the paginated object-shaped workflows endpoint and never uses --jq' {
         Mock Invoke-RepositoryGitHub {
             @(
@@ -51,6 +68,90 @@ Describe 'Get-AvmWorkflowFailureWorkflows' {
     }
 }
 
+Describe 'Get-AvmWorkflowFailureRunHistory' {
+    It 'counts failures across cancelled/skipped runs and stops at recovery: <Conclusions>' -ForEach @(
+        @{ Conclusions = @('failure', 'cancelled', 'failure', 'skipped', 'failure', 'success'); Expected = @('failure', 'failure', 'failure') }
+        @{ Conclusions = @('failure', 'success', 'failure', 'failure'); Expected = @('failure', 'success') }
+        @{ Conclusions = @('cancelled', 'success', 'failure'); Expected = @('success') }
+        @{ Conclusions = @('failure', 'failure'); Expected = @('failure', 'failure') }
+    ) {
+        $script:runs = @($Conclusions | ForEach-Object { [pscustomobject]@{ conclusion = $_; event = 'schedule' } })
+        Mock Invoke-RepositoryGitHub { $script:runs }
+        $history = @(Get-AvmWorkflowFailureRunHistory -Repository 'Azure/azure-verified-modules-tools' -WorkflowId 1 -Count 3)
+        $history.conclusion | Should -Be $Expected
+        Should -Invoke Invoke-RepositoryGitHub -Times 1 -ParameterFilter {
+            $Arguments[1] -match 'branch=main&status=completed&per_page=100&page=1'
+        }
+    }
+
+    It 'paginates past ignored runs but does not fetch beyond three eligible failures' {
+        $script:firstPage = @(
+            [pscustomobject]@{ conclusion = 'failure'; event = 'schedule' }
+            1..99 | ForEach-Object { [pscustomobject]@{ conclusion = 'cancelled'; event = 'schedule' } }
+        )
+        Mock Invoke-RepositoryGitHub {
+            if ($Arguments[1] -match 'page=1$') { return $script:firstPage }
+            if ($Arguments[1] -match 'page=2$') {
+                return @(
+                    [pscustomobject]@{ conclusion = 'failure'; event = 'workflow_dispatch' }
+                    [pscustomobject]@{ conclusion = 'failure'; event = 'push' }
+                )
+            }
+            throw 'Unexpected extra page.'
+        }
+        @(Get-AvmWorkflowFailureRunHistory -Repository 'Azure/azure-verified-modules-tools' -WorkflowId 1 -Count 3) |
+            Should -HaveCount 3
+        Should -Invoke Invoke-RepositoryGitHub -Times 2 -Exactly
+    }
+
+    It 'does not count pull-request runs toward the maintenance failure streak' {
+        Mock Invoke-RepositoryGitHub {
+            @(
+                [pscustomobject]@{ conclusion = 'failure'; event = 'pull_request' }
+                [pscustomobject]@{ conclusion = 'failure'; event = 'pull_request_target' }
+                [pscustomobject]@{ conclusion = 'success'; event = 'schedule' }
+            )
+        }
+        $history = @(Get-AvmWorkflowFailureRunHistory -Repository 'Azure/azure-verified-modules-tools' -WorkflowId 1)
+        $history | Should -HaveCount 1
+        $history[0].conclusion | Should -Be 'success'
+    }
+}
+
+Describe 'Get-AvmWorkflowFailureOpenIssues' {
+    It 'paginates all open issues and excludes pull requests before matching incident titles' {
+        Mock Invoke-RepositoryGitHub {
+            @(
+                [pscustomobject]@{
+                    number = 42; title = '[Failed pipeline] Repos: Catalog Sync'
+                    html_url = 'https://github.com/Azure/azure-verified-modules-tools/issues/42'
+                    created_at = '2026-01-01T00:00:00Z'; labels = @(); body = 'Failed run.'
+                }
+                [pscustomobject]@{ number = 43; title = '[Failed pipeline] Not an issue'; pull_request = @{} }
+                [pscustomobject]@{ number = 44; title = 'Unrelated issue' }
+            )
+        }
+        $issues = @(Get-AvmWorkflowFailureOpenIssues -Repository 'Azure/azure-verified-modules-tools' -Maintenance)
+        $issues | Should -HaveCount 1
+        $issues[0].number | Should -Be 42
+        $issues[0].url | Should -Be 'https://github.com/Azure/azure-verified-modules-tools/issues/42'
+        $issues[0].body | Should -Be 'Failed run.'
+        Should -Invoke Invoke-RepositoryGitHub -Times 1 -ParameterFilter {
+            $Arguments -contains '--paginate' -and $Arguments -notcontains '--limit'
+        }
+    }
+
+    It 'preserves the Bicep sweep issue lookup' {
+        Mock Invoke-RepositoryGitHub {
+            @([pscustomobject]@{ number = 42; title = '[Failed pipeline] avm.res.storage.storage-account' })
+        }
+        @(Get-AvmWorkflowFailureOpenIssues -Repository 'Azure/bicep-registry-modules') | Should -HaveCount 1
+        Should -Invoke Invoke-RepositoryGitHub -Times 1 -ParameterFilter {
+            $Arguments -contains 'issue' -and $Arguments -contains 'list' -and $Arguments -contains '500'
+        }
+    }
+}
+
 Describe 'Get-AvmWorkflowFailureIssueCommentsToday' {
     It 'fetches paginated comments and projects bodies client-side without --jq' {
         Mock Invoke-RepositoryGitHub {
@@ -73,6 +174,40 @@ Describe 'Get-AvmWorkflowFailureIssueCommentsToday' {
 Describe 'Resolve-AvmWorkflowFailureRouting' {
     BeforeEach {
         $script:run = [pscustomobject]@{ name = 'avm.res.storage.storage-account'; conclusion = 'failure'; html_url = 'https://github.com/Azure/bicep-registry-modules/actions/runs/1' }
+    }
+
+    It 'keeps the existing incident open without notifying on <Conclusion>' -ForEach @(
+        @{ Conclusion = 'cancelled' }, @{ Conclusion = 'skipped' }, @{ Conclusion = 'neutral' }
+    ) {
+        $script:run.conclusion = $Conclusion
+        $routing = Resolve-AvmWorkflowFailureRouting -WorkflowRun $script:run `
+            -ExistingIssues @([pscustomobject]@{ number = 1 }) -Owners @() -IsModule $false `
+            -PlatformTeam 'Azure/azure-verified-modules-engineering-owners'
+        $routing.IssuesToClose | Should -HaveCount 0
+        $routing.CreateIssueTitle | Should -BeNullOrEmpty
+        $routing.CommentBody | Should -BeNullOrEmpty
+    }
+
+    It 'preserves the Bicep sweep handling of non-failure conclusions' {
+        $script:run.conclusion = 'cancelled'
+        $routing = Resolve-AvmWorkflowFailureRouting -WorkflowRun $script:run `
+            -ExistingIssues @([pscustomobject]@{ number = 1 }) -Owners @() -IsModule $true
+        $routing.IssuesToClose | Should -HaveCount 1
+    }
+
+    It 'alerts engineering owners for a maintenance <Conclusion> without requiring module labels' -ForEach @(
+        @{ Conclusion = 'failure' }, @{ Conclusion = 'timed_out' }
+        @{ Conclusion = 'startup_failure' }, @{ Conclusion = 'action_required' }
+    ) {
+        $script:run.name = 'Repos: Catalog Sync'
+        $script:run.conclusion = $Conclusion
+        $routing = Resolve-AvmWorkflowFailureRouting -WorkflowRun $script:run -ExistingIssues @() -Owners @() `
+            -IsModule $false -PlatformTeam 'Azure/azure-verified-modules-engineering-owners'
+        $routing.CreateIssueTitle | Should -Be '[Failed pipeline] Repos: Catalog Sync'
+        $routing.CreateIssueBody | Should -Match '@Azure/azure-verified-modules-engineering-owners'
+        $routing.CreateIssueBody | Should -Match ([regex]::Escape($script:run.html_url))
+        $routing.CreateIssueLabels | Should -HaveCount 0
+        $routing.TaggingComment | Should -BeNullOrEmpty
     }
 
     It 'closes every existing open issue when the run succeeded' {
@@ -145,6 +280,79 @@ Describe 'Set-AvmWorkflowFailureIssueForRun' {
         # fetch, which now projects `.body`; shaped as a comment object so
         # it works there too.
         Mock Invoke-RepositoryGitHub { @([pscustomobject]@{ body = 'https://github.com/Azure/bicep-registry-modules/issues/99' }) }
+    }
+
+    It 'adds a recovery comment with the successful run and auto-closes an existing maintenance incident' {
+        $script:run.name = 'Repos: Terraform Sync'
+        $script:run.conclusion = 'success'
+        Mock Get-AvmWorkflowFailureIssueCommentsToday { @() }
+        $issue = [pscustomobject]@{
+            number = 42; title = '[Failed pipeline] Repos: Terraform Sync'
+            url = 'https://github.com/Azure/azure-verified-modules-tools/issues/42'
+            createdAt = '2026-01-01T00:00:00Z'; body = 'Three failed runs.'
+        }
+        $outcome = Set-AvmWorkflowFailureIssueForRun -WorkflowRun $script:run `
+            -Repository 'Azure/azure-verified-modules-tools' -ExistingIssues @($issue) -Owners @() `
+            -IsModule $false -PlatformTeam 'Azure/azure-verified-modules-engineering-owners' -FailureThresholdMet:$false
+        $outcome.Status | Should -Be 'Closed'
+        Should -Invoke Invoke-RepositoryGitHub -Times 1 -Exactly -ParameterFilter {
+            $Arguments[0] -eq 'issue' -and $Arguments[1] -eq 'close' -and
+            $Arguments -contains '--comment' -and $Arguments[-1] -eq "Successful run: $($script:run.html_url)"
+        }
+    }
+
+    It 'updates the open maintenance incident with a team mention instead of creating another issue' {
+        $script:run.name = 'Repos: Terraform Sync'
+        Mock Get-AvmWorkflowFailureIssueCommentsToday { @() }
+        $issue = [pscustomobject]@{
+            number = 42; title = '[Failed pipeline] Repos: Terraform Sync'
+            url = 'https://github.com/Azure/azure-verified-modules-tools/issues/42'
+            createdAt = '2026-01-01T00:00:00Z'; body = 'Earlier failed run.'
+        }
+        $outcome = Set-AvmWorkflowFailureIssueForRun -WorkflowRun $script:run `
+            -Repository 'Azure/azure-verified-modules-tools' -ExistingIssues @($issue) -Owners @() `
+            -IsModule $false -PlatformTeam 'Azure/azure-verified-modules-engineering-owners'
+        $outcome.Status | Should -Be 'Commented'
+        $outcome.Notified | Should -Be @('Azure/azure-verified-modules-engineering-owners')
+        Should -Invoke Get-AvmWorkflowFailureIssueCommentsToday -Times 1 -ParameterFilter { $All }
+        Should -Invoke Invoke-RepositoryGitHub -Times 1 -Exactly -ParameterFilter {
+            $Arguments[0] -eq 'issue' -and $Arguments[1] -eq 'comment' -and
+            $Arguments[-1] -match '@Azure/azure-verified-modules-engineering-owners'
+        }
+    }
+
+    It 'does not repeat a maintenance alert already present in the issue body or an older comment: <Location>' -ForEach @(
+        @{ Location = 'body' }, @{ Location = 'comment' }
+    ) {
+        $script:run.name = 'Repos: Bicep Sync'
+        $team = 'Azure/azure-verified-modules-engineering-owners'
+        $routing = Resolve-AvmWorkflowFailureRouting -WorkflowRun $script:run -ExistingIssues @() -Owners @() -IsModule $false -PlatformTeam $team
+        $script:comments = if ($Location -eq 'comment') { @($routing.CreateIssueBody) } else { @() }
+        Mock Get-AvmWorkflowFailureIssueCommentsToday { $script:comments }
+        $issue = [pscustomobject]@{
+            number = 42; title = '[Failed pipeline] Repos: Bicep Sync'
+            url = 'https://github.com/Azure/azure-verified-modules-tools/issues/42'
+            createdAt = '2026-01-01T00:00:00Z'
+            body = if ($Location -eq 'body') { $routing.CreateIssueBody } else { 'Earlier failure.' }
+        }
+        $outcome = Set-AvmWorkflowFailureIssueForRun -WorkflowRun $script:run `
+            -Repository 'Azure/azure-verified-modules-tools' -ExistingIssues @($issue) -Owners @() -IsModule $false -PlatformTeam $team
+        $outcome.Status | Should -Be 'AlreadyReported'
+        Should -Invoke Invoke-RepositoryGitHub -Times 0 -Exactly
+    }
+
+    It 'creates a maintenance incident with one issue write containing the team mention' {
+        $script:run.name = 'Repos: Catalog Sync'
+        Mock Invoke-RepositoryGitHub { 'https://github.com/Azure/azure-verified-modules-tools/issues/99' }
+        $outcome = Set-AvmWorkflowFailureIssueForRun -WorkflowRun $script:run `
+            -Repository 'Azure/azure-verified-modules-tools' -ExistingIssues @() -Owners @() `
+            -IsModule $false -PlatformTeam 'Azure/azure-verified-modules-engineering-owners'
+        $outcome.Status | Should -Be 'Created'
+        Should -Invoke Invoke-RepositoryGitHub -Times 1 -Exactly -ParameterFilter {
+            $Arguments[0] -eq 'issue' -and $Arguments[1] -eq 'create' -and
+            $Arguments -notcontains '--label' -and
+            $Arguments[[array]::IndexOf($Arguments, '--body') + 1] -match '@Azure/azure-verified-modules-engineering-owners'
+        }
     }
 
     It 'creates, assigns, and comments on a brand new failure issue' {
@@ -273,6 +481,33 @@ Describe 'Invoke-AvmWorkflowFailureIssues diagnostics' {
         $script:workflow1 = [pscustomobject]@{ id = 11; name = 'avm.res.storage.storage-account' }
     }
 
+    It 'applies a three-failure threshold without fetching the module catalog: <Failures> failure(s)' -ForEach @(
+        @{ Failures = 1; ExpectedWrites = 0 }
+        @{ Failures = 2; ExpectedWrites = 0 }
+        @{ Failures = 3; ExpectedWrites = 1 }
+    ) {
+        $script:failures = $Failures
+        Mock Get-AvmWorkflowFailureWorkflows {
+            @([pscustomobject]@{ id = 11; name = 'Repos: Catalog Sync' })
+        }
+        Mock Get-AvmWorkflowFailureOpenIssues { @() }
+        Mock Get-AvmWorkflowFailureRunHistory {
+            @(
+                1..$script:failures | ForEach-Object {
+                    [pscustomobject]@{ name = 'Repos: Catalog Sync'; conclusion = 'failure'; html_url = "https://github.com/Azure/azure-verified-modules-tools/actions/runs/$_" }
+                }
+                if ($script:failures -lt 3) {
+                    [pscustomobject]@{ name = 'Repos: Catalog Sync'; conclusion = 'success'; html_url = 'https://github.com/Azure/azure-verified-modules-tools/actions/runs/0' }
+                }
+            )
+        }
+        Mock Invoke-RepositoryGitHub { 'https://github.com/Azure/azure-verified-modules-tools/issues/99' }
+        Invoke-AvmWorkflowFailureIssues -Repository 'Azure/azure-verified-modules-tools' `
+            -WorkflowName @('Repos: Catalog Sync') -PlatformTeam 'Azure/azure-verified-modules-engineering-owners' -FailureThreshold 3
+        Should -Invoke Get-AvmReviewerRoutingCatalogIndex -Times 0 -Exactly
+        Should -Invoke Invoke-RepositoryGitHub -Times $ExpectedWrites -Exactly
+    }
+
     It 'emits a per-item progress marker for every workflow before it is processed' {
         Mock Get-AvmWorkflowFailureWorkflows { @($script:workflow1) }
         Mock Get-AvmWorkflowFailureOpenIssues { @() }
@@ -315,14 +550,14 @@ Describe 'Workflow failure issue management workflow safety' {
         $script:triggerBlock = [System.Text.RegularExpressions.Regex]::Match(
             $script:workflowText, '(?ms)^on:\r?\n(.*?)(?=^\S)').Groups[1].Value
         $script:runBlocks = [System.Text.RegularExpressions.Regex]::Matches(
-            $script:workflowText, '(?ms)^        run:\s*\|\r?\n(?<body>.*?)(?=^      - |\z)')
+            $script:workflowText, '(?ms)^        run:\s*\|\r?\n(?<body>.*?)(?=^      - |^  [\w-]+:|\z)')
     }
 
     It 'exists' {
         Test-Path $script:workflowPath | Should -BeTrue
     }
 
-    It 'is triggered only by schedule and workflow_dispatch, never pull_request(_target), issues, or workflow_run' {
+    It 'is triggered only by schedule and workflow_dispatch, never by issues, pull requests or workflow runs' {
         $triggerNames = @([System.Text.RegularExpressions.Regex]::Matches(
                 $script:triggerBlock, '(?m)^  ([A-Za-z_]+):') |
             ForEach-Object { $_.Groups[1].Value })
@@ -335,6 +570,56 @@ Describe 'Workflow failure issue management workflow safety' {
         $script:triggerBlock | Should -Not -Match '(?m)^\s{2}pull_request:'
         $script:triggerBlock | Should -Not -Match '(?m)^\s{2}pull_request_target:'
         $script:triggerBlock | Should -Not -Match '(?m)^\s{2}workflow_run:'
+    }
+
+    It 'does not delegate Tools maintenance checks from the Bicep sweep' {
+        $script:workflowText | Should -Not -Match 'critical_only|maintenance-alerts'
+    }
+
+    Describe 'Maintenance workflow failure alert safety' {
+        BeforeAll {
+            $script:alertWorkflow = Get-Content -Raw (Join-Path $root '.github' 'workflows' 'repository-management-maintenance-alerts.yml')
+            $script:alertTriggers = [regex]::Match($script:alertWorkflow, '(?ms)^on:\n(.*?)(?=^\S)').Groups[1].Value
+        }
+
+        It 'monitors all eight maintenance workflows, including the old monitor but not itself' {
+            $json = [regex]::Match($script:alertWorkflow, '(?ms)MONITORED_WORKFLOWS: >-\n(.*?)\n        run:').Groups[1].Value
+            $names = @($json | ConvertFrom-Json)
+            $names | Should -HaveCount 8
+            $names | Should -Contain 'Repos: Workflow Failures'
+            foreach ($name in $names) {
+                $script:alertTriggers | Should -Match ([regex]::Escape("- '$name'"))
+            }
+            $script:alertTriggers | Should -Not -Match "- 'Repos: Maintenance Alerts'"
+            $script:alertTriggers | Should -Match 'branches: \[main\]'
+            $script:alertTriggers | Should -Match 'types: \[completed\]'
+            $script:alertTriggers | Should -Match "cron: '47 5 \* \* \*'"
+            $script:alertTriggers | Should -Match 'workflow_dispatch:'
+            $script:alertTriggers | Should -Not -Match 'workflow_call:'
+        }
+
+        It 'uses trusted code and a same-repository token without app credentials or artifact downloads' {
+            $script:alertWorkflow | Should -Not -Match 'create-github-app-token|AVM_APP_PRIVATE_KEY|download-artifact'
+            $script:alertWorkflow | Should -Match 'head_repository.full_name == github.repository'
+            $script:alertWorkflow | Should -Match "workflow_run.event != 'pull_request'"
+            $script:alertWorkflow | Should -Match "workflow_run.event != 'pull_request_target'"
+            $script:alertWorkflow | Should -Match 'github.event.repository.default_branch'
+            $script:alertWorkflow | Should -Not -Match 'workflow_run.head_sha|workflow_run.head_branch'
+            $script:alertWorkflow | Should -Match '(?m)^  issues: write$'
+            $script:alertWorkflow | Should -Match '(?m)^  actions: read$'
+            $run = [regex]::Match($script:alertWorkflow, '(?ms)        run: \|\n(.*)$').Groups[1].Value
+            $run | Should -Not -Match '\$\{\{'
+            $run | Should -Match 'Import-Module .+ -Force -ErrorAction Stop'
+        }
+
+        It 'configures three consecutive failures, the engineering owners team and a write-free manual default' {
+            $script:alertWorkflow | Should -Match "FAILURE_THRESHOLD: '3'"
+            $script:alertWorkflow | Should -Match 'NOTIFY_TEAM: Azure/azure-verified-modules-engineering-owners'
+            $script:alertWorkflow | Should -Match '-FailureThreshold \(\[int\]\$env:FAILURE_THRESHOLD\)'
+            $script:alertWorkflow | Should -Match '-PlatformTeam \$env:NOTIFY_TEAM'
+            $script:alertWorkflow | Should -Match '-WhatIf:\$whatIf'
+            $script:alertTriggers | Should -Match '(?ms)workflow_dispatch:\n.*?what_if:\n.*?default: true'
+        }
     }
 
     It 'runs the offset cron without schedule-dependent expressions' {
@@ -362,10 +647,11 @@ Describe 'Workflow failure issue management workflow safety' {
         $workRunBlocks.Count | Should -BeGreaterThan 0
         foreach ($match in $workRunBlocks) {
             $runBody = $match.Groups['body'].Value
-            $importIndex = $runBody.IndexOf('Import-Module Avm.Authoring -Force -ErrorAction Stop')
+            $import = [regex]::Match($runBody, '(?m)^\s*Import-Module .+ -Force -ErrorAction Stop')
+            $importIndex = $import.Index
             $scriptIndex = [System.Text.RegularExpressions.Regex]::Match(
                 $runBody, '(?m)^\s*\./repository-management/.+\.ps1\b').Index
-            $importIndex | Should -BeGreaterThan -1
+            $import.Success | Should -BeTrue
             $importIndex | Should -BeLessThan $scriptIndex
         }
     }

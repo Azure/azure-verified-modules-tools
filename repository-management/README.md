@@ -41,6 +41,29 @@ edit the JSON here instead. The one `githubDescription` override preserves the
 longer specification text while keeping the GitHub label description within
 GitHub's 100-character limit.
 
+## Workflow failure alerts
+
+`Repos: Maintenance Alerts` monitors the eight scheduled Tools maintenance
+workflows: catalog, Terraform, Bicep, module-list and label synchronization,
+issue and reviewer routing, and the failure monitor itself. Main-branch
+completions trigger checks; the daily sweep is a fallback. Pull-request runs
+are excluded. Three consecutive completed failures open an incident;
+cancelled and skipped runs neither count nor reset the streak.
+
+Each workflow has one open `[Failed pipeline]` issue in this repository.
+New incidents and subsequent failed-run updates mention
+`@Azure/azure-verified-modules-engineering-owners`; an already-reported run
+does not notify again. The first subsequent successful check adds a recovery
+comment linking to that run and closes the issue. The existing daily Bicep module
+failure sweep and owner routing remain separate and do not re-trigger runs.
+Team members still control notification delivery in their GitHub settings.
+
+Manual runs default to `what_if: true`. The alert workflow does not monitor
+itself; retain native Actions
+failure notifications for its owner.
+Keep the internal Azure-Verified-Modules-Docs operations guidance aligned
+with this alert ownership and incident lifecycle.
+
 ## Pull request reviewer routing
 
 `Repos: PR Routing` handles Bicep and active Terraform module repositories in

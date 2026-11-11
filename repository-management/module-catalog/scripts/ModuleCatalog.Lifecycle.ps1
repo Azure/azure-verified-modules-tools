@@ -75,9 +75,7 @@ function Get-AvmCatalogExcludedModuleKey {
         throw [System.IO.InvalidDataException]::new('Excluded modules must conform to the packaged catalog record schema.')
     }
     foreach ($module in $Modules) {
-        if ($module.moduleStatus -cne 'Deprecated' -or $module.registry.status -cne 'not-published' -or
-            ($module.ecosystem -ceq 'bicep' -and $module.registry.marRegistered -isnot [bool]) -or
-            ($module.ecosystem -ceq 'terraform' -and $null -ne $module.registry.marRegistered)) {
+        if ($module.moduleStatus -cne 'Deprecated' -or $module.registry.status -cne 'not-published') {
             throw [System.IO.InvalidDataException]::new('Only validated deprecated, unpublished modules may be excluded from the catalog.')
         }
         $identity = New-AvmCatalogIdentity -Ecosystem $module.ecosystem -Repository $module.repository `

@@ -229,9 +229,7 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
             $report.csvRowRemovals | Should -HaveCount 0
             $report.csvRowRemovalsForced | Should -BeFalse
             $report.heldBackOutputs | Should -HaveCount 0
-            $mar = Read-AvmCatalogJson -Path (Join-Path $fixture.Output 'docs' 'BicepMARModules.json')
-            $originalMar = Read-AvmCatalogJson -Path (Join-Path $fixture.Legacy 'BicepMARModules.json')
-            $mar | Should -Be (Get-AvmCatalogOrdinal -Values $originalMar)
+            Test-Path -LiteralPath (Join-Path $fixture.Output 'docs' 'BicepMARModules.json') | Should -BeFalse
             (Get-FileHash -LiteralPath (Join-Path $module.Directory 'metadata.json')).Hash | Should -BeExactly $metadataHash
             $plan = Test-AvmCatalogPublicationBundle -Path $fixture.Output
             { Assert-AvmCatalogPublicationBase -Root $sourceRoot -BaseFiles $plan.docs.baseFiles } | Should -Not -Throw
@@ -365,8 +363,7 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
             $bundle.HeldBack | Should -HaveCount 0
             $registryPath = Join-Path $fixture.Root 'registry.json'
             $registry = Read-AvmCatalogJson -Path $registryPath
-            $registry[$module.Identity.Key] = New-AvmCatalogRegistryResult -Version '1.0.0' -FirstPublished ([datetime]'2024-02-01') `
-                -MarRegistered $(if ($Ecosystem -eq 'bicep') { $true } else { $null })
+            $registry[$module.Identity.Key] = New-AvmCatalogRegistryResult -Version '1.0.0' -FirstPublished ([datetime]'2024-02-01')
             Save-CatalogJson -Path $registryPath -Data $registry
             { & (Join-Path $catalogScripts 'Invoke-ModuleCatalog.ps1') -InputPath $fixture.Root -OutputPath $fixture.Output -Force } |
                 Should -Throw '*metadata but no source*registry reports it as available*'
@@ -446,8 +443,8 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
             @{ Case = 'unpublished with date'; Ecosystem = 'bicep'; File = 'registry.json'; Change = { param($data, $key) $data[$key].firstPublishedIn = '2024-02' } }
             @{ Case = 'unpublished with downloads'; Ecosystem = 'terraform'; File = 'registry.json'; Change = { param($data, $key) $data[$key].downloads = 1 } }
             @{ Case = 'unknown registry status'; Ecosystem = 'terraform'; File = 'registry.json'; Change = { param($data, $key) $data[$key].status = 'unknown' } }
-            @{ Case = 'invalid Bicep registration'; Ecosystem = 'bicep'; File = 'registry.json'; Change = { param($data, $key) $data[$key].marRegistered = $null } }
-            @{ Case = 'invalid Terraform registration'; Ecosystem = 'terraform'; File = 'registry.json'; Change = { param($data, $key) $data[$key].marRegistered = $true } }
+            @{ Case = 'retired Bicep registry field'; Ecosystem = 'bicep'; File = 'registry.json'; Change = { param($data, $key) $data[$key]['marRegistered'] = $null } }
+            @{ Case = 'retired Terraform registry field'; Ecosystem = 'terraform'; File = 'registry.json'; Change = { param($data, $key) $data[$key]['marRegistered'] = $true } }
             @{ Case = 'missing owner evidence'; Ecosystem = 'bicep'; File = 'github.json'; Change = { param($data) $data.users.Remove('owner-one') } }
             @{ Case = 'missing archive flag'; Ecosystem = 'terraform'; File = 'revisions.json'; Change = {
                     param($data, $key)
@@ -547,7 +544,7 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
             $rootRecord[0].registry.status | Should -BeExactly 'not-published'
             $rootRecord[0].registry.currentVersion | Should -BeNullOrEmpty
             $rootRecord[0].registry.firstPublishedIn | Should -BeNullOrEmpty
-            $rootRecord[0].registry.marRegistered | Should -BeTrue
+            $rootRecord[0].registry.Contains('marRegistered') | Should -BeFalse
             $rootRecord[0].publicRegistryReference | Should -BeExactly $parent.Identity.Reference
             @($bundle.Report.excludedModules | ForEach-Object { $_.modulePath }) | Should -Not -Contain $parent.ModulePath
         }
@@ -628,7 +625,6 @@ Describe 'Component: module catalog lifecycle and flat owners' -Tag Component {
                 currentVersion = if ($live) { '1.2.3' } else { $null }
                 firstPublishedIn = if ($live) { '2024-02' } else { $null }
                 downloads = $null
-                marRegistered = if ($isBicep) { $true } else { $null }
             }
         }
         $github = [ordered]@{
