@@ -52,8 +52,9 @@ cancelled and skipped runs neither count nor reset the streak.
 
 Each workflow has one open `[Failed pipeline]` issue in this repository.
 New incidents and subsequent failed-run updates mention
-`@Azure/azure-verified-modules-engineering-owners`; an already-reported run
-does not notify again. The first subsequent successful check adds a recovery
+`@Azure/azure-verified-modules-engineering-owners` and its current members.
+Previously reported failures without individual mentions receive one update;
+subsequent checks do not repeat it. The first successful check adds a recovery
 comment linking to that run and closes the issue. The existing daily Bicep module
 failure sweep and owner routing remain separate and do not re-trigger runs.
 Team members still control notification delivery in their GitHub settings.

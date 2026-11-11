@@ -28,6 +28,7 @@ $script:AvmWorkflowFailureIgnoredWorkflowNames = @(
 $script:AvmWorkflowFailureAvmLabel = 'Type: AVM :a: :v: :m:'
 $script:AvmWorkflowFailureBugLabel = 'Type: Bug :bug:'
 $script:AvmWorkflowFailureDuplicateLabel = 'Type: Duplicate :palms_up_together:'
+$script:AvmMaintenanceMemberMentionMarker = '<!-- avm-maintenance-member-mentions:v1 -->'
 $script:AvmWorkflowFailurePlatformTaggingComment = @'
 > [!IMPORTANT]
 > This issue was created for a platform workflow. The maintainer team @Azure/azure-verified-modules-tooling-contributors should investigate and mitigate the reason.
@@ -191,6 +192,29 @@ function Get-AvmWorkflowFailureIssueCommentsToday {
     return @($comments | ForEach-Object { [string]$_.body })
 }
 
+function Get-AvmWorkflowFailureTeamMembers {
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param([Parameter(Mandatory)] [ValidatePattern('^[A-Za-z0-9-]+/[a-z0-9-]+$')] [string] $Team)
+
+    $org, $slug = $Team -split '/', 2
+    $pages = @(Invoke-RepositoryGitHub -AsJson -Arguments @(
+            'api', '--paginate', '--slurp', "orgs/$org/teams/$slug/members?per_page=100", '--hostname', 'github.com'
+        ))
+    $members = @($pages | ForEach-Object { foreach ($member in $_) { $member } })
+    if ($members.Count -eq 0) {
+        throw [System.IO.InvalidDataException]::new("The alert team [$Team] has no members.")
+    }
+    $logins = @($members | ForEach-Object {
+            if ($null -eq $_ -or $null -eq $_.PSObject.Properties['login'] -or
+                $_.login -notmatch '^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$' -or $_.login.Length -gt 39) {
+                throw [System.IO.InvalidDataException]::new("The alert team [$Team] returned an invalid member login.")
+            }
+            [string]$_.login
+        } | Sort-Object -Unique)
+    return $logins
+}
+
 function Get-AvmWorkflowFailureModuleReference {
     <#
     .SYNOPSIS
@@ -223,6 +247,7 @@ function Resolve-AvmWorkflowFailureRouting {
         [Parameter(Mandatory)] [bool] $IsModule,
         [AllowEmptyCollection()] [string[]] $ExistingCommentBodiesToday = @(),
         [string] $PlatformTeam,
+        [AllowEmptyCollection()] [string[]] $PlatformMembers = @(),
         [bool] $FailureThresholdMet = $true
     )
 
@@ -270,8 +295,10 @@ function Resolve-AvmWorkflowFailureRouting {
 
     $failedRunText = "Failed run: $runUrl"
     if (-not $IsModule -and $PlatformTeam) {
-        $failedRunText += "`n`n@$PlatformTeam, the ``$($WorkflowRun.name)`` workflow has failed. Please investigate the linked run."
-        $result.NotifiedHandles = @($PlatformTeam)
+        $handles = @($PlatformTeam) + @($PlatformMembers)
+        $mentions = ($handles | ForEach-Object { "@$_" }) -join ', '
+        $failedRunText += "`n`n$mentions, the ``$($WorkflowRun.name)`` workflow has failed. Please investigate the linked run.`n`n$script:AvmMaintenanceMemberMentionMarker"
+        $result.NotifiedHandles = $handles
     }
 
     if ($ExistingIssues.Count -eq 0) {
@@ -296,7 +323,7 @@ function Resolve-AvmWorkflowFailureRouting {
         }
         $result.TaggingComment = if (-not $IsModule -and $PlatformTeam) { $null } else { $taggingComment }
         $result.NotifiedHandles = @(if (-not $IsModule -or $isOrphaned) {
-                if (-not $IsModule -and $PlatformTeam) { $PlatformTeam } else { 'Azure/azure-verified-modules-tooling-contributors' }
+                if (-not $IsModule -and $PlatformTeam) { $handles } else { 'Azure/azure-verified-modules-tooling-contributors' }
             }
             else {
                 $Owners | ForEach-Object { $_.Handle }
@@ -315,7 +342,16 @@ function Resolve-AvmWorkflowFailureRouting {
     $duplicateIssues = @(if ($sortedIssues.Count -gt 1) { $sortedIssues[1..($sortedIssues.Count - 1)] })
 
     $result.DuplicateIssuesToClose = $duplicateIssues
-    if ($ExistingCommentBodiesToday -notcontains $failedRunText) {
+    $alreadyReported = if ($PlatformTeam) {
+        @($ExistingCommentBodiesToday | Where-Object {
+                (($_ -split "`n", 2)[0].TrimEnd("`r") -ceq "Failed run: $runUrl") -and
+                $_.Contains($script:AvmMaintenanceMemberMentionMarker)
+            }).Count -gt 0
+    }
+    else {
+        $ExistingCommentBodiesToday -contains $failedRunText
+    }
+    if (-not $alreadyReported) {
         $result.CommentIssueUrl = $newestIssue.url
         $result.CommentBody = $failedRunText
     }
@@ -342,6 +378,7 @@ function Set-AvmWorkflowFailureIssueForRun {
         [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Owners,
         [Parameter(Mandatory)] [bool] $IsModule,
         [string] $PlatformTeam,
+        [AllowEmptyCollection()] [string[]] $PlatformMembers = @(),
         [bool] $FailureThresholdMet = $true
     )
 
@@ -371,7 +408,7 @@ function Set-AvmWorkflowFailureIssueForRun {
 
     $routing = Resolve-AvmWorkflowFailureRouting -WorkflowRun $WorkflowRun -ExistingIssues $ExistingIssues `
         -Owners $Owners -IsModule $IsModule -ExistingCommentBodiesToday $existingCommentBodiesToday `
-        -PlatformTeam $PlatformTeam -FailureThresholdMet $FailureThresholdMet
+        -PlatformTeam $PlatformTeam -PlatformMembers $PlatformMembers -FailureThresholdMet $FailureThresholdMet
     if ($routing.BelowThreshold) {
         $outcome.Status = 'BelowThreshold'
         return $outcome
@@ -542,6 +579,10 @@ function Invoke-AvmWorkflowFailureIssues {
         $workflows = @(Get-AvmWorkflowFailureWorkflows -Repository $Repository -WorkflowName $WorkflowName)
         Write-Verbose "Evaluating [$($workflows.Count)] workflow(s) in [$Repository]." -Verbose
         $openIssues = @(Get-AvmWorkflowFailureOpenIssues -Repository $Repository -Maintenance:([bool]$PlatformTeam))
+        $platformMembers = @()
+        if ($PlatformTeam) {
+            $platformMembers = @(Get-AvmWorkflowFailureTeamMembers -Team $PlatformTeam)
+        }
         $catalogIndex = @{}
         if (-not $PlatformTeam -or @($workflows | Where-Object { $null -ne (Get-AvmWorkflowFailureModuleReference -WorkflowName $_.name) }).Count -gt 0) {
             $catalogIndex = Get-AvmReviewerRoutingCatalogIndex -Repository $Repository
@@ -601,7 +642,7 @@ function Invoke-AvmWorkflowFailureIssues {
 
             $outcome = Set-AvmWorkflowFailureIssueForRun -WorkflowRun $latestRun -Repository $Repository `
                 -ExistingIssues $existingIssues -Owners $owners -IsModule $isModule -PlatformTeam $PlatformTeam `
-                -FailureThresholdMet:($failureCount -ge $FailureThreshold) -WhatIf:$WhatIfPreference
+                -PlatformMembers $platformMembers -FailureThresholdMet:($failureCount -ge $FailureThreshold) -WhatIf:$WhatIfPreference
             $outcomes.Add($outcome)
         }
         catch {

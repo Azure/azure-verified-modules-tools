@@ -171,6 +171,32 @@ Describe 'Get-AvmWorkflowFailureIssueCommentsToday' {
     }
 }
 
+Describe 'Get-AvmWorkflowFailureTeamMembers' {
+    It 'reads all team members once and returns sorted unique logins' {
+        Mock Invoke-RepositoryGitHub {
+            @(
+                ,@([pscustomobject]@{ login = 'user-two' }, [pscustomobject]@{ login = 'user-one' })
+                ,@([pscustomobject]@{ login = 'user-two' })
+            )
+        }
+        @(Get-AvmWorkflowFailureTeamMembers -Team 'Azure/engineering-owners') | Should -Be @('user-one', 'user-two')
+        Should -Invoke Invoke-RepositoryGitHub -Times 1 -ParameterFilter {
+            $Arguments -contains '--paginate' -and $Arguments -contains '--slurp' -and
+            $Arguments -contains 'orgs/Azure/teams/engineering-owners/members?per_page=100'
+        }
+    }
+
+    It 'fails explicitly on an empty or malformed team response: <Case>' -ForEach @(
+        @{ Case = 'empty'; Members = @() }
+        @{ Case = 'invalid login'; Members = @([pscustomobject]@{ login = 'invalid/name' }) }
+        @{ Case = 'missing login'; Members = @([pscustomobject]@{ id = 1 }) }
+    ) {
+        $script:teamMembers = $Members
+        Mock Invoke-RepositoryGitHub { ,@($script:teamMembers) }
+        { Get-AvmWorkflowFailureTeamMembers -Team 'Azure/engineering-owners' } | Should -Throw
+    }
+}
+
 Describe 'Resolve-AvmWorkflowFailureRouting' {
     BeforeEach {
         $script:run = [pscustomobject]@{ name = 'avm.res.storage.storage-account'; conclusion = 'failure'; html_url = 'https://github.com/Azure/bicep-registry-modules/actions/runs/1' }
@@ -202,12 +228,15 @@ Describe 'Resolve-AvmWorkflowFailureRouting' {
         $script:run.name = 'Repos: Catalog Sync'
         $script:run.conclusion = $Conclusion
         $routing = Resolve-AvmWorkflowFailureRouting -WorkflowRun $script:run -ExistingIssues @() -Owners @() `
-            -IsModule $false -PlatformTeam 'Azure/azure-verified-modules-engineering-owners'
+            -IsModule $false -PlatformTeam 'Azure/azure-verified-modules-engineering-owners' -PlatformMembers @('member-one', 'member-two')
         $routing.CreateIssueTitle | Should -Be '[Failed pipeline] Repos: Catalog Sync'
         $routing.CreateIssueBody | Should -Match '@Azure/azure-verified-modules-engineering-owners'
+        $routing.CreateIssueBody | Should -Match '@member-one'
+        $routing.CreateIssueBody | Should -Match '@member-two'
         $routing.CreateIssueBody | Should -Match ([regex]::Escape($script:run.html_url))
         $routing.CreateIssueLabels | Should -HaveCount 0
         $routing.TaggingComment | Should -BeNullOrEmpty
+        $routing.AssigneeToAdd | Should -BeNullOrEmpty
     }
 
     It 'closes every existing open issue when the run succeeded' {
@@ -301,7 +330,7 @@ Describe 'Set-AvmWorkflowFailureIssueForRun' {
         }
     }
 
-    It 'updates the open maintenance incident with a team mention instead of creating another issue' {
+    It 'updates the open maintenance incident with team and member mentions instead of creating another issue' {
         $script:run.name = 'Repos: Terraform Sync'
         Mock Get-AvmWorkflowFailureIssueCommentsToday { @() }
         $issue = [pscustomobject]@{
@@ -311,13 +340,14 @@ Describe 'Set-AvmWorkflowFailureIssueForRun' {
         }
         $outcome = Set-AvmWorkflowFailureIssueForRun -WorkflowRun $script:run `
             -Repository 'Azure/azure-verified-modules-tools' -ExistingIssues @($issue) -Owners @() `
-            -IsModule $false -PlatformTeam 'Azure/azure-verified-modules-engineering-owners'
+            -IsModule $false -PlatformTeam 'Azure/azure-verified-modules-engineering-owners' -PlatformMembers @('member-one', 'member-two')
         $outcome.Status | Should -Be 'Commented'
-        $outcome.Notified | Should -Be @('Azure/azure-verified-modules-engineering-owners')
+        $outcome.Notified | Should -Be @('Azure/azure-verified-modules-engineering-owners', 'member-one', 'member-two')
         Should -Invoke Get-AvmWorkflowFailureIssueCommentsToday -Times 1 -ParameterFilter { $All }
         Should -Invoke Invoke-RepositoryGitHub -Times 1 -Exactly -ParameterFilter {
             $Arguments[0] -eq 'issue' -and $Arguments[1] -eq 'comment' -and
-            $Arguments[-1] -match '@Azure/azure-verified-modules-engineering-owners'
+            $Arguments[-1] -match '@Azure/azure-verified-modules-engineering-owners' -and
+            $Arguments[-1] -match '@member-one' -and $Arguments[-1] -match '@member-two'
         }
     }
 
@@ -326,7 +356,8 @@ Describe 'Set-AvmWorkflowFailureIssueForRun' {
     ) {
         $script:run.name = 'Repos: Bicep Sync'
         $team = 'Azure/azure-verified-modules-engineering-owners'
-        $routing = Resolve-AvmWorkflowFailureRouting -WorkflowRun $script:run -ExistingIssues @() -Owners @() -IsModule $false -PlatformTeam $team
+        $routing = Resolve-AvmWorkflowFailureRouting -WorkflowRun $script:run -ExistingIssues @() -Owners @() -IsModule $false `
+            -PlatformTeam $team -PlatformMembers @('former-member')
         $script:comments = if ($Location -eq 'comment') { @($routing.CreateIssueBody) } else { @() }
         Mock Get-AvmWorkflowFailureIssueCommentsToday { $script:comments }
         $issue = [pscustomobject]@{
@@ -339,6 +370,23 @@ Describe 'Set-AvmWorkflowFailureIssueForRun' {
             -Repository 'Azure/azure-verified-modules-tools' -ExistingIssues @($issue) -Owners @() -IsModule $false -PlatformTeam $team
         $outcome.Status | Should -Be 'AlreadyReported'
         Should -Invoke Invoke-RepositoryGitHub -Times 0 -Exactly
+    }
+
+    It 'updates a previously reported failure once to mention individual members' {
+        $script:run.name = 'Repos: Terraform Sync'
+        Mock Get-AvmWorkflowFailureIssueCommentsToday { @() }
+        $issue = [pscustomobject]@{
+            number = 42; title = '[Failed pipeline] Repos: Terraform Sync'
+            url = 'https://github.com/Azure/azure-verified-modules-tools/issues/42'
+            createdAt = '2026-01-01T00:00:00Z'; body = "Failed run: $($script:run.html_url)`n`n@Azure/engineering-owners"
+        }
+        $outcome = Set-AvmWorkflowFailureIssueForRun -WorkflowRun $script:run `
+            -Repository 'Azure/azure-verified-modules-tools' -ExistingIssues @($issue) -Owners @() `
+            -IsModule $false -PlatformTeam 'Azure/engineering-owners' -PlatformMembers @('member-one')
+        $outcome.Status | Should -Be 'Commented'
+        Should -Invoke Invoke-RepositoryGitHub -Times 1 -Exactly -ParameterFilter {
+            $Arguments[1] -eq 'comment' -and $Arguments[-1] -match '@member-one'
+        }
     }
 
     It 'creates a maintenance incident with one issue write containing the team mention' {
@@ -478,6 +526,7 @@ Describe 'Invoke-AvmWorkflowFailureIssues summary' {
 Describe 'Invoke-AvmWorkflowFailureIssues diagnostics' {
     BeforeEach {
         Mock Get-AvmReviewerRoutingCatalogIndex { @{} }
+        Mock Get-AvmWorkflowFailureTeamMembers { @('member-one', 'member-two') }
         $script:workflow1 = [pscustomobject]@{ id = 11; name = 'avm.res.storage.storage-account' }
     }
 
@@ -505,6 +554,7 @@ Describe 'Invoke-AvmWorkflowFailureIssues diagnostics' {
         Invoke-AvmWorkflowFailureIssues -Repository 'Azure/azure-verified-modules-tools' `
             -WorkflowName @('Repos: Catalog Sync') -PlatformTeam 'Azure/azure-verified-modules-engineering-owners' -FailureThreshold 3
         Should -Invoke Get-AvmReviewerRoutingCatalogIndex -Times 0 -Exactly
+        Should -Invoke Get-AvmWorkflowFailureTeamMembers -Times 1 -Exactly
         Should -Invoke Invoke-RepositoryGitHub -Times $ExpectedWrites -Exactly
     }
 
@@ -598,15 +648,19 @@ Describe 'Workflow failure issue management workflow safety' {
             $script:alertTriggers | Should -Not -Match 'workflow_call:'
         }
 
-        It 'uses trusted code and a same-repository token without app credentials or artifact downloads' {
-            $script:alertWorkflow | Should -Not -Match 'create-github-app-token|AVM_APP_PRIVATE_KEY|download-artifact'
+        It 'uses trusted code and a scoped GitHub App token without artifact downloads' {
+            $script:alertWorkflow | Should -Not -Match 'download-artifact'
+            $script:alertWorkflow | Should -Match 'create-github-app-token'
+            $script:alertWorkflow | Should -Match '(?m)^\s+repositories: azure-verified-modules-tools$'
+            $script:alertWorkflow | Should -Match '(?m)^\s+permission-actions: read$'
+            $script:alertWorkflow | Should -Match '(?m)^\s+permission-issues: write$'
+            $script:alertWorkflow | Should -Match '(?m)^\s+permission-members: read$'
+            $script:alertWorkflow | Should -Match 'GH_TOKEN: \$\{\{ steps.app-token.outputs.token \}\}'
             $script:alertWorkflow | Should -Match 'head_repository.full_name == github.repository'
             $script:alertWorkflow | Should -Match "workflow_run.event != 'pull_request'"
             $script:alertWorkflow | Should -Match "workflow_run.event != 'pull_request_target'"
             $script:alertWorkflow | Should -Match 'github.event.repository.default_branch'
             $script:alertWorkflow | Should -Not -Match 'workflow_run.head_sha|workflow_run.head_branch'
-            $script:alertWorkflow | Should -Match '(?m)^  issues: write$'
-            $script:alertWorkflow | Should -Match '(?m)^  actions: read$'
             $run = [regex]::Match($script:alertWorkflow, '(?ms)        run: \|\n(.*)$').Groups[1].Value
             $run | Should -Not -Match '\$\{\{'
             $run | Should -Match 'Import-Module .+ -Force -ErrorAction Stop'
