@@ -131,13 +131,23 @@ Describe 'Get-AvmWorkflowFailureOpenIssues' {
                 [pscustomobject]@{ number = 44; title = 'Unrelated issue' }
             )
         }
-        $issues = @(Get-AvmWorkflowFailureOpenIssues -Repository 'Azure/azure-verified-modules-tools')
+        $issues = @(Get-AvmWorkflowFailureOpenIssues -Repository 'Azure/azure-verified-modules-tools' -Maintenance)
         $issues | Should -HaveCount 1
         $issues[0].number | Should -Be 42
         $issues[0].url | Should -Be 'https://github.com/Azure/azure-verified-modules-tools/issues/42'
         $issues[0].body | Should -Be 'Failed run.'
         Should -Invoke Invoke-RepositoryGitHub -Times 1 -ParameterFilter {
             $Arguments -contains '--paginate' -and $Arguments -notcontains '--limit'
+        }
+    }
+
+    It 'preserves the Bicep sweep issue lookup' {
+        Mock Invoke-RepositoryGitHub {
+            @([pscustomobject]@{ number = 42; title = '[Failed pipeline] avm.res.storage.storage-account' })
+        }
+        @(Get-AvmWorkflowFailureOpenIssues -Repository 'Azure/bicep-registry-modules') | Should -HaveCount 1
+        Should -Invoke Invoke-RepositoryGitHub -Times 1 -ParameterFilter {
+            $Arguments -contains 'issue' -and $Arguments -contains 'list' -and $Arguments -contains '500'
         }
     }
 }
@@ -171,10 +181,18 @@ Describe 'Resolve-AvmWorkflowFailureRouting' {
     ) {
         $script:run.conclusion = $Conclusion
         $routing = Resolve-AvmWorkflowFailureRouting -WorkflowRun $script:run `
-            -ExistingIssues @([pscustomobject]@{ number = 1 }) -Owners @() -IsModule $false
+            -ExistingIssues @([pscustomobject]@{ number = 1 }) -Owners @() -IsModule $false `
+            -PlatformTeam 'Azure/azure-verified-modules-engineering-owners'
         $routing.IssuesToClose | Should -HaveCount 0
         $routing.CreateIssueTitle | Should -BeNullOrEmpty
         $routing.CommentBody | Should -BeNullOrEmpty
+    }
+
+    It 'preserves the Bicep sweep handling of non-failure conclusions' {
+        $script:run.conclusion = 'cancelled'
+        $routing = Resolve-AvmWorkflowFailureRouting -WorkflowRun $script:run `
+            -ExistingIssues @([pscustomobject]@{ number = 1 }) -Owners @() -IsModule $true
+        $routing.IssuesToClose | Should -HaveCount 1
     }
 
     It 'alerts engineering owners for a maintenance <Conclusion> without requiring module labels' -ForEach @(
@@ -554,11 +572,8 @@ Describe 'Workflow failure issue management workflow safety' {
         $script:triggerBlock | Should -Not -Match '(?m)^\s{2}workflow_run:'
     }
 
-    It 'delegates maintenance-only manual previews without executing the privileged Bicep sweep' {
-        $script:workflowText | Should -Match 'inputs.critical_only != true'
-        $script:workflowText | Should -Match 'inputs.critical_only == true'
-        $script:workflowText | Should -Match 'uses: \./\.github/workflows/repository-management-maintenance-alerts.yml'
-        $script:workflowText | Should -Match 'what_if: \$\{\{ inputs.what_if \}\}'
+    It 'does not delegate Tools maintenance checks from the Bicep sweep' {
+        $script:workflowText | Should -Not -Match 'critical_only|maintenance-alerts'
     }
 
     Describe 'Maintenance workflow failure alert safety' {
@@ -580,7 +595,7 @@ Describe 'Workflow failure issue management workflow safety' {
             $script:alertTriggers | Should -Match 'types: \[completed\]'
             $script:alertTriggers | Should -Match "cron: '47 5 \* \* \*'"
             $script:alertTriggers | Should -Match 'workflow_dispatch:'
-            $script:alertTriggers | Should -Match 'workflow_call:'
+            $script:alertTriggers | Should -Not -Match 'workflow_call:'
         }
 
         It 'uses trusted code and a same-repository token without app credentials or artifact downloads' {

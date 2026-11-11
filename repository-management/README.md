@@ -58,11 +58,8 @@ comment linking to that run and closes the issue. The existing daily Bicep modul
 failure sweep and owner routing remain separate and do not re-trigger runs.
 Team members still control notification delivery in their GitHub settings.
 
-Manual runs default to `what_if: true`. Before the new workflow reaches the
-default branch, use `Repos: Workflow Failures` with `critical_only: true`
-and `what_if: true` on the feature branch to exercise the same reusable
-alert workflow without scanning Bicep module workflows or writing issues.
-The new alert workflow does not monitor itself; retain native Actions
+Manual runs default to `what_if: true`. The alert workflow does not monitor
+itself; retain native Actions
 failure notifications for its owner.
 Keep the internal Azure-Verified-Modules-Docs operations guidance aligned
 with this alert ownership and incident lifecycle.

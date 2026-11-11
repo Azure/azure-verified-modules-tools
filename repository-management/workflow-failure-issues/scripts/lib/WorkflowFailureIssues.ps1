@@ -142,8 +142,18 @@ function Get-AvmWorkflowFailureOpenIssues {
     #>
     [CmdletBinding()]
     [OutputType([object[]])]
-    param([Parameter(Mandatory)] [string] $Repository)
+    param(
+        [Parameter(Mandatory)] [string] $Repository,
+        [switch] $Maintenance
+    )
 
+    if (-not $Maintenance) {
+        $issues = @(Invoke-RepositoryGitHub -AsJson -Arguments @(
+                'issue', 'list', '--repo', $Repository, '--state', 'open', '--limit', '500',
+                '--json', 'number,title,url,createdAt,labels'
+            ))
+        return @($issues | Where-Object { $_.title -and $_.title.StartsWith($script:AvmWorkflowFailureIssueTitlePrefix) })
+    }
     $issues = @(Invoke-RepositoryGitHub -AsJson -Arguments @(
         'api', '--paginate', "repos/$Repository/issues?state=open&per_page=100", '--hostname', 'github.com'
     ))
@@ -224,7 +234,12 @@ function Resolve-AvmWorkflowFailureRouting {
     # runs under Set-StrictMode -Version 3, under which dot-notation access to an absent hashtable
     # key throws PropertyNotFoundException rather than returning $null.
     $result = @{
-        IsFailure             = Test-AvmWorkflowFailureConclusion -Conclusion $WorkflowRun.conclusion
+        IsFailure             = if ($PlatformTeam) {
+            Test-AvmWorkflowFailureConclusion -Conclusion $WorkflowRun.conclusion
+        }
+        else {
+            $WorkflowRun.conclusion -ceq 'failure'
+        }
         BelowThreshold        = $false
         IssuesToClose         = @()
         CloseComment          = $null
@@ -241,7 +256,7 @@ function Resolve-AvmWorkflowFailureRouting {
 
     if (-not $result.IsFailure) {
         # A successful run closes every open issue that was tracking this workflow's failures.
-        if ($WorkflowRun.conclusion -ceq 'success') {
+        if (-not $PlatformTeam -or $WorkflowRun.conclusion -ceq 'success') {
             $result.IssuesToClose = @($ExistingIssues)
             $result.CloseComment = "Successful run: $runUrl"
         }
@@ -349,7 +364,7 @@ function Set-AvmWorkflowFailureIssueForRun {
         $newest = @($ExistingIssues | Sort-Object -Property 'createdAt' -Descending)[0]
         $existingCommentBodiesToday = @(Get-AvmWorkflowFailureIssueCommentsToday -Repository $Repository `
             -Number $newest.number -All:([bool]$PlatformTeam))
-        if ($null -ne $newest.PSObject.Properties['body']) {
+        if ($PlatformTeam -and $null -ne $newest.PSObject.Properties['body']) {
             $existingCommentBodiesToday += [string]$newest.body
         }
     }
@@ -526,9 +541,9 @@ function Invoke-AvmWorkflowFailureIssues {
     try {
         $workflows = @(Get-AvmWorkflowFailureWorkflows -Repository $Repository -WorkflowName $WorkflowName)
         Write-Verbose "Evaluating [$($workflows.Count)] workflow(s) in [$Repository]." -Verbose
-        $openIssues = @(Get-AvmWorkflowFailureOpenIssues -Repository $Repository)
+        $openIssues = @(Get-AvmWorkflowFailureOpenIssues -Repository $Repository -Maintenance:([bool]$PlatformTeam))
         $catalogIndex = @{}
-        if (@($workflows | Where-Object { $null -ne (Get-AvmWorkflowFailureModuleReference -WorkflowName $_.name) }).Count -gt 0) {
+        if (-not $PlatformTeam -or @($workflows | Where-Object { $null -ne (Get-AvmWorkflowFailureModuleReference -WorkflowName $_.name) }).Count -gt 0) {
             $catalogIndex = Get-AvmReviewerRoutingCatalogIndex -Repository $Repository
         }
     }

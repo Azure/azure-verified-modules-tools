@@ -22,12 +22,6 @@ on:
         description: 'Report planned failure issue updates without changing issues or notifying the team.'
         type: boolean
         default: true
-  workflow_call:
-    inputs:
-      what_if:
-        type: boolean
-        default: true
-
 permissions:
   contents: read
   actions: read

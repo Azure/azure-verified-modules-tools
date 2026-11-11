@@ -13,10 +13,6 @@ on:
     - cron: '41 5 * * *'
   workflow_dispatch:
     inputs:
-      critical_only:
-        description: 'Check only Tools maintenance workflows, without sweeping Bicep module workflows.'
-        default: false
-        type: boolean
       what_if:
         description: 'Compute and log the create/comment/close decisions without calling gh issue create/comment/edit/close.'
         default: true
@@ -35,9 +31,7 @@ defaults:
 jobs:
   manage-issues:
     name: Manage workflow failure issues
-    if: >-
-      github.repository == 'Azure/azure-verified-modules-tools' &&
-      inputs.critical_only != true
+    if: github.repository == 'Azure/azure-verified-modules-tools'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: avm
@@ -79,14 +73,3 @@ jobs:
             -WhatIf:$whatIf
 
           $global:LASTEXITCODE = 0
-
-  maintenance-preview:
-    name: Check maintenance workflow alerts
-    if: github.repository == 'Azure/azure-verified-modules-tools' && inputs.critical_only == true
-    permissions:
-      contents: read
-      actions: read
-      issues: write
-    uses: ./.github/workflows/repository-management-maintenance-alerts.yml
-    with:
-      what_if: ${{ inputs.what_if }}
