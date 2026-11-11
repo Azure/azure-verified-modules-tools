@@ -168,6 +168,8 @@ Providers required by state:
             @{ Shape = 'backend separated by comments'; File = 'backend.tf'; Text = 'terraform { backend /* preserve */ "azurerm" {} }' }
             @{ Shape = 'cloud execution'; File = 'main.tf'; Text = "terraform { cloud # authored`n { organization = `"example`" } }" }
             @{ Shape = 'state store'; File = 'main.tf'; Text = 'terraform { state_store "azure" "example" {} }' }
+            @{ Shape = 'state-store provider'; File = 'main.tf'; Text = 'terraform { state_store_provider "azure" {} }' }
+            @{ Shape = 'unterminated HCL comment'; File = 'main.tf'; Text = 'locals { value = /*' }
             @{ Shape = 'JSON backend'; File = 'main.tf.json'; Text = '{"terraform":{"backend":{"azurerm":{}}}}' }
             @{ Shape = 'JSON cloud'; File = 'main.tf.json'; Text = '{"terraform":{"cloud":{"organization":"example"}}}' }
             @{ Shape = 'JSON provider'; File = 'main.tf.json'; Text = '{"provider":{"modtm":{}}}' }
@@ -192,6 +194,28 @@ Providers required by state:
                 Should -Invoke Invoke-AvmProcess -Exactly 0
                 Should -Invoke Invoke-AvmTerraformInit -Exactly 0
                 $Fixture.Options.InspectionRoot | Should -Not -Exist
+            }
+        }
+
+        It 'ignores remote-state words in comments and strings' {
+            Set-Content -LiteralPath (Join-Path $script:fixture.Child 'main.tf') -Encoding utf8NoBOM -Value @'
+locals = {
+  # backend
+  // state_store is not a declaration in this comment.
+  /* cloud is not a declaration in this comment. */
+  # The quoted map key below is not a backend declaration.
+  "state_key" = "value"
+  state_hint = "cloud { organization = example }"
+}
+'@
+            $script:fixture.Options.EnvVars['AVM_TEST_INSPECTION_JSON'] = "Providers required by configuration:`n."
+            InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {
+                param($Fixture)
+                @(Get-AvmTerraformUnitTestProviderSource -Path $Fixture.Child `
+                        -ModuleTargets $Fixture.Targets -Options $Fixture.Options) | Should -HaveCount 0
+                Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -ceq 'get' }
+                Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -ceq 'providers' }
+                Should -Invoke Invoke-AvmTerraformInit -Exactly 0
             }
         }
 
