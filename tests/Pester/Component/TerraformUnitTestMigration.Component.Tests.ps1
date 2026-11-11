@@ -219,6 +219,20 @@ locals = {
             }
         }
 
+        It 'inspects an empty Terraform file without treating it as remote state' {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $script:fixture.Child 'main.tf'), '', [System.Text.UTF8Encoding]::new($false))
+            $script:fixture.Options.EnvVars['AVM_TEST_INSPECTION_JSON'] = "Providers required by configuration:`n."
+            InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:fixture } {
+                param($Fixture)
+                @(Get-AvmTerraformUnitTestProviderSource -Path $Fixture.Child `
+                        -ModuleTargets $Fixture.Targets -Options $Fixture.Options) | Should -HaveCount 0
+                Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -ceq 'get' }
+                Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -ceq 'providers' }
+                Should -Invoke Invoke-AvmTerraformInit -Exactly 0
+            }
+        }
+
         It 'inspects providers with <Shape> without changing JSON' -TestCases @(
             @{ Shape = 'locals-only region data'; Json = '{"locals":{"geo_codes_by_name":{"eastus":"US"}}}' }
             @{ Shape = 'locals-only block arrays'; Json = '{"locals":[{"region":"eastus"},{"code":"${local.region}"}]}' }

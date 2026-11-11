@@ -689,7 +689,7 @@ function Test-AvmTerraformRemoteStateDeclaration {
     [CmdletBinding()]
     [OutputType([bool])]
     param(
-        [Parameter(Mandatory)] [string] $Text,
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Text,
         [Parameter(Mandatory)] [string] $Path
     )
 
