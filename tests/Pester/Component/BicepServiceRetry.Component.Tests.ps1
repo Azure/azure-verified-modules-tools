@@ -188,7 +188,7 @@ Describe 'Component: Bicep native service retry <Kind>' -Tag Component -ForEach 
             'history authorization' { $script:fixture.OperationLookupDenied = $true }
         }
         $result = Invoke-AvmTestE2e @script:options
-        $result.Status | Should -Be 'fail'
+        $result.Status | Should -Be $(if ($Obstacle -eq 'resource removal') { 'pass' } else { 'fail' })
         $result.CleanupPending.Count | Should -BeGreaterThan 0
         $attempts = if ($Obstacle -eq 'resource removal') { 2 } else { 1 }
         @($script:fixture.NativeInputs | Where-Object Operation -eq 'Create').Count | Should -Be $attempts

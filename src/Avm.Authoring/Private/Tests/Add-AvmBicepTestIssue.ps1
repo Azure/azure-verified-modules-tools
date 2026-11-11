@@ -14,6 +14,9 @@ function Add-AvmBicepTestIssue {
         [Parameter(Mandatory)]
         [string] $Message,
 
+        [ValidateSet('error', 'warning')]
+        [string] $Severity = 'error',
+
         [int] $Line = 0
     )
 
@@ -21,7 +24,7 @@ function Add-AvmBicepTestIssue {
     $ErrorActionPreference = 'Stop'
 
     $Issues.Add([pscustomobject][ordered]@{
-            File = $File; Line = $Line; Column = 0; Severity = 'error'
+            File = $File; Line = $Line; Column = 0; Severity = $Severity
             Code = "avm.bicep.e2e-$Code"; Message = $Message
         })
 }

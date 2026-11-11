@@ -157,21 +157,29 @@ function Complete-AvmBicepTestCase {
                         }
                         foreach ($issue in $cleanup.Issues) {
                             Add-AvmBicepTestIssue -Issues $issues -File $Item.Case.RelativePath `
-                                -Code 'cleanup-failed' -Message $issue.Message
+                                -Code 'cleanup-failed' -Message $issue.Message -Severity warning
+                        }
+                        if (-not $cleanup.Cleaned) {
+                            $message = "Cleanup did not complete; retain the state at '$StatePath' for recovery."
+                            if ($cleanup.Issues.Count -eq 0) {
+                                Add-AvmBicepTestIssue -Issues $issues -File $Item.Case.RelativePath `
+                                    -Code 'cleanup-failed' -Message $message -Severity warning
+                            }
+                            Write-AvmLog -Level Warning -Message $message
                         }
                     }
                 }
             }
         }
-        $passed = $succeeded -and $issues.Count -eq 0 -and
+        $passed = $succeeded -and @($issues | Where-Object Severity -EQ 'error').Count -eq 0 -and
         @($assertions | Where-Object Status -EQ 'fail').Count -eq 0 -and
-        @($posts | Where-Object Status -EQ 'fail').Count -eq 0 -and
-        ($completionOptions.KeepResources -or ($null -ne $cleanup -and $cleanup.Cleaned))
+        @($posts | Where-Object Status -EQ 'fail').Count -eq 0
         [pscustomobject]@{
-            Status         = if ($passed) { 'pass' } else { 'fail' }
+            Status          = if ($passed) { 'pass' } else { 'fail' }
             AssertionResults = $assertions.ToArray(); PostResults = $posts.ToArray()
-            CleanupPending = @(if ($null -ne $cleanup) { $cleanup.Pending })
-            CleanupDeferred  = $completionOptions.KeepResources; StatePath = $StatePath; Issues = $issues.ToArray()
+            CleanupPending  = @(if ($null -ne $cleanup) { $cleanup.Pending })
+            CleanupDeferred = $completionOptions.KeepResources -or ($null -ne $cleanup -and -not $cleanup.Cleaned)
+            StatePath        = $StatePath; Issues = $issues.ToArray()
         }
     } -Confirm:$false
 }

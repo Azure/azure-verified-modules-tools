@@ -175,33 +175,111 @@ Describe 'Component: Bicep native end-to-end workflow' -Tag Component {
     It 'retains an unverified owned group and its children instead of broad deletion' {
         $script:fixture.OwnershipMismatch = $true
         $result = Invoke-AvmTestE2e @script:options
-        $result.Status | Should -Be 'fail'
+        $result.Status | Should -Be 'pass'
         $result.CleanupPending.Count | Should -BeGreaterThan 0
         @($script:fixture.Calls | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 0
     }
 
-    It 'stops later cases when cleanup fails and keeps its state outside temporary staging' {
+    It 'continues later cases after cleanup failures and retains each state' -ForEach @(
+        @{ DeploymentMode = 'success'; ExpectedStatus = 'pass' }
+        @{ DeploymentMode = 'failed'; ExpectedStatus = 'fail' }
+    ) {
         $next = Join-Path $script:fixture.Root 'tests' 'e2e' 'next'
         $null = New-Item -ItemType Directory -Path $next
         Set-Content -LiteralPath (Join-Path $next 'main.test.bicep') -Value 'param name string'
         $script:fixture.StatePath = ''
         $script:options.Remove('CleanupStatePath')
         $script:fixture.CleanupFails = $true
+        $script:fixture.CreateMode = $DeploymentMode
+        $result = Invoke-AvmTestE2e @script:options -DeploymentRetryLimit 1
+        $result.Status | Should -Be $ExpectedStatus
+        $result.RunsTotal | Should -Be 2
+        $result.RunsPassed | Should -Be $(if ($DeploymentMode -eq 'success') { 2 } else { 0 })
+        $result.RunsFailed | Should -Be $(if ($DeploymentMode -eq 'failed') { 2 } else { 0 })
+        $result.RunsSkipped | Should -Be 0
+        $result.CleanupStatePaths.Count | Should -Be 2
+        foreach ($path in $result.CleanupStatePaths) {
+            Test-Path -LiteralPath $path | Should -BeTrue
+            (Get-Content -LiteralPath $path -Raw | ConvertFrom-Json).status | Should -Be 'CleanupPending'
+        }
+        @($result.Issues | Where-Object {
+                $_.Code -eq 'avm.bicep.e2e-cleanup-failed' -and $_.Severity -eq 'warning'
+            }).Count | Should -BeGreaterThan 1
+        @($script:fixture.Calls | Where-Object { $_ -eq 'create' }).Count | Should -Be 2
+    }
+
+    It 'never reports a case with <CaseStatus> status as passed' -ForEach @(
+        @{ CaseStatus = 'skipped'; ExpectedSkipped = 1; ExpectedFailed = 0 }
+        @{ CaseStatus = 'unexpected'; ExpectedSkipped = 0; ExpectedFailed = 1 }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ CaseStatus = $CaseStatus } {
+            param($CaseStatus)
+            $script:caseStatus = $CaseStatus
+            Mock Invoke-AvmBicepNativeTestCase {
+                [pscustomobject]@{
+                    Status = $script:caseStatus; AssertionResults = @(); PostResults = @()
+                    CleanupPending = @(); CleanupDeferred = $false; StatePath = ''; Issues = @()
+                }
+            }
+        }
         $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'fail'
-        $result.RunsFailed | Should -Be 1
-        $result.RunsSkipped | Should -Be 1
-        $result.CleanupPending | Should -Contain $script:fixture.CreatedId
-        $result.CleanupStatePaths.Count | Should -Be 1
-        Test-Path -LiteralPath $result.CleanupStatePaths[0] | Should -BeTrue
-        @($script:fixture.Calls | Where-Object { $_ -eq 'create' }).Count | Should -Be 1
+        $result.RunsPassed | Should -Be 0
+        $result.RunsSkipped | Should -Be $ExpectedSkipped
+        $result.RunsFailed | Should -Be $ExpectedFailed
     }
 
     It 'retains the parent group when deployment-operation discovery is incomplete' {
         $script:fixture.MissingOperations = $true
         $result = Invoke-AvmTestE2e @script:options
-        $result.Status | Should -Be 'fail'
+        $result.Status | Should -Be 'pass'
         $result.CleanupPending | Should -Contain $script:fixture.LastDeploymentId
+        @($script:fixture.Calls | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 0
+    }
+
+    It 'warns and retains state after a successful <Phase> run with a persistent cleanup 403' -ForEach @(
+        @{ Phase = 'All' }, @{ Phase = 'Complete' }
+    ) {
+        if ($Phase -eq 'Complete') {
+            (Invoke-AvmTestE2e @script:options -Phase Deploy).Status | Should -Be 'pass'
+        }
+        $script:fixture.OperationLookupDenied = $true
+        InModuleScope Avm.Authoring { Mock Write-AvmLog {} }
+        $result = if ($Phase -eq 'All') {
+            Invoke-AvmTestE2e @script:options
+        }
+        else {
+            Invoke-AvmTestE2e -Path $script:fixture.Root -Phase Complete -CleanupStatePath $script:fixture.StatePath `
+                -SubscriptionId $script:options.SubscriptionId -TenantId $script:options.TenantId -SkipModuleVersionCheck
+        }
+        $result.Status | Should -Be 'pass'
+        $result.RunsPassed | Should -Be 1
+        $result.CleanupDeferred | Should -BeTrue
+        $result.CleanupPending | Should -Contain $script:fixture.LastDeploymentId
+        $result.CleanupStatePaths | Should -Contain $script:fixture.StatePath
+        @($result.Issues | Where-Object {
+                $_.Code -eq 'avm.bicep.e2e-cleanup-failed' -and $_.Severity -eq 'warning'
+            }).Count | Should -BeGreaterThan 0
+        (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).status | Should -Be 'CleanupPending'
+        @($script:fixture.Calls | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 0
+        InModuleScope Avm.Authoring {
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                $Level -eq 'Warning' -and $Message -like '*Cleanup did not complete*for recovery*'
+            }
+        }
+    }
+
+    It 'still fails a deployment when its cleanup also returns persistent 403' {
+        $script:fixture.CreateMode = 'failed'
+        $script:fixture.OperationLookupDenied = $true
+        $result = Invoke-AvmTestE2e @script:options -DeploymentRetryLimit 1
+        $result.Status | Should -Be 'fail'
+        $result.RunsFailed | Should -Be 1
+        $result.CleanupPending | Should -Contain $script:fixture.LastDeploymentId
+        @($result.Issues | Where-Object {
+                $_.Code -eq 'avm.bicep.e2e-deployment-failed' -and $_.Severity -eq 'error'
+            }).Count | Should -BeGreaterThan 0
+        (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).status | Should -Be 'CleanupPending'
         @($script:fixture.Calls | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 0
     }
 

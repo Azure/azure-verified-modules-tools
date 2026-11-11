@@ -37,7 +37,16 @@ function Remove-AvmBicepResource {
 
     if ($Type -ine 'Microsoft.Management/managementGroups' -and
         $PSCmdlet.ShouldProcess("Possible locks on resource with ID [$ResourceId]", 'Handle')) {
-        Remove-AvmBicepResourceLock -ResourceId $ResourceId -Type $Type
+        try {
+            Remove-AvmBicepResourceLock -ResourceId $ResourceId -Type $Type
+        }
+        catch {
+            if ((Get-AvmBicepDeploymentErrorKind -ErrorRecord $_) -eq 'Cancellation' -or
+                $_.FullyQualifiedErrorId.Split(',')[0] -eq 'AvmBicepContextRestoreFailed') { throw }
+            $PSCmdlet.ThrowTerminatingError(
+                [System.Management.Automation.ErrorRecord]::new(
+                    $_.Exception, 'AvmBicepLockValidationFailed', $_.CategoryInfo.Category, $_.TargetObject))
+        }
     }
 
     switch ($Type) {

@@ -51,7 +51,7 @@ function Invoke-AvmTestE2e {
         before submission or removal. The state contains no credentials,
         parameters or outputs, and survives temporary-template removal.
         Final cleanup covers every attempt, including failed attempts.
-        Incomplete cleanup reports pending IDs and stops subsequent cases.
+        Incomplete cleanup warns, reports pending IDs and allows later cases to run.
         The reaper is a fallback, not the normal cleanup mechanism.
 
         All runs the complete lifecycle. Deploy retains all attempts and state
@@ -181,7 +181,9 @@ function Invoke-AvmTestE2e {
     .OUTPUTS
         Engine result with Status, Issues and run counts. Bicep also returns
         Phase, AssertionResults, PostResults, CleanupPending, CleanupDeferred
-        and CleanupStatePaths. Deployment outputs and parameters are not returned.
+        and CleanupStatePaths. Cleanup failures are warnings and retain state for
+        recovery; later cases continue. Deployment and assertion failures remain
+        errors. Outputs and parameters are not returned.
 
     .EXAMPLE
         avm test e2e --list

@@ -477,9 +477,11 @@ Describe 'Component: Bicep concurrent-case native ownership' -Tag Component {
     It 'refuses cleanup after group ownership changes, including child removal' {
         $script:fixture.RetagDuringMetadata = $true
         $result = Invoke-AvmTestE2e @script:nativeOptions -UseCiInputs
-        $result.Status | Should -BeExactly 'fail'
+        $result.Status | Should -BeExactly 'pass'
         @($script:fixture.Calls | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 0
         $result.CleanupPending.Count | Should -BeGreaterThan 0
+        $result.CleanupDeferred | Should -BeTrue
+        (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).status | Should -Be 'CleanupPending'
     }
 
     It 'refuses submission when the freshly created group no longer has the expected owner' {
@@ -495,8 +497,10 @@ Describe 'Component: Bicep concurrent-case native ownership' -Tag Component {
         $foreign = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/foreign/providers/Microsoft.Resources/deployments/shared'
         $script:fixture.AdditionalRootResources = @($foreign)
         $result = Invoke-AvmTestE2e @script:nativeOptions -UseCiInputs
-        $result.Status | Should -BeExactly 'fail'
+        $result.Status | Should -BeExactly 'pass'
         $result.Issues.Message -join ' ' | Should -Match 'outside the verified ownership boundary'
+        $result.CleanupDeferred | Should -BeTrue
+        (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).status | Should -Be 'CleanupPending'
         @($script:fixture.RestInputs | Where-Object { $_.Path -like "$foreign/*" }).Count | Should -Be 0
         @($script:fixture.Calls | Where-Object { $_ -like 'remove:*foreign*' }).Count | Should -Be 0
     }

@@ -256,9 +256,14 @@ Describe 'Bicep native completion decisions' {
         InModuleScope Avm.Authoring {
             Mock Invoke-AvmBicepCleanup { throw [IO.IOException]::new('state unavailable') }
             $result = Complete-AvmBicepTestCase @script:completionInput
-            $result.Status | Should -Be 'fail'
+            $result.Status | Should -Be 'pass'
             $result.CleanupPending | Should -Be @($script:completionState.deployments[0].id)
+            $result.CleanupDeferred | Should -BeTrue
             $result.Issues[0].Code | Should -Be 'avm.bicep.e2e-cleanup-failed'
+            $result.Issues[0].Severity | Should -Be 'warning'
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                $Level -eq 'Warning' -and $Message -like '*Cleanup did not complete*never-opened.json*'
+            }
         }
     }
 

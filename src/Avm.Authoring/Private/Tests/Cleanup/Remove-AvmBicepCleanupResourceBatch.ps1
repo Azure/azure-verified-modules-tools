@@ -85,12 +85,13 @@ function Remove-AvmBicepCleanupResourceBatch {
             if (-not $resource['metadataCaptured'] -or $resource['postProcessed'] -or
                 $blocked.Contains($resource['id'])) { continue }
             $unpreparedChildren = @($byId.Values | Where-Object {
-                    (-not $_['metadataCaptured'] -or $blocked.Contains($_['id'])) -and $_['id'].StartsWith(
+                    $unresolved = -not $_['metadataCaptured'] -or $blocked.Contains($_['id']) -or ($issues.ContainsKey($_['id']) -and $issues[$_['id']].Phase -eq 'lock')
+                    $unresolved -and $_['id'].StartsWith(
                         $resource['id'] + '/', [System.StringComparison]::OrdinalIgnoreCase)
                 })
             if ($unpreparedChildren.Count -gt 0) {
                 $issues[$resource['id']] = [pscustomobject]@{
-                    ResourceId = $resource['id']; Phase = 'metadata'; Message = 'Child cleanup must be allowed and its metadata captured before removing its parent.'
+                    ResourceId = $resource['id']; Phase = 'metadata'; Message = 'Child cleanup must be allowed and validated before removing its parent.'
                 }
                 continue
             }
@@ -124,16 +125,19 @@ function Remove-AvmBicepCleanupResourceBatch {
                             $_.FullyQualifiedErrorId.Split(',')[0] -eq 'AvmBicepContextRestoreFailed') {
                             throw
                         }
-                        if ((Get-AvmBicepAzureErrorStatus -ErrorRecord $_) -eq 404) {
+                        $lockValidationFailed = $_.FullyQualifiedErrorId.Split(',')[0] -eq 'AvmBicepLockValidationFailed'
+                        if (-not $lockValidationFailed -and (Get-AvmBicepAzureErrorStatus -ErrorRecord $_) -eq 404) {
                             $resource['removed'] = $true
                             Write-AvmLog -Level Info -Message "Skipped ${resourceName}: already absent."
                         }
                         else {
                             $issues[$resource['id']] = [pscustomobject]@{
-                                ResourceId = $resource['id']; Phase = 'remove'; Message = $_.Exception.Message
+                                ResourceId = $resource['id']
+                                Phase      = if ($lockValidationFailed) { 'lock' } else { 'remove' }
+                                Message    = $_.Exception.Message
                             }
                             Write-AvmLog -Message "Removal failed for '$($resource['id'])': $($_.Exception.Message)" -Level Warning
-                            if ($_.Exception -is [AvmConfigurationException]) { continue }
+                            if ($lockValidationFailed -or $_.Exception -is [AvmConfigurationException]) { continue }
                         }
                     }
                 }

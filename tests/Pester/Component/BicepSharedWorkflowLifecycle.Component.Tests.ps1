@@ -49,6 +49,22 @@ Describe 'Component: Bicep shared workflow native lifecycle' -Tag Component {
     }
     AfterEach { Remove-NativeBicepWorkflowFixture -Fixture $script:fixture }
 
+    It 'publishes a passing completion and retained recovery state when cleanup is denied' {
+        Invoke-AvmWorkflowE2e @script:parameters -Phase Deploy -Example 'tests/e2e/defaults/main.test.bicep' -Confirm:$false
+        $script:fixture.OperationLookupDenied = $true
+        Invoke-AvmWorkflowE2e @script:parameters -Phase Complete -Confirm:$false
+
+        $result = Get-Content -LiteralPath (Join-Path $script:parameters.ResultDirectory 'complete.json') -Raw | ConvertFrom-Json
+        $result.Status | Should -Be 'pass'
+        $result.CleanupDeferred | Should -BeTrue
+        $result.CleanupPending | Should -Contain $script:fixture.LastDeploymentId
+        @($result.Issues | Where-Object {
+                $_.Code -eq 'avm.bicep.e2e-cleanup-failed' -and $_.Severity -eq 'warning'
+            }).Count | Should -BeGreaterThan 0
+        (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).status | Should -Be 'CleanupPending'
+        @($script:fixture.Calls | Where-Object { $_ -like 'remove:*' }).Count | Should -Be 0
+    }
+
     It 'completes exhausted deployment once, retaining failure and cleaning every attempt after the final post (<Mode>)' -ForEach @(
         @{ Mode = 'Fresh'; Failure = 'Regional'; Records = 3 }
         @{ Mode = 'InPlace'; Failure = 'Transient'; Records = 1 }

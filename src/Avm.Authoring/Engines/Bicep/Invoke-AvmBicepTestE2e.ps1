@@ -294,7 +294,6 @@ function Invoke-AvmBicepTestE2e {
                         $null = $registeredProviders.Add("$($item.SubscriptionId):$($requirement.FullName)")
                     }
                 }
-                if ($run.CleanupPending.Count -gt 0) { break }
             }
         }
         finally {
@@ -307,14 +306,14 @@ function Invoke-AvmBicepTestE2e {
     $result.FilesProcessed = $runs.Count
     $result.RunsTotal = $runs.Count
     $result.RunsPassed = @($runs | Where-Object Status -EQ 'pass').Count
-    $result.RunsFailed = @($runs | Where-Object Status -EQ 'fail').Count
-    $result.RunsSkipped = $cases.Count - $runs.Count
+    $result.RunsFailed = @($runs | Where-Object { $_.Status -notin @('pass', 'skipped') }).Count
+    $result.RunsSkipped = $cases.Count - $runs.Count + @($runs | Where-Object Status -EQ 'skipped').Count
     $result.AssertionResults = @($runs | ForEach-Object { $_.AssertionResults })
     $result.PostResults = @($runs | ForEach-Object { $_.PostResults })
     $result.CleanupPending = @($runs | ForEach-Object { $_.CleanupPending } | Select-Object -Unique)
     $result.CleanupStatePaths = @($runs | ForEach-Object { $_.StatePath })
     $result.CleanupDeferred = @($runs | Where-Object CleanupDeferred).Count -gt 0
     $result.Issues = @($runs | ForEach-Object { $_.Issues })
-    $result.Status = if ($result.RunsFailed -gt 0 -or $result.CleanupPending.Count -gt 0) { 'fail' } else { 'pass' }
+    $result.Status = if ($result.RunsFailed -gt 0 -or $result.RunsSkipped -gt 0) { 'fail' } else { 'pass' }
     return [pscustomobject]$result
 }

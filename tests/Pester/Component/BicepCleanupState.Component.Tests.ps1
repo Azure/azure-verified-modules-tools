@@ -813,6 +813,49 @@ Describe 'Component: Bicep cleanup state and context' -Tag Component {
         }
     }
 
+    It 'retains a management group after child lock validation returns HTTP <Status> and resumes' -ForEach @(
+        @{ Status = 403 }, @{ Status = 404 }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ File = $script:statePath; Status = $Status } {
+            param($File, $Status)
+            $created = New-AvmBicepCleanupState -Path $File -Environment AzureCloud `
+                -SubscriptionId '00000000-0000-0000-0000-000000000001' `
+                -TenantId '00000000-0000-0000-0000-000000000002'
+            $script:parent = '/providers/Microsoft.Management/managementGroups/created'
+            $script:child = "$script:parent/providers/Microsoft.Authorization/policySetDefinitions/example"
+            foreach ($resource in ConvertTo-AvmBicepCleanupResource -ResourceIds @($script:parent, $script:child)) {
+                $created.State.resources.Add(@{
+                        id = $resource.resourceId; type = $resource.type
+                        removed = $false; postProcessed = $false; metadataCaptured = $true
+                        managedResourceGroupIds = @(); originalSoftDeleteFeatureState = ''
+                    })
+            }
+            Save-AvmBicepCleanupState -State $created.State -Path $File
+            $script:denyChild = $true
+            $script:lockStatus = [Net.HttpStatusCode]$Status
+            Mock Remove-AvmBicepResource {
+                if ($ResourceId -eq $script:child -and $script:denyChild) {
+                    throw [System.Management.Automation.ErrorRecord]::new(
+                        [Net.Http.HttpRequestException]::new('Lock validation failed.', $null, $script:lockStatus),
+                        'AvmBicepLockValidationFailed', 'InvalidResult', $ResourceId)
+                }
+            }
+            Mock Remove-AvmBicepResourceRemainder {}
+            $first = Remove-AvmBicepCleanupResourceBatch -State $created.State -StatePath $File -RetryLimit 1
+            $first.Cleaned | Should -BeFalse
+            $first.Pending | Should -Contain $script:parent
+            $first.Pending | Should -Contain $script:child
+            Should -Invoke Remove-AvmBicepResource -Exactly 0 -ParameterFilter { $ResourceId -eq $script:parent }
+            Should -Invoke Remove-AvmBicepResourceRemainder -Exactly 0
+            @((Read-AvmBicepCleanupState -Path $File).resources | Where-Object { $_.removed }).Count | Should -Be 0
+
+            $script:denyChild = $false
+            $second = Remove-AvmBicepCleanupResourceBatch -State $created.State -StatePath $File -RetryLimit 1
+            $second.Cleaned | Should -BeTrue
+            Should -Invoke Remove-AvmBicepResource -Exactly 1 -ParameterFilter { $ResourceId -eq $script:parent }
+        }
+    }
+
     It 'propagates cancellation during <Phase> without retrying' -ForEach @(
         @{ Phase = 'metadata' }
         @{ Phase = 'remove' }
