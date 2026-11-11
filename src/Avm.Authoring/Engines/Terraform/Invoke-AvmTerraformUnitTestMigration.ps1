@@ -736,6 +736,159 @@ function Assert-AvmTerraformLocalsOnlyJson {
     }
 }
 
+function Test-AvmTerraformRemoteStateDeclaration {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Text,
+        [Parameter(Mandatory)] [string] $Path
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+    $tokens = [System.Collections.Generic.List[object]]::new()
+    $index = 0
+    while ($index -lt $Text.Length) {
+        $character = $Text[$index]
+        if ([char]::IsWhiteSpace($character)) {
+            $index++
+            continue
+        }
+        if ($character -eq '#') {
+            while ($index -lt $Text.Length -and $Text[$index] -notin @("`r", "`n")) { $index++ }
+            continue
+        }
+        if ($character -eq '/' -and $index + 1 -lt $Text.Length -and $Text[$index + 1] -eq '/') {
+            $index += 2
+            while ($index -lt $Text.Length -and $Text[$index] -notin @("`r", "`n")) { $index++ }
+            continue
+        }
+        if ($character -eq '/' -and $index + 1 -lt $Text.Length -and $Text[$index + 1] -eq '*') {
+            $end = $Text.IndexOf('*/', $index + 2, [System.StringComparison]::Ordinal)
+            if ($end -lt 0) {
+                throw [AvmConfigurationException]::new(
+                    "Cannot inspect provider dependencies for '$Path': unterminated HCL comment requires review before dependency inspection.")
+            }
+            $index = $end + 2
+            continue
+        }
+        if ($character -eq '"') {
+            $index++
+            $terminated = $false
+            while ($index -lt $Text.Length) {
+                if ($Text[$index] -eq '\') {
+                    $index += 2
+                    continue
+                }
+                if ($Text[$index] -eq '"') {
+                    $index++
+                    $terminated = $true
+                    break
+                }
+                if ($Text[$index] -in @("`r", "`n")) { break }
+                $index++
+            }
+            if (-not $terminated) {
+                throw [AvmConfigurationException]::new(
+                    "Cannot inspect provider dependencies for '$Path': unterminated HCL string requires review before dependency inspection.")
+            }
+            $tokens.Add([pscustomobject]@{ Kind = 'String'; Value = $null })
+            continue
+        }
+        if ($character -eq '<' -and $index + 1 -lt $Text.Length -and $Text[$index + 1] -eq '<') {
+            $header = [regex]::Match($Text.Substring($index),
+                '\A<<(?<trim>-?)(?<marker>[A-Za-z_][A-Za-z0-9_]*)[^\r\n]*(?:\r\n|\n|\r)')
+            if (-not $header.Success) {
+                throw [AvmConfigurationException]::new(
+                    "Cannot inspect provider dependencies for '$Path': malformed HCL heredoc requires review before dependency inspection.")
+            }
+            $index += $header.Length
+            $indent = if ($header.Groups['trim'].Value) { '[ \t]*' } else { '' }
+            $marker = [regex]::Escape($header.Groups['marker'].Value)
+            $terminator = [regex]::Match($Text.Substring($index),
+                "(?m)^$indent$marker[ \t]*(?:\r\n|\n|\r|$)")
+            if (-not $terminator.Success) {
+                throw [AvmConfigurationException]::new(
+                    "Cannot inspect provider dependencies for '$Path': unterminated HCL heredoc requires review before dependency inspection.")
+            }
+            $index += $terminator.Index + $terminator.Length
+            continue
+        }
+        if ([char]::IsLetter($character) -or $character -eq '_') {
+            $start = $index
+            $index++
+            while ($index -lt $Text.Length -and
+                ([char]::IsLetterOrDigit($Text[$index]) -or $Text[$index] -in @('_', '-'))) {
+                $index++
+            }
+            $tokens.Add([pscustomobject]@{ Kind = 'Word'; Value = $Text.Substring($start, $index - $start) })
+            continue
+        }
+        $kind = switch ($character) {
+            '{' { 'OpenBrace' }
+            '}' { 'CloseBrace' }
+            default { 'Other' }
+        }
+        $tokens.Add([pscustomobject]@{ Kind = $kind; Value = $null })
+        $index++
+    }
+
+    $depth = 0
+    $terraformDepth = $null
+    $pendingTerraform = $false
+    $declaration = $null
+    $hasLabel = $false
+    foreach ($token in $tokens) {
+        if ($pendingTerraform) {
+            $pendingTerraform = $false
+            if ($token.Kind -eq 'OpenBrace') {
+                $depth++
+                $terraformDepth = $depth
+                continue
+            }
+        }
+        if ($null -ne $declaration) {
+            if ($declaration -eq 'cloud' -and $token.Kind -eq 'OpenBrace') { return $true }
+            if ($declaration -ne 'cloud' -and $token.Kind -eq 'String') {
+                $hasLabel = $true
+                continue
+            }
+            if ($declaration -ne 'cloud' -and $hasLabel -and $token.Kind -eq 'OpenBrace') { return $true }
+            $declaration = $null
+            $hasLabel = $false
+        }
+        switch ($token.Kind) {
+            'OpenBrace' {
+                $depth++
+                continue
+            }
+            'CloseBrace' {
+                $depth--
+                if ($depth -lt 0) {
+                    throw [AvmConfigurationException]::new(
+                        "Cannot inspect provider dependencies for '$Path': malformed HCL block requires review before dependency inspection.")
+                }
+                if ($terraformDepth -eq $depth + 1) { $terraformDepth = $null }
+                continue
+            }
+            'Word' {
+                if ($depth -eq 0 -and $token.Value -ceq 'terraform') {
+                    $pendingTerraform = $true
+                }
+                elseif ($null -ne $terraformDepth -and $depth -eq $terraformDepth -and
+                    $token.Value -cin @('backend', 'state_store', 'state_store_provider', 'cloud')) {
+                    $declaration = $token.Value
+                }
+            }
+        }
+    }
+    if ($depth -ne 0) {
+        throw [AvmConfigurationException]::new(
+            "Cannot inspect provider dependencies for '$Path': malformed HCL block requires review before dependency inspection.")
+    }
+    return $false
+}
+
 function Get-AvmTerraformUnitTestProviderSource {
     [CmdletBinding()]
     [OutputType([string[]])]
@@ -756,17 +909,13 @@ function Get-AvmTerraformUnitTestProviderSource {
         throw [AvmConfigurationException]::new('Dependency inspection requires an owned temporary InspectionRoot.')
     }
     $files = @(Get-ChildItem -LiteralPath $Path -File)
-    $trivia = '(?:\s|#[^\r\n]*|//[^\r\n]*|/\*[\s\S]*?\*/)'
-    $stateDeclaration = '\b(?:backend|state_store|state_store_provider)' + $trivia + '+"' +
-    '|\bcloud' + $trivia + '*\{'
     foreach ($file in $files) {
         if ($file.Name.EndsWith('.tf.json', [System.StringComparison]::OrdinalIgnoreCase)) {
             Assert-AvmTerraformLocalsOnlyJson -Path $file.FullName `
                 -ReviewMessage "Cannot inspect provider dependencies for '$Path': JSON configuration requires review"
         }
         elseif ($file.Name.EndsWith('.tf', [System.StringComparison]::OrdinalIgnoreCase) -and
-            [regex]::IsMatch([System.IO.File]::ReadAllText($file.FullName), $stateDeclaration,
-                [System.Text.RegularExpressions.RegexOptions]::CultureInvariant, [TimeSpan]::FromSeconds(1))) {
+            (Test-AvmTerraformRemoteStateDeclaration -Text ([System.IO.File]::ReadAllText($file.FullName)) -Path $Path)) {
             throw [AvmConfigurationException]::new(
                 "Cannot inspect provider dependencies for '$Path': review possible backend/cloud declarations before running dependency inspection.")
         }
