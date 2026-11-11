@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "limits", "modes", "reads", "authorizationPropagation", "nestedRead", "observation", "regions", "wrappers", "rules"],
+  "required": ["schemaVersion", "limits", "modes", "reads", "unsupportedLockRead", "authorizationPropagation", "nestedRead", "observation", "regions", "wrappers", "rules"],
   "properties": {
     "schemaVersion": { "const": 1 },
     "modes": {
@@ -33,6 +33,13 @@
       "properties": {
         "attempts": { "type": "integer", "minimum": 1, "maximum": 3 },
         "initialDelaySeconds": { "type": "integer", "minimum": 0, "maximum": 60 }
+      }
+    },
+    "unsupportedLockRead": {
+      "type": "object", "additionalProperties": false, "required": ["statusCode", "errorCode"],
+      "properties": {
+        "statusCode": { "const": 400 },
+        "errorCode": { "const": "NoRegisteredProviderFound" }
       }
     },
     "authorizationPropagation": {

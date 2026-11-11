@@ -41,6 +41,20 @@ function Get-AvmBicepResourceLock {
                 if ($visited.Count -eq 1 -and ($status -is [int] -or $status -is [System.Net.HttpStatusCode]) -and [int]$status -eq 404) {
                     break
                 }
+                if ($visited.Count -eq 1 -and $Type -ine 'Microsoft.Authorization/locks' -and
+                    ($status -is [int] -or $status -is [System.Net.HttpStatusCode]) -and [int]$status -ge 400) {
+                    $unsupported = (Get-AvmBicepRetryPolicy)['unsupportedLockRead']
+                    if ([int]$status -eq $unsupported['statusCode']) {
+                        $document = ConvertFrom-AvmBicepRestResponse -Response $response -Activity 'Read resource locks' `
+                            -AllowedStatus @($unsupported['statusCode'])
+                        $errorNode = Get-AvmPropertyValue -InputObject $document -Name 'error' -NoEnumerate
+                        $code = Get-AvmPropertyValue -InputObject $errorNode -Name 'code' -NoEnumerate
+                        if ($errorNode -is [System.Collections.IDictionary] -and
+                            $code -is [string] -and $code -ceq $unsupported['errorCode']) {
+                            break
+                        }
+                    }
+                }
                 $document = ConvertFrom-AvmBicepRestResponse -Response $response -Activity 'Read resource locks'
                 if ($document['value'] -isnot [array]) {
                     throw [AvmProcessException]::new('Resource lock response did not contain a value array.')

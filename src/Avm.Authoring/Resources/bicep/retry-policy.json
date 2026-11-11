@@ -3,6 +3,7 @@
   "limits": { "deploymentAttempts": 3, "regionAttempts": 3, "delaySeconds": 5 },
   "modes": { "InPlace": { "location": "Preserve" }, "Fresh": { "location": "NextEligible" } },
   "reads": { "attempts": 3, "initialDelaySeconds": 5 },
+  "unsupportedLockRead": { "statusCode": 400, "errorCode": "NoRegisteredProviderFound" },
   "authorizationPropagation": {
     "attempts": 61,
     "timeoutSeconds": 300,
