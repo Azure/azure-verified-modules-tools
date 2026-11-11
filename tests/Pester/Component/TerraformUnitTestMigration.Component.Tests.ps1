@@ -1663,6 +1663,98 @@ Context 'migration decisions' {
                 Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
             }
 
+            It 'retires only a legacy ModTM source mock that its owning module cannot bind' {
+                $script:fixture.After.test.runs.Remove('root')
+                $script:fixture.After.test.run_modules.Remove('root')
+                $script:fixture.Before.test.runs.Remove('root')
+                $script:fixture.Before.test.run_modules.Remove('root')
+                $legacyMock = @{
+                    mptf      = @{
+                        is_empty      = $false
+                        attributes    = @{}
+                        block_type    = 'mock_provider'
+                        block_labels  = @('modtm')
+                        block_address = 'mock_provider.modtm'
+                    }
+                    mock_data = @(@{
+                            mptf = @{
+                                block_labels = @('modtm_module_source')
+                                attributes   = @{ defaults = @{
+                                        module_source  = 'registry.terraform.io/Azure/avm-res-example/azurerm'
+                                        module_version = '0.1.0'
+                                    } }
+                            }
+                        })
+                }
+                $script:fixture.After.test.mock_providers.modtm =
+                    $legacyMock | ConvertTo-Json -Depth 10 | ConvertFrom-Json -AsHashtable
+                $script:fixture.Before.test.mock_providers.modtm =
+                    $legacyMock | ConvertTo-Json -Depth 10 | ConvertFrom-Json -AsHashtable
+                foreach ($test in @($script:fixture.Before.test, $script:fixture.After.test)) {
+                    $test.runs.child.mptf.attributes.providers = '{ azapi = azapi, modtm = modtm }'
+                }
+                $script:fixture.Options.EnvVars['AVM_TEST_OWNER_PATH'] = $script:fixture.Root
+                Mock Get-AvmTerraformUnitTestRequiredProvider -ModuleName Avm.Authoring {
+                    if ($Path -ceq $Options.EnvVars['AVM_TEST_OWNER_PATH']) {
+                        return @{ azapi = @{ source = 'Azure/azapi' } }
+                    }
+                    return @{ azapi = @{ source = 'Azure/azapi' }; modtm = @{ source = 'Azure/modtm' } }
+                }
+                Mock Invoke-AvmProcess -ModuleName Avm.Authoring {
+                    $output = if ($ArgumentList[-1] -ceq 'data.module.unit_test_modtm_calls.result') { '{}' } else { 'true' }
+                    [pscustomobject]@{ ExitCode = 0; StdOut = $output; StdErr = '' }
+                }
+                Invoke-UnitMigrationFixture -Fixture $script:fixture
+                Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                    -not $UnitTestPlans[0].RetainModtmMock -and
+                    $UnitTestPlans[0].RetiredMockNames -contains 'modtm' -and
+                    $UnitTestPlans[0].ProviderMockBindings.child -ceq '{ azapi = azapi,    }' -and
+                    $UnitTestPlans[0].RetiredProviderReferences.modtm -eq 1 -and
+                    $UnitTestPlans[0].RetainedProviderReferences.modtm -eq 0
+                }
+                Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                    $ArgumentList[0] -eq 'transform' -and
+                    @($ArgumentList | Where-Object { $_ -ceq 'retired_mock_provider_names=["modtm"]' }).Count -eq 1 -and
+                    @($ArgumentList | Where-Object { $_ -like 'provider_mock_bindings=*' }).Count -eq 0
+                }
+                Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 1 -ParameterFilter {
+                    $ArgumentList[0] -eq 'transform' -and
+                    @($ArgumentList | Where-Object { $_ -ceq 'retired_mock_provider_names=["modtm"]' }).Count -eq 1 -and
+                    @($ArgumentList | Where-Object {
+                            $_ -like 'provider_mock_bindings=*' -and $_.Contains('azapi = azapi') -and -not $_.Contains('modtm')
+                        }).Count -eq 1
+                }
+            }
+
+            It 'requires review instead of deleting authored non-telemetry ModTM mock data' {
+                $script:fixture.After.test.mock_providers.modtm = @{
+                    mptf          = @{
+                        is_empty      = $false
+                        attributes    = @{}
+                        block_type    = 'mock_provider'
+                        block_labels  = @('modtm')
+                        block_address = 'mock_provider.modtm'
+                    }
+                    mock_resource = @(@{
+                            mptf = @{
+                                block_labels = @('modtm_resource')
+                                attributes   = @{ defaults = @{ value = 'authored' } }
+                            }
+                        })
+                }
+                $script:fixture.Options.EnvVars['AVM_TEST_OWNER_PATH'] = $script:fixture.Root
+                Mock Get-AvmTerraformUnitTestRequiredProvider -ModuleName Avm.Authoring {
+                    if ($Path -ceq $Options.EnvVars['AVM_TEST_OWNER_PATH']) {
+                        return @{ azapi = @{ source = 'Azure/azapi' } }
+                    }
+                    return @{ azapi = @{ source = 'Azure/azapi' }; modtm = @{ source = 'Azure/modtm' } }
+                }
+                { Invoke-UnitMigrationFixture -Fixture $script:fixture } |
+                    Should -Throw '*owning module must explicitly declare Azure/modtm*'
+                Should -Invoke Remove-AvmLegacyTelemetryTestMock -ModuleName Avm.Authoring -Exactly 0
+                Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0
+            }
+
             It 'ensures introduced AzAPI coverage with a required nonempty ModTM mock and <Binding> bindings' -TestCases @(
                 @{ Binding = 'implicit'; Explicit = $false }
                 @{ Binding = 'explicit'; Explicit = $true }
@@ -1674,8 +1766,13 @@ Context 'migration decisions' {
                     mptf = @{ is_empty = $false; attributes = @{} }
                     mock_resource = @(@{ mptf = @{ block_labels = @('modtm_telemetry'); attributes = @{ defaults = @{ tags = @{ fixture = 'mock-only' } } } } })
                 }
+                $script:fixture.Options.EnvVars['AVM_TEST_OWNER_PATH'] = $script:fixture.Root
                 Mock Get-AvmTerraformUnitTestRequiredProvider -ModuleName Avm.Authoring {
-                    @{ azapi = @{ source = 'Azure/azapi' }; azurerm = @{ source = 'hashicorp/azurerm' } }
+                    $requirements = @{ azapi = @{ source = 'Azure/azapi' }; azurerm = @{ source = 'hashicorp/azurerm' } }
+                    if ($Path -ceq $Options.EnvVars['AVM_TEST_OWNER_PATH']) {
+                        $requirements.modtm = @{ source = 'Azure/modtm' }
+                    }
+                    $requirements
                 }
                 Mock Get-AvmTerraformUnitTestProviderSource -ModuleName Avm.Authoring {
                     @('registry.terraform.io/azure/azapi', 'registry.terraform.io/hashicorp/azurerm', 'registry.terraform.io/azure/modtm')
