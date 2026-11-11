@@ -15,7 +15,6 @@
     { "kind": "csv", "sourceFile": "TerraformResourceModules.csv", "file": "TerraformResourceModules.csv", "destination": "docs", "ecosystem": "terraform", "moduleType": "resource" },
     { "kind": "csv", "sourceFile": "TerraformPatternModules.csv", "file": "TerraformPatternModules.csv", "destination": "docs", "ecosystem": "terraform", "moduleType": "pattern" },
     { "kind": "csv", "sourceFile": "TerraformUtilityModules.csv", "file": "TerraformUtilityModules.csv", "destination": "docs", "ecosystem": "terraform", "moduleType": "utility" },
-    { "kind": "mar", "file": "BicepMARModules.json", "destination": "docs" },
     {
       "kind": "catalog",
       "file": "v1/modules.json",

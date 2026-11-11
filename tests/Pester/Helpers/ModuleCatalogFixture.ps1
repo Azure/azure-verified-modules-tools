@@ -134,7 +134,6 @@ function New-CatalogFixture {
         $fixture.Original[$output.sourceFile] = $row
         [System.IO.File]::WriteAllText((Join-Path $fixture.Legacy $output.sourceFile), (ConvertTo-AvmCatalogCsv -Headers $headers -Rows @($row)))
     }
-    Save-CatalogJson -Path (Join-Path $fixture.Legacy 'BicepMARModules.json') -Data @($bicepNames.Values)
     return $fixture
 }
 
@@ -160,7 +159,7 @@ function Get-CatalogFixtureBundle {
             currentVersion = if ($published) { '1.2.3' } else { $null }
             firstPublishedIn = if ($published) { '2024-02' } else { $null }
             downloads = if ($published -and $item.Identity.Ecosystem -eq 'terraform' -and $item.Identity.ModulePath -eq '.') { 123 } else { $null }
-            marRegistered = if ($item.Identity.Ecosystem -eq 'bicep') { $true } else { $null }
+            marRegistered = $null
         }
     }
     $revisions = @(
@@ -205,8 +204,8 @@ function Initialize-CatalogPublicationBase {
 
     $configuration = Read-AvmCatalogConfiguration
     $sourceRoot = Join-Path $Fixture.Root 'publication-base'
-    foreach ($output in $configuration.outputs | Where-Object { $_.kind -in @('csv', 'mar') }) {
-        $file = if ($output.kind -eq 'csv') { $output.sourceFile } else { $output.file }
+    foreach ($output in $configuration.outputs | Where-Object { $_.kind -eq 'csv' }) {
+        $file = $output.sourceFile
         $target = Join-Path $sourceRoot $output.targetPath
         $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($target))
         Copy-Item -LiteralPath (Join-Path $Fixture.Legacy $file) -Destination $target

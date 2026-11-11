@@ -13,8 +13,8 @@ neither updated nor deleted by this workflow.
 selects the docs, Bicep source, and tools repositories; `destinations` supplies
 the repository-relative output directories. Each `outputs` entry declares its
 kind, relative filename, and destination. CSV entries also declare `sourceFile`,
-the canonical input name; `file` is the matching output name. This includes all six CSVs,
-`BicepMARModules.json`, and `v1/modules.json`.
+the canonical input name; `file` is the matching output name. This includes all six CSVs
+and `v1/modules.json`. The retired MAR mirror is not an input or output.
 The `migration-report` and `publication-plan` entries have null destinations:
 they remain in the `module-metadata-catalog` workflow artifact and are never
 published to the repository. The plan is emitted when publication-base
@@ -48,8 +48,8 @@ This workflow never creates module `metadata.json` files.
     -InputPath .\snapshot -OutputPath .\out\catalog
 ```
 
-Use a new output directory. The snapshot contains `legacy/` (all six CSVs and the
-approved `BicepMARModules.json` mirror), `sources/bicep/`, source-bearing
+Use a new output directory. The snapshot contains `legacy/` (all six CSVs),
+`sources/bicep/`, source-bearing
 `sources/terraform/terraform-{azurerm,azapi,azure}-avm-*/` repositories,
 `registry.json`, `github.json`, and `revisions.json`. Repository revisions include
 the boolean GitHub `archived` flag for every available Terraform repository.
@@ -118,7 +118,6 @@ are omitted from CSV indexes and `v1/modules.json`. Each warning names the
 repository and module path and recommends deleting unused source, or an unused
 Terraform repository if it contains no published modules. No source is deleted.
 Published deprecated modules and published descendants remain indexed.
-The separate approved MAR registration mirror is unchanged.
 
 The hashed migration report retains validated records in `excludedModules`
 and an `excludedEntries` count. These exact repository/module identities are
@@ -179,8 +178,11 @@ not-published only at the module lookup boundary; a missing listed release is an
 error. First-published months use the earliest actual release timestamp, not the
 lowest version number. Terraform child availability/dates come from releases
 containing that submodule; per-child download counts are unavailable and remain
-null. The approved MAR string-array mirror is preserved, not replaced with an
-MCR-only list that would lose approved but unpublished modules.
+null. Bicep publication status comes only from published versions in MCR;
+the MAR source repository and its JSON mirror are not consulted, validated,
+copied, or published. The legacy v1 `registry.marRegistered` field remains
+nullable for compatibility; new collection emits null rather than claiming
+repository approval.
 
 `owners` is a flat list of usernames and qualified team handles. CSV user columns
 project the first two usernames, and the existing team column projects the
@@ -221,7 +223,7 @@ version (or removed from the candidate if absent on main) before merging.
 No direct `main` push, permission edit, or obsolete-source deletion is used.
 
 Terraform metadata creation, the direct Bicep metadata file change, Terraform telemetry transport,
-refreshing the private-source MAR mirror, and approval of any source-row removals
+and approval of any source-row removals
 remain rollout dependencies. Update the internal Azure-Verified-Modules-Docs
 team catalog how-to with the Bicep child-removal and multi-scope status rules,
 exclusion warnings, and deletion recommendation;

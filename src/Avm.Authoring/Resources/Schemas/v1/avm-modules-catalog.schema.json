@@ -113,7 +113,10 @@
           "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$"
         },
         "downloads": { "type": [ "integer", "null" ], "minimum": 0 },
-        "marRegistered": { "type": [ "boolean", "null" ] }
+        "marRegistered": {
+          "type": [ "boolean", "null" ],
+          "description": "Legacy v1 field. New collection emits null and does not consult MAR repository registration."
+        }
       },
       "allOf": [
         {

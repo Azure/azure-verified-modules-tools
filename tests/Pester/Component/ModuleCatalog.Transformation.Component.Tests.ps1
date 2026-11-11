@@ -199,7 +199,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $bundle.Report.csvRowRemovals | Should -HaveCount 6
         $bundle.Report.csvRowRemovalsForced | Should -BeTrue
         $bundle.Report.Contains('modes') | Should -BeFalse
-        $bundle.Files['docs/BicepMARModules.json'] | ConvertFrom-Json | Should -HaveCount 3
+        $bundle.Files.Contains('docs/BicepMARModules.json') | Should -BeFalse
     }
 
     It 'uses metadata per adopted module and resolves only the first two names from the profile cache' {
@@ -526,7 +526,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $configurationPath = Join-Path $fixture.Root 'repository-config.json'
         [System.IO.File]::WriteAllText($configurationPath, 'not a catalog input')
         $bundle = Get-CatalogFixtureBundle -Fixture $fixture
-        $bundle.Files.Count | Should -Be 9
+        $bundle.Files.Count | Should -Be 8
         @($bundle.Files.Keys | Where-Object { $_ -notlike 'docs/*' }) | Should -Be @('v1/migration-report.json')
         $published = Read-AvmCatalogJson -Path (Join-Path $fixture.Modules[0].Directory 'metadata.json')
         $published.Contains('tier') | Should -BeFalse
@@ -665,14 +665,9 @@ Describe 'Component: module catalog transformations' -Tag Component {
         $null = Get-CatalogFixtureBundle -Fixture $fixture -Inventory $inventory
 
         $roots = @{ docs = Join-Path $fixture.Root 'docs-checkout'; tools = Join-Path $fixture.Root 'tools-checkout' }
-        foreach ($output in $configuration.outputs | Where-Object { $_.kind -in @('csv', 'mar') }) {
-            $source = if ($output.kind -eq 'csv') {
-                Join-Path $fixture.Legacy $output.sourceFile
-            }
-            else {
-                Join-Path $fixture.Legacy $output.file
-            }
-            $targetPath = if ($output.kind -eq 'csv') { $output.sourcePath } else { $output.targetPath }
+        foreach ($output in $configuration.outputs | Where-Object { $_.kind -eq 'csv' }) {
+            $source = Join-Path $fixture.Legacy $output.sourceFile
+            $targetPath = $output.sourcePath
             $target = Join-Path $roots[$output.destination] $targetPath
             $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($target))
             [System.IO.File]::Copy($source, $target)
@@ -721,7 +716,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         Test-Path -LiteralPath $fixture.Output | Should -BeFalse
         $null = Get-CatalogFixtureBundle -Fixture $fixture
         & (Join-Path $catalogScripts 'Invoke-ModuleCatalog.ps1') -InputPath $fixture.Root -OutputPath $fixture.Output | Should -BeExactly ([System.IO.Path]::GetFullPath($fixture.Output))
-        @(Get-ChildItem -LiteralPath $fixture.Output -File -Recurse) | Should -HaveCount 9
+        @(Get-ChildItem -LiteralPath $fixture.Output -File -Recurse) | Should -HaveCount 8
     }
 
     It 'does not write output when generated registry data fails the output schema' {
@@ -788,7 +783,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         if (-not $Published) {
             $registryPath = Join-Path $fixture.Root 'registry.json'
             $registry = Read-AvmCatalogJson -Path $registryPath
-            $registry[$module.Identity.Key] = New-AvmCatalogRegistryResult -MarRegistered $registry[$module.Identity.Key].marRegistered
+            $registry[$module.Identity.Key] = New-AvmCatalogRegistryResult
             Save-CatalogJson -Path $registryPath -Data $registry
         }
         & (Join-Path $catalogScripts 'Invoke-ModuleCatalog.ps1') -InputPath $fixture.Root -OutputPath $fixture.Output -WarningVariable warnings | Out-Null
@@ -879,7 +874,7 @@ Describe 'Component: module catalog transformations' -Tag Component {
         foreach ($item in $inventory.Items) {
             $registry[$item.Identity.Key] = [ordered]@{
                 status = 'available'; currentVersion = '1.2.3'; firstPublishedIn = '2024-02'
-                downloads = $null; marRegistered = $true
+                downloads = $null; marRegistered = $null
             }
         }
         { New-AvmCatalogBundle -Inventory $inventory -Registry $registry -GitHub ([ordered]@{ users = @{}; teams = @{} }) `

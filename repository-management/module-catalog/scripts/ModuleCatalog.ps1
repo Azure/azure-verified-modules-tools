@@ -523,22 +523,11 @@ function Get-AvmCatalogInventory {
         }
     }
 
-    $marOutput = Get-AvmCatalogOutput -Configuration $Configuration -Kind mar
-    $mar = Read-AvmCatalogJson -Path (Join-Path $LegacyPath $marOutput.file)
-    if ($mar -isnot [array]) {
-        throw [System.IO.InvalidDataException]::new("$($marOutput.file) must remain an array of module-name strings.")
-    }
-    foreach ($name in $mar) {
-        if ($name -isnot [string] -or $name -cnotmatch '^avm/(res|ptn|utl)/[a-z0-9/-]+$') {
-            throw [System.IO.InvalidDataException]::new("$($marOutput.file) contains an unsupported module name.")
-        }
-    }
     return [pscustomobject]@{
         Configuration = $Configuration
         Sources = $sources
         Items = @((Get-AvmCatalogOrdinal -Values @($itemsByKey.Keys)) | ForEach-Object { $itemsByKey[$_] })
         Tables = $tables
-        Mar = Get-AvmCatalogOrdinal -Values $mar
         RowRemovalReasons = $rowReasons
         RowRenames = $renames.ToArray()
         Report = [ordered]@{
@@ -685,9 +674,6 @@ function New-AvmCatalogBundle {
         }
         if ($deprecated) {
             $item.Row['ModuleStatus'] = 'Deprecated'
-        }
-        if ($record.ecosystem -eq 'bicep' -and $record.registry.marRegistered -isnot [bool]) {
-            throw [System.IO.InvalidDataException]::new("Bicep registry snapshot lacks MAR registration: $($item.Identity.Key)")
         }
         if ($record.ecosystem -eq 'terraform' -and $null -ne $record.registry.marRegistered) {
             throw [System.IO.InvalidDataException]::new("Terraform registry snapshot has Bicep-only registration: $($item.Identity.Key)")
@@ -839,7 +825,6 @@ function New-AvmCatalogBundle {
     foreach ($file in $heldBackFiles) {
         $heldBack.Add([string]$bundlePathBySourceFile[$file])
     }
-    $files[(Get-AvmCatalogOutput -Configuration $configuration -Kind mar).bundlePath] = ConvertTo-AvmCatalogJson -Value @($Inventory.Mar)
     $files[$catalogOutput.bundlePath] = $json
     if ($heldBack.Count -gt 0) {
         $heldBack.Add([string]$catalogOutput.bundlePath)

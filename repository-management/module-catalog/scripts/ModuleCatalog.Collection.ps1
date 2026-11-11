@@ -359,23 +359,14 @@ function Copy-AvmCatalogInputFile {
         $path = Join-Path $RepositoryRoots[$output.destination] $output.targetPath
         $exists = Test-Path -LiteralPath $path -PathType Leaf
         $publication[$output.destination].baseFiles[$output.targetPath] = if ($exists) { (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
-        if ($output.kind -in @('csv', 'mar')) {
-            if ($output.kind -eq 'csv') {
-                $path = Join-Path $RepositoryRoots[$output.destination] $output.sourcePath
-                $exists = Test-Path -LiteralPath $path -PathType Leaf
-            }
+        if ($output.kind -eq 'csv') {
+            $path = Join-Path $RepositoryRoots[$output.destination] $output.sourcePath
+            $exists = Test-Path -LiteralPath $path -PathType Leaf
             if (-not $exists) {
                 throw [System.IO.FileNotFoundException]::new("Required legacy catalog is missing: $path")
             }
-            if ($output.kind -eq 'csv') {
-                $publication[$output.destination].baseFiles[$output.sourcePath] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
-            }
-            $relative = if ($output.kind -eq 'csv') {
-                "legacy/$($output.sourceFile)"
-            }
-            else {
-                "legacy/$($output.file)"
-            }
+            $publication[$output.destination].baseFiles[$output.sourcePath] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            $relative = "legacy/$($output.sourceFile)"
             $copies.Add(@{ Source = $path; Target = Join-Path $SnapshotPath $relative })
         }
     }
@@ -538,8 +529,7 @@ function New-AvmCatalogRegistryResult {
     param(
         [string] $Version,
         [AllowNull()][object] $FirstPublished,
-        [AllowNull()][object] $Downloads,
-        [AllowNull()][object] $MarRegistered
+        [AllowNull()][object] $Downloads
     )
 
     return [ordered]@{
@@ -547,13 +537,13 @@ function New-AvmCatalogRegistryResult {
         currentVersion = if ($Version) { $Version } else { $null }
         firstPublishedIn = if ($null -ne $FirstPublished) { $FirstPublished.ToString('yyyy-MM', [Globalization.CultureInfo]::InvariantCulture) } else { $null }
         downloads = $Downloads
-        marRegistered = $MarRegistered
+        marRegistered = $null
     }
 }
 
 function Get-AvmCatalogBicepRegistrySet {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Identities, [string[]] $Mar)
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Identities)
 
     $results = @{}
     $tagResponses = Invoke-AvmCatalogRequestSet -Activity 'Bicep registry tag lists' -Requests @(foreach ($identity in $Identities) {
@@ -565,10 +555,9 @@ function Get-AvmCatalogBicepRegistrySet {
     for ($index = 0; $index -lt $Identities.Count; $index++) {
         $identity = $Identities[$index]
         $path = $identity.ModulePath
-        $registered = $Mar -ccontains $path
         $response = $tagResponses[$index]
         if ($response.StatusCode -eq 404) {
-            $results[$identity.Key] = New-AvmCatalogRegistryResult -MarRegistered $registered
+            $results[$identity.Key] = New-AvmCatalogRegistryResult
             continue
         }
         $body = Get-AvmCatalogResponseJson -Response $response
@@ -577,11 +566,8 @@ function Get-AvmCatalogBicepRegistrySet {
         }
         $versions = Get-AvmCatalogVersions -Versions $body.tags
         if ($versions.Count -eq 0) {
-            $results[$identity.Key] = New-AvmCatalogRegistryResult -MarRegistered $registered
+            $results[$identity.Key] = New-AvmCatalogRegistryResult
             continue
-        }
-        if (-not $registered) {
-            throw [System.IO.InvalidDataException]::new("Published Bicep module $path is absent from the approved MAR mirror. Refresh the mirror before publication.")
         }
         $current[$identity.Key] = $versions[-1]
         foreach ($version in $versions) {
@@ -605,16 +591,16 @@ function Get-AvmCatalogBicepRegistrySet {
         }
     }
     foreach ($key in $current.Keys) {
-        $results[$key] = New-AvmCatalogRegistryResult -Version $current[$key] -FirstPublished $first[$key] -MarRegistered $true
+        $results[$key] = New-AvmCatalogRegistryResult -Version $current[$key] -FirstPublished $first[$key]
     }
     return $results
 }
 
 function Get-AvmCatalogBicepRegistry {
     [CmdletBinding()]
-    param([object] $Identity, [string[]] $Mar)
+    param([object] $Identity)
 
-    return (Get-AvmCatalogBicepRegistrySet -Identities @($Identity) -Mar $Mar)[$Identity.Key]
+    return (Get-AvmCatalogBicepRegistrySet -Identities @($Identity))[$Identity.Key]
 }
 
 function Get-AvmCatalogTerraformRegistrySet {
@@ -791,7 +777,7 @@ function Get-AvmCatalogEnrichment {
             $null = Resolve-AvmCatalogOwnerProfiles -Owners $item.Record.owners -Cache $github
         }
     }
-    $bicep = Get-AvmCatalogBicepRegistrySet -Mar $Inventory.Mar `
+    $bicep = Get-AvmCatalogBicepRegistrySet `
         -Identities @($Inventory.Items | Where-Object { $_.Identity.Ecosystem -eq 'bicep' } | ForEach-Object { $_.Identity })
     $terraform = Get-AvmCatalogTerraformRegistrySet `
         -Identities @($Inventory.Items | Where-Object { $_.Identity.Ecosystem -ne 'bicep' } | ForEach-Object { $_.Identity })

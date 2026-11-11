@@ -54,7 +54,7 @@ function Read-AvmCatalogConfiguration {
         }
     }
 
-    $kinds = @('csv', 'mar', 'catalog', 'migration-report', 'publication-plan')
+    $kinds = @('csv', 'catalog', 'migration-report', 'publication-plan')
     $counts = @{}
     $csvKeys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $csvSources = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)

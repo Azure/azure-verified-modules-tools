@@ -313,7 +313,7 @@ Describe 'Component: module catalog helpers' -Tag Component {
         { Test-AvmCatalogPublicationBundle -Path $fixture.Output -Configuration $configuration } |
             Should -Throw '*CSV row removals are blocked*'
         $publishedPlan = Test-AvmCatalogPublicationBundle -Path $fixture.Output -Configuration $configuration -Force
-        $publishedPlan.outputHashes.Count | Should -Be 9
+        $publishedPlan.outputHashes.Count | Should -Be 8
     }
 }
 
