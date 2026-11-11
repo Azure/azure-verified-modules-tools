@@ -97,6 +97,7 @@
           "targetRequired": { "type": "boolean" },
           "forbidTarget": { "type": "boolean" },
           "allowEmptyDetails": { "type": "boolean" },
+          "requireNonGlobalLocation": { "type": "boolean" },
           "regionCapture": { "$ref": "#/definitions/capture" },
           "numberCaptures": {
             "type": "object", "propertyNames": { "$ref": "#/definitions/capture" },

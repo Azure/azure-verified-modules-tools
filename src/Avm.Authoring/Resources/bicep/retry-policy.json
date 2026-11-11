@@ -155,6 +155,20 @@
       "messagePatterns": ["https://aka\\.ms/locationineligible(?:[?#\\s).,;:'\"]|$)"]
     },
     {
+      "id": "application-gateway-zonal-capacity",
+      "mode": "Fresh",
+      "code": "ApplicationGatewayAllocationFailureDueToCapacityInZone",
+      "parentCode": "ResourceDeploymentFailure",
+      "parentTargetRequired": true,
+      "targetRequired": true,
+      "targetTypes": ["Microsoft.Network/applicationGateways"],
+      "allowEmptyDetails": true,
+      "requireNonGlobalLocation": true,
+      "messagePatterns": [
+        "\\AWe have a temporary capacity issue with Application Gateways in this region/zone\\. Please retry after a few days or please try the operation in another region or zone\\. For a list of Azure regions, refer to: https://azure\\.microsoft\\.com/en-us/global-infrastructure/regions/\\.\\z"
+      ]
+    },
+    {
       "id": "allocation-capacity",
       "mode": "Fresh",
       "code": "AllocationFailed",
