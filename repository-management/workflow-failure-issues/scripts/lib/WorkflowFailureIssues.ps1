@@ -15,8 +15,7 @@
 #
 # Design invariants carried over from the other routing libraries: one
 # failing workflow/issue must not abort the sweep, and every write is
-# conditional (an issue that is already up to date for this run is left
-# untouched).
+# conditional (an issue that does not need an update is left untouched).
 
 $script:AvmWorkflowFailureIssueTitlePrefix = '[Failed pipeline]'
 $script:AvmWorkflowFailureWorkflowFilter = '(?:avm\.(?:res|ptn|utl)\.|^\.Module - Check and Publish(?: \[EXPERIMENTAL\])?$)'
@@ -192,6 +191,32 @@ function Get-AvmWorkflowFailureIssueCommentsToday {
     return @($comments | ForEach-Object { [string]$_.body })
 }
 
+function Test-AvmMaintenanceReminderDue {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)] [object] $Issue,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Comments,
+        [Parameter(Mandatory)] [datetimeoffset] $Now,
+        [Parameter(Mandatory)] [int] $IntervalHours
+    )
+
+    $cutoff = $Now.AddHours(-$IntervalHours)
+    if ($Issue.body -and $Issue.body.StartsWith('Failed run: ') -and
+        [datetimeoffset]::Parse($Issue.createdAt) -gt $cutoff) {
+        return $false
+    }
+    foreach ($comment in $Comments) {
+        if ($comment.body -and $comment.body.StartsWith('Failed run: ') -and
+            $comment.body.Contains($script:AvmMaintenanceMemberMentionMarker) -and
+            $comment.user.type -eq 'Bot' -and
+            [datetimeoffset]::Parse($comment.created_at) -gt $cutoff) {
+            return $false
+        }
+    }
+    return $true
+}
+
 function Get-AvmWorkflowFailureTeamMembers {
     [CmdletBinding()]
     [OutputType([string[]])]
@@ -248,7 +273,8 @@ function Resolve-AvmWorkflowFailureRouting {
         [AllowEmptyCollection()] [string[]] $ExistingCommentBodiesToday = @(),
         [string] $PlatformTeam,
         [AllowEmptyCollection()] [string[]] $PlatformMembers = @(),
-        [bool] $FailureThresholdMet = $true
+        [bool] $FailureThresholdMet = $true,
+        [bool] $MaintenanceReminderDue = $true
     )
 
     $issueTitle = "$script:AvmWorkflowFailureIssueTitlePrefix $($WorkflowRun.name)"
@@ -342,13 +368,7 @@ function Resolve-AvmWorkflowFailureRouting {
     $duplicateIssues = @(if ($sortedIssues.Count -gt 1) { $sortedIssues[1..($sortedIssues.Count - 1)] })
 
     $result.DuplicateIssuesToClose = $duplicateIssues
-    $alreadyReported = if ($PlatformTeam) {
-        @($ExistingCommentBodiesToday | Where-Object {
-                (($_ -split "`n", 2)[0].TrimEnd("`r") -ceq "Failed run: $runUrl") -and
-                $_.Contains($script:AvmMaintenanceMemberMentionMarker)
-            }).Count -gt 0
-    }
-    else {
+    $alreadyReported = if ($PlatformTeam) { -not $MaintenanceReminderDue } else {
         $ExistingCommentBodiesToday -contains $failedRunText
     }
     if (-not $alreadyReported) {
@@ -379,7 +399,8 @@ function Set-AvmWorkflowFailureIssueForRun {
         [Parameter(Mandatory)] [bool] $IsModule,
         [string] $PlatformTeam,
         [AllowEmptyCollection()] [string[]] $PlatformMembers = @(),
-        [bool] $FailureThresholdMet = $true
+        [bool] $FailureThresholdMet = $true,
+        [ValidateRange(1, 8760)] [int] $ReminderIntervalHours = 24
     )
 
     $workflowName = [string]$WorkflowRun.name
@@ -396,19 +417,29 @@ function Set-AvmWorkflowFailureIssueForRun {
     }
 
     $existingCommentBodiesToday = @()
+    $maintenanceReminderDue = $true
     $newest = $null
     if ($ExistingIssues.Count -gt 0) {
         $newest = @($ExistingIssues | Sort-Object -Property 'createdAt' -Descending)[0]
-        $existingCommentBodiesToday = @(Get-AvmWorkflowFailureIssueCommentsToday -Repository $Repository `
-            -Number $newest.number -All:([bool]$PlatformTeam))
-        if ($PlatformTeam -and $null -ne $newest.PSObject.Properties['body']) {
-            $existingCommentBodiesToday += [string]$newest.body
+        if ($PlatformTeam -and (Test-AvmWorkflowFailureConclusion -Conclusion $WorkflowRun.conclusion)) {
+            $now = [datetimeoffset]::UtcNow
+            $since = $now.AddHours(-$ReminderIntervalHours).ToString('yyyy-MM-ddTHH:mm:ssZ')
+            $comments = @(Invoke-RepositoryGitHub -AsJson -Arguments @(
+                    'api', '--paginate', "repos/$Repository/issues/$($newest.number)/comments?per_page=100&since=$since",
+                    '--hostname', 'github.com'
+                ))
+            $maintenanceReminderDue = Test-AvmMaintenanceReminderDue -Issue $newest -Comments $comments `
+                -Now $now -IntervalHours $ReminderIntervalHours
+        }
+        elseif (-not $PlatformTeam) {
+            $existingCommentBodiesToday = @(Get-AvmWorkflowFailureIssueCommentsToday -Repository $Repository -Number $newest.number)
         }
     }
 
     $routing = Resolve-AvmWorkflowFailureRouting -WorkflowRun $WorkflowRun -ExistingIssues $ExistingIssues `
         -Owners $Owners -IsModule $IsModule -ExistingCommentBodiesToday $existingCommentBodiesToday `
-        -PlatformTeam $PlatformTeam -PlatformMembers $PlatformMembers -FailureThresholdMet $FailureThresholdMet
+        -PlatformTeam $PlatformTeam -PlatformMembers $PlatformMembers -FailureThresholdMet $FailureThresholdMet `
+        -MaintenanceReminderDue $maintenanceReminderDue
     if ($routing.BelowThreshold) {
         $outcome.Status = 'BelowThreshold'
         return $outcome
@@ -452,7 +483,12 @@ function Set-AvmWorkflowFailureIssueForRun {
     elseif ($routing.IsFailure -and $null -ne $newest) {
         $outcome.Status = 'AlreadyReported'
         $outcome.IssueUrl = [string]$newest.url
-        Write-Host "Workflow [$workflowName] failed in run [$runUrl], which issue [$($newest.url)] already reports today."
+        if ($PlatformTeam) {
+            Write-Host "Workflow [$workflowName] failed in run [$runUrl]; issue [$($newest.url)] does not need another update yet."
+        }
+        else {
+            Write-Host "Workflow [$workflowName] failed in run [$runUrl], which issue [$($newest.url)] already reports today."
+        }
     }
 
     if ($routing.CreateIssueTitle) {
@@ -572,7 +608,8 @@ function Invoke-AvmWorkflowFailureIssues {
         [string] $DefaultRef = 'main',
         [string[]] $WorkflowName = @(),
         [string] $PlatformTeam,
-        [ValidateRange(1, 100)][int] $FailureThreshold = 1
+        [ValidateRange(1, 100)][int] $FailureThreshold = 1,
+        [ValidateRange(1, 8760)][int] $ReminderIntervalHours = 24
     )
 
     try {
@@ -642,7 +679,8 @@ function Invoke-AvmWorkflowFailureIssues {
 
             $outcome = Set-AvmWorkflowFailureIssueForRun -WorkflowRun $latestRun -Repository $Repository `
                 -ExistingIssues $existingIssues -Owners $owners -IsModule $isModule -PlatformTeam $PlatformTeam `
-                -PlatformMembers $platformMembers -FailureThresholdMet:($failureCount -ge $FailureThreshold) -WhatIf:$WhatIfPreference
+                -PlatformMembers $platformMembers -FailureThresholdMet:($failureCount -ge $FailureThreshold) `
+                -ReminderIntervalHours $ReminderIntervalHours -WhatIf:$WhatIfPreference
             $outcomes.Add($outcome)
         }
         catch {

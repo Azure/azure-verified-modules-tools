@@ -197,6 +197,37 @@ Describe 'Get-AvmWorkflowFailureTeamMembers' {
     }
 }
 
+Describe 'Test-AvmMaintenanceReminderDue' {
+    BeforeAll {
+        $now = [datetimeoffset]::Parse('2026-11-12T12:00:00Z')
+        $marker = '<!-- avm-maintenance-member-mentions:v1 -->'
+        $oldIssue = [pscustomobject]@{ createdAt = '2026-11-01T00:00:00Z'; body = 'Failed run: https://example.com/1' }
+    }
+
+    It 'waits 24 hours after creating an incident, including when a newer run fails' {
+        $issue = [pscustomobject]@{ createdAt = '2026-11-12T11:00:00Z'; body = 'Failed run: https://example.com/1' }
+        Test-AvmMaintenanceReminderDue -Issue $issue -Comments @() -Now $now -IntervalHours 24 | Should -BeFalse
+    }
+
+    It 'uses the creation time of a marked reminder at the rolling boundary: <CreatedAt>' -ForEach @(
+        @{ CreatedAt = '2026-11-11T12:00:01Z'; Due = $false }
+        @{ CreatedAt = '2026-11-11T12:00:00Z'; Due = $true }
+        @{ CreatedAt = '2026-11-11T11:59:59Z'; Due = $true }
+    ) {
+        $comment = [pscustomobject]@{ created_at = $CreatedAt; body = "Failed run: https://example.com/1`n`n$marker"; user = @{ type = 'Bot' } }
+        Test-AvmMaintenanceReminderDue -Issue $oldIssue -Comments @($comment) -Now $now -IntervalHours 24 | Should -Be $Due
+    }
+
+    It 'ignores unrelated human comments and unmarked old alerts' {
+        $comments = @(
+            [pscustomobject]@{ created_at = '2026-11-12T11:59:00Z'; body = 'Investigating the failure.' }
+            [pscustomobject]@{ created_at = '2026-11-12T11:59:00Z'; body = 'Failed run: https://example.com/1' }
+            [pscustomobject]@{ created_at = '2026-11-12T11:59:00Z'; body = "Failed run: https://example.com/1`n`n$marker"; user = @{ type = 'User' } }
+        )
+        Test-AvmMaintenanceReminderDue -Issue $oldIssue -Comments $comments -Now $now -IntervalHours 24 | Should -BeTrue
+    }
+}
+
 Describe 'Resolve-AvmWorkflowFailureRouting' {
     BeforeEach {
         $script:run = [pscustomobject]@{ name = 'avm.res.storage.storage-account'; conclusion = 'failure'; html_url = 'https://github.com/Azure/bicep-registry-modules/actions/runs/1' }
@@ -332,7 +363,7 @@ Describe 'Set-AvmWorkflowFailureIssueForRun' {
 
     It 'updates the open maintenance incident with team and member mentions instead of creating another issue' {
         $script:run.name = 'Repos: Terraform Sync'
-        Mock Get-AvmWorkflowFailureIssueCommentsToday { @() }
+        Mock Invoke-RepositoryGitHub { if ($Arguments[0] -eq 'api') { return @() } }
         $issue = [pscustomobject]@{
             number = 42; title = '[Failed pipeline] Repos: Terraform Sync'
             url = 'https://github.com/Azure/azure-verified-modules-tools/issues/42'
@@ -343,7 +374,7 @@ Describe 'Set-AvmWorkflowFailureIssueForRun' {
             -IsModule $false -PlatformTeam 'Azure/azure-verified-modules-engineering-owners' -PlatformMembers @('member-one', 'member-two')
         $outcome.Status | Should -Be 'Commented'
         $outcome.Notified | Should -Be @('Azure/azure-verified-modules-engineering-owners', 'member-one', 'member-two')
-        Should -Invoke Get-AvmWorkflowFailureIssueCommentsToday -Times 1 -ParameterFilter { $All }
+        Should -Invoke Invoke-RepositoryGitHub -Times 1 -ParameterFilter { $Arguments[0] -eq 'api' -and $Arguments -contains '--paginate' }
         Should -Invoke Invoke-RepositoryGitHub -Times 1 -Exactly -ParameterFilter {
             $Arguments[0] -eq 'issue' -and $Arguments[1] -eq 'comment' -and
             $Arguments[-1] -match '@Azure/azure-verified-modules-engineering-owners' -and
@@ -351,30 +382,33 @@ Describe 'Set-AvmWorkflowFailureIssueForRun' {
         }
     }
 
-    It 'does not repeat a maintenance alert already present in the issue body or an older comment: <Location>' -ForEach @(
+    It 'does not repeat a maintenance alert within 24 hours of the issue body or a reminder: <Location>' -ForEach @(
         @{ Location = 'body' }, @{ Location = 'comment' }
     ) {
         $script:run.name = 'Repos: Bicep Sync'
         $team = 'Azure/azure-verified-modules-engineering-owners'
         $routing = Resolve-AvmWorkflowFailureRouting -WorkflowRun $script:run -ExistingIssues @() -Owners @() -IsModule $false `
             -PlatformTeam $team -PlatformMembers @('former-member')
-        $script:comments = if ($Location -eq 'comment') { @($routing.CreateIssueBody) } else { @() }
-        Mock Get-AvmWorkflowFailureIssueCommentsToday { $script:comments }
+        $script:comments = if ($Location -eq 'comment') {
+            @([pscustomobject]@{ body = $routing.CreateIssueBody; created_at = [datetimeoffset]::UtcNow.ToString('o'); user = @{ type = 'Bot' } })
+        }
+        else { @() }
+        Mock Invoke-RepositoryGitHub { if ($Arguments[0] -eq 'api') { $script:comments } }
         $issue = [pscustomobject]@{
             number = 42; title = '[Failed pipeline] Repos: Bicep Sync'
             url = 'https://github.com/Azure/azure-verified-modules-tools/issues/42'
-            createdAt = '2026-01-01T00:00:00Z'
+            createdAt = if ($Location -eq 'body') { [datetimeoffset]::UtcNow.ToString('o') } else { '2026-01-01T00:00:00Z' }
             body = if ($Location -eq 'body') { $routing.CreateIssueBody } else { 'Earlier failure.' }
         }
         $outcome = Set-AvmWorkflowFailureIssueForRun -WorkflowRun $script:run `
             -Repository 'Azure/azure-verified-modules-tools' -ExistingIssues @($issue) -Owners @() -IsModule $false -PlatformTeam $team
         $outcome.Status | Should -Be 'AlreadyReported'
-        Should -Invoke Invoke-RepositoryGitHub -Times 0 -Exactly
+        Should -Invoke Invoke-RepositoryGitHub -Times 0 -Exactly -ParameterFilter { $Arguments[0] -eq 'issue' }
     }
 
     It 'updates a previously reported failure once to mention individual members' {
         $script:run.name = 'Repos: Terraform Sync'
-        Mock Get-AvmWorkflowFailureIssueCommentsToday { @() }
+        Mock Invoke-RepositoryGitHub { if ($Arguments[0] -eq 'api') { return @() } }
         $issue = [pscustomobject]@{
             number = 42; title = '[Failed pipeline] Repos: Terraform Sync'
             url = 'https://github.com/Azure/azure-verified-modules-tools/issues/42'

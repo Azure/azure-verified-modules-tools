@@ -10,7 +10,8 @@ param(
     [string] $DefaultRef = 'main',
     [string[]] $WorkflowName = @(),
     [ValidatePattern('^[A-Za-z0-9-]+/[a-z0-9-]+$')][string] $PlatformTeam,
-    [ValidateRange(1, 100)][int] $FailureThreshold = 1
+    [ValidateRange(1, 100)][int] $FailureThreshold = 1,
+    [ValidateRange(1, 8760)][int] $ReminderIntervalHours = 24
 )
 
 Set-StrictMode -Version 3.0
@@ -31,7 +32,8 @@ $libDir = Join-Path $PSScriptRoot 'lib'
 
 try {
     Invoke-AvmWorkflowFailureIssues -Repository $Repository -Branch $Branch -DefaultRef $DefaultRef `
-        -WorkflowName $WorkflowName -PlatformTeam $PlatformTeam -FailureThreshold $FailureThreshold -WhatIf:$WhatIfPreference
+        -WorkflowName $WorkflowName -PlatformTeam $PlatformTeam -FailureThreshold $FailureThreshold `
+        -ReminderIntervalHours $ReminderIntervalHours -WhatIf:$WhatIfPreference
 }
 catch {
     # Defense-in-depth: guarantee full exception detail always reaches the workflow log,

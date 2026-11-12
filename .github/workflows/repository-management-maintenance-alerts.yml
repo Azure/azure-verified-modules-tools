@@ -75,6 +75,7 @@ jobs:
           WHAT_IF: ${{ inputs.what_if }}
           NOTIFY_TEAM: Azure/azure-verified-modules-engineering-owners
           FAILURE_THRESHOLD: '3'
+          REMINDER_INTERVAL_HOURS: '24'
           MONITORED_WORKFLOWS: >-
             ["Repos: Catalog Sync", "Repos: Terraform Sync", "Repos: Bicep Sync",
              "Repos: Module List Sync", "Repos: Label Sync", "Repos: Issue Routing",
@@ -89,6 +90,7 @@ jobs:
             -WorkflowName $workflowNames `
             -PlatformTeam $env:NOTIFY_TEAM `
             -FailureThreshold ([int]$env:FAILURE_THRESHOLD) `
+            -ReminderIntervalHours ([int]$env:REMINDER_INTERVAL_HOURS) `
             -WhatIf:$whatIf
 
           $global:LASTEXITCODE = 0
