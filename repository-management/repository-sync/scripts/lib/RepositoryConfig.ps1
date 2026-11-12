@@ -1,6 +1,6 @@
 # Resolves the per-repository view of `repository-config/config.json`:
-# teams, code-owners teams, topics, and workload identity federation claim
-# overrides.
+# teams, code-owners teams, topics, workload identity federation claim
+# overrides, and the release-metadata check rollout mode.
 #
 # Managed-file group selection is deliberately NOT resolved here. Avm.Authoring's
 # Sync-AvmManagedFile.ps1 owns that resolution end to end, so there is only one
@@ -19,6 +19,31 @@ function Resolve-AvmRepositoryEntraGroups {
     )
 
     return Resolve-AvmGroupEntraGroups -Groups $Groups -SelectorProperty 'repositories' -Item $RepositoryId
+}
+
+function Resolve-AvmRepositoryReleaseMetadataCheck {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Groups,
+        [Parameter(Mandatory)] [string] $RepositoryId
+    )
+
+    $modes = @('off', 'evaluate', 'required')
+    foreach ($entry in $Groups) {
+        $group = ConvertTo-AvmSettingDictionary -Value $entry
+        if ($group.Contains('releaseMetadataCheck') -and
+            ($group['releaseMetadataCheck'] -isnot [string] -or $group['releaseMetadataCheck'] -cnotin $modes)) {
+            throw [System.ArgumentException]::new("Repository group '$($group['name'])' releaseMetadataCheck must be exactly 'off', 'evaluate', or 'required'.")
+        }
+    }
+    $mode = 'off'
+    foreach ($entry in @(Get-AvmOrderedGroup -Groups $Groups -SelectorProperty 'repositories' -Item $RepositoryId)) {
+        if ($entry.Group.Contains('releaseMetadataCheck')) {
+            $mode = $entry.Group['releaseMetadataCheck']
+        }
+    }
+    return $mode
 }
 
 function Resolve-RepositorySettings {
@@ -141,5 +166,6 @@ function Resolve-RepositorySettings {
         TestTenant                                      = Resolve-AvmGroupTestTenant -Groups $repositoryConfig.repositoryGroups -SelectorProperty 'repositories' -Item $repoId
         EntraGroups                                     = Resolve-AvmRepositoryEntraGroups -Groups $repositoryConfig.repositoryGroups -RepositoryId $repoId
         ExistingIdentity                                = Resolve-AvmGroupExistingIdentity -Groups $repositoryConfig.repositoryGroups -SelectorProperty 'repositories' -Item $repoId
+        ReleaseMetadataCheck                            = Resolve-AvmRepositoryReleaseMetadataCheck -Groups $repositoryConfig.repositoryGroups -RepositoryId $repoId
     }
 }

@@ -2,7 +2,7 @@
 Set-StrictMode -Version 3.0
 
 function Get-ModuleReleaseUnitCatalogueName {
-    return , @('version', 'timers', 'commands', 'pull-request-body', 'classifier', 'authorization', 'notes', 'notes-edit')
+    return , @('version', 'timers', 'commands', 'pull-request-body', 'classifier', 'authorization', 'notes', 'notes-edit', 'release-metadata')
 }
 
 function Get-ModuleReleaseCatalogue {

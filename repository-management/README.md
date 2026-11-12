@@ -384,6 +384,8 @@ of the main branch ruleset alongside the existing AVM App. Only
 `avm-ptn-example-repo` gets the team bypass. It covers all pull-request rules,
 not just approvals; it does not allow direct pushes or bypass tag rulesets.
 
+Repository groups may set `releaseMetadataCheck` to roll out the Terraform `release-metadata` pull request check. The value must be exactly `off`, `evaluate`, or `required`, and the matching group with the highest `order` wins. `off` is the default and changes nothing. `evaluate` adds the Terraform-only `patch`, `minor`, and `major` labels, so the check can run without blocking merges. `required` also adds a required status check to the main branch ruleset for the context `release-metadata / Validate`, accepted only from the GitHub Actions app (integration ID 15368). The existing AVM App and team bypasses stay pull-request-only, so repo-sync pull requests still merge. Switch a group to `required` only after its managed files include the `release-metadata` caller workflow, or its pull requests cannot merge. The version labels live in Terraform, not in the shared standard labels file, so Bicep repositories and the published label list are unaffected. Only `canary-ring-0` sets this, to `evaluate`.
+
 The generated file replaces stale content or creates a missing file after
 `avm pre-commit` succeeds, in the same temporary checkout and publication flow.
 Plan-only runs show local drift without publishing. Edit the configuration or

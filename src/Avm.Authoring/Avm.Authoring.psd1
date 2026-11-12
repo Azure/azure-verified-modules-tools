@@ -36,6 +36,7 @@
         'Invoke-AvmLint',
         'Invoke-AvmPrCheck',
         'Invoke-AvmPreCommit',
+        'Invoke-AvmReleaseMetadataCheck',
         'Invoke-AvmSync',
         'Invoke-AvmTest',
         'Invoke-AvmTestCleanup',
@@ -48,6 +49,7 @@
         'Select-AvmTestSubscription',
         'Set-AvmBicepReleaseTags',
         'Test-AvmModuleMetadata',
+        'Test-AvmReleaseMetadata',
         'Update-AvmAuthoring'
     )
     CmdletsToExport      = @()
@@ -62,6 +64,7 @@
             BicepWorkflowOrchestration      = 1
             BicepWorkflowE2eRuntime         = 1
             BicepAzureDependencyInventory   = 1
+            TerraformReleaseMetadata        = 1
         }
         PSData          = @{
             Tags         = @('Azure', 'AVM', 'AzureVerifiedModules', 'Bicep', 'Terraform', 'Authoring', 'CLI', 'PSEdition_Core')

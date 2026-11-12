@@ -21,6 +21,7 @@ section when cutting a release.
 
 ### Added
 
+- `Test-AvmReleaseMetadata` and `Invoke-AvmReleaseMetadataCheck` check a Terraform module pull request's release metadata: exactly one `patch`, `minor`, or `major` label when the pull request starts a release, and complete breaking-change details. Repo-sync pull requests and routine bot pull requests pass without a label, unless a bot changes module code beyond formatting. The read-only reusable workflow `terraform-release-metadata.yml` runs the check as `release-metadata / Validate`, and the manifest advertises the `TerraformReleaseMetadata` capability.
 - `Select-AvmTestSubscription` provides the shared read-only Bicep workflow
   subscription selector. It validates the complete tagged pool and exact root
   reservation map, resolves an optional example's actual owning module through

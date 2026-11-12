@@ -33,6 +33,7 @@ This reference is generated from the comment-based help on the public PowerShell
 | [Invoke-AvmLint](Invoke-AvmLint.md) | `avm lint` | Lint all source files in the resolved module under $Path. |
 | [Invoke-AvmPrCheck](Invoke-AvmPrCheck.md) | `avm pr-check` | Run the pull-request linting and drift gauntlet against the resolved module:<br>metadata -> initialize (Terraform) -> sync -> format -> transform -> lint -> check policy -><br>check convention -> validate -> docs. |
 | [Invoke-AvmPreCommit](Invoke-AvmPreCommit.md) | `avm pre-commit` | Run the standard pre-commit gauntlet against the resolved module:<br>bicep:     metadata -> format -> lint -> validate -> transform -> docs.<br>terraform: metadata -> initialize -> sync -> check convention -> transform -> format -> docs. |
+| [Invoke-AvmReleaseMetadataCheck](Invoke-AvmReleaseMetadataCheck.md) |  | Run the release-metadata check for one Terraform module pull request in GitHub Actions. |
 | [Invoke-AvmSync](Invoke-AvmSync.md) | `avm sync` | Synchronise the current Terraform module repository's managed files<br>against the AVM governance source-of-truth (file sync only, no PR). |
 | [Invoke-AvmTest](Invoke-AvmTest.md) | `avm test` | Build Bicep sources or validate Terraform examples under $Path. |
 | [Invoke-AvmTestCleanup](Invoke-AvmTestCleanup.md) | `avm test cleanup` | Resume Bicep test cleanup from its saved JSON state. |
@@ -45,4 +46,5 @@ This reference is generated from the comment-based help on the public PowerShell
 | [Select-AvmTestSubscription](Select-AvmTestSubscription.md) |  | Select a Bicep test subscription using the repository's exact reservation map. |
 | [Set-AvmBicepReleaseTags](Set-AvmBicepReleaseTags.md) |  | Create guarded Bicep module release tags from a checked-out target. |
 | [Test-AvmModuleMetadata](Test-AvmModuleMetadata.md) | `avm metadata validate` | Validate existing or supplied module metadata with packaged Pester tests. |
+| [Test-AvmReleaseMetadata](Test-AvmReleaseMetadata.md) |  | Check one Terraform module pull request's version label and breaking-change details. |
 | [Update-AvmAuthoring](Update-AvmAuthoring.md) | `avm upgrade` | Update Avm.Authoring using the configured PowerShell repositories. |

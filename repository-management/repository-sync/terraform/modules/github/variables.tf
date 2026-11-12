@@ -133,6 +133,13 @@ variable "pull_request_bypass_teams" {
   description = "GitHub team slugs allowed to bypass the main ruleset on pull requests."
 }
 
+variable "release_metadata_check_required" {
+  type        = bool
+  description = "Whether the main ruleset requires the release-metadata pull request check from GitHub Actions."
+  default     = false
+  nullable    = false
+}
+
 variable "github_avm_app_id" {
   type        = string
   description = "The GitHub App ID for the AVM."

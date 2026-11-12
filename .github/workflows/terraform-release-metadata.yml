@@ -1,0 +1,105 @@
+# Reusable release-metadata check for Azure Verified Modules (AVM) Terraform module repositories.
+#
+# It checks that a pull request carries the release metadata the release engine needs: one version label (patch, minor, or major) and complete breaking-change details. Read-only: it never checks out or runs pull request code, never adds labels, and needs no secrets.
+#
+# Consuming module repositories call it from a job named release-metadata, so the check reports as `release-metadata / Validate`. Repository sync requires that exact context when a repository group sets releaseMetadataCheck to required.
+#
+#   on:
+#     pull_request:
+#       types: [opened, edited, reopened, synchronize, labeled, unlabeled]
+#     merge_group:
+#       types: [checks_requested]
+#   jobs:
+#     release-metadata:
+#       uses: Azure/azure-verified-modules-tools/.github/workflows/terraform-release-metadata.yml@<sha>
+#       permissions:
+#         contents: read
+#         issues: read
+#         pull-requests: read
+
+name: 'Reusable: Terraform release metadata'
+
+on:
+  workflow_call:
+    inputs:
+      authoringSource:
+        description: Where to obtain the Avm.Authoring PowerShell module.
+        type: string
+        default: gallery
+      authoringRef:
+        description: 'Avm.Authoring reference: authoringSource=gallery uses a package version (blank = latest); authoringSource=repo uses a tools SHA, tag or branch (blank = latest stable tag).'
+        type: string
+        default: ''
+      pullRequestNumber:
+        description: The pull request to check when the event doesn't name one, such as a manual dispatch. 0 reads it from the event.
+        type: number
+        default: 0
+
+permissions: {}
+
+jobs:
+  bootstrap:
+    name: Prepare authoring runtime
+    permissions:
+      contents: read
+    uses: ./.github/workflows/authoring-bootstrap.yml
+    with:
+      authoringSource: ${{ inputs.authoringSource }}
+      authoringRef: ${{ inputs.authoringRef }}
+
+  validate:
+    name: Validate
+    needs: bootstrap
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Require the prepared authoring runtime
+        if: needs.bootstrap.result != 'success'
+        shell: pwsh
+        env:
+          BOOTSTRAP_RESULT: ${{ needs.bootstrap.result }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          throw [InvalidOperationException]::new("The authoring runtime was not prepared (result: $env:BOOTSTRAP_RESULT). The release-metadata check cannot run.")
+
+      - name: Configure AVM tool cache
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $avmHome = Join-Path $env:RUNNER_TEMP 'avm-home'
+          New-Item -ItemType Directory -Force -Path $avmHome | Out-Null
+          "AVM_HOME=$avmHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Download prepared authoring runtime
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.bootstrap.outputs.artifact }}
+          path: ${{ runner.temp }}/avm-authoring
+
+      - name: Check release metadata
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pullRequestNumber }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module (Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1') -ErrorAction Stop
+          $capabilities = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities
+          if ($capabilities.TerraformReleaseMetadata -isnot [int] -or $capabilities.TerraformReleaseMetadata -ne 1) {
+            throw [InvalidOperationException]::new('The installed Avm.Authoring package does not provide TerraformReleaseMetadata = 1.')
+          }
+          if ($env:PULL_REQUEST_NUMBER -cnotmatch '^(0|[1-9]\d{0,8})$') {
+            throw [ArgumentException]::new('pullRequestNumber must be 0 or a pull request number.')
+          }
+          $parameters = @{ SkipModuleVersionCheck = $true }
+          if ($env:PULL_REQUEST_NUMBER -cne '0') {
+            $parameters.PullRequestNumber = [int]$env:PULL_REQUEST_NUMBER
+          }
+          $result = Invoke-AvmReleaseMetadataCheck @parameters
+          if ($result.Status -cne 'pass') {
+            exit 1
+          }
