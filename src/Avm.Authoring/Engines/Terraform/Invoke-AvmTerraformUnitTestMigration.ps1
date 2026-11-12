@@ -797,16 +797,15 @@ function Test-AvmTerraformRemoteStateDeclaration {
         }
         if ($character -eq '<' -and $index + 1 -lt $Text.Length -and $Text[$index + 1] -eq '<') {
             $header = [regex]::Match($Text.Substring($index),
-                '\A<<(?<trim>-?)(?<marker>[A-Za-z_][A-Za-z0-9_]*)[^\r\n]*(?:\r\n|\n|\r)')
+                '\A<<-?(?<marker>[A-Za-z_][A-Za-z0-9_]*)[^\r\n]*(?:\r\n|\n|\r)')
             if (-not $header.Success) {
                 throw [AvmConfigurationException]::new(
                     "Cannot inspect provider dependencies for '$Path': malformed HCL heredoc requires review before dependency inspection.")
             }
             $index += $header.Length
-            $indent = if ($header.Groups['trim'].Value) { '[ \t]*' } else { '' }
             $marker = [regex]::Escape($header.Groups['marker'].Value)
             $terminator = [regex]::Match($Text.Substring($index),
-                "(?m)^$indent$marker[ \t]*(?:\r\n|\n|\r|$)")
+                "(?m)^[ \t]*$marker[ \t]*(?:\r\n|\n|\r|$)")
             if (-not $terminator.Success) {
                 throw [AvmConfigurationException]::new(
                     "Cannot inspect provider dependencies for '$Path': unterminated HCL heredoc requires review before dependency inspection.")
