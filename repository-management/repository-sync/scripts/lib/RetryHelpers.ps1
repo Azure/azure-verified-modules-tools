@@ -19,7 +19,7 @@ function Get-GitHubTransientRetryPatterns {
     )
 
     if ($ReadOnly) {
-        $patterns += @("HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504")
+        $patterns += @("HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504", "unexpected end of JSON input")
     }
 
     return $patterns
@@ -352,11 +352,13 @@ function Invoke-RepositoryGitHub {
     param(
         [Parameter(Mandatory)] [string[]] $Arguments,
         [switch] $AsJson,
+        [switch] $ReadOnly,
         [int] $MaxRetries = 5
     )
 
     $result = Invoke-GitHubCliWithRetry -commands @(@{ Arguments = $Arguments }) `
         -literalArguments -maxRetries $MaxRetries -retryDelayIncremental 5 `
+        -retryOn (Get-GitHubTransientRetryPatterns -ReadOnly:$ReadOnly.IsPresent) `
         -returnOutput:(!$AsJson) -returnOutputParsedFromJson:$AsJson
     if (-not $result.success) {
         $detail = if ($result.ContainsKey('error')) { $result.error } else { 'retry attempts exhausted' }

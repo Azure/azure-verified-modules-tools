@@ -47,7 +47,7 @@ function Get-AvmIssueOwnerRoutingCandidates {
 
     if (-not [string]::IsNullOrWhiteSpace($IssueUrl)) {
         $sanitized = $IssueUrl.Replace('api.', '').Replace('repos/', '').Replace('issues/', 'issue/')
-        $issue = Invoke-RepositoryGitHub -AsJson -Arguments @(
+        $issue = Invoke-RepositoryGitHub -AsJson -ReadOnly -Arguments @(
             'issue', 'view', $sanitized, '--repo', $Repository, '--json', $script:AvmIssueOwnerRoutingFields
         )
         if ($null -eq $issue -or $null -eq $issue.number) {
@@ -56,7 +56,7 @@ function Get-AvmIssueOwnerRoutingCandidates {
         return @($issue)
     }
 
-    $issues = @(Invoke-RepositoryGitHub -AsJson -Arguments @(
+    $issues = @(Invoke-RepositoryGitHub -AsJson -ReadOnly -Arguments @(
         'issue', 'list', '--repo', $Repository, '--state', 'open', '--limit', '500',
         '--json', $script:AvmIssueOwnerRoutingFields
     ))
@@ -80,7 +80,7 @@ function Get-AvmIssueOwnerRoutingTimeline {
         [Parameter(Mandatory)] [int] $Number
     )
 
-    return @(Invoke-RepositoryGitHub -AsJson -Arguments @(
+    return @(Invoke-RepositoryGitHub -AsJson -ReadOnly -Arguments @(
         'api', '--paginate', "repos/$Repository/issues/$Number/timeline?per_page=100", '--hostname', 'github.com'
     ))
 }
