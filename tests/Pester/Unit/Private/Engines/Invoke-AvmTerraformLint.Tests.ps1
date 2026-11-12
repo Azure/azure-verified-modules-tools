@@ -1373,7 +1373,11 @@ rule "scope_rule" {
                 }
                 [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
             }
-            Mock Invoke-AvmProcess -ParameterFilter { $ArgumentList -contains '-File' } {
+            Mock Invoke-AvmProcess -ParameterFilter {
+                $ArgumentList.Count -eq 6 -and
+                $ArgumentList[2] -eq '-CommandWithArgs' -and
+                $ArgumentList[-1] -like '*tflint-pre.ps1'
+            } {
                 if (($WorkingDirectory -replace '\\', '/') -like '*/examples/default') {
                     $script:sequence += 'tflint-pre.ps1'
                 }
@@ -1395,7 +1399,10 @@ rule "scope_rule" {
             $null = Invoke-AvmTerraformLint -Context $C
 
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
-                ($ArgumentList -contains '-File') -and
+                $ArgumentList.Count -eq 6 -and
+                $ArgumentList[2] -eq '-CommandWithArgs' -and
+                $ArgumentList[3] -eq 'Import-Module -Name $args[0] -Force -ErrorAction Stop; & $args[1]' -and
+                $ArgumentList[-2] -like '*Avm.Authoring.psd1' -and
                 ($ArgumentList[-1] -like '*tflint-pre.ps1') -and
                 $WorkingDirectory -ne $E -and
                 (($WorkingDirectory -replace '\\', '/') -like '*/examples/default')

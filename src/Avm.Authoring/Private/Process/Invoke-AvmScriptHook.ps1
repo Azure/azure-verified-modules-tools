@@ -29,10 +29,21 @@ function Invoke-AvmScriptHook {
         throw [AvmConfigurationException]::new("Unsupported script hook extension: '$HookPath'.")
     }
 
+    $moduleManifest = Join-Path `
+        -Path (Split-Path -Parent $MyInvocation.MyCommand.Module.Path) `
+        -ChildPath 'Avm.Authoring.psd1'
+    $arguments = @(
+        '-NoProfile'
+        '-NonInteractive'
+        '-CommandWithArgs'
+        'Import-Module -Name $args[0] -Force -ErrorAction Stop; & $args[1]'
+        $moduleManifest
+        $HookPath
+    )
     Write-AvmLog ("script-hook: running {0} in {1}" -f $HookPath, $WorkingDirectory) -Level Verbose | Out-Null
     $null = Invoke-AvmProcess `
         -FilePath ([System.Environment]::ProcessPath) `
-        -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $HookPath) `
+        -ArgumentList $arguments `
         -WorkingDirectory $WorkingDirectory `
         -EnvVars $EnvVars `
         -Label $Label
