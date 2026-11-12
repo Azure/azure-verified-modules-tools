@@ -155,4 +155,64 @@ Describe 'Bicep retry policy validation and generic matching' {
             }
         }
     }
+
+    It 'classifies only captured Application Gateway zonal capacity evidence for regional retry' {
+        InModuleScope Avm.Authoring {
+            $subscriptionId = '11111111-1111-1111-1111-111111111111'
+            $gatewayTarget = "/subscriptions/$subscriptionId/resourceGroups/retry-fixture/providers/Microsoft.Network/applicationGateways/gateway"
+            $deploymentTarget = "/subscriptions/$subscriptionId/resourceGroups/retry-fixture/providers/Microsoft.Resources/deployments/dependencies"
+            $message = 'We have a temporary capacity issue with Application Gateways in this region/zone. Please retry after a few days or please try the operation in another region or zone. For a list of Azure regions, refer to: https://azure.microsoft.com/en-us/global-infrastructure/regions/.'
+            $newEvidence = {
+                $leaf = @{
+                    code = 'ApplicationGatewayAllocationFailureDueToCapacityInZone'
+                    message = $message
+                    details = @()
+                }
+                @{
+                    status = 'Failed'
+                    error = @{
+                        code = 'DeploymentFailed'
+                        target = $deploymentTarget
+                        details = @(@{
+                            code = 'ResourceDeploymentFailure'
+                            target = $gatewayTarget
+                            details = @($leaf)
+                        })
+                    }
+                }
+            }
+            $policy = Get-AvmBicepRetryPolicy
+            $evidence = & $newEvidence
+
+            Test-AvmBicepRetryErrorNode -Node $evidence -Policy $policy -RetryKind Regional `
+                -SubscriptionId $subscriptionId -ResourceLocation 'swedencentral' | Should -BeTrue
+            Test-AvmBicepRetryErrorNode -Node $evidence -Policy $policy -RetryKind Transient `
+                -SubscriptionId $subscriptionId -ResourceLocation 'swedencentral' | Should -BeFalse
+
+            $cases = @(
+                @{ Name = 'malformed message'; Location = 'swedencentral' }
+                @{ Name = 'mismatched region message'; Location = 'swedencentral' }
+                @{ Name = 'global location'; Location = 'global' }
+                @{ Name = 'unrelated target'; Location = 'swedencentral' }
+                @{ Name = 'cross-subscription target'; Location = 'swedencentral' }
+                @{ Name = 'mixed evidence'; Location = 'swedencentral' }
+                @{ Name = 'malformed evidence'; Location = 'swedencentral' }
+            )
+            foreach ($case in $cases) {
+                $evidence = & $newEvidence
+                $leaf = $evidence.error.details[0].details[0]
+                switch ($case.Name) {
+                    'malformed message' { $leaf.message += ' Additional provider text.' }
+                    'mismatched region message' { $leaf.message = $leaf.message.Replace('this region/zone', 'another region/zone') }
+                    'unrelated target' { $evidence.error.details[0].target = $gatewayTarget.Replace('applicationGateways/gateway', 'virtualNetworks/network') }
+                    'cross-subscription target' { $evidence.error.details[0].target = $gatewayTarget.Replace($subscriptionId, '22222222-2222-2222-2222-222222222222') }
+                    'mixed evidence' { $evidence.error.details[0].details += @{ code = 'AuthorizationFailed'; message = 'Authorization failed.' } }
+                    'malformed evidence' { $leaf.unexpected = 'evidence' }
+                }
+
+                Test-AvmBicepRetryErrorNode -Node $evidence -Policy $policy -RetryKind Regional `
+                    -SubscriptionId $subscriptionId -ResourceLocation $case.Location | Should -BeFalse
+            }
+        }
+    }
 }

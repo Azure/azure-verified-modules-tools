@@ -63,9 +63,12 @@ function Test-AvmBicepRetryRule {
         }
     }
     $region = ($ResourceLocation -replace '\s', '').ToLowerInvariant()
-    if ($Rule.Contains('regionCapture') -and
-        (-not $region -or $region -eq 'global' -or
-        ($captures[$Rule['regionCapture']] -replace '\s', '').ToLowerInvariant() -ne $region)) { return $false }
+    $regionRequired = $Rule.Contains('regionCapture') -or $Rule['requireNonGlobalLocation']
+    $regionMatches = $true
+    if ($Rule.Contains('regionCapture')) {
+        $regionMatches = ($captures[$Rule['regionCapture']] -replace '\s', '').ToLowerInvariant() -eq $region
+    }
+    if ($regionRequired -and (-not $region -or $region -eq 'global' -or -not $regionMatches)) { return $false }
     foreach ($name in @('numberCaptures', 'dateCaptures', 'listCaptures')) {
         if (-not $Rule.Contains($name)) { continue }
         foreach ($key in $Rule[$name].psbase.Keys) {
