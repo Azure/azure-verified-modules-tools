@@ -9,6 +9,10 @@ function Invoke-AvmTestCleanup {
         before removal; active or unverified deployments retain their resources.
         The file remains available after success or failure. A downloaded Actions
         artifact can be used in the same way as a locally saved file.
+        Retained state from earlier versions needs no conversion. Unfinished
+        resources are retried, including extension resources whose first lock
+        list returned HTTP 400 with NoRegisteredProviderFound. Other lock-read
+        failures retain the resource and block parent cleanup.
         This command does not log in, install modules, or execute test hooks.
     .PARAMETER StatePath
         Existing cleanup JSON file. Relative paths use the current PowerShell location.

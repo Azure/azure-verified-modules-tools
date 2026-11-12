@@ -21,11 +21,168 @@ BeforeAll {
             param($Method, $Path, $Uri, $Payload)
             throw 'Unmocked Azure request.'
         }
+        foreach ($name in @('Get-AzResourceLock', 'Remove-AzResourceLock', 'Remove-AzResource', 'Remove-AzResourceGroup', 'Remove-AzDiagnosticSetting')) {
+            Set-Item -Path "Function:script:$name" -Value {
+                [CmdletBinding(SupportsShouldProcess)]
+                param($Scope, $LockName, $LockId, $ResourceId, $Name, [switch] $Force)
+                throw "Unmocked Azure call: $($MyInvocation.MyCommand.Name)"
+            }
+        }
     }
 }
 
 AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
+}
+
+Describe 'Component: Bicep unsupported lock discovery recovery' -Tag Component {
+    BeforeEach {
+        $script:statePath = Join-Path $TestDrive ([guid]::NewGuid().ToString('N') + '.cleanup.json')
+        InModuleScope Avm.Authoring -Parameters @{ File = $script:statePath } {
+            param($File)
+            $script:group = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test'
+            $script:parent = "$script:group/providers/Microsoft.Sql/servers/server"
+            $script:child = "$script:parent/providers/Microsoft.Insights/diagnosticSettings/customSetting"
+            $created = New-AvmBicepCleanupState -Path $File -Environment AzureCloud `
+                -SubscriptionId '00000000-0000-0000-0000-000000000001' `
+                -TenantId '00000000-0000-0000-0000-000000000002'
+            $created.State.status = 'CleanupPending'
+            $script:runId = $created.State.runId
+            $created.State.ownedResourceGroups.Add(@{ id = $script:group; runId = $script:runId })
+            foreach ($resource in ConvertTo-AvmBicepCleanupResource -ResourceIds @($script:group, $script:parent, $script:child)) {
+                $created.State.resources.Add(@{
+                        id = $resource.resourceId; type = $resource.type
+                        removed = $false; postProcessed = $false; metadataCaptured = $true
+                        managedResourceGroupIds = @(); originalSoftDeleteFeatureState = ''
+                    })
+            }
+            Save-AvmBicepCleanupState -State $created.State -Path $File
+            Mock Test-AvmModuleVersion {}
+            Mock Assert-AvmBicepAzureDependency {}
+            Mock Assert-AvmBicepAzureIdentity {}
+            Mock Get-Command { @{ Source = 'fake-az' } }
+            Mock Invoke-AvmBicepAzureContext { & $ScriptBlock }
+            Mock Get-AzContext { @{ Environment = @{ Name = 'AzureCloud' } } }
+            Mock Get-AvmBicepDeploymentCleanupTarget { @{ ResourceIds = @(); Issues = @() } }
+            Mock Invoke-AvmBicepCleanupLookup {
+                @{ ResourceId = $script:group; Tags = @{ 'avm-e2e-run-id' = $script:runId } }
+            }
+            Mock Initialize-AvmBicepCleanupResource { throw 'Saved metadata must be reused.' }
+            Mock Get-AzResourceLock { @() }
+            Mock Remove-AzResourceLock { throw 'Unexpected lock removal.' }
+            Mock Remove-AzDiagnosticSetting {}
+            Mock Remove-AzResource {}
+            Mock Remove-AzResourceGroup {}
+            Mock Remove-AvmBicepResourceRemainder {}
+            Mock Start-Sleep {}
+            Mock Write-AvmLog {}
+            Mock Invoke-AzRestMethod { $script:lockResponse }
+        }
+    }
+
+    It 'resumes retained state through the public command after unsupported diagnostic-setting lock discovery' {
+        InModuleScope Avm.Authoring -Parameters @{ File = $script:statePath } {
+            param($File)
+            $script:lockResponse = @{ StatusCode = 400; Content = '{"error":{"code":"NoRegisteredProviderFound"}}' }
+            $result = Invoke-AvmTestCleanup -StatePath $File `
+                -SubscriptionId '00000000-0000-0000-0000-000000000001' `
+                -TenantId '00000000-0000-0000-0000-000000000002' -RemovalRetryInterval 0
+            $result.Cleaned | Should -BeTrue
+            $result.Status | Should -BeExactly 'pass'
+            $result.Issues | Should -BeNullOrEmpty
+            $result.CleanupPending | Should -BeNullOrEmpty
+            $saved = Read-AvmBicepCleanupState -Path $File
+            $saved.status | Should -BeExactly 'Complete'
+            @($saved.resources | Where-Object { -not $_.postProcessed }).Count | Should -Be 0
+            Should -Invoke Remove-AzDiagnosticSetting -Exactly 1 -ParameterFilter { $ResourceId -eq $script:parent }
+            Should -Invoke Remove-AzResource -Exactly 1 -ParameterFilter { $ResourceId -eq $script:parent }
+            Should -Invoke Remove-AzResource -Exactly 1 -ParameterFilter { $ResourceId -eq $script:group }
+            Should -Invoke Initialize-AvmBicepCleanupResource -Exactly 0
+        }
+    }
+
+    It 'removes and confirms a recorded parent lock before deleting the diagnostic setting and its parents' {
+        InModuleScope Avm.Authoring -Parameters @{ File = $script:statePath } {
+            param($File)
+            $state = Read-AvmBicepCleanupState -Path $File
+            $script:parentLock = "$script:parent/providers/Microsoft.Authorization/locks/owned"
+            $state.resources = @(Get-AvmBicepCleanupResourceRecord -Existing $state.resources -ResourceIds @($script:parentLock))
+            foreach ($resource in $state.resources) { $resource.metadataCaptured = $true }
+            Save-AvmBicepCleanupState -State $state -Path $File
+            $script:lockRemoved = $false
+            $script:deletions = [Collections.Generic.List[string]]::new()
+            $script:lockResponse = @{ StatusCode = 400; Content = '{"error":{"code":"NoRegisteredProviderFound"}}' }
+            Mock Get-AzResourceLock {
+                if (-not $script:lockRemoved) { @{ LockId = $script:parentLock; Level = 'CanNotDelete' } }
+            }
+            Mock Remove-AzResourceLock {
+                $script:deletions.Add($LockId)
+                $script:lockRemoved = $true
+            }
+            Mock Remove-AzDiagnosticSetting { $script:deletions.Add($script:child) }
+            Mock Remove-AzResource { $script:deletions.Add($ResourceId) }
+            $result = Invoke-AvmTestCleanup -StatePath $File `
+                -SubscriptionId '00000000-0000-0000-0000-000000000001' `
+                -TenantId '00000000-0000-0000-0000-000000000002' -RemovalRetryInterval 0
+            $result.Cleaned | Should -BeTrue
+            @($script:deletions) | Should -Be @($script:parentLock, $script:child, $script:parent, $script:group)
+            Should -Invoke Get-AzResourceLock -Exactly 3 -ParameterFilter {
+                $Scope -eq $script:parent -and $LockName -eq 'owned'
+            }
+        }
+    }
+
+    It 'retains state and blocks parents for <Label>' -ForEach @(
+        @{ Label = '401'; Response = @{ StatusCode = 401; Content = '{"error":{"code":"NoRegisteredProviderFound"}}' } }
+        @{ Label = '403'; Response = @{ StatusCode = 403; Content = '{"error":{"code":"AuthorizationFailed"}}' } }
+        @{ Label = '429'; Response = @{ StatusCode = 429; Content = '{}' } }
+        @{ Label = '500'; Response = @{ StatusCode = 500; Content = '{}' } }
+        @{ Label = '503'; Response = @{ StatusCode = 503; Content = '{}' } }
+        @{ Label = 'transport failure'; Response = $null }
+        @{ Label = 'different 400 code'; Response = @{ StatusCode = 400; Content = '{"error":{"code":"MissingSubscriptionRegistration"}}' } }
+        @{ Label = 'malformed JSON'; Response = @{ StatusCode = 400; Content = '{"error":' } }
+        @{ Label = 'missing error code'; Response = @{ StatusCode = 400; Content = '{}' } }
+        @{ Label = 'array error code'; Response = @{ StatusCode = 400; Content = '{"error":{"code":["NoRegisteredProviderFound"]}}' } }
+        @{ Label = 'array error'; Response = @{ StatusCode = 400; Content = '{"error":[{"code":"NoRegisteredProviderFound"}]}' } }
+        @{ Label = 'duplicate error code'; Response = @{ StatusCode = 400; Content = '{"error":{"code":"AuthorizationFailed","Code":"NoRegisteredProviderFound"}}' } }
+        @{ Label = 'string status'; Response = @{ StatusCode = '400'; Content = '{"error":{"code":"NoRegisteredProviderFound"}}' } }
+        @{ Label = 'CanNotDelete lock'; Response = 'CanNotDelete' }
+        @{ Label = 'ReadOnly lock'; Response = 'ReadOnly' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ File = $script:statePath; Response = $Response } {
+            param($File, $Response)
+            $script:lockResponse = $Response
+            Mock Invoke-AzRestMethod {
+                if ($null -eq $script:lockResponse) { throw [Net.Http.HttpRequestException]::new('Transport failed.') }
+                if ($script:lockResponse -is [string]) {
+                    if ($Method -eq 'DELETE') { return @{ StatusCode = 204 } }
+                    $lock = @{
+                        id         = "$script:child/providers/Microsoft.Authorization/locks/retained"
+                        properties = @{ level = $script:lockResponse }
+                    }
+                    return @{
+                        StatusCode = 200
+                        Content    = (@{ value = @($lock) } | ConvertTo-Json -Depth 6 -Compress)
+                    }
+                }
+                $script:lockResponse
+            }
+            $result = Invoke-AvmTestCleanup -StatePath $File `
+                -SubscriptionId '00000000-0000-0000-0000-000000000001' `
+                -TenantId '00000000-0000-0000-0000-000000000002' -RemovalRetryInterval 0
+            $result.Cleaned | Should -BeFalse
+            $result.Status | Should -BeExactly 'fail'
+            $result.CleanupPending.Count | Should -Be 3
+            @($result.Issues | Where-Object { $_.ResourceId -eq $script:child -and $_.Phase -eq 'lock' }).Count | Should -Be 1
+            $saved = Read-AvmBicepCleanupState -Path $File
+            $saved.status | Should -BeExactly 'CleanupPending'
+            @($saved.resources | Where-Object { $_.removed -or $_.postProcessed }).Count | Should -Be 0
+            Should -Invoke Remove-AzDiagnosticSetting -Exactly 0
+            Should -Invoke Remove-AzResource -Exactly 0
+            Should -Invoke Remove-AzResourceGroup -Exactly 0
+            Should -Invoke Remove-AvmBicepResourceRemainder -Exactly 0
+        }
+    }
 }
 
 Describe 'Component: Bicep cleanup state and context' -Tag Component {

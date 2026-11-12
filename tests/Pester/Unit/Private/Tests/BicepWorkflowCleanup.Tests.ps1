@@ -390,8 +390,36 @@ Describe 'Bicep workflow cleanup locks and failures' {
         }
     }
 
+    It 'accepts unsupported first-page lock discovery for <Type>' -ForEach @(
+        @{ Type = 'Microsoft.Insights/diagnosticSettings'; Suffix = 'Microsoft.Insights/diagnosticSettings/customSetting' }
+        @{ Type = 'Microsoft.SecurityInsights/onboardingStates'; Suffix = 'Microsoft.SecurityInsights/onboardingStates/default' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Type = $Type; Suffix = $Suffix } {
+            param($Type, $Suffix)
+            $target = "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.OperationalInsights/workspaces/workspace/providers/$Suffix"
+            Mock Invoke-AzRestMethod {
+                @{ StatusCode = 400; Content = '{"error":{"code":"NoRegisteredProviderFound"}}' }
+            }
+            @(Get-AvmBicepResourceLock -ResourceId $target -Type $Type).Count | Should -Be 0
+            Should -Invoke Invoke-AzRestMethod -Exactly 1 -ParameterFilter {
+                $Method -ceq 'GET' -and $Path -ceq "$target/providers/Microsoft.Authorization/locks?api-version=2016-09-01"
+            }
+        }
+    }
+
+    It 'does not treat an unsupported read as absence of an explicitly recorded extension lock' {
+        InModuleScope Avm.Authoring {
+            $target = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Sql/servers/server/providers/Microsoft.Insights/diagnosticSettings/customSetting/providers/Microsoft.Authorization/locks/recorded'
+            Mock Invoke-AzRestMethod {
+                @{ StatusCode = 400; Content = '{"error":{"code":"NoRegisteredProviderFound"}}' }
+            }
+            { Get-AvmBicepResourceLock -ResourceId $target -Type 'Microsoft.Authorization/locks' } |
+                Should -Throw -ExpectedMessage '*HTTP 400*'
+        }
+    }
+
     It 'refuses a missing later extension-lock page and a non-lock descendant ID' -ForEach @(
-        @{ Scenario = 'missing page' }, @{ Scenario = 'non-lock ID' }
+        @{ Scenario = 'missing page' }, @{ Scenario = 'unsupported later page' }, @{ Scenario = 'non-lock ID' }
     ) {
         InModuleScope Avm.Authoring -Parameters @{ Scenario = $Scenario } {
             param($Scenario)
@@ -399,9 +427,12 @@ Describe 'Bicep workflow cleanup locks and failures' {
             $script:scenario = $Scenario
             Mock Invoke-AzRestMethod {
                 if ($Path -like '*page=2') {
+                    if ($script:scenario -eq 'unsupported later page') {
+                        return @{ StatusCode = 400; Content = '{"error":{"code":"NoRegisteredProviderFound"}}' }
+                    }
                     return @{ StatusCode = 404; Content = '{"error":{"code":"ResourceNotFound"}}' }
                 }
-                $body = if ($script:scenario -eq 'missing page') {
+                $body = if ($script:scenario -ne 'non-lock ID') {
                     @{ value = @(); nextLink = "$script:target/providers/Microsoft.Authorization/locks?page=2" }
                 }
                 else {
