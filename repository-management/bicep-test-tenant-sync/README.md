@@ -179,7 +179,6 @@ and claims['job_workflow_ref'] matches '{configured workflow path}@*'
 and claims['sub'] matches '*:workflow_ref:Azure/bicep-registry-modules/.github/workflows/*'
 and claims['sub'] matches '*:workflow_ref:*/.github/workflows/{module.path}.yml@refs/heads/main'
 and claims['repository_id'] eq '{registry ID}'
-and claims['repository_owner_id'] eq '{Azure ID}'
 ```
 
 Every comparand remains within 128 characters. GitHub's caller `workflow_ref`
@@ -188,8 +187,10 @@ files cannot be nested below that directory. Both caller clauses must match
 the same final subject field: the first fixes the repository and directory,
 and the second fixes the complete filename and trusted `main` ref. Together
 they do not wildcard the caller filename. Inputs reject nested paths, wildcard
-filenames, other repositories and non-main caller refs. The separate immutable
-ID clauses remain mandatory. GitHub `workflow_ref` itself is not an
+filenames, other repositories and non-main caller refs. The subject binds both
+immutable owner and repository IDs, with the repository ID also checked as a
+separate claim to stay within Azure's five-clause limit. GitHub `workflow_ref`
+itself is not an
 [FFL-supported claim](https://learn.microsoft.com/entra/workload-id/workload-identities-flexible-federated-identity-credentials#issuer-urls-supported-claims-and-operators-by-platform),
 so caller matching stays in the customized subject instead of an unsupported
 raw-claim comparison.

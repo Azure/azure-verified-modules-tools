@@ -51,8 +51,10 @@ locals {
       [for pattern in try(credential.caller_subject_patterns, []) : "claims['sub'] matches '${pattern}'"],
       [
         "claims['repository_id'] eq '${credential.repository_id}'",
-        "claims['repository_owner_id'] eq '${var.github_organization_id}'",
       ],
+      length(try(credential.caller_subject_patterns, [])) == 0 ? [
+        "claims['repository_owner_id'] eq '${var.github_organization_id}'",
+      ] : [],
     )
   }
   member_is_repository_identity = (

@@ -21,7 +21,7 @@ Describe 'Bounded exact Bicep caller federation' {
                 -RepositoryId '447791597' -Environment 'avm-validation' `
                 -JobWorkflowPath 'Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml' -WorkflowRef $workflowRef
             $clauses = @($expression -split ' and ')
-            $clauses.Count | Should -Be 6
+            $clauses.Count | Should -Be 5
             foreach ($clause in $clauses) {
                 $comparand = [regex]::Match($clause, " (?:matches|eq) '([^']+)'$").Groups[1].Value
                 $comparand.Length | Should -BeLessOrEqual 128
@@ -57,7 +57,7 @@ Describe 'Bounded exact Bicep caller federation' {
 
     It 'matches only the exact caller, IDs, environment and reusable path: <Case>' -ForEach @(
         @{ Case = 'trusted SHA-pinned reusable workflow'; Field = ''; From = ''; To = ''; Accepted = $true }
-        @{ Case = 'another owner ID'; Field = 'repository_owner_id'; From = '6844498'; To = '999'; Accepted = $false }
+        @{ Case = 'another owner ID'; Field = 'sub'; From = 'repository_owner_id:6844498'; To = 'repository_owner_id:999'; Accepted = $false }
         @{ Case = 'another repository ID'; Field = 'repository_id'; From = '447791597'; To = '999'; Accepted = $false }
         @{ Case = 'another subject repository'; Field = 'sub'; From = 'repository_id:447791597'; To = 'repository_id:999'; Accepted = $false }
         @{ Case = 'another environment'; Field = 'sub'; From = 'environment:avm-validation'; To = 'environment:no-approval'; Accepted = $false }
@@ -77,6 +77,7 @@ Describe 'Bounded exact Bicep caller federation' {
             repository_id = '447791597'; repository_owner_id = '6844498'; job_workflow_ref = $job
         }
         if ($Field) { $claims[$Field] = $claims[$Field].Replace($From, $To) }
+        if ($Case -eq 'another owner ID') { $claims.repository_owner_id = '999' }
         $expression = Get-AvmBamiModuleFederationExpression -RepositoryOwnerId '6844498' -RepositoryId '447791597' `
             -Environment 'avm-validation' -JobWorkflowPath $jobPath -WorkflowRef $caller
         $matched = @(
@@ -475,7 +476,7 @@ Describe 'Bicep identity saved-plan ownership guard' {
                 "claims['job_workflow_ref'] matches 'Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml@*' and " +
                 "claims['sub'] matches '*:workflow_ref:Azure/bicep-registry-modules/.github/workflows/*' and " +
                 "claims['sub'] matches '*:workflow_ref:*/.github/workflows/$($path.Replace('/', '.')).yml@refs/heads/main' and " +
-                "claims['repository_id'] eq '447791597' and claims['repository_owner_id'] eq '6844498'"
+                "claims['repository_id'] eq '447791597'"
             )
             $tools = @($credentials | Where-Object { $_.address.EndsWith('.azapi_resource.federated_credentials["validation"]') })[0]
             $tools.values.body.properties.claimsMatchingExpression.value |
@@ -497,7 +498,7 @@ Describe 'Bicep identity saved-plan ownership guard' {
             $clauses = @($change.change.before.body.properties.claimsMatchingExpression.value -split ' and ')
             $change.change.before.body.properties.claimsMatchingExpression.value = (@($clauses[0..1]) +
                 "claims['sub'] matches '*:workflow_ref:Azure/bicep-registry-modules/.github/workflows/$($path.Replace('/', '.')).yml@refs/heads/main'" +
-                @($clauses[4..5])) -join ' and '
+                @($clauses[4]) + "claims['repository_owner_id'] eq '6844498'") -join ' and '
             $change.change.actions = @('update')
         }
         { Assert-AvmBicepIdentityPlan @script:guard } | Should -Not -Throw
