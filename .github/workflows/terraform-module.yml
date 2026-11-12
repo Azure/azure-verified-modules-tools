@@ -26,6 +26,8 @@
 # the governance cred-prep script's curated
 # `AVM_*` / `TF_VAR_*` subset forwarding - and makes the old `AVM_BARE_` prefix
 # escape hatch redundant, so it is intentionally dropped here.
+# PR check and integration also expose lowercase TF_VAR suffix aliases and
+# bind TF_VAR_subscription_id to the selected General subscription.
 #
 # Divergences from the governance template (tracked as follow-ups):
 #   * There is no global setup/teardown stage; the module implements per-example
@@ -369,6 +371,12 @@ jobs:
               $value = [string] $combined[$key]
               $delim = "AVM_ENV_$([guid]::NewGuid().ToString('N'))"
               "$key<<$delim`n$value`n$delim" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+              if ($key -match '^TF_VAR_(.+)$') {
+                  $terraformName = "TF_VAR_$($Matches[1].ToLowerInvariant())"
+                  if ($terraformName -cne $key) {
+                      "$terraformName<<$delim`n$value`n$delim" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+                  }
+              }
           }
 
           # Azure OIDC plumbing for terraform (ARM_USE_OIDC=true).
@@ -382,6 +390,7 @@ jobs:
           'SECRETS_CONTEXT={}' | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           'VARS_CONTEXT={}' | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ARM_SUBSCRIPTION_ID=$($env:SELECTED_SUBSCRIPTION_ID)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TF_VAR_subscription_id=$($env:SELECTED_SUBSCRIPTION_ID)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "subscriptionId=$($env:SELECTED_SUBSCRIPTION_ID)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Download prepared authoring runtime
