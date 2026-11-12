@@ -276,6 +276,7 @@ Describe 'GitHub read-only discovery retries' {
         @{ Failure = 'gh: Server Error (HTTP 502)' }
         @{ Failure = 'gh: Service Unavailable (HTTP 503)' }
         @{ Failure = 'gh: Gateway Timeout (HTTP 504)' }
+        @{ Failure = 'unexpected end of JSON input' }
     ) {
         param($Failure)
 
@@ -382,6 +383,26 @@ Describe 'GitHub read-only discovery retries' {
         Test-CommandResultsSucceeded -results $result | Should -BeFalse
         $global:retryHelpersAttempts | Should -Be 2
         Should -Invoke Start-Sleep -Exactly 0
+    }
+}
+
+Describe 'Invoke-RepositoryGitHub retry policy' {
+    BeforeEach {
+        Mock Invoke-GitHubCliWithRetry { @{ success = $true; output = @() } }
+    }
+
+    It 'enables transient response retries only for read-only operations' {
+        Invoke-RepositoryGitHub -Arguments @('issue', 'list') -AsJson -ReadOnly | Out-Null
+        Should -Invoke Invoke-GitHubCliWithRetry -Times 1 -ParameterFilter {
+            $retryOn -contains 'HTTP 504' -and $retryOn -contains 'unexpected end of JSON input'
+        }
+    }
+
+    It 'keeps the default retry policy for operations without a read-only marker' {
+        Invoke-RepositoryGitHub -Arguments @('issue', 'edit') | Out-Null
+        Should -Invoke Invoke-GitHubCliWithRetry -Times 1 -ParameterFilter {
+            $retryOn -notcontains 'HTTP 504' -and $retryOn -notcontains 'unexpected end of JSON input'
+        }
     }
 }
 

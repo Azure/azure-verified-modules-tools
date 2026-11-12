@@ -45,6 +45,13 @@ Describe 'Get-AvmIssueOwnerRoutingCandidates' {
         $result.number | Should -Contain 3
     }
 
+    It 'uses the read-only retry policy when listing issue candidates' {
+        Get-AvmIssueOwnerRoutingCandidates -Repository 'Azure/bicep-registry-modules' -UpdatedWithinMinutes 0 | Out-Null
+        Should -Invoke Invoke-RepositoryGitHub -Times 1 -ParameterFilter {
+            $ReadOnly -and $Arguments[0] -ceq 'issue' -and $Arguments[1] -ceq 'list'
+        }
+    }
+
     It 'filters by the lookback window' {
         $result = @(Get-AvmIssueOwnerRoutingCandidates -Repository 'Azure/bicep-registry-modules' -UpdatedWithinMinutes 60)
         $result.Count | Should -Be 1
