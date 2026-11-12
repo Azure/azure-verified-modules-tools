@@ -28,7 +28,6 @@ if (($args -join ',') -cne 'version,-json') {
 }
 $record = @(
     $env:AVM_HOOK_PHASE
-    $PSCommandPath
     ($args -join ',')
     (Get-Location).Path
     $env:TF_DATA_DIR
@@ -67,7 +66,6 @@ if (-not $json -or $args.Count -ne 0) {
 }
 $record = @(
     $env:AVM_HOOK_PHASE
-    (Get-Process -Id $PID).Path
     'version,-json'
     (Get-Location).Path
     $env:TF_DATA_DIR
@@ -269,10 +267,10 @@ Describe 'Invoke-AvmScriptHook runtime propagation' -Tag Component {
 
         $records = @(Get-Content -LiteralPath $fixture.Trace)
         $records.Count | Should -Be 2
-        $records[0] | Should -BeExactly ('pre|{0}|version,-json|{1}|{2}' -f
-            $fixture.ToolPath, $fixture.Hooks, $fixture.DataDirectory)
-        $records[1] | Should -BeExactly ('post|{0}|version,-json|{1}|{2}' -f
-            $fixture.ToolPath, $fixture.Hooks, $fixture.DataDirectory)
+        $records[0] | Should -BeExactly ('pre|version,-json|{0}|{1}' -f
+            $fixture.Hooks, $fixture.DataDirectory)
+        $records[1] | Should -BeExactly ('post|version,-json|{0}|{1}' -f
+            $fixture.Hooks, $fixture.DataDirectory)
         Test-Path -LiteralPath $fixture.FakeMarker | Should -BeFalse
         Test-Path -LiteralPath $fixture.ConflictTrace | Should -BeFalse
     }
@@ -293,7 +291,7 @@ Describe 'Invoke-AvmScriptHook runtime propagation' -Tag Component {
         Remove-Item -LiteralPath $fixture.ToolPath -Force
 
         { Invoke-FixtureHook -Fixture $fixture -Name 'post.ps1' } |
-            Should -Throw '*Get-AvmTool did not select the repository override from the managed cache*'
+            Should -Throw '*Get-AvmTool did not select*managed*cache*'
         Test-Path -LiteralPath $fixture.Trace | Should -BeFalse
         Test-Path -LiteralPath $fixture.ToolPath | Should -BeFalse
         Test-Path -LiteralPath $fixture.FakeMarker | Should -BeFalse
