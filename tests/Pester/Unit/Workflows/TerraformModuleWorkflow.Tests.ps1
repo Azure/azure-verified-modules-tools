@@ -500,6 +500,30 @@ Describe 'Terraform General subscription selection' {
         $script:written['fixture-environment'] | Should -Not -Contain "ARM_SUBSCRIPTION_ID=$($script:reserved.id)"
         $script:written['fixture-output'] | Should -Contain "subscriptionId=$($script:general.id)"
     }
+
+    It 'aliases Terraform variable names and binds subscription_id to the selected pool in <Job>' -ForEach @(
+        @{ Job = 'pr-check' }
+        @{ Job = 'integration-test' }
+    ) {
+        $env:SUBSCRIPTION_IDS = ConvertTo-Json -InputObject @($script:general) -Compress
+        $env:SELECTED_SUBSCRIPTION_ID = $script:general.id
+        $env:VARS_CONTEXT = ConvertTo-Json -InputObject @{
+            TF_VAR_AKS_ARC_NAME = 'policy-only-cluster'
+            TF_VAR_RESOURCE_GROUP_NAME = 'policy-only-rg'
+            TF_VAR_lowercase = 'already-lowercase'
+            TF_VAR_SUBSCRIPTION_ID = $script:reserved.id
+        } -Compress
+        $env:SECRETS_CONTEXT = '{"TF_VAR_AKS_ARC_NAME":"secret-cluster"}'
+
+        & $script:reservationScripts[$Job]
+
+        $writes = $script:written['fixture-environment'] -join "`n"
+        [regex]::IsMatch($writes, '(?s)TF_VAR_aks_arc_name<<[^\n]+\nsecret-cluster\n') | Should -BeTrue
+        [regex]::IsMatch($writes, '(?s)TF_VAR_AKS_ARC_NAME<<[^\n]+\nsecret-cluster\n') | Should -BeTrue
+        [regex]::IsMatch($writes, '(?s)TF_VAR_resource_group_name<<[^\n]+\npolicy-only-rg\n') | Should -BeTrue
+        @($script:written['fixture-environment'] | Where-Object { $_ -clike 'TF_VAR_lowercase<<*' }) | Should -HaveCount 1
+        $script:written['fixture-environment'][-1] | Should -BeExactly "TF_VAR_subscription_id=$($script:general.id)"
+    }
 }
 
 Describe 'terraform-module automatic checks and fork isolation' {
