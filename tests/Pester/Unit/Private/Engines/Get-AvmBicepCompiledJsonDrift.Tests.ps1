@@ -142,4 +142,201 @@ Describe 'Get-AvmBicepCompiledJsonDrift' {
                 Should -Throw '*valid UTF-8*'
         }
     }
+
+    It 'retains root generator validation and masking regardless of its name' {
+        $compiled = $script:compiled.Replace('"bicep"', '"FinOps toolkit"')
+        InModuleScope 'Avm.Authoring' -Parameters @{ Compiled = $compiled } {
+            param($Compiled)
+            $current = $Compiled.Replace('987654321', 'old')
+            Get-AvmBicepCompiledJsonDrift -CompiledJson $Compiled -CurrentBytes ([Text.Encoding]::UTF8.GetBytes($current)) |
+                Should -BeNullOrEmpty
+            $invalid = $Compiled.Replace(',"templateHash":"987654321"', '')
+            { Get-AvmBicepCompiledJsonDrift -CompiledJson $invalid -CurrentBytes ([Text.Encoding]::UTF8.GetBytes($invalid)) } |
+                Should -Throw -ExceptionType ([AvmConfigurationException]) -ExpectedMessage '*requires version and templateHash*'
+        }
+    }
+
+    Context 'nested deployment templates' {
+        BeforeEach {
+            $script:nestedCompiled = @'
+{
+  "languageVersion": "2.0",
+  "metadata": {"_generator": {"name": "bicep", "version": "current-root", "templateHash": "root-hash"}},
+  "resources": {
+    "registry_scopeMaps": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "scopeMaps",
+      "properties": {
+        "expressionEvaluationOptions": {"scope": "inner"},
+        "mode": "Incremental",
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {"_generator": {"name": "bicep", "version": "current-local", "templateHash": "local-hash"}},
+          "resources": [
+            {"type": "Microsoft.ContainerRegistry/registries/scopeMaps", "name": "child-resource"},
+            {
+              "type": "Microsoft.Resources/deployments",
+              "properties": {
+                "template": {
+                  "metadata": {"_generator": {"name": "bicep", "version": "current-leaf", "templateHash": "leaf-hash"}},
+                  "resources": [],
+                  "outputs": {"result": {"type": "string", "value": "unchanged-output"}}
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "withoutProvenance": {
+      "type": "Microsoft.Resources/deployments",
+      "properties": {"template": {"metadata": {}, "resources": []}}
+    },
+    "publishedModule": {
+      "type": "Microsoft.Resources/deployments",
+      "properties": {"template": {
+        "metadata": {"_generator": {"name": "bicep", "version": "0.41.2.15936", "templateHash": "published-hash"}},
+        "resources": []
+      }}
+    }
+  }
+}
+'@
+        }
+
+        It 'ignores provenance through two levels and mixed resource collections: <Layout>' -ForEach @(
+            @{ Layout = 'symbolic root, array child' }
+            @{ Layout = 'array root, symbolic child' }
+        ) {
+            $compiled = $script:nestedCompiled
+            if ($Layout -eq 'array root, symbolic child') {
+                $template = $compiled | ConvertFrom-Json -AsHashtable
+                $children = $template.resources.registry_scopeMaps.properties.template.resources
+                $template.resources.registry_scopeMaps.properties.template.resources = [ordered]@{
+                    scopeMap = $children[0]
+                    nested   = $children[1]
+                }
+                $template.resources = @($template.resources.Values)
+                $compiled = $template | ConvertTo-Json -Depth 100
+            }
+            $current = $compiled.Replace('current-root', 'old-root').Replace('root-hash', 'old-root-hash').
+            Replace('current-local', '0.47.16.16243').Replace('local-hash', 'old-local-hash').
+            Replace('current-leaf', 'old-leaf').Replace('leaf-hash', 'old-leaf-hash')
+            InModuleScope 'Avm.Authoring' -Parameters @{ Compiled = $compiled; Current = $current } {
+                param($Compiled, $Current)
+                Get-AvmBicepCompiledJsonDrift -CompiledJson $Compiled -CurrentBytes ([Text.Encoding]::UTF8.GetBytes($Current)) |
+                    Should -BeNullOrEmpty
+            }
+        }
+
+        It 'continues into children when ancestor provenance is absent: <Metadata>' -ForEach @(
+            @{ Metadata = '' }
+            @{ Metadata = '"metadata": {},' }
+        ) {
+            $compiled = '{' + $Metadata + '"resources":{"child":{"type":"Microsoft.Resources/deployments",' +
+            '"properties":{"template":' + $script:compiled + '}}}}'
+            $current = $compiled.Replace('987654321', 'old')
+            InModuleScope 'Avm.Authoring' -Parameters @{ Compiled = $compiled; Current = $current } {
+                param($Compiled, $Current)
+                Get-AvmBicepCompiledJsonDrift -CompiledJson $Compiled -CurrentBytes ([Text.Encoding]::UTF8.GetBytes($Current)) |
+                    Should -BeNullOrEmpty
+            }
+        }
+
+        It 'preserves nested non-provenance bytes: <Case>' -ForEach @(
+            @{ Case = 'resource'; Find = 'child-resource'; Replace = 'changed-resource' }
+            @{ Case = 'depth-two output'; Find = 'unchanged-output'; Replace = 'changed-output' }
+            @{ Case = 'unknown generator field'; Find = '"templateHash": "local-hash"'; Replace = '"templateHash": "local-hash", "extra": "changed"' }
+            @{ Case = 'generator name'; Find = '"name": "bicep", "version": "current-local"'; Replace = '"name": "other", "version": "current-local"' }
+            @{ Case = 'whitespace'; Find = '"version": "current-local"'; Replace = '"version" : "current-local"' }
+            @{ Case = 'key order'; Find = '"name": "bicep", "version": "current-local"'; Replace = '"version": "current-local", "name": "bicep"' }
+            @{ Case = 'escaped key'; Find = '"version": "current-local"'; Replace = '"\u0076ersion": "current-local"' }
+        ) {
+            $current = $script:nestedCompiled.Replace($Find, $Replace).Replace('current-local', 'old-local')
+            InModuleScope 'Avm.Authoring' -Parameters @{ Compiled = $script:nestedCompiled; Current = $current } {
+                param($Compiled, $Current)
+                Get-AvmBicepCompiledJsonDrift -CompiledJson $Compiled -CurrentBytes ([Text.Encoding]::UTF8.GetBytes($Current)) |
+                    Should -Be 'stale'
+            }
+        }
+
+        It 'does not mask template-shaped data outside exact deployment paths: <Case>' -ForEach @(
+            @{ Case = 'other type'; Prefix = '{"resources":[{"type":"Contoso/widgets","properties":{"template":'; Suffix = '}}]}' }
+            @{ Case = 'type casing'; Prefix = '{"resources":[{"type":"microsoft.resources/deployments","properties":{"template":'; Suffix = '}}]}' }
+            @{ Case = 'computed type'; Prefix = '{"resources":[{"type":"[variables(''type'')]","properties":{"template":'; Suffix = '}}]}' }
+            @{ Case = 'missing type'; Prefix = '{"resources":[{"properties":{"template":'; Suffix = '}}]}' }
+            @{ Case = 'resource metadata'; Prefix = '{"resources":[{"type":"Microsoft.Resources/deployments","metadata":'; Suffix = '}]}' }
+            @{ Case = 'template casing'; Prefix = '{"resources":[{"type":"Microsoft.Resources/deployments","properties":{"Template":'; Suffix = '}}]}' }
+            @{ Case = 'parameter default'; Prefix = '{"parameters":{"input":{"defaultValue":'; Suffix = '}}}' }
+            @{ Case = 'deployment parameters'; Prefix = '{"resources":[{"type":"Microsoft.Resources/deployments","properties":{"parameters":{"input":{"value":'; Suffix = '}}}}]}' }
+            @{ Case = 'variables'; Prefix = '{"variables":{"template":'; Suffix = '}}' }
+            @{ Case = 'templateLink'; Prefix = '{"resources":[{"type":"Microsoft.Resources/deployments","properties":{"templateLink":'; Suffix = '}}]}' }
+        ) {
+            $compiled = $Prefix + $script:compiled + $Suffix
+            $current = $compiled.Replace('987654321', 'old')
+            InModuleScope 'Avm.Authoring' -Parameters @{ Compiled = $compiled; Current = $current } {
+                param($Compiled, $Current)
+                Get-AvmBicepCompiledJsonDrift -CompiledJson $Compiled -CurrentBytes ([Text.Encoding]::UTF8.GetBytes($Current)) |
+                    Should -Be 'stale'
+            }
+        }
+
+        It 'preserves non-object nested templates and their referenced variables: <Case>' -ForEach @(
+            @{ Case = 'expression'; Template = '"[variables(''$fxv#0'')]"'; ChangedTemplate = '"[variables(''$fxv#1'')]"' }
+            @{ Case = 'array'; Template = '[]'; ChangedTemplate = '[{}]' }
+        ) {
+            $compiled = '{"variables":{"$fxv#0":{"resources":[]}},"resources":[{"type":"Microsoft.Resources/deployments",' +
+            '"properties":{"template":' + $Template + '}}]}'
+            InModuleScope 'Avm.Authoring' -Parameters @{
+                Compiled        = $compiled
+                ChangedTemplate = $compiled.Replace('"template":' + $Template, '"template":' + $ChangedTemplate)
+            } {
+                param($Compiled, $ChangedTemplate)
+                Get-AvmBicepCompiledJsonDrift -CompiledJson $Compiled -CurrentBytes ([Text.Encoding]::UTF8.GetBytes($Compiled)) |
+                    Should -BeNullOrEmpty
+                $changedVariable = $Compiled.Replace('"resources":[]', '"resources":[{}]')
+                Get-AvmBicepCompiledJsonDrift -CompiledJson $Compiled -CurrentBytes ([Text.Encoding]::UTF8.GetBytes($changedVariable)) |
+                    Should -Be 'stale'
+                Get-AvmBicepCompiledJsonDrift -CompiledJson $Compiled -CurrentBytes ([Text.Encoding]::UTF8.GetBytes($ChangedTemplate)) |
+                    Should -Be 'stale'
+            }
+        }
+
+        It 'preserves explicitly non-Bicep nested generator metadata: <Name>' -ForEach @(
+            @{ Name = 'FinOps toolkit' }
+            @{ Name = 'Bicep' }
+        ) {
+            $compiled = '{"resources":{"defaultTelemetry":{"type":"Microsoft.Resources/deployments","properties":{' +
+            '"template":{"metadata":{"_generator":{"name":"' + $Name + '","version":"0.3"}},"resources":[]}}}}}'
+            InModuleScope 'Avm.Authoring' -Parameters @{ Compiled = $compiled } {
+                param($Compiled)
+                Get-AvmBicepCompiledJsonDrift -CompiledJson $Compiled -CurrentBytes ([Text.Encoding]::UTF8.GetBytes($Compiled)) |
+                    Should -BeNullOrEmpty
+                $changed = $Compiled.Replace('"0.3"', '"0.4"')
+                Get-AvmBicepCompiledJsonDrift -CompiledJson $Compiled -CurrentBytes ([Text.Encoding]::UTF8.GetBytes($changed)) |
+                    Should -Be 'stale'
+            }
+        }
+
+        It 'rejects malformed present nested provenance on either side: <Case>' -ForEach @(
+            @{ Case = 'metadata array'; Template = '{"metadata":[]}' }
+            @{ Case = 'generator array'; Template = '{"metadata":{"_generator":[]}}' }
+            @{ Case = 'missing hash'; Template = '{"metadata":{"_generator":{"version":"old"}}}' }
+            @{ Case = 'Bicep missing hash'; Template = '{"metadata":{"_generator":{"name":"bicep","version":"old"}}}' }
+            @{ Case = 'null version'; Template = '{"metadata":{"_generator":{"version":null,"templateHash":"hash"}}}' }
+            @{ Case = 'empty hash'; Template = '{"metadata":{"_generator":{"version":"old","templateHash":""}}}' }
+            @{ Case = 'duplicate version'; Template = '{"metadata":{"_generator":{"version":"old","version":"new","templateHash":"hash"}}}' }
+        ) {
+            $invalid = '{"resources":{"child":{"type":"Microsoft.Resources/deployments","properties":{"template":' + $Template + '}}}}'
+            InModuleScope 'Avm.Authoring' -Parameters @{ Invalid = $invalid } {
+                param($Invalid)
+                { Get-AvmBicepCompiledJsonDrift -CompiledJson '{}' -CurrentBytes ([Text.Encoding]::UTF8.GetBytes($Invalid)) } |
+                    Should -Throw -ExceptionType ([AvmConfigurationException]) -ExpectedMessage '*Checked-in main.json*'
+                { Get-AvmBicepCompiledJsonDrift -CompiledJson $Invalid -CurrentBytes ([Text.Encoding]::UTF8.GetBytes('{}')) } |
+                    Should -Throw -ExceptionType ([AvmConfigurationException]) -ExpectedMessage '*Bicep compiler output*'
+            }
+        }
+    }
 }
