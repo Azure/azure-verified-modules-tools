@@ -11,6 +11,39 @@ AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
+Describe 'Terraform remote-state heredoc inspection' {
+    It 'accepts an indented closing marker for <Shape> and still detects following backends' -ForEach @(
+        @{ Shape = 'ordinary LF heredoc'; Operator = '<<'; Newline = "`n" }
+        @{ Shape = 'ordinary CRLF heredoc'; Operator = '<<'; Newline = "`r`n" }
+        @{ Shape = 'indented LF heredoc'; Operator = '<<-'; Newline = "`n" }
+        @{ Shape = 'indented CRLF heredoc'; Operator = '<<-'; Newline = "`r`n" }
+    ) {
+        $text = @(
+            'variable "lock" {'
+            "  description = ${Operator}DESCRIPTION"
+            '  Example only: terraform { backend "azurerm" {} }'
+            '  DESCRIPTION'
+            '}'
+            ''
+        ) -join $Newline
+        InModuleScope Avm.Authoring -Parameters @{ Text = $text; Newline = $Newline } {
+            param($Text, $Newline)
+            Test-AvmTerraformRemoteStateDeclaration -Text $Text -Path 'fixture' | Should -BeFalse
+            Test-AvmTerraformRemoteStateDeclaration `
+                -Text ($Text + 'terraform { backend "azurerm" {} }' + $Newline) -Path 'fixture' |
+                Should -BeTrue
+        }
+    }
+
+    It 'rejects an unterminated heredoc with a marker embedded in content' {
+        InModuleScope Avm.Authoring {
+            $text = "locals { value = <<DESCRIPTION`n  DESCRIPTION_suffix`n}`n"
+            { Test-AvmTerraformRemoteStateDeclaration -Text $text -Path 'fixture' } |
+                Should -Throw '*unterminated HCL heredoc*'
+        }
+    }
+}
+
 Describe 'Terraform ModTM restoration module enumeration' {
     It 'preserves a retained dependency with <Label> as the <Role> module label' -TestCases @(
         @{ Label = 'keys'; Role = 'other'; RetainedLabel = $false }

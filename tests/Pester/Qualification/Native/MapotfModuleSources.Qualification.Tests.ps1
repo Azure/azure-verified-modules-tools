@@ -71,6 +71,28 @@ AfterAll {
         Remove-Module -Name 'Avm.Authoring' -Force -ErrorAction SilentlyContinue
     }
 
+It 'accepts a Terraform-validated ordinary heredoc with an indented closing marker' {
+        $root = Join-Path $TestDrive 'ordinary-heredoc'
+        $null = New-Item -ItemType Directory -Path $root
+        $text = @'
+variable "lock" {
+  type = string
+  description = <<DESCRIPTION
+  Example only: terraform { backend "azurerm" {} }
+  DESCRIPTION
+  default = "none"
+}
+'@
+        Set-Content -LiteralPath (Join-Path $root 'variables.tf') -Value $text -Encoding utf8NoBOM
+        $validation = Invoke-ModuleSourceProcess -FilePath $script:terraformPath `
+            -WorkingDirectory $root -ArgumentList @('validate', '-json')
+        ($validation.StdOut | ConvertFrom-Json).valid | Should -BeTrue
+        InModuleScope Avm.Authoring -Parameters @{ Text = $text; Root = $root } {
+            param($Text, $Root)
+            Test-AvmTerraformRemoteStateDeclaration -Text $Text -Path $Root | Should -BeFalse
+        }
+    }
+
 It 'orders inputs from <Name> and remains idempotent' -TestCases (@(
         @{ Name = 'a Git repository root'; Subdirectory = ''; Decoy = $false }
         @{ Name = 'a Git subdirectory with no root Terraform files'; Subdirectory = 'modules/nested'; Decoy = $false }
