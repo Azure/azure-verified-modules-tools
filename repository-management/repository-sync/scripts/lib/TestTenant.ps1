@@ -194,10 +194,10 @@ function Get-AvmBamiModuleFederationExpression {
             $clauses += "claims['sub'] matches '$pattern'"
         }
     }
-    $clauses += @(
-        "claims['repository_id'] eq '$RepositoryId'",
-        "claims['repository_owner_id'] eq '$RepositoryOwnerId'"
-    )
+    $clauses += "claims['repository_id'] eq '$RepositoryId'"
+    if (-not $WorkflowRef) {
+        $clauses += "claims['repository_owner_id'] eq '$RepositoryOwnerId'"
+    }
     return $clauses -join ' and '
 }
 
@@ -247,12 +247,15 @@ function Test-AvmBamiModuleFederation {
     $properties = $Values['body']['properties']
     $audiences = @($properties['audiences'])
     $claimExpression = $properties['claimsMatchingExpression']
-    $previousExpression = $null
+    $previousExpressions = @()
     if ($AllowLegacy -and $WorkflowRef) {
         $clauses = @($Expression -split ' and ')
-        if ($clauses.Count -eq 6) {
-            $previousExpression = (@($clauses[0..1]) +
-                "claims['sub'] matches '*:workflow_ref:$WorkflowRef'" + @($clauses[4..5])) -join ' and '
+        $ownerMatch = [regex]::Match($clauses[0], "repository_owner_id:([^:]+):repository_id:")
+        if ($clauses.Count -eq 5 -and $ownerMatch.Success) {
+            $ownerClause = "claims['repository_owner_id'] eq '$($ownerMatch.Groups[1].Value)'"
+            $previousExpressions += (@($clauses) + $ownerClause) -join ' and '
+            $previousExpressions += (@($clauses[0..1]) +
+                "claims['sub'] matches '*:workflow_ref:$WorkflowRef'" + @($clauses[4]) + $ownerClause) -join ' and '
         }
     }
     if ($Values['type'] -ceq 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview' -and
@@ -260,8 +263,7 @@ function Test-AvmBamiModuleFederation {
         $audiences.Count -eq 1 -and $audiences[0] -ceq 'api://AzureADTokenExchange' -and
         $claimExpression -is [System.Collections.IDictionary] -and $claimExpression.Count -eq 2 -and
         $claimExpression['languageVersion'] -eq 1 -and
-        ($claimExpression['value'] -ceq $Expression -or
-            ($null -ne $previousExpression -and $claimExpression['value'] -ceq $previousExpression))) {
+        ($claimExpression['value'] -ceq $Expression -or $claimExpression['value'] -cin $previousExpressions)) {
         return $true
     }
     return $AllowLegacy -and

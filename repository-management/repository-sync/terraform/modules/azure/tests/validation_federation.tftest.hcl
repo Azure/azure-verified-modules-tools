@@ -259,7 +259,7 @@ run "caller_bound_credential_accepts_exactly_120_characters" {
       alltrue([for key, credential in azapi_resource.federated_credentials : length(credential.name) == 120 if startswith(key, "module-")]) &&
       alltrue([for key, credential in azapi_resource.federated_credentials :
         credential.body.properties.claimsMatchingExpression.value ==
-        "claims['sub'] matches 'repository_owner_id:6844498:repository_id:1234:environment:${trimprefix(key, "module-")}:*' and claims['job_workflow_ref'] matches '${var.github_job_workflow_path}@*' and claims['sub'] matches '*:workflow_ref:Azure/bicep-registry-modules/.github/workflows/*' and claims['sub'] matches '*:workflow_ref:*/.github/workflows/avm.res.fabric.capacity.yml@refs/heads/main' and claims['repository_id'] eq '1234' and claims['repository_owner_id'] eq '6844498'"
+        "claims['sub'] matches 'repository_owner_id:6844498:repository_id:1234:environment:${trimprefix(key, "module-")}:*' and claims['job_workflow_ref'] matches '${var.github_job_workflow_path}@*' and claims['sub'] matches '*:workflow_ref:Azure/bicep-registry-modules/.github/workflows/*' and claims['sub'] matches '*:workflow_ref:*/.github/workflows/avm.res.fabric.capacity.yml@refs/heads/main' and claims['repository_id'] eq '1234'"
         if startswith(key, "module-")
       ])
     )
@@ -288,7 +288,8 @@ run "longest_published_bicep_caller_keeps_exact_bounded_claims" {
       local.caller_subject_patterns[1] == "*:workflow_ref:*/.github/workflows/avm.res.network.application-gateway-web-application-firewall-policy.yml@refs/heads/main" &&
       length(local.caller_subject_patterns[1]) == 122 &&
       azapi_resource.federated_credentials["module-avm-validation"].body.properties.claimsMatchingExpression.value ==
-      "claims['sub'] matches 'repository_owner_id:6844498:repository_id:447791597:environment:avm-validation:*' and claims['job_workflow_ref'] matches '${var.github_job_workflow_path}@*' and claims['sub'] matches '${local.caller_subject_patterns[0]}' and claims['sub'] matches '${local.caller_subject_patterns[1]}' and claims['repository_id'] eq '447791597' and claims['repository_owner_id'] eq '6844498'" &&
+      "claims['sub'] matches 'repository_owner_id:6844498:repository_id:447791597:environment:avm-validation:*' and claims['job_workflow_ref'] matches '${var.github_job_workflow_path}@*' and claims['sub'] matches '${local.caller_subject_patterns[0]}' and claims['sub'] matches '${local.caller_subject_patterns[1]}' and claims['repository_id'] eq '447791597'" &&
+      length(split(" and ", azapi_resource.federated_credentials["module-avm-validation"].body.properties.claimsMatchingExpression.value)) == 5 &&
       toset(keys(azapi_resource.federated_credentials)) == toset(["module-avm-validation", "validation", "bicep-registry"])
     )
     error_message = "Long callers must retain the complete filename, trusted main, immutable IDs and existing credential addresses within each comparand limit."
