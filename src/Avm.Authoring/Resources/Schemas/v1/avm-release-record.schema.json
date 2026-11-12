@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "Use the canonical HTTP identifier so Test-Json resolves its bundled draft-07 meta-schema without a download.",
+  "$id": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-release-record.schema.json",
+  "title": "AVM module release record v1",
+  "description": "An immutable releases/vX.Y.Z.json file on a module repository's avm-release-state branch. It is written once at the publication cutoff and never changes afterwards.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [ "schemaVersion", "repository", "version", "previousVersion", "increment", "commit", "cutoffAt", "trigger", "requestedBy", "notes", "pullRequests" ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "repository": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$" },
+    "version": { "$ref": "#/definitions/version" },
+    "previousVersion": { "$ref": "#/definitions/version" },
+    "increment": { "enum": [ "patch", "minor", "major" ] },
+    "commit": { "$ref": "#/definitions/sha" },
+    "cutoffAt": { "$ref": "#/definitions/timestamp" },
+    "trigger": { "enum": [ "timer", "cap", "release-command" ] },
+    "requestedBy": { "anyOf": [ { "$ref": "#/definitions/text" }, { "type": "null" } ] },
+    "notes": { "$ref": "#/definitions/text" },
+    "pullRequests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [ "number", "title", "author", "kind", "mergedAt", "mergeCommit", "triggersRelease", "versionLabel", "breaking" ],
+        "properties": {
+          "number": { "type": "integer", "minimum": 1 },
+          "title": { "type": "string" },
+          "author": { "$ref": "#/definitions/text" },
+          "kind": { "enum": [ "Human", "RoutineBot", "Automation" ] },
+          "mergedAt": { "$ref": "#/definitions/timestamp" },
+          "mergeCommit": { "$ref": "#/definitions/sha" },
+          "triggersRelease": { "type": "boolean" },
+          "versionLabel": { "enum": [ "patch", "minor", "major", null ] },
+          "breaking": { "type": "boolean" }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "text": { "type": "string", "pattern": "\\S" },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$"
+    },
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" }
+  }
+}
