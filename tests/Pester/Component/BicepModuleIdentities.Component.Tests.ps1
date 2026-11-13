@@ -85,6 +85,7 @@ Describe 'Bicep module identity entry points with real files and mocked services
             Plan = New-AvmTestBicepIdentityPlan
             Outputs = New-AvmTestBicepIdentityOutputs
             Calls = [System.Collections.Generic.List[object]]::new()
+            Events = [System.Collections.Generic.List[string]]::new()
             Writes = [System.Collections.Generic.List[string]]::new()
             Variables = [ordered]@{}
             RequestPaths = [System.Collections.Generic.List[string]]::new()
@@ -123,6 +124,7 @@ Describe 'Bicep module identity entry points with real files and mocked services
             param($FilePath, $ArgumentList, $EnvVars, $WorkingDirectory, $StreamOutput, $OnStdOutLine, $OnStdErrLine, $StandardInputPath)
             $command = [IO.Path]::GetFileNameWithoutExtension($FilePath)
             $state.Calls.Add(@{ Command = $command; Arguments = $ArgumentList; Environment = $EnvVars; Directory = $WorkingDirectory })
+            if ($command -ceq 'terraform') { $state.Events.Add("terraform-$($ArgumentList[0])") }
             if ($command -ceq 'gh') {
                 $ArgumentList[0] | Should -BeExactly 'api'
                 $ArgumentList[4] | Should -BeIn @('GET', 'POST', 'PATCH')
@@ -224,6 +226,21 @@ Describe 'Bicep module identity entry points with real files and mocked services
                 & $OnStdErrLine "provider warning $env:GH_TOKEN $env:ARM_CLIENT_SECRET"
             }
             [pscustomobject]@{ ExitCode = 0; StdOut = $body; StdErr = '' }
+        }.GetNewClosure())
+        Mock Clear-TerraformStateLock ({
+            param($workingDirectory, $storageAccountName, $containerName, $blobName, $subscriptionId, $tenantId, $clientId, $repository)
+            $state.Events.Add('state-preflight')
+            $state.LockRecovery = @{
+                WorkingDirectory = $workingDirectory
+                StorageAccountName = $storageAccountName
+                ContainerName = $containerName
+                BlobName = $blobName
+                SubscriptionId = $subscriptionId
+                TenantId = $tenantId
+                ClientId = $clientId
+                Repository = $repository
+            }
+            $true
         }.GetNewClosure())
     }
 
@@ -360,6 +377,24 @@ Describe 'Bicep module identity entry points with real files and mocked services
         ConvertTo-Json -InputObject $remaining -Depth 5 -Compress | Should -BeExactly $script:beforeVariables
         @($script:state.Calls | Where-Object Command -CEQ 'terraform' | ForEach-Object { $_.Arguments[0] }) |
             Should -Be @('init', 'plan', 'show', 'show', 'apply', 'output')
+    }
+
+    It 'preflights the exact Bicep state before plan and apply' {
+        $null = & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath -Apply
+
+        @($script:state.Events) | Should -Be @(
+            'terraform-init', 'state-preflight', 'terraform-plan', 'terraform-show',
+            'terraform-show', 'state-preflight', 'terraform-apply', 'terraform-output'
+        )
+        [IO.Path]::GetFullPath($script:state.LockRecovery.WorkingDirectory) | Should -BeExactly $script:terraformRoot
+        $script:state.LockRecovery.StorageAccountName | Should -BeExactly 'fixturestatestore'
+        $script:state.LockRecovery.ContainerName | Should -BeExactly 'tfstate'
+        $script:state.LockRecovery.BlobName | Should -BeExactly 'bicep-module-identities.tfstate'
+        $script:state.LockRecovery.SubscriptionId | Should -BeExactly $script:backendValues.ARM_BACKEND_SUBSCRIPTION_ID
+        $script:state.LockRecovery.TenantId | Should -BeExactly $script:backendValues.ARM_BACKEND_TENANT_ID
+        $script:state.LockRecovery.ClientId | Should -BeExactly $script:backendValues.ARM_BACKEND_CLIENT_ID
+        $script:state.LockRecovery.Repository | Should -BeExactly 'Azure/bicep-registry-modules'
+        Should -Invoke Clear-TerraformStateLock -Exactly 2
     }
 
     It 'replaces legacy module identities and updates only exactly matching old client bindings from the same run' {

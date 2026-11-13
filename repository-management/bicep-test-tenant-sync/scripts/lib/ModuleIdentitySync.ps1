@@ -258,6 +258,15 @@ function Invoke-AvmBicepModuleIdentitySync {
     }
     $context = Resolve-AvmBicepIdentitySyncContext
     $environment = Get-RepositorySyncTerraformEnvironment -Root $TerraformRoot -Settings $settings
+    $lockRecovery = @{
+        storageAccountName = $state.StorageAccountName
+        containerName = $state.ContainerName
+        subscriptionId = $state.SubscriptionId
+        tenantId = $state.TenantId
+        clientId = $state.ClientId
+        blobName = 'bicep-module-identities.tfstate'
+        repository = 'Azure/bicep-registry-modules'
+    }
     $runId = [guid]::NewGuid().ToString('N')
     $inputPath = Join-Path $TerraformRoot "$runId.tfvars.json"
     $planPath = Join-Path $TerraformRoot "$runId.tfplan"
@@ -276,7 +285,7 @@ function Invoke-AvmBicepModuleIdentitySync {
             -repoId 'bicep-module-identities' -stateStorageAccountName $state.StorageAccountName `
             -stateContainerName $state.ContainerName -stateTenantId $state.TenantId `
             -stateSubscriptionId $state.SubscriptionId -stateClientId $state.ClientId -environment $environment
-        Invoke-RepositorySyncTerraform -Root $TerraformRoot -Environment $environment -Quiet -Arguments @(
+        Invoke-RepositorySyncTerraform -Root $TerraformRoot -Environment $environment -LockRecovery $lockRecovery -Quiet -Arguments @(
             'plan', '-input=false', '-no-color', '-lock-timeout=5m', "-var-file=$inputPath", "-out=$planPath"
         )
         $plan = Invoke-RepositorySyncTerraform -Root $TerraformRoot -Environment $environment `
@@ -298,7 +307,7 @@ function Invoke-AvmBicepModuleIdentitySync {
             $result.PlanOnly = $true
             return [pscustomobject]$result
         }
-        Invoke-RepositorySyncTerraform -Root $TerraformRoot -Environment $environment -StreamOutput `
+        Invoke-RepositorySyncTerraform -Root $TerraformRoot -Environment $environment -LockRecovery $lockRecovery -StreamOutput `
             -Arguments @('apply', '-input=false', '-no-color', '-lock-timeout=5m', $planPath)
         $identities = Invoke-RepositorySyncTerraform -Root $TerraformRoot -Environment $environment `
             -Arguments @('output', '-json', 'test_identities') -Json
