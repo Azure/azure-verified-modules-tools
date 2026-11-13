@@ -134,6 +134,43 @@ Describe 'Repository state-lock preflight' -Tag Component {
         }
     }
 
+    It 'clears only the exact Bicep identity state from the Bicep Sync workflow' {
+        $script:parameters.blobName = 'bicep-module-identities.tfstate'
+        $script:parameters.repository = 'Azure/bicep-registry-modules'
+        $script:backendMetadata.backend.config.key = $script:parameters.blobName
+        Set-TestBackendMetadata
+        $env:GITHUB_WORKFLOW_REF =
+            'Azure/azure-verified-modules-tools/.github/workflows/repository-management-bicep-sync.yml@refs/heads/main'
+
+        Clear-TerraformStateLock @script:parameters | Should -BeTrue
+        $script:fixture.BlobReads | Should -Be 2
+        Should -Invoke Invoke-RepositorySyncProcess -Exactly 1 -ParameterFilter {
+            $Arguments -contains 'break' -and ($Arguments -join ' ') -match '--blob-name bicep-module-identities\.tfstate'
+        }
+    }
+
+    It 'rejects Bicep state from an unrelated repository or workflow' -ForEach @(
+        @{
+            Repository = 'Azure/terraform-azurerm-avm-ptn-example-repo'
+            WorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/repository-management-bicep-sync.yml@refs/heads/main'
+            Message = '*supported repository state blob*'
+        }
+        @{
+            Repository = 'Azure/bicep-registry-modules'
+            WorkflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/repository-management-sync.yml@refs/heads/main'
+            Message = '*serialized Bicep Sync job*'
+        }
+    ) {
+        $script:parameters.blobName = 'bicep-module-identities.tfstate'
+        $script:parameters.repository = $Repository
+        $script:backendMetadata.backend.config.key = $script:parameters.blobName
+        Set-TestBackendMetadata
+        $env:GITHUB_WORKFLOW_REF = $WorkflowRef
+
+        { Clear-TerraformStateLock @script:parameters } | Should -Throw $Message
+        Should -Invoke Invoke-RepositorySyncProcess -Exactly 0
+    }
+
     It 'does not depend on Terraform lock metadata being present or readable' -ForEach @(
         @{ Metadata = $null }
         @{ Metadata = '' }
@@ -243,7 +280,7 @@ Describe 'Repository state-lock preflight' -Tag Component {
     }
 
     It 'rejects an inexact target or missing backend field: <Key>' -ForEach @(
-        @{ Key = 'blobName'; Value = '../another.tfstate'; Message = '*canonical repository state blob*' }
+        @{ Key = 'blobName'; Value = '../another.tfstate'; Message = '*supported repository state blob*' }
         @{ Key = 'repository'; Value = 'Azure/terraform-azurerm-avm-ptn-other'; Message = '*same module*' }
         @{ Key = 'clientId'; Value = ''; Message = '*all five*' }
     ) {
