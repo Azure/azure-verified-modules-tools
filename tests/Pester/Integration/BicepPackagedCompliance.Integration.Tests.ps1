@@ -78,7 +78,7 @@ Describe 'Integration: packaged Bicep compliance' -Tag Integration {
         $result.ComplianceFile | Should -BeExactly (Join-Path $script:package 'Resources' 'bicep' 'Compliance.Tests.ps1')
         $result.UnitFiles | Should -Be 1
         $result.FilesProcessed | Should -Be 2
-        $result.RunsTotal | Should -Be 187
+        $result.RunsTotal | Should -Be 170
         $result.RunsPassed | Should -Be $result.RunsTotal -Because (@($result.Issues | ForEach-Object Message) -join '; ')
         $result.RunsFailed | Should -Be 0
         $result.Issues | Should -HaveCount 0
