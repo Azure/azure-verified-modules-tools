@@ -147,6 +147,12 @@ has drifted from `Avm.Authoring` / `Avm.Authoring.psd1` /
 
 ## 6. Build, test, lint
 
+Bicep `.e2eignore` files may exclude any scenario, including `defaults` and
+`waf-aligned`, but must contain a nonempty UTF-8 explanation. The Bicep registry
+repository must assign these files to
+`@Azure/azure-verified-modules-module-owners` in CODEOWNERS and enforce
+code-owner approval through its branch rules.
+
 The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it through the `./build.ps1 <task>` forwarder from the repo root. `pre-commit` is the gate to run before every PR.
 
 ```pwsh
