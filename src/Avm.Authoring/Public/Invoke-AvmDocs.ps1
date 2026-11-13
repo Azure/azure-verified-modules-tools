@@ -38,14 +38,15 @@ function Invoke-AvmDocs {
 
     .PARAMETER CheckDrift
         Report-only mode used by pr-check. Any README that regeneration
-        would change makes the result Status 'fail' and is emitted as an
-        Issue, instead of being silently rewritten. Without it a CI run
-        regenerates docs in the throwaway working copy and reports a pass,
-        so stale READMEs merge unnoticed.
+        would change after line-ending normalization makes the result Status
+        'fail' and is emitted as an Issue, instead of being silently rewritten.
+        Without it a CI run regenerates docs in the throwaway working copy and
+        reports a pass, so stale READMEs merge unnoticed.
 
     .PARAMETER IncludeRenderedContent
         With Bicep and -CheckDrift, return generated README text and relative
-        paths for independent raw-byte comparisons, without writing files.
+        paths for independent comparisons, without writing files. Content uses
+        LF line endings.
 
     .PARAMETER SkipModuleVersionCheck
         Skip the PowerShell Gallery check that otherwise stops the command when a

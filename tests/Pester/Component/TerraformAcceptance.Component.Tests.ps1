@@ -18,8 +18,8 @@ Describe 'Terraform acceptance byte inventory' -Tag Component {
             $script:result = [pscustomobject]@{
                 Status = 'pass'
                 Steps = @(
-                    foreach ($name in @('metadata', 'initialize', 'sync', 'format', 'transform', 'lint',
-                            'check policy', 'check convention', 'validate', 'docs')) {
+                    foreach ($name in @('metadata', 'initialize', 'validate', 'sync', 'format', 'transform', 'docs',
+                            'lint', 'check policy', 'check convention')) {
                         [pscustomobject]@{
                             Step = $name
                             Status = 'pass'
@@ -63,8 +63,8 @@ Describe 'Terraform acceptance byte inventory' -Tag Component {
                 'a failed initialization step' { $script:result.Steps[1].Status = 'fail' }
                 'a skipped initialization step' { $script:result.Steps[1].Status = 'skipped' }
                 'a missing step' { $script:result.Steps = $script:result.Steps[0..8] }
-                'an empty policy evaluation' { $script:result.Steps[6].Result.Evaluated = 0 }
-                'a policy issue' { $script:result.Steps[6].Result.Issues = @('Policy failed.') }
+                'an empty policy evaluation' { $script:result.Steps[8].Result.Evaluated = 0 }
+                'a policy issue' { $script:result.Steps[8].Result.Issues = @('Policy failed.') }
             }
 
             { Invoke-TerraformAcceptancePrCheck -Context ([pscustomobject]@{ Root = $TestDrive }) } |

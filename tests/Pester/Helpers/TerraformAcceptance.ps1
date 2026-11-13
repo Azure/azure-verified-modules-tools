@@ -183,7 +183,7 @@ function Invoke-TerraformAcceptancePrCheck {
     param([Parameter(Mandatory)] [object] $Context)
     Assert-TerraformAcceptanceCredentials
     $result = avm pr-check --path $Context.Root --ecosystem terraform --passthru -SkipModuleVersionCheck
-    Assert-TerraformAcceptanceSteps -Result $result -Names @('metadata', 'initialize', 'sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
+    Assert-TerraformAcceptanceSteps -Result $result -Names @('metadata', 'initialize', 'validate', 'sync', 'format', 'transform', 'docs', 'lint', 'check policy', 'check convention')
     $policy = $result.Steps | Where-Object Step -eq 'check policy'
     $policy.Result.Evaluated | Should -BeGreaterThan 0
     @($policy.Result.Issues) | Should -HaveCount 0

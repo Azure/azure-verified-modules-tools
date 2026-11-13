@@ -163,7 +163,7 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
                 $script:customPaths.Add($ArgumentList[5])
                 $data = [System.IO.File]::ReadAllText($ArgumentList[5]) | ConvertFrom-Json -AsHashtable
                 $script:references.Add($data.moduleReference)
-                $body = if ($WorkingDirectory -match 'child$') { "# Child`n" } else { "# Root`n" }
+                $body = if ($WorkingDirectory -match 'child$') { "# Child`r`n" } else { "# Root`r`n" }
                 [pscustomobject]@{ ExitCode = 0; StdOut = $body; StdErr = '' }
             }
 
@@ -189,7 +189,24 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
                 Should -BeExactly "# Root`n"
             [System.IO.File]::ReadAllText((Join-Path $F.Module 'child' 'README.md')) |
                 Should -BeExactly "# Child`n"
-            $before = [System.IO.File]::GetLastWriteTimeUtc((Join-Path $F.Module 'README.md'))
+            $rootReadme = Join-Path $F.Module 'README.md'
+            $childReadme = Join-Path $F.Module 'child' 'README.md'
+            $utf8 = [System.Text.UTF8Encoding]::new($false)
+            $rootCrLf = $utf8.GetBytes("# Root`r`n")
+            $childCrLf = $utf8.GetBytes("# Child`r`n")
+            [System.IO.File]::WriteAllBytes($rootReadme, $rootCrLf)
+            [System.IO.File]::WriteAllBytes($childReadme, $childCrLf)
+            $before = [System.IO.File]::GetLastWriteTimeUtc($rootReadme)
+
+            $lineEndingOnly = Invoke-AvmDocs -Path $F.Root -SkipModuleVersionCheck
+            $lineEndingOnly.Status | Should -BeExactly 'pass'
+            $lineEndingOnly.Changed.Count | Should -Be 0
+            [System.Linq.Enumerable]::SequenceEqual(
+                [byte[]]$rootCrLf, [byte[]][System.IO.File]::ReadAllBytes($rootReadme)) |
+                Should -BeTrue
+            [System.Linq.Enumerable]::SequenceEqual(
+                [byte[]]$childCrLf, [byte[]][System.IO.File]::ReadAllBytes($childReadme)) |
+                Should -BeTrue
 
             $clean = Invoke-AvmDocs -Path $F.Root -CheckDrift -SkipModuleVersionCheck
             $clean.Status | Should -BeExactly 'pass'
@@ -197,8 +214,7 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
             $clean.Changed.Count | Should -Be 0
             $clean.ValidationSummary.Total | Should -Be 4
             $clean.ValidationSummary.Passed | Should -Be 4
-            [System.IO.File]::GetLastWriteTimeUtc((Join-Path $F.Module 'README.md')) |
-                Should -Be $before
+            [System.IO.File]::GetLastWriteTimeUtc($rootReadme) | Should -Be $before
             $script:references | Should -Contain 'avm/res/storage/storage-account'
             $script:references | Should -Contain 'avm/res/storage/storage-account/child'
             foreach ($path in $script:customPaths) {
