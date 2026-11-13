@@ -722,6 +722,17 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.Issues.Code | Should -Contain 'avm.bicep.codeowners-override'
     }
 
+    It 'requires module-owner review for deployment exclusions' {
+        $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
+        $content = [System.IO.File]::ReadAllText($path).Replace(
+            '*.e2eignore @Azure/azure-verified-modules-module-owners',
+            '*.e2eignore @Azure/azure-verified-modules-tooling-contributors')
+        [System.IO.File]::WriteAllText($path, $content)
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Issues.Code | Should -Contain 'avm.bicep.codeowners-override'
+    }
+
     It 'reports duplicate and module-specific CODEOWNERS patterns with line numbers' {
         $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
         [System.IO.File]::AppendAllText(
@@ -1721,64 +1732,35 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.Issues.Code | Should -Contain 'avm.bicep.test-file-missing'
     }
 
-    It 'blocks skipping required resource tests and requires a reason for permitted exclusions' {
-        Set-Content -LiteralPath (Join-Path $script:modulePath 'tests' 'e2e' 'defaults' '.e2eignore') -Value 'Not allowed'
-        Set-Content -LiteralPath (Join-Path $script:modulePath 'tests' 'e2e' 'max' '.e2eignore') -Value ''
-
-        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $result.Issues.Code | Should -Contain 'avm.bicep.e2eignore-required-test'
-        $result.Issues.Code | Should -Contain 'avm.bicep.e2eignore-reason'
-    }
-
-    It 'matches only actual resource paths for E2E ignore exemptions: <ModuleRelativePath> <Folder>' -TestCases @(
-        @{
-            ModuleRelativePath = 'avm/res/operational-insights/cluster'
-            Folder = 'defaults'
-            Required = $false
-        }
-        @{
-            ModuleRelativePath = 'avm/res/dev-center/devcenter'
-            Folder = 'waf-aligned'
-            Required = $false
-        }
-        @{
-            ModuleRelativePath = 'avm/res/dev-center/project'
-            Folder = 'waf-aligned'
-            Required = $false
-        }
-        @{
-            ModuleRelativePath = 'avm/res/dev-center/devcenter'
-            Folder = 'defaults'
-            Required = $true
-        }
-        @{
-            ModuleRelativePath = 'avm/res/dev-center/project'
-            Folder = 'defaults'
-            Required = $true
-        }
-        @{
-            ModuleRelativePath = 'avm/res/dev-center/project-child'
-            Folder = 'waf-aligned'
-            Required = $true
-        }
+    It 'permits owner-reviewed exclusions with a reason for <Folder>' -TestCases @(
+        @{ Folder = 'defaults' }
+        @{ Folder = 'waf-aligned' }
+        @{ Folder = 'max' }
     ) {
-        param([string] $ModuleRelativePath, [string] $Folder, [bool] $Required)
+        param([string] $Folder)
 
-        $target = Join-Path $script:workingRoot ($ModuleRelativePath.Split('/') -join [IO.Path]::DirectorySeparatorChar)
-        $null = New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force
-        Copy-Item -LiteralPath $script:modulePath -Destination $target -Recurse -Force
-        Set-Content -LiteralPath (Join-Path $target 'tests' 'e2e' $Folder '.e2eignore') `
-            -Value 'This module is excluded by an explicit convention exemption.' -Encoding utf8NoBOM
-        $scope = InModuleScope 'Avm.Authoring' -Parameters @{ Path = $target } {
+        Set-Content -LiteralPath (Join-Path $script:modulePath 'tests' 'e2e' $Folder '.e2eignore') `
+            -Value 'Temporarily excluded while the documented provider failure is investigated.' -Encoding utf8NoBOM
+        $scope = InModuleScope 'Avm.Authoring' -Parameters @{ Path = $script:modulePath } {
             param($Path)
             Get-AvmBicepConventionScope -Path $Path
         }
-        $scope.ModuleRelativePath | Should -BeExactly $ModuleRelativePath
 
         $run = Invoke-NativeLayoutFixture -Root $script:workingRoot -Scopes @($scope)
         $run.Summary.Total | Should -Be $run.Expected
-        @($run.Issues | Where-Object Code -EQ 'avm.bicep.e2eignore-required-test').Count |
-            Should -Be ([int]$Required)
+        $run.Summary.Failed | Should -Be 0
+    }
+
+    It 'requires a reason for deployment exclusions in <Folder>' -TestCases @(
+        @{ Folder = 'defaults' }
+        @{ Folder = 'waf-aligned' }
+        @{ Folder = 'max' }
+    ) {
+        param([string] $Folder)
+
+        Set-Content -LiteralPath (Join-Path $script:modulePath 'tests' 'e2e' $Folder '.e2eignore') -Value ''
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Issues.Code | Should -Contain 'avm.bicep.e2eignore-reason'
     }
 
     It 'reports source errors instead of accepting commented-out test metadata or namePrefix' {

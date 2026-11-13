@@ -28,7 +28,7 @@ Describe 'Bicep repository ownership' -ForEach $cases {
             $Convention.NativeOwnershipExpected += 5 + (2 * $Case.Rules.Count)
             $overrides = @(
                 '*avm.core.team.tests.ps1 @Azure/azure-verified-modules-tooling-contributors'
-                '*.e2eignore @Azure/azure-verified-modules-tooling-contributors'
+                '*.e2eignore @Azure/azure-verified-modules-module-owners'
                 'metadata.json @Azure/azure-verified-modules-engineering-owners @Azure/azure-verified-modules-module-owners'
             )
             $overrideCases = @(for ($index = 0; $index -lt 3; $index++) {
