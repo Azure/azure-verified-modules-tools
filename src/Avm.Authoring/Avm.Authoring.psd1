@@ -9,7 +9,6 @@
     PowerShellVersion    = '7.4'
     CompatiblePSEditions = @('Core')
     FunctionsToExport    = @(
-        'Export-AvmReadmeNote',
         'Get-AvmAuthoringPlaceholder',
         'Get-AvmBicepAzureDependency',
         'Get-AvmBicepE2eDeploymentMatrix',

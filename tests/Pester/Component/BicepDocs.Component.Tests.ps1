@@ -855,7 +855,7 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
                 [pscustomobject]@{ ExitCode = 0; StdOut = "# Generated`n"; StdErr = '' }
             }
             { Invoke-AvmDocs -Path $F.Root -SkipModuleVersionCheck } |
-                Should -Throw '*avm docs export-notes*'
+                Should -Throw '*Move the Notes body into a README.notes.md sidecar*'
             Should -Invoke Invoke-AvmProcess -Exactly 0
             $sidecar = Join-Path $F.Module 'README.notes.md'
             [System.IO.File]::WriteAllText($sidecar, "`nAn important note.`n")

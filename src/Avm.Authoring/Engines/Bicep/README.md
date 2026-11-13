@@ -9,8 +9,8 @@ An explicit `documentation.template.file` in the nearest `bicepconfig.json`
 must remain relative to that config and point to an exact canonical copy.
 No caller config or template is required or created. Source files and compiled JSON
 supply generated content; authored Notes live in an adjacent
-`README.notes.md` body-only sidecar. Run `avm docs export-notes` once to
-extract existing Notes without overwriting an existing sidecar. Use
+`README.notes.md` body-only sidecar. When migrating existing Notes, move their
+body into the sidecar before generating documentation. Use
 `avm docs -CheckDrift` to compare without writes; `-IncludeRenderedContent`
 returns generated text only in drift mode.
 

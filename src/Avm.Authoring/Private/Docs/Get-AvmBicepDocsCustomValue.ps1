@@ -64,7 +64,7 @@ function Get-AvmBicepDocsCustomValue {
         }
         if ($null -ne (Get-AvmLegacyReadmeNote -Content $existing)) {
             throw [AvmConfigurationException]::new(
-                "The README in '$ModulePath' has authored Notes but no README.notes.md. Run 'avm docs export-notes -Path `"$ModulePath`"' first; documentation generation never copies Notes from an existing README.")
+                "The README in '$ModulePath' has authored Notes but no README.notes.md. Move the Notes body into a README.notes.md sidecar before generating documentation; documentation generation never copies Notes from an existing README.")
         }
     }
     $banners = @{}
