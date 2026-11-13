@@ -22,7 +22,7 @@ function Get-AvmVerbRegistry {
         [pscustomobject]@{
             Path    = [string[]]@('pre-commit')
             Cmdlet  = 'Invoke-AvmPreCommit'
-            Summary = 'Validate metadata, then run the fast pre-commit gauntlet (terraform: sync, check convention, transform, format, docs; bicep: format, lint, validate, transform, docs).'
+            Summary = 'Validate metadata, then run the fast pre-commit gauntlet (terraform: sync, check convention, transform, format, docs; bicep: format, transform, docs).'
         }
         [pscustomobject]@{
             Path    = [string[]]@('pr-check')

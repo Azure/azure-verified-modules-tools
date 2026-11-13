@@ -5,7 +5,7 @@
 ## Synopsis
 
 Run the standard pre-commit gauntlet against the resolved module:
-bicep:     metadata -> format -> lint -> validate -> transform -> docs.
+bicep:     metadata -> format -> transform -> docs.
 terraform: metadata -> initialize -> sync -> check convention -> transform -> format -> docs.
 
 ## Description
@@ -16,6 +16,9 @@ in sequence against that same module root. Each step's structured
 result is captured. The overall Status is 'pass' only when every
 executed step reports Status='pass' (format reports an implicit
 pass when no errors are thrown).
+
+Bicep lint and build validation run in 'avm pr-check'; pre-commit
+formats sources and generates the compiled templates and READMEs.
 
 The Terraform chain follows the legacy Terraform governance
 pre-commit.porch.yaml philosophy: its initialize step prepares the shared
