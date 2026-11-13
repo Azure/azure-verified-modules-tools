@@ -27,7 +27,6 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Public/Invoke-AvmLint.ps1`                       | `avm lint` -> route to the bicep / terraform engine and run lint diagnostics.      |
 | `Public/Invoke-AvmTest.ps1`                       | `avm test` -> route to the bicep / terraform engine and run build-validation.      |
 | `Public/Invoke-AvmDocs.ps1`                       | `avm docs` -> route to the bicep / terraform engine and refresh README content.    |
-| `Public/Export-AvmReadmeNote.ps1`                 | `avm docs export-notes` -> extract authored legacy Notes once without overwriting an existing sidecar. |
 | `Public/Invoke-AvmPreCommit.ps1`                  | `avm pre-commit` -> validate metadata, then run the ecosystem's authoring chain.  |
 | `Public/Invoke-AvmTestE2e.ps1`                    | `avm test e2e` -> deploy selected examples, run assertions and clean up. |
 | `Public/Invoke-AvmTestCleanup.ps1`                | `avm test cleanup` -> resume Bicep cleanup from retained local state. |

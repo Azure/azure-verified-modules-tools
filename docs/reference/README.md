@@ -27,7 +27,6 @@ This reference is generated from the comment-based help on the public PowerShell
 | [Invoke-AvmTestCleanup](Invoke-AvmTestCleanup.md) | `avm test cleanup` | Resume Bicep test cleanup from its saved JSON state. |
 | [Register-AvmFeature](Register-AvmFeature.md) | `avm register-features` | Ensure features declared at a module root are registered in one Azure test subscription. |
 | [Invoke-AvmDocs](Invoke-AvmDocs.md) | `avm docs` | Generate or refresh module documentation under $Path. |
-| [Export-AvmReadmeNote](Export-AvmReadmeNote.md) | `avm docs export-notes` | Extract authored Bicep README Notes into an adjacent, tracked sidecar. |
 | [Invoke-AvmSync](Invoke-AvmSync.md) | `avm sync` | Synchronise the current Terraform module repository's managed files<br>against the AVM governance source-of-truth (file sync only, no PR). |
 | [Invoke-AvmTransform](Invoke-AvmTransform.md) | `avm transform` | Transform the module's authored source into governed artifacts. |
 | [Invoke-AvmCheckPolicy](Invoke-AvmCheckPolicy.md) | `avm check policy` | Run policy checks against the resolved module. |
