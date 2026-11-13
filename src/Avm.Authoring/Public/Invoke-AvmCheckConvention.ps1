@@ -7,7 +7,7 @@ function Invoke-AvmCheckConvention {
         Routes to the engine matching the module's ecosystem:
 
           - bicep      -> first-party layout, version, changelog, test-source,
-                          compiled ARM, checked-in JSON, workflow, and CODEOWNERS
+                          compiled ARM, checked-in JSON, and workflow
                           checks
           - terraform  -> built-in AVM convention rules
 

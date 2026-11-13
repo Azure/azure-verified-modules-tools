@@ -5,7 +5,7 @@
 ## Synopsis
 
 Run the pull-request linting and drift gauntlet against the resolved module:
-metadata -> initialize (Terraform) -> validate -> sync (Terraform) -> format ->
+metadata -> initialize -> validate -> sync (Terraform only) -> format ->
 transform -> docs -> lint -> check policy -> check convention.
 
 ## Description
@@ -17,8 +17,10 @@ result is captured. The overall Status is 'pass' only when every
 executed step reports Status='pass' (or didn't throw, for verbs
 that don't carry a Status field).
 
-Step warnings and errors are reported as the steps run. GitHub Actions
-annotations include file and line information when available.
+Step warnings and errors are reported as the steps run; the final summary
+lists their statuses and timings. GitHub Actions annotations include file
+and line information when available. Verbose output includes additional
+step details.
 
 This is the broader sibling of Invoke-AvmPreCommit. It adds the
 credentialled policy evaluation and read-only drift checks used to
@@ -44,8 +46,9 @@ pre-commit. Failure aborts the chain even without StopOnFail.
 Excluding validate omits the initialize step; formatting needs only the
 executable, while transform, lint and policy prepare their own working
 directories.
-The 'validate' step is a build-validation
-pass ('terraform validate' / 'bicep build'), not a test run. Unit tests remain a
+The Terraform 'validate' step is a build-validation
+pass ('terraform validate'), not a test run. Bicep lint builds every
+source and reports compiler and linter diagnostics. Unit tests remain a
 separate CI job so a failure produces one actionable signal and
 all contributors receive results without environment approval.
 The convention step requires a tests/unit/*.tftest.hcl fixture,
@@ -140,7 +143,7 @@ Force the ecosystem selector. Defaults to 'auto'.
 ### -ExcludeSteps
 
 Step names to skip: metadata, validate, sync, format, transform,
-docs, lint, check policy, check convention. Sync applies to Terraform.
+docs, lint, check policy, check convention. Validate and sync apply to Terraform.
 Accepts an array;
 names are case-insensitive and duplicates are ignored. Unknown or
 empty names are rejected. Omit this parameter or supply an empty

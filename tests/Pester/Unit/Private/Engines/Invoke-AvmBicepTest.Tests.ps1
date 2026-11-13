@@ -63,6 +63,22 @@ Describe 'Invoke-AvmBicepTest' {
         $captured.Calls[0].Args[1]       | Should -Be '--stdout'
     }
 
+    It 'excludes Bicep sources under hidden directories and node_modules' {
+        foreach ($folder in @('.git', 'node_modules')) {
+            $path = Join-Path $script:moduleDir $folder
+            $null = New-Item -ItemType Directory -Path $path
+            Set-Content -LiteralPath (Join-Path $path 'ignored.bicep') -Value 'param z string' -Encoding utf8
+        }
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context } {
+            param($C)
+            Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'bicep'; Version = 'pinned'; Source = 'cache'; Path = 'bicep' } }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = '{}'; StdErr = '' } }
+            $result = Invoke-AvmBicepTest -Context $C
+            $result.FilesProcessed | Should -Be 2
+            Should -Invoke Invoke-AvmProcess -Exactly 2
+        }
+    }
+
     It 'parses compile errors and flips Status to fail' {
         $ctx = $script:context
         $a = $script:fileA
@@ -198,7 +214,7 @@ Describe 'Invoke-AvmBicepTest' {
                     StdErr = "$A(3,5) : Warning no-unused-params: Unused parameter.`n$A(4,5) : Warning no-unused-params: Unused parameter."
                 }
             }
-            Mock Write-AvmLog { $script:events.Add('warning') }
+            Mock Write-AvmLog { if ($Level -eq 'Warning') { $script:events.Add('warning') } }
 
             $result = Invoke-AvmBicepTest -Context $C
             $result.Status | Should -Be 'pass'
@@ -232,7 +248,7 @@ Describe 'Invoke-AvmBicepTest' {
                 }
                 $output = @(Invoke-AvmBicepTest -Context $C 6>&1)
                 $annotations = @($output | Where-Object { $_ -is [System.Management.Automation.InformationRecord] } |
-                        ForEach-Object { [string]$_.MessageData })
+                        ForEach-Object { [string]$_.MessageData } | Where-Object { $_ -like '::warning*' })
                 @($annotations).Count | Should -Be 1
                 $annotations[0] | Should -BeExactly '::warning file=main.bicep,line=3,col=5::[no-unused-params] Unused parameter.'
             }

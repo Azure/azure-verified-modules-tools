@@ -17,6 +17,9 @@ result is captured. The overall Status is 'pass' only when every
 executed step reports Status='pass' (format reports an implicit
 pass when no errors are thrown).
 
+Step warnings and errors are reported as the steps run; the final summary
+lists their statuses and timings. Verbose output includes additional details.
+
 Bicep lint and build validation run in 'avm pr-check'; pre-commit
 formats sources and generates the compiled templates and READMEs.
 

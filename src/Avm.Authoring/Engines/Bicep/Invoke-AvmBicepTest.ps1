@@ -57,7 +57,10 @@ function Invoke-AvmBicepTest {
 
     $issues = New-Object System.Collections.Generic.List[object]
     $presentedWarnings = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $fileIndex = 0
     foreach ($file in $files) {
+        $fileIndex++
+        Write-AvmLog ('build: file {0}/{1} = {2}' -f $fileIndex, $files.Count, $file.FullName) -Level Info
         $arguments = @('build', '--stdout', $file.FullName)
         if ($env:AVM_OFFLINE -eq '1') {
             $arguments += '--no-restore'

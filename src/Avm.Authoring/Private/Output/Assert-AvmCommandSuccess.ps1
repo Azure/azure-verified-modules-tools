@@ -57,7 +57,11 @@ function Assert-AvmCommandSuccess {
     }
     $issue = if ($null -ne $issueResult) { Get-AvmPrimaryIssue -Result $issueResult }
 
-    if ($null -ne $issue -and (Test-AvmIssuePresented -Issue $issue)) {
+    $stepErrorPresented = $null -ne $step -and
+    $null -ne $step.PSObject.Properties['Error'] -and
+    -not [string]::IsNullOrWhiteSpace([string]$step.Error) -and
+    (Test-AvmIssuePresented -Issue $step)
+    if ($stepErrorPresented -or ($null -ne $issue -and (Test-AvmIssuePresented -Issue $issue))) {
         Write-AvmLog $summary -Level Fail
     }
     elseif ([string]::IsNullOrWhiteSpace($detail)) {

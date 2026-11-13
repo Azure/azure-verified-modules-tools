@@ -7,7 +7,7 @@ This reference is generated from the comment-based help on the public PowerShell
 | Cmdlet | CLI command(s) | Purpose |
 | --- | --- | --- |
 | [Invoke-AvmPreCommit](Invoke-AvmPreCommit.md) | `avm pre-commit` | Run the standard pre-commit gauntlet against the resolved module:<br>bicep:     metadata -> format -> transform -> docs.<br>terraform: metadata -> initialize -> sync -> check convention -> transform -> format -> docs. |
-| [Invoke-AvmPrCheck](Invoke-AvmPrCheck.md) | `avm pr-check` | Run the pull-request linting and drift gauntlet against the resolved module:<br>metadata -> initialize (Terraform) -> validate -> sync (Terraform) -> format -><br>transform -> docs -> lint -> check policy -> check convention. |
+| [Invoke-AvmPrCheck](Invoke-AvmPrCheck.md) | `avm pr-check` | Run the pull-request linting and drift gauntlet against the resolved module:<br>metadata -> initialize -> validate -> sync (Terraform only) -> format -><br>transform -> docs -> lint -> check policy -> check convention. |
 | [Invoke-AvmTestUnit](Invoke-AvmTestUnit.md) | `avm test unit` | Run the module's Bicep Pester or Terraform unit-test tier. |
 | [Invoke-AvmTestIntegration](Invoke-AvmTestIntegration.md) | `avm test integration` | Run Bicep ARM validation/what-if or Terraform integration tests. |
 | [Invoke-AvmTestE2e](Invoke-AvmTestE2e.md) | `avm test e2e` | Run Bicep or Terraform deployment tests with ordinary cleanup. |

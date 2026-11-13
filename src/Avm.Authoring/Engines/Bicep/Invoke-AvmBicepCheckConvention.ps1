@@ -5,7 +5,7 @@ function Invoke-AvmBicepCheckConvention {
 
     .DESCRIPTION
         Checks layout, versions, changelogs, compiled ARM templates, checked-in
-        main.json drift, e2e test sources, workflows, and CODEOWNERS across root
+        main.json drift, e2e test sources, and workflows across root
         and child modules without modifying them. The separate required docs
         step in pr-check checks README regeneration and render completeness.
 

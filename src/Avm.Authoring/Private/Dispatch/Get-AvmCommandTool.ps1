@@ -24,7 +24,7 @@ function Get-AvmCommandTool {
         $requiredBy = switch ($Ecosystem) {
             'bicep' {
                 @{
-                    'bicep'              = @('format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
+                    'bicep'              = @('format', 'transform', 'lint', 'check policy', 'check convention', 'docs')
                     'Pester'             = @('metadata', 'check convention', 'docs')
                     'powershell-yaml'    = @('check convention')
                     'PSRule'             = @('check policy')

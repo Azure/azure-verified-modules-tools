@@ -2,7 +2,7 @@ function Invoke-AvmPrCheck {
     <#
     .SYNOPSIS
         Run the pull-request linting and drift gauntlet against the resolved module:
-        metadata -> initialize (Terraform) -> validate -> sync (Terraform) -> format ->
+        metadata -> initialize -> validate -> sync (Terraform only) -> format ->
         transform -> docs -> lint -> check policy -> check convention.
 
     .DESCRIPTION
@@ -13,8 +13,10 @@ function Invoke-AvmPrCheck {
         executed step reports Status='pass' (or didn't throw, for verbs
         that don't carry a Status field).
 
-        Step warnings and errors are reported as the steps run. GitHub Actions
-        annotations include file and line information when available.
+        Step warnings and errors are reported as the steps run; the final summary
+        lists their statuses and timings. GitHub Actions annotations include file
+        and line information when available. Verbose output includes additional
+        step details.
 
         This is the broader sibling of Invoke-AvmPreCommit. It adds the
         credentialled policy evaluation and read-only drift checks used to
@@ -40,8 +42,9 @@ function Invoke-AvmPrCheck {
         Excluding validate omits the initialize step; formatting needs only the
         executable, while transform, lint and policy prepare their own working
         directories.
-        The 'validate' step is a build-validation
-        pass ('terraform validate' / 'bicep build'), not a test run. Unit tests remain a
+        The Terraform 'validate' step is a build-validation
+        pass ('terraform validate'), not a test run. Bicep lint builds every
+        source and reports compiler and linter diagnostics. Unit tests remain a
         separate CI job so a failure produces one actionable signal and
         all contributors receive results without environment approval.
         The convention step requires a tests/unit/*.tftest.hcl fixture,
@@ -111,7 +114,7 @@ function Invoke-AvmPrCheck {
 
     .PARAMETER ExcludeSteps
         Step names to skip: metadata, validate, sync, format, transform,
-        docs, lint, check policy, check convention. Sync applies to Terraform.
+        docs, lint, check policy, check convention. Validate and sync apply to Terraform.
         Accepts an array;
         names are case-insensitive and duplicates are ignored. Unknown or
         empty names are rejected. Omit this parameter or supply an empty
@@ -230,9 +233,6 @@ function Invoke-AvmPrCheck {
             [pscustomobject]@{ Name = 'validate'; Cmdlet = 'Invoke-AvmTest'; ExtraArgs = @{ UseExistingInit = $true } }
             [pscustomobject]@{ Name = 'sync'; Cmdlet = 'Invoke-AvmSync'; ExtraArgs = @{ CheckDrift = $true } }
         }
-        else {
-            [pscustomobject]@{ Name = 'validate'; Cmdlet = 'Invoke-AvmTest' }
-        }
         [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat'; ExtraArgs = @{ CheckDrift = $true } }
         [pscustomobject]@{
             Name = 'transform'; Cmdlet = 'Invoke-AvmTransform'
@@ -251,6 +251,7 @@ function Invoke-AvmPrCheck {
     )
 
     $steps = New-Object System.Collections.Generic.List[object]
+    $presentedDiagnostics = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     $overall = if (@($stepDefs | Where-Object { $_.Name -notin $ExcludeSteps }).Count -eq 0) { 'skipped' } else { 'pass' }
     $stepIndex = 0
 
@@ -264,15 +265,17 @@ function Invoke-AvmPrCheck {
         $stepStart = [datetime]::UtcNow
         if ($def.Name -in $ExcludeSteps) {
             Write-AvmLog ('step {0}/{1}: {2} -> skipped (excluded by -ExcludeSteps)' -f $stepIndex, $stepDefs.Count, $def.Name) -Level Info | Out-Null
-            $steps.Add([pscustomobject][ordered]@{
-                    Step       = $def.Name
-                    Status     = 'skipped'
-                    Error      = 'Excluded by -ExcludeSteps.'
-                    Result     = $null
-                    StartTime  = $stepStart
-                    EndTime    = $stepStart
-                    DurationMs = 0
-                })
+            $step = [pscustomobject][ordered]@{
+                Step       = $def.Name
+                Status     = 'skipped'
+                Error      = 'Excluded by -ExcludeSteps.'
+                Result     = $null
+                StartTime  = $stepStart
+                EndTime    = $stepStart
+                DurationMs = 0
+            }
+            Register-AvmPresentedIssue -Issue $step
+            $steps.Add($step)
             continue
         }
         $stepSw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -382,51 +385,25 @@ function Invoke-AvmPrCheck {
             if ($stepStatus -ne 'error') { $stepStatus = 'fail' }
             $stepError = "Terraform initialization prerequisite failed: $stepError"
         }
-        if ($null -ne $stepResult -and $null -ne $stepResult.PSObject.Properties['Issues']) {
-            $presented = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-            foreach ($issue in @($stepResult.Issues)) {
-                if ($null -eq $issue -or $null -eq $issue.PSObject.Properties['Severity'] -or
-                    $issue.Severity -isnot [string] -or $issue.Severity -notin @('warning', 'error')) { continue }
-                $fields = @{ File = ''; Line = 0; Column = 0; Code = ''; Message = '' }
-                foreach ($name in @($fields.Keys)) {
-                    $property = $issue.PSObject.Properties[$name]
-                    if ($null -ne $property -and $null -ne $property.Value) { $fields[$name] = $property.Value }
-                }
-                $key = ConvertTo-Json -InputObject @(
-                    $issue.Severity, $fields.File, $fields.Line, $fields.Column, $fields.Code, $fields.Message
-                ) -Compress
-                if ($presented.Add($key) -and -not (Test-AvmIssuePresented -Issue $issue)) {
-                    $message = [string]$fields.Message
-                    $code = [string]$fields.Code
-                    if ($code) { $message = '[{0}] {1}' -f $code, $message }
-                    Write-AvmLog -Message $message -Level $issue.Severity `
-                        -File ([string]$fields.File) -Line ([int]$fields.Line) -Column ([int]$fields.Column)
-                }
-                Register-AvmPresentedIssue -Issue $issue
-            }
-        }
+        Write-AvmStepDiagnostic -Result $stepResult -Name $def.Name -Status $stepStatus `
+            -ErrorMessage $stepError -Presented $presentedDiagnostics
         $stepSw.Stop()
         $stepEnd = $stepStart.AddMilliseconds($stepSw.Elapsed.TotalMilliseconds)
 
         $completionLevel = if ($stepStatus -eq 'pass') { 'Pass' } elseif ($stepStatus -in @('fail', 'error')) { 'Fail' } else { 'Info' }
         Write-AvmLog ('step {0}/{1}: {2} -> {3} ({4})' -f $stepIndex, $stepDefs.Count, $def.Name, $stepStatus, (Format-AvmDuration -Duration $stepSw.Elapsed)) -Level $completionLevel | Out-Null
 
-        if ($stepStatus -in @('fail', 'error') -and -not [string]::IsNullOrWhiteSpace($stepError)) {
-            # F41: narration only. Assert-AvmCommandSuccess promotes the same
-            # text to the single GitHub Actions annotation for the run.
-            $headline = ($stepError -split "`r?`n", 2)[0]
-            Write-AvmLog ('  {0}: {1}' -f $def.Name, $headline) -Level Fail | Out-Null
+        $step = [pscustomobject][ordered]@{
+            Step       = $def.Name
+            Status     = $stepStatus
+            Error      = $stepError
+            Result     = $stepResult
+            StartTime  = $stepStart
+            EndTime    = $stepEnd
+            DurationMs = [int]$stepSw.Elapsed.TotalMilliseconds
         }
-
-        $steps.Add([pscustomobject][ordered]@{
-                Step       = $def.Name
-                Status     = $stepStatus
-                Error      = $stepError
-                Result     = $stepResult
-                StartTime  = $stepStart
-                EndTime    = $stepEnd
-                DurationMs = [int]$stepSw.Elapsed.TotalMilliseconds
-            })
+        Register-AvmPresentedIssue -Issue $step
+        $steps.Add($step)
 
         if ($stepStatus -eq 'fail' -or $stepStatus -eq 'error') { $overall = $stepStatus }
         if ($def.Name -eq 'initialize' -and $stepStatus -ne 'pass') { break }
