@@ -234,6 +234,16 @@ $observedAuthoring = @(Get-Module -Name Avm.Authoring)
 $observedGetAvmTool = @(Get-Command -Name Get-AvmTool -All -ErrorAction SilentlyContinue)
 $observedInstallAvmTool = @(Get-Command -Name Install-AvmTool -All -ErrorAction SilentlyContinue)
 $observedAvailable = @(Get-Module -ListAvailable -Name Avm.Authoring)
+if ($PSCmdlet.ParameterSetName -eq 'Object') {
+    if (-not $inputData.Contains('AuthoringModule') -or
+        $inputData.AuthoringModule -isnot [System.Management.Automation.PSModuleInfo]) {
+        throw [System.InvalidOperationException]::new('Bicep Pester in-process admission requires the executing Avm.Authoring module.')
+    }
+    $admitted = $inputData.AuthoringModule
+    $observedAuthoring = @($observedAuthoring | Where-Object { [object]::ReferenceEquals($_, $admitted) })
+    $observedGetAvmTool = @($observedGetAvmTool | Where-Object { [object]::ReferenceEquals($_.Module, $admitted) })
+    $observedInstallAvmTool = @($observedInstallAvmTool | Where-Object { [object]::ReferenceEquals($_.Module, $admitted) })
+}
 $expectedModuleBase = if ($PSCmdlet.ParameterSetName -eq 'File') { $admissionModule } else { $authoringModuleBase }
 if ($observedAuthoring.Count -ne 1 -or
     ($PSCmdlet.ParameterSetName -eq 'File' -and $observedAvailable.Count -lt 1) -or

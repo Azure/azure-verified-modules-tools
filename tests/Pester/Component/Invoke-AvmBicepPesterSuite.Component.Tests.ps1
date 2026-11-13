@@ -9,6 +9,40 @@ BeforeAll {
 }
 
 Describe 'Component: native Bicep convention diagnostics' -Tag Component {
+    It 'uses the executing module when another authoring copy is loaded' {
+        $copy = Join-Path $TestDrive 'other' 'Avm.Authoring'
+        $null = New-Item -ItemType Directory -Path (Split-Path $copy -Parent)
+        Copy-Item -LiteralPath $script:admittedModule.ModuleBase -Destination $copy -Recurse
+        $runner = Join-Path $TestDrive 'multiple-authoring.ps1'
+        Set-Content -LiteralPath $runner -Encoding utf8NoBOM -Value @'
+param($OtherManifest, $SourceManifest, $Root)
+$ErrorActionPreference = 'Stop'
+Import-Module -Name $OtherManifest -Global
+$module = Import-Module -Name $SourceManifest -Global -PassThru
+if (@(Get-Module Avm.Authoring).Count -ne 2) { throw 'Expected two loaded authoring modules.' }
+$summary = & $module {
+    param($Directory)
+    $suite = Join-Path $ExecutionContext.SessionState.Module.ModuleBase 'Resources' 'bicep' 'conventions' 'Readme.Tests.ps1'
+    Invoke-AvmBicepPesterSuite -Files @($suite) -WorkingDirectory $Directory -Mode Convention `
+        -ConventionData @{ ReadmeInputs = @() } -EnvVars @{} -InProcess
+} $Root
+if ($summary.Authoring.SourceModuleBase -ne $module.ModuleBase -or
+    $summary.Authoring.LoadedModuleBase -ne $module.ModuleBase) {
+    throw 'The runner did not retain the executing module.'
+}
+'@
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            Runner = $runner; Other = (Join-Path $copy 'Avm.Authoring.psd1')
+            Source = (Join-Path $script:admittedModule.ModuleBase 'Avm.Authoring.psd1'); Root = $TestDrive
+        } {
+            param($Runner, $Other, $Source, $Root)
+            $result = Invoke-AvmProcess -FilePath ([System.Environment]::ProcessPath) `
+                -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $Runner, $Other, $Source, $Root) `
+                -WorkingDirectory $Root
+            $result.ExitCode | Should -Be 0
+        }
+    }
+
     It 'maps native assertion locations and never downgrades runtime failures or skips' {
         $suite = Join-Path $TestDrive 'native.Tests.ps1'
         Set-Content -LiteralPath $suite -Encoding utf8NoBOM -Value @'

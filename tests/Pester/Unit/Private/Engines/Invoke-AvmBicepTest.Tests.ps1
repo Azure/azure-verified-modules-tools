@@ -184,6 +184,35 @@ Describe 'Invoke-AvmBicepTest' {
         $result.Issues[0].Severity | Should -Be 'warning'
     }
 
+    It 'reports repeated compiler warnings once inline and in the result' {
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; A = $script:fileA } {
+            param($C, $A)
+            $script:events = [System.Collections.Generic.List[string]]::new()
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'bicep'; Version = 'pinned'; Source = 'cache'; Path = 'bicep' }
+            }
+            Mock Invoke-AvmProcess {
+                $script:events.Add('build')
+                [pscustomobject]@{
+                    ExitCode = 0; StdOut = '{}'
+                    StdErr = "$A(3,5) : Warning no-unused-params: Unused parameter.`n$A(4,5) : Warning no-unused-params: Unused parameter."
+                }
+            }
+            Mock Write-AvmLog { $script:events.Add('warning') }
+
+            $result = Invoke-AvmBicepTest -Context $C
+            $result.Status | Should -Be 'pass'
+            $result.Issues.Count | Should -Be 2
+            @($script:events) | Should -Be @('build', 'warning', 'warning', 'build')
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                $Level -eq 'Warning' -and $File -eq $A -and $Line -eq 3 -and $Column -eq 5
+            }
+            (ConvertTo-AvmResultLine -Result $result -Verb 'test') -join "`n" | Should -Match 'no-unused-params'
+            (ConvertTo-AvmResultLine -Result $result -Verb 'test' -ExcludePresentedIssues) -join "`n" |
+                Should -Not -Match 'no-unused-params'
+        }
+    }
+
     It 'reports the bicep tool identity in the returned object' {
         $ctx = $script:context
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {

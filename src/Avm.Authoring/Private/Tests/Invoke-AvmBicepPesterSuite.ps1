@@ -38,9 +38,10 @@ function Invoke-AvmBicepPesterSuite {
     $ErrorActionPreference = 'Stop'
     if (-not $ModuleRoot) { $ModuleRoot = $WorkingDirectory }
     $pester = Import-AvmPowerShellModule -Name Pester -ModuleRoot $ModuleRoot
-    $authoring = @(Get-Module -Name Avm.Authoring)
-    if ($authoring.Count -ne 1) { throw 'Bicep Pester child admission requires exactly one loaded Avm.Authoring module.' }
-    $authoring = $authoring[0]
+    $authoring = $ExecutionContext.SessionState.Module
+    if ($null -eq $authoring -or $authoring.Name -cne 'Avm.Authoring') {
+        throw [System.InvalidOperationException]::new('Bicep Pester admission requires the executing Avm.Authoring module.')
+    }
     $authoringManifest = Join-Path $authoring.ModuleBase 'Avm.Authoring.psd1'
     if (-not (Test-Path -LiteralPath $authoringManifest -PathType Leaf)) { throw 'The loaded Avm.Authoring module has no manifest.' }
 
@@ -71,6 +72,7 @@ function Invoke-AvmBicepPesterSuite {
     $resultPath = $null
     try {
         if ($InProcess) {
+            $inputData.AuthoringModule = $authoring
             $run = Invoke-AvmBicepTestScript -Path $runnerPath -WorkingDirectory $WorkingDirectory `
                 -Parameters @{ InputData = $inputData } -EnvVars $EnvVars -Confirm:$false
             if ($run.Output.Count -ne 1 -or

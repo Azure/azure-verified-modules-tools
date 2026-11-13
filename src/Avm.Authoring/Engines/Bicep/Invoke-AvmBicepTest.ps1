@@ -56,6 +56,7 @@ function Invoke-AvmBicepTest {
     $files = @($discovered)
 
     $issues = New-Object System.Collections.Generic.List[object]
+    $presentedWarnings = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($file in $files) {
         $arguments = @('build', '--stdout', $file.FullName)
         if ($env:AVM_OFFLINE -eq '1') {
@@ -73,14 +74,22 @@ function Invoke-AvmBicepTest {
             if ($line -match '^(?<path>.+?)\((?<l>\d+),(?<c>\d+)\)\s*:\s*(?<sev>\w+)\s+(?<code>[^:]+)\s*:\s*(?<msg>.*)$') {
                 $severity = $Matches['sev'].ToLowerInvariant()
                 if ($severity -eq 'error') { $hasError = $true }
-                $issues.Add([pscustomobject][ordered]@{
+                $issue = [pscustomobject][ordered]@{
                         File     = $Matches['path']
                         Line     = [int]$Matches['l']
                         Column   = [int]$Matches['c']
                         Severity = $severity
                         Code     = $Matches['code'].Trim()
                         Message  = $Matches['msg'].Trim()
-                    })
+                    }
+                if ($severity -eq 'warning') {
+                    $warningKey = ConvertTo-Json -InputObject @($issue.File, $issue.Line, $issue.Column, $issue.Code, $issue.Message) -Compress
+                    if (-not $presentedWarnings.Add($warningKey)) { continue }
+                    Write-AvmLog -Message ('[{0}] {1}' -f $issue.Code, $issue.Message) -Level Warning `
+                        -File $issue.File -Line $issue.Line -Column $issue.Column
+                    Register-AvmPresentedIssue -Issue $issue
+                }
+                $issues.Add($issue)
             }
         }
         if ($r.ExitCode -ne 0 -and -not $hasError) {
