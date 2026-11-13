@@ -64,7 +64,7 @@ Describe 'Test-AvmModuleLayout' {
 Describe 'Module Resources packaging' {
     It 'ships versioned metadata and catalog schemas from this repository' {
         $schemaDirectory = Join-Path $script:moduleRoot 'Resources' 'Schemas' 'v1'
-        foreach ($name in @('avm-module-metadata.schema.json', 'avm-modules-catalog.schema.json')) {
+        foreach ($name in @('avm-module-metadata.schema.json', 'avm-modules-catalog.schema.json', 'avm-release-state.schema.json', 'avm-release-record.schema.json')) {
             $path = Join-Path $schemaDirectory $name
             $path | Should -Exist
             (Get-Item -LiteralPath $path).Name | Should -BeExactly $name

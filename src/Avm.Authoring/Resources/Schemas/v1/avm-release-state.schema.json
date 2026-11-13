@@ -1,0 +1,205 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "Use the canonical HTTP identifier so Test-Json resolves its bundled draft-07 meta-schema without a download.",
+  "$id": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-release-state.schema.json",
+  "title": "AVM module release state v1",
+  "description": "state.json on a module repository's avm-release-state branch. It holds the pending release, the comment and label cursors, the hold, and the publication in progress.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [ "schemaVersion", "repository", "releaseIssue", "commentCursor", "labelCursor", "hold", "pending", "publication" ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "repository": { "$ref": "#/definitions/repository" },
+    "releaseIssue": {
+      "type": [ "object", "null" ],
+      "additionalProperties": false,
+      "required": [ "number" ],
+      "properties": {
+        "number": { "$ref": "#/definitions/id" }
+      }
+    },
+    "commentCursor": {
+      "type": [ "object", "null" ],
+      "additionalProperties": false,
+      "required": [ "createdAt", "id" ],
+      "properties": {
+        "createdAt": { "$ref": "#/definitions/timestamp" },
+        "id": { "$ref": "#/definitions/id" }
+      }
+    },
+    "labelCursor": {
+      "type": [ "object", "null" ],
+      "additionalProperties": false,
+      "required": [ "at", "id" ],
+      "properties": {
+        "at": { "$ref": "#/definitions/timestamp" },
+        "id": { "$ref": "#/definitions/id" }
+      }
+    },
+    "hold": {
+      "type": [ "object", "null" ],
+      "additionalProperties": false,
+      "required": [ "reason", "placedBy", "placedAt", "since", "commentId" ],
+      "properties": {
+        "reason": { "$ref": "#/definitions/text" },
+        "placedBy": { "$ref": "#/definitions/text" },
+        "placedAt": { "$ref": "#/definitions/timestamp" },
+        "since": { "$ref": "#/definitions/timestamp" },
+        "commentId": { "$ref": "#/definitions/id" }
+      }
+    },
+    "pending": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "pullRequests", "releaseRequest", "notes" ],
+      "properties": {
+        "pullRequests": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/pullRequest" }
+        },
+        "releaseRequest": {
+          "type": [ "object", "null" ],
+          "additionalProperties": false,
+          "required": [ "requestedBy", "requestedAt", "commentId" ],
+          "properties": {
+            "requestedBy": { "$ref": "#/definitions/text" },
+            "requestedAt": { "$ref": "#/definitions/timestamp" },
+            "commentId": { "$ref": "#/definitions/id" }
+          }
+        },
+        "notes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [ "commentary", "breakingOverride" ],
+          "properties": {
+            "commentary": {
+              "type": [ "object", "null" ],
+              "additionalProperties": false,
+              "required": [ "text", "setBy", "setAt" ],
+              "properties": {
+                "text": { "$ref": "#/definitions/text" },
+                "setBy": { "$ref": "#/definitions/text" },
+                "setAt": { "$ref": "#/definitions/timestamp" }
+              }
+            },
+            "breakingOverride": {
+              "type": [ "object", "null" ],
+              "additionalProperties": false,
+              "required": [ "text", "coveredPullRequests", "setBy", "setAt" ],
+              "properties": {
+                "text": { "$ref": "#/definitions/text" },
+                "coveredPullRequests": {
+                  "type": "array",
+                  "items": { "$ref": "#/definitions/id" }
+                },
+                "setBy": { "$ref": "#/definitions/text" },
+                "setAt": { "$ref": "#/definitions/timestamp" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "publication": {
+      "type": [ "object", "null" ],
+      "additionalProperties": false,
+      "required": [ "version", "previousVersion", "commit", "cutoffAt", "trigger", "stage", "pullRequests" ],
+      "properties": {
+        "version": { "$ref": "#/definitions/version" },
+        "previousVersion": { "$ref": "#/definitions/version" },
+        "commit": { "$ref": "#/definitions/sha" },
+        "cutoffAt": { "$ref": "#/definitions/timestamp" },
+        "trigger": { "enum": [ "timer", "cap", "release-command" ] },
+        "stage": { "const": "cutoff" },
+        "pullRequests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [ "number", "versionLabel" ],
+            "properties": {
+              "number": { "$ref": "#/definitions/id" },
+              "versionLabel": { "enum": [ "patch", "minor", "major", null ] }
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "id": { "type": "integer", "minimum": 1 },
+    "text": { "type": "string", "pattern": "\\S" },
+    "nullableText": { "anyOf": [ { "$ref": "#/definitions/text" }, { "type": "null" } ] },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$"
+    },
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "repository": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$" },
+    "versionLabel": { "enum": [ "patch", "minor", "major" ] },
+    "pullRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "number", "title", "author", "kind", "mergedAt", "mergeCommit", "triggersRelease", "triggeredAt", "triggeredBy", "optIn", "versionLabels", "labelChanges", "breaking", "moduleCodeChanged", "formattingOnly", "flags" ],
+      "properties": {
+        "number": { "$ref": "#/definitions/id" },
+        "title": { "type": "string" },
+        "author": { "$ref": "#/definitions/text" },
+        "kind": { "enum": [ "Human", "RoutineBot", "Automation" ] },
+        "mergedAt": { "$ref": "#/definitions/timestamp" },
+        "mergeCommit": { "$ref": "#/definitions/sha" },
+        "triggersRelease": { "type": "boolean" },
+        "triggeredAt": { "anyOf": [ { "$ref": "#/definitions/timestamp" }, { "type": "null" } ] },
+        "triggeredBy": { "enum": [ "merge", "opt-in", null ] },
+        "optIn": {
+          "type": [ "object", "null" ],
+          "additionalProperties": false,
+          "required": [ "by", "at" ],
+          "properties": {
+            "by": { "$ref": "#/definitions/text" },
+            "at": { "$ref": "#/definitions/timestamp" }
+          }
+        },
+        "versionLabels": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/versionLabel" }
+        },
+        "labelChanges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [ "label", "action", "actor", "at" ],
+            "properties": {
+              "label": { "$ref": "#/definitions/versionLabel" },
+              "action": { "enum": [ "labeled", "unlabeled" ] },
+              "actor": { "$ref": "#/definitions/text" },
+              "at": { "$ref": "#/definitions/timestamp" }
+            }
+          }
+        },
+        "breaking": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [ "declared", "whatChanges", "requiredUpgrade", "issues" ],
+          "properties": {
+            "declared": { "type": "boolean" },
+            "whatChanges": { "$ref": "#/definitions/nullableText" },
+            "requiredUpgrade": { "$ref": "#/definitions/nullableText" },
+            "issues": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/text" }
+            }
+          }
+        },
+        "moduleCodeChanged": { "type": "boolean" },
+        "formattingOnly": { "type": "boolean" },
+        "flags": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/text" }
+        }
+      }
+    }
+  }
+}
