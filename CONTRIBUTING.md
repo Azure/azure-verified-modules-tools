@@ -4,7 +4,7 @@ The module's purpose, architecture, and engineering rules live in [docs/quality-
 
 The build, test, and lint scaffolding is live. The two things you most likely want:
 
-- **Run the tests / local gate** — `./build.ps1 pre-commit` (layout + lint + unit tests). See [§6](#6-build-test-lint).
+- **Run unit tests** — `./build.ps1 test`. See [§6](#6-build-test-lint) for other checks.
 - **Install / run the module locally in dev mode** — `Import-Module ./src/Avm.Authoring/Avm.Authoring.psd1 -Force`, then use the `avm` CLI from source. See [§3](#3-import-the-module-from-source).
 
 ---
@@ -147,7 +147,7 @@ has drifted from `Avm.Authoring` / `Avm.Authoring.psd1` /
 
 ## 6. Build, test, lint
 
-The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it through the `./build.ps1 <task>` forwarder from the repo root. `pre-commit` is the gate to run before every PR.
+The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it through the `./build.ps1 <task>` forwarder from the repo root. Run the checks needed to validate your change locally; the pull-request workflows provide the broader validation.
 
 ```pwsh
 ./build.ps1 pre-commit        # docs-check + layout + lint + all unit/component tests
@@ -176,6 +176,7 @@ The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it thr
 Notes:
 
 - `test` runs the **unit** tier only. The `Component` and `Integration` tiers are separate tasks (and separate `-Tag`s) so routine local runs stay fast and offline.
+- For routine changes, run `./build.ps1 test` and any focused checks needed for the changed behavior. Run `./build.ps1 docs` when exported cmdlet help changes, and commit the generated reference pages. Do not run the full `pre-commit`, `ci`, or `ci-tests` task locally by default; the pull-request workflows run their checks independently and concurrently. Run broader checks locally only when needed to diagnose or reproduce a failure.
 - `integration` and `qualification` use real pinned tools and network downloads; neither runs in `pre-commit` or `ci`.
 - Terraform acceptance requires authorized policy-plan credentials for full pr-check. Do not exclude steps to manufacture a local pass. Canonical input must remain byte-identical on both public pre-commit runs; the migration fixture allows only its reviewed first-pass changes. Both compare authored files, docs, tests, dotfiles and tracked locks again after pr-check.
 - Integration defaults to both ecosystems. Bicep has its own compiler/metadata/policy selection; Terraform selects only the public user flows. Native compatibility runs once per OS outside the two Terraform fixture legs. Package qualification runs independently for pin/bootstrap/release-related changes. Unknown integration files fail selection until assigned.
@@ -189,9 +190,9 @@ and relevant shared dependencies and can be dispatched manually on its own.
 Only authoring retains the cross-platform matrix; workflow and
 repository-management tests run on Ubuntu. Unrelated documentation-only changes
 intentionally skip CI. Each workflow reports its own results.
-Run the full local `pre-commit` gate before pushing, not a scoped substitute.
-See the workflow files for the current CI path filters and test groups. The
-quality spec describes the general testing standard.
+After pushing, monitor all pull-request checks to completion, investigate any
+failures, and push fixes. See the workflow files for current CI path filters and
+test groups. The quality spec describes the general testing standard.
 
 ---
 
@@ -310,10 +311,10 @@ Remove-Item (Get-PSReadLineOption).HistorySavePath -Force  # clear the history f
    ```
 
 2. Make changes, keeping the PR focused on a single concern.
-3. Run the local gate before pushing: `./build.ps1 pre-commit` (layout + lint + unit tests).
+3. Run the relevant local checks before pushing. For code changes, run `./build.ps1 test` and focused checks as needed. If exported cmdlet help changed, run `./build.ps1 docs` and include the generated Markdown.
 4. Commit. Prefer [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `chore:`).
 5. Push and open a PR against `Azure/azure-verified-modules-tools:main`. Link the relevant phase / spec section in the description.
-6. Address review comments via `git commit --fixup` + `git rebase -i --autosquash` before merge, not force-push reflinks.
+6. Monitor PR checks to completion and fix failures. Address review comments via `git commit --fixup` + `git rebase -i --autosquash` before merge, not force-push reflinks.
 
 ---
 
