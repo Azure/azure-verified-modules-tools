@@ -34,8 +34,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Public/Get-AvmAuthoringPlaceholder.ps1`          | Back-compat shim from the initial placeholder release.                             |
 | `Engines/`                                        | Per-ecosystem facades over real toolchains. Loaded by the module but not exported. |
 | `Engines/Bicep/Format-AvmBicepModule.ps1`         | Runs `bicep format` over every `.bicep` / `.bicepparam` source in the module.      |
-| `Engines/Bicep/Invoke-AvmBicepLint.ps1`           | Runs `bicep lint` per `.bicep` file and surfaces structured diagnostics.           |
-| `Engines/Bicep/Invoke-AvmBicepTest.ps1`           | Runs `bicep build --stdout` per `.bicep` file as a no-network compile check.       |
+| `Engines/Bicep/Invoke-AvmBicepTest.ps1`           | Builds each `.bicep` file and surfaces structured compiler and lint diagnostics.    |
 | `Engines/Bicep/Invoke-AvmBicepTestUnit.ps1`       | Runs module Pester unit tests in isolation; `-IncludeCompliance` adds packaged native conventions, metadata and README checks. |
 | `Engines/Bicep/Invoke-AvmBicepTestIntegration.ps1` | Validates and previews Bicep `tests/e2e` with Azure CLI using temporary, token-substituted ARM templates. |
 | `Engines/Bicep/Invoke-AvmBicepTestE2e.ps1`        | Native deployment, assertions, post hooks and operation-based cleanup at all four ARM scopes. |
@@ -406,7 +405,7 @@ avm -SkipModuleVersionCheck context         # Get-AvmModuleContext (current work
 avm -SkipModuleVersionCheck init -Ecosystem bicep -ModuleType resource -Path ./avm/res/storage/storage-account -Proposed
 avm -SkipModuleVersionCheck tool list       # Get-AvmTool (lists all tools in the bundled lock)
 avm -SkipModuleVersionCheck format          # Invoke-AvmFormat (engine resolved from module context)
-avm -SkipModuleVersionCheck lint            # Invoke-AvmLint (bicep lint; scoped AVM TFLint rulesets for terraform)
+avm -SkipModuleVersionCheck lint            # Invoke-AvmLint (bicep build and lint; scoped AVM TFLint rulesets for terraform)
 avm -SkipModuleVersionCheck test            # Invoke-AvmTest (bicep build --stdout; terraform validate -json per example)
 avm -SkipModuleVersionCheck test --no-init  # Use initialized examples; module coverage is not assessed
 avm -SkipModuleVersionCheck docs            # Invoke-AvmDocs (terraform-docs inject; Bicep Scriban template)

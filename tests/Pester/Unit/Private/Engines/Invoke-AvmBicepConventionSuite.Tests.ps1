@@ -22,7 +22,7 @@ Describe 'Invoke-AvmBicepConventionSuite' {
                 foreach ($name in @('Compiled', 'ApiVersion', 'Workflow', 'ChildPublish', 'Version', 'TestSource', 'Publication')) {
                     $Data["Native${name}Expected"] = 0
                 }
-                $Data.NativeOwnershipExpected = 1
+                $Data.NativeChildPublishExpected = 1
                 $Data.NativeLayoutExpected = 1
             }
             Mock Invoke-AvmBicepPesterSuite {
@@ -44,7 +44,7 @@ Describe 'Invoke-AvmBicepConventionSuite' {
         InModuleScope 'Avm.Authoring' {
             @(Invoke-AvmBicepConventionSuite -Convention $script:convention) | Should -HaveCount 0
             Should -Invoke Invoke-AvmBicepPesterSuite -Times 1 -Exactly -ParameterFilter {
-                $Mode -eq 'Convention' -and $InProcess -and $Files.Count -eq 6 -and
+                $Mode -eq 'Convention' -and $InProcess -and $Files.Count -eq 5 -and
                 @($Files | Where-Object { $_ -like '*Conventions.Tests.ps1' }).Count -eq 0 -and
                 @($Files | Where-Object { $_ -like '*Layout.Tests.ps1' }).Count -eq 1 -and
                 @($Files | Where-Object { $_ -like '*Publication.Tests.ps1' }).Count -eq 1
@@ -114,7 +114,6 @@ Describe 'Invoke-AvmBicepConventionSuite' {
     }
 
     It 'rejects missing <Name> discovery independently of reported totals' -ForEach @(
-        @{ Name = 'Ownership'; Value = 0; Total = 1 }
         @{ Name = 'ChildPublish'; Value = -1; Total = 2 }
         @{ Name = 'Version'; Value = -1; Total = 2 }
         @{ Name = 'TestSource'; Value = -1; Total = 2 }

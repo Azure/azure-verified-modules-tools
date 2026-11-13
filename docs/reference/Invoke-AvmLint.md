@@ -10,7 +10,7 @@ Lint all source files in the resolved module under $Path.
 
 Routes to the engine matching the module's ecosystem:
 
-  - bicep      -> Invoke-AvmBicepLint     ('bicep lint <file>' per file)
+  - bicep      -> Invoke-AvmBicepTest     (build and lint each Bicep file)
   - terraform  -> Invoke-AvmTerraformLint (AVM tflint rulesets, per scope)
 
 The ecosystem is determined by Get-AvmModuleContext, which honours

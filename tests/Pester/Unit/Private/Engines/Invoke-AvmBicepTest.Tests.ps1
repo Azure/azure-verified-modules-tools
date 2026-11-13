@@ -63,6 +63,22 @@ Describe 'Invoke-AvmBicepTest' {
         $captured.Calls[0].Args[1]       | Should -Be '--stdout'
     }
 
+    It 'excludes Bicep sources under hidden directories and node_modules' {
+        foreach ($folder in @('.git', 'node_modules')) {
+            $path = Join-Path $script:moduleDir $folder
+            $null = New-Item -ItemType Directory -Path $path
+            Set-Content -LiteralPath (Join-Path $path 'ignored.bicep') -Value 'param z string' -Encoding utf8
+        }
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context } {
+            param($C)
+            Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'bicep'; Version = 'pinned'; Source = 'cache'; Path = 'bicep' } }
+            Mock Invoke-AvmProcess { [pscustomobject]@{ ExitCode = 0; StdOut = '{}'; StdErr = '' } }
+            $result = Invoke-AvmBicepTest -Context $C
+            $result.FilesProcessed | Should -Be 2
+            Should -Invoke Invoke-AvmProcess -Exactly 2
+        }
+    }
+
     It 'parses compile errors and flips Status to fail' {
         $ctx = $script:context
         $a = $script:fileA
@@ -182,6 +198,65 @@ Describe 'Invoke-AvmBicepTest' {
         $result.Status             | Should -Be 'pass'
         $result.Issues.Count       | Should -Be 1
         $result.Issues[0].Severity | Should -Be 'warning'
+    }
+
+    It 'reports repeated compiler warnings once inline and in the result' {
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; A = $script:fileA } {
+            param($C, $A)
+            $script:events = [System.Collections.Generic.List[string]]::new()
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'bicep'; Version = 'pinned'; Source = 'cache'; Path = 'bicep' }
+            }
+            Mock Invoke-AvmProcess {
+                $script:events.Add('build')
+                [pscustomobject]@{
+                    ExitCode = 0; StdOut = '{}'
+                    StdErr = "$A(3,5) : Warning no-unused-params: Unused parameter.`n$A(4,5) : Warning no-unused-params: Unused parameter."
+                }
+            }
+            Mock Write-AvmLog { if ($Level -eq 'Warning') { $script:events.Add('warning') } }
+
+            $result = Invoke-AvmBicepTest -Context $C
+            $result.Status | Should -Be 'pass'
+            $result.Issues.Count | Should -Be 2
+            @($script:events) | Should -Be @('build', 'warning', 'warning', 'build')
+            Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                $Level -eq 'Warning' -and $File -eq $A -and $Line -eq 3 -and $Column -eq 5
+            }
+            (ConvertTo-AvmResultLine -Result $result -Verb 'test') -join "`n" | Should -Match 'no-unused-params'
+            (ConvertTo-AvmResultLine -Result $result -Verb 'test' -ExcludePresentedIssues) -join "`n" |
+                Should -Not -Match 'no-unused-params'
+        }
+    }
+
+    It 'anchors deduplicated warnings in GitHub Actions' {
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; A = $script:fileA } {
+            param($C, $A)
+            $savedActions = [System.Environment]::GetEnvironmentVariable('GITHUB_ACTIONS')
+            $savedWorkspace = [System.Environment]::GetEnvironmentVariable('GITHUB_WORKSPACE')
+            try {
+                $env:GITHUB_ACTIONS = 'true'
+                $env:GITHUB_WORKSPACE = $C.Root
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{ Name = 'bicep'; Version = 'pinned'; Source = 'cache'; Path = 'bicep' }
+                }
+                Mock Invoke-AvmProcess {
+                    [pscustomobject]@{
+                        ExitCode = 0; StdOut = '{}'
+                        StdErr = "$A(3,5) : Warning no-unused-params: Unused parameter."
+                    }
+                }
+                $output = @(Invoke-AvmBicepTest -Context $C 6>&1)
+                $annotations = @($output | Where-Object { $_ -is [System.Management.Automation.InformationRecord] } |
+                        ForEach-Object { [string]$_.MessageData } | Where-Object { $_ -like '::warning*' })
+                @($annotations).Count | Should -Be 1
+                $annotations[0] | Should -BeExactly '::warning file=main.bicep,line=3,col=5::[no-unused-params] Unused parameter.'
+            }
+            finally {
+                [System.Environment]::SetEnvironmentVariable('GITHUB_ACTIONS', $(if ($null -eq $savedActions) { [NullString]::Value } else { $savedActions }))
+                [System.Environment]::SetEnvironmentVariable('GITHUB_WORKSPACE', $(if ($null -eq $savedWorkspace) { [NullString]::Value } else { $savedWorkspace }))
+            }
+        }
     }
 
     It 'reports the bicep tool identity in the returned object' {

@@ -117,7 +117,33 @@ Describe 'Assert-AvmCommandSuccess annotations' {
     }
 
     Describe 'Gauntlet failure narration' {
-        It 'narrates only the headline and retains full failure detail for <Command>' -ForEach @(
+        It 'reports the full pr-check exception once during its step and keeps the summary concise' {
+            InModuleScope 'Avm.Authoring' {
+                Mock Get-AvmModuleContextInternal { [pscustomobject]@{ Root = 'fixture'; Ecosystem = 'bicep' } }
+                Mock Assert-AvmGitWorkingTreeClean {}
+                Mock Resolve-AvmCommandTool { @() }
+                Mock Test-AvmMetadataModules { [pscustomobject]@{ Status = 'pass' } }
+                Mock Invoke-AvmTest { [pscustomobject]@{ Status = 'pass' } }
+                Mock Invoke-AvmFormat { throw [System.Exception]::new("Tool failed`nDetailed failure cause") }
+                $output = @(Invoke-AvmPrCheck -Path fixture -Ecosystem bicep -SkipModuleVersionCheck 6>&1)
+                $result = $output | Where-Object { $null -ne $_.PSObject.Properties['Steps'] } | Select-Object -Last 1
+                $captured = @($output | Where-Object { $_ -is [System.Management.Automation.InformationRecord] } |
+                        ForEach-Object { [string]$_.MessageData })
+                try {
+                    Assert-AvmCommandSuccess -Verb 'pr-check' -Status $result.Status -Result $result `
+                        -InformationVariable finalMessages
+                }
+                catch {}
+                @($captured | Where-Object { $_ -eq '::error::format: Tool failed%0ADetailed failure cause' }).Count | Should -Be 1
+                @($finalMessages | Where-Object { [string]$_.MessageData -like '::error*' }).Count | Should -Be 0
+                (ConvertTo-AvmResultLine -Result $result -Verb 'pr-check' -ExcludePresentedIssues) -join "`n" |
+                    Should -Not -Match 'Tool failed|Detailed failure cause'
+                (ConvertTo-AvmResultLine -Result $result -Verb 'pr-check') -join "`n" |
+                    Should -Match 'Detailed failure cause'
+            }
+        }
+
+        It 'retains full failure detail for <Command>' -ForEach @(
             @{ Command = 'Invoke-AvmPrCheck' }
             @{ Command = 'Invoke-AvmPreCommit' }
         ) {
@@ -136,8 +162,9 @@ Describe 'Assert-AvmCommandSuccess annotations' {
 
                 $result.Status | Should -Be 'error'
                 $result.Steps[-1].Error | Should -BeExactly "Tool failed`nDetailed failure cause"
-                Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter { $Message -eq '  format: Tool failed' }
-                Should -Invoke Write-AvmLog -Exactly 0 -ParameterFilter { $Message -match 'Detailed failure cause' }
+                Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
+                    $Level -eq 'Error' -and $Message -eq "  format: Tool failed`nDetailed failure cause"
+                }
             }
         }
     }

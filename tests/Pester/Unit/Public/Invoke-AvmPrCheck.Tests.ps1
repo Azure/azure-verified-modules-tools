@@ -73,7 +73,7 @@ Describe 'Invoke-AvmPrCheck' {
                 $steps = @('metadata', 'validate', 'sync', 'format', 'transform', 'docs',
                     'lint', 'check policy', 'check convention')
                 if ($ecosystem -eq 'bicep') {
-                    $steps = @($steps | Where-Object { $_ -ne 'sync' })
+                    $steps = @($steps | Where-Object { $_ -notin @('sync', 'validate') })
                 }
                 foreach ($step in $steps) {
                     @{ Step = $step; Ecosystem = $ecosystem }
@@ -91,7 +91,7 @@ Describe 'Invoke-AvmPrCheck' {
                 if ($initializations) { $expectedSteps += 'initialize' }
                 $expectedSteps += @($Commands.Keys | Where-Object {
                         $_ -ne 'metadata' -and
-                        ($SelectedEcosystem -ne 'bicep' -or $_ -ne 'sync')
+                        ($SelectedEcosystem -ne 'bicep' -or $_ -notin @('sync', 'validate'))
                     })
                 $result.Status | Should -Be 'pass'
                 $result.Steps.Step | Should -Be $expectedSteps
@@ -105,7 +105,7 @@ Describe 'Invoke-AvmPrCheck' {
                     Should -HaveCount ($expectedSteps.Count - 1)
                 foreach ($entry in $Commands.GetEnumerator()) {
                     $count = if ($entry.Key -eq $SelectedStep -or
-                        ($SelectedEcosystem -eq 'bicep' -and $entry.Key -eq 'sync')) { 0 } else { 1 }
+                        ($SelectedEcosystem -eq 'bicep' -and $entry.Key -in @('sync', 'validate'))) { 0 } else { 1 }
                     Should -Invoke $entry.Value -Exactly $count
                 }
                 Should -Invoke Initialize-AvmTerraformCommand -Exactly $initializations
@@ -157,7 +157,7 @@ Describe 'Invoke-AvmPrCheck' {
                 param($Commands, $SelectedEcosystem)
                 $result = Invoke-AvmPrCheck -Path root -Ecosystem $SelectedEcosystem -ExcludeSteps @($Commands.Keys) -StopOnFail
                 $result.Status | Should -Be 'skipped'
-                $expectedCount = if ($SelectedEcosystem -eq 'bicep') { $Commands.Count - 1 } else { $Commands.Count }
+                $expectedCount = if ($SelectedEcosystem -eq 'bicep') { $Commands.Count - 2 } else { $Commands.Count }
                 $result.Steps | Should -HaveCount $expectedCount
                 @($result.Steps | Where-Object Status -ne 'skipped') | Should -HaveCount 0
                 foreach ($command in $Commands.Values) {
@@ -483,7 +483,7 @@ Describe 'Invoke-AvmPrCheck' {
             }
         }
 
-        ($observed.DefaultInfo -join "`n") | Should -Match 'step 6/8: lint'
+        ($observed.DefaultInfo -join "`n") | Should -Match 'step 5/7: lint'
         @($observed.DefaultWarnings) | Should -Contain 'nested lint warning'
         @($observed.DefaultInfo) | Should -Not -Contain 'nested lint info'
         @($observed.DefaultInfo) | Should -Not -Contain 'nested lint pass'
@@ -491,6 +491,87 @@ Describe 'Invoke-AvmPrCheck' {
         @($observed.VerboseInfo) | Should -Contain 'nested lint pass'
         @($observed.DebugInfo) | Should -Contain 'nested lint info'
         @($observed.DebugInfo) | Should -Contain 'nested lint pass'
+    }
+
+    It 'presents each <Ecosystem> step warning and error once with GitHub location metadata' -ForEach @(
+        @{ Ecosystem = 'bicep' }
+        @{ Ecosystem = 'terraform' }
+    ) {
+        $dir = Join-Path $TestDrive 'step-annotations'
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        $observed = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir; E = $Ecosystem } {
+            param($D, $E)
+            $savedActions = [System.Environment]::GetEnvironmentVariable('GITHUB_ACTIONS')
+            $savedWorkspace = [System.Environment]::GetEnvironmentVariable('GITHUB_WORKSPACE')
+            try {
+                $env:GITHUB_ACTIONS = 'true'
+                $env:GITHUB_WORKSPACE = $D
+                Mock Get-AvmModuleContextInternal {
+                    [pscustomobject]@{ Kind = "$E-module"; Root = $D; Ecosystem = $E }
+                }
+                Mock Test-AvmMetadataModules {
+                    [pscustomobject]@{ Status = 'pass'; Issues = @(
+                            [pscustomobject]@{ Severity = 'warning'; File = (Join-Path $D 'metadata.json'); Line = 2; Column = 3; Code = 'metadata-warning'; Message = 'Metadata warning.' }
+                        ) }
+                }
+                Mock Invoke-AvmTest {
+                    [pscustomobject]@{ Status = 'fail'; RunsTotal = 2; RunsPassed = 1; RunsFailed = 1; Issues = @(
+                            [pscustomobject]@{ Severity = 'error'; File = (Join-Path $D 'main.bicep'); Line = 4; Column = 5; Code = 'build-error'; Message = 'Build error.' }
+                            [pscustomobject]@{ Severity = 'error'; File = (Join-Path $D 'main.bicep'); Line = 4; Column = 5; Code = 'build-error'; Message = 'Build error.' }
+                            [pscustomobject]@{ Severity = 'notice'; File = (Join-Path $D 'main.bicep'); Line = 6; Column = 2; Code = 'build-notice'; Message = 'Build notice.' }
+                        ) }
+                }
+                Mock Invoke-AvmSync { [pscustomobject]@{ Status = 'pass' } }
+                Mock Invoke-AvmFormat { [pscustomobject]@{ Status = 'pass' } }
+                Mock Invoke-AvmTransform { [pscustomobject]@{ Status = 'pass' } }
+                Mock Invoke-AvmDocs {
+                    [pscustomobject]@{
+                        Status = 'pass'; FilesSelected = 0; FilesProcessed = 0; NotRendered = @()
+                        Issues = @([pscustomobject]@{ Severity = 'warning'; File = (Join-Path $D 'README.md'); Code = 'docs-warning'; Message = 'Documentation warning.' })
+                    }
+                }
+                Mock Invoke-AvmLint {
+                    $issues = @(
+                            [pscustomobject]@{ Severity = 'warning'; File = (Join-Path $D 'metadata.json'); Line = 2; Column = 3; Code = 'metadata-warning'; Message = 'Metadata warning.' }
+                        )
+                    if ($E -eq 'bicep') {
+                        $issues += @(
+                            [pscustomobject]@{ Severity = 'error'; File = (Join-Path $D 'main.bicep'); Line = 4; Column = 5; Code = 'build-error'; Message = 'Build error.' }
+                            [pscustomobject]@{ Severity = 'error'; File = (Join-Path $D 'main.bicep'); Line = 4; Column = 5; Code = 'build-error'; Message = 'Build error.' }
+                            [pscustomobject]@{ Severity = 'notice'; File = (Join-Path $D 'main.bicep'); Line = 6; Column = 2; Code = 'build-notice'; Message = 'Build notice.' }
+                        )
+                    }
+                    [pscustomobject]@{ Status = if ($E -eq 'bicep') { 'fail' } else { 'pass' }; RunsTotal = 2; RunsPassed = 1; RunsFailed = 1; Issues = $issues }
+                }
+                Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Status = 'pass' } }
+                Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Status = 'pass' } }
+                $output = @(Invoke-AvmPrCheck -Path $D 6>&1)
+                $result = $output | Where-Object { $null -ne $_.PSObject.Properties['Steps'] } | Select-Object -Last 1
+                $messages = @($output | Where-Object { $_ -is [System.Management.Automation.InformationRecord] } |
+                        ForEach-Object { [string]$_.MessageData })
+                $verboseOutput = @(Invoke-AvmPrCheck -Path $D -Verbose 4>&1 6>&1)
+                [pscustomobject]@{
+                    Result = $result; Messages = $messages
+                    Verbose = @($verboseOutput | Where-Object { $_ -is [System.Management.Automation.VerboseRecord] } |
+                            ForEach-Object { [string]$_ })
+                    Summary = @(ConvertTo-AvmResultLine -Result $result -Verb 'pr-check' -ExcludePresentedIssues)
+                    Full = @(ConvertTo-AvmResultLine -Result $result -Verb 'pr-check')
+                }
+            }
+            finally {
+                [System.Environment]::SetEnvironmentVariable('GITHUB_ACTIONS', $(if ($null -eq $savedActions) { [NullString]::Value } else { $savedActions }))
+                [System.Environment]::SetEnvironmentVariable('GITHUB_WORKSPACE', $(if ($null -eq $savedWorkspace) { [NullString]::Value } else { $savedWorkspace }))
+            }
+        }
+        $observed.Result.Status | Should -Be 'fail'
+        @($observed.Messages | Where-Object { $_ -eq '::warning file=metadata.json,line=2,col=3::[metadata-warning] Metadata warning.' }).Count | Should -Be 1
+        @($observed.Messages | Where-Object { $_ -eq '::error file=main.bicep,line=4,col=5::[build-error] Build error.' }).Count | Should -Be 1
+        @($observed.Messages | Where-Object { $_ -eq '::warning file=README.md::[docs-warning] Documentation warning.' }).Count | Should -Be 1
+        ($observed.Messages -join "`n") | Should -Not -Match 'build-notice|2 runs'
+        ($observed.Verbose -join "`n") | Should -Match 'build-notice'
+        ($observed.Verbose -join "`n") | Should -Match '2 runs, 1 passed, 1 failed'
+        ($observed.Summary -join "`n") | Should -Not -Match 'metadata-warning|build-error|build-notice|docs-warning|2 runs'
+        ($observed.Full -join "`n") | Should -Match 'build-notice|2 runs'
     }
 
     It 'preserves an inline deprecated-interface warning through nested lint and omits its green summary duplicate' {
@@ -643,7 +724,7 @@ Describe 'Invoke-AvmPrCheck' {
         $probe.Result.Steps.Step | Should -Be @('metadata')
     }
 
-    It 'runs Bicep validation after metadata and docs after transform without a sync step' {
+    It 'runs Bicep lint and docs after transform without separate validate or sync steps' {
         $dir = Join-Path $TestDrive ("prcheck-pass-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -673,12 +754,14 @@ Describe 'Invoke-AvmPrCheck' {
 
         $result.Status                    | Should -Be 'pass'
         $result.Ecosystem                 | Should -Be 'bicep'
-        $result.Steps.Count               | Should -Be 8
-        $result.Steps.Step | Should -Be @('metadata', 'validate', 'format', 'transform', 'docs', 'lint', 'check policy', 'check convention')
+        $result.Steps.Count               | Should -Be 7
+        $result.Steps.Step | Should -Be @('metadata', 'format', 'transform', 'docs', 'lint', 'check policy', 'check convention')
         ($result.Steps | Where-Object Step -eq 'docs').Result.NotRendered |
             Should -Contain 'README.md'
         InModuleScope Avm.Authoring {
             Should -Invoke Invoke-AvmSync -Exactly 0
+            Should -Invoke Invoke-AvmTest -Exactly 0
+            Should -Invoke Invoke-AvmLint -Exactly 1
             Should -Invoke Test-AvmMetadataModules -Exactly 1 -ParameterFilter {
                 $Context.Ecosystem -eq 'bicep'
             }
@@ -750,7 +833,7 @@ Describe 'Invoke-AvmPrCheck' {
         }
 
         $result.Status                                  | Should -Be 'fail'
-        $result.Steps.Count                             | Should -Be 8
+        $result.Steps.Count                             | Should -Be 7
         ($result.Steps | Where-Object Status -eq 'skipped').Count | Should -Be 1
         ($result.Steps | Where-Object Step -eq 'transform').Status         | Should -Be 'skipped'
         ($result.Steps | Where-Object Step -eq 'check policy').Status      | Should -Be 'fail'
@@ -995,7 +1078,7 @@ Describe 'Invoke-AvmPrCheck' {
         }
 
         $result.Status                                | Should -Be 'fail'
-        $result.Steps.Count                           | Should -Be 8
+        $result.Steps.Count                           | Should -Be 7
         ($result.Steps | Where-Object Step -eq 'lint').Status | Should -Be 'fail'
         ($result.Steps | Where-Object Step -eq 'docs').Status | Should -Be 'pass'
     }
@@ -1027,14 +1110,15 @@ Describe 'Invoke-AvmPrCheck' {
         }
 
         $result.Status                       | Should -Be 'fail'
-        $result.Steps.Count                  | Should -Be 6
+        $result.Steps.Count                  | Should -Be 5
         $result.Steps[-1].Step               | Should -Be 'lint'
         $result.Steps[-1].Status             | Should -Be 'fail'
 
         InModuleScope 'Avm.Authoring' {
             Should -Invoke Invoke-AvmCheckPolicy -Times 0 -Exactly
             Should -Invoke Invoke-AvmCheckConvention -Times 0 -Exactly
-            Should -Invoke Invoke-AvmTest -Exactly 1
+            Should -Invoke Invoke-AvmTest -Exactly 0
+            Should -Invoke Invoke-AvmLint -Exactly 1
             Should -Invoke Invoke-AvmDocs -Exactly 1
         }
     }
@@ -1066,7 +1150,7 @@ Describe 'Invoke-AvmPrCheck' {
         }
 
         $result.Status                       | Should -Be 'error'
-        $result.Steps.Count                  | Should -Be 4
+        $result.Steps.Count                  | Should -Be 3
         $result.Steps[-1].Step               | Should -Be 'transform'
         $result.Steps[-1].Status             | Should -Be 'error'
         $result.Steps[-1].Error              | Should -Match 'engine blew up'

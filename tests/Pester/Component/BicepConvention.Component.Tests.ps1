@@ -295,7 +295,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         }
     }
 
-    It 'executes independent native workflow and ownership requirements' {
+    It 'executes independent native workflow requirements' {
         $run = InModuleScope 'Avm.Authoring' -Parameters @{
             Path = $script:modulePath; Root = $script:workingRoot
         } {
@@ -303,19 +303,17 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             $scope = Get-AvmBicepConventionScope -Path $Path
             $data = @{
                 Root = $Root; RepositoryRoot = $Root
-                Workflows      = @(@{ Scope = $scope; Input = Get-AvmBicepConventionWorkflowInput -Scope $scope })
-                CodeownerInput = Get-AvmBicepCodeownerInput -RepositoryRoot $Root
+                Workflows = @(@{ Scope = $scope; Input = Get-AvmBicepConventionWorkflowInput -Scope $scope })
             }
             $directory = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Resources' 'bicep' 'conventions'
             $summary = Invoke-AvmBicepPesterSuite -Files @(
-                (Join-Path $directory 'Workflow.Tests.ps1'), (Join-Path $directory 'Ownership.Tests.ps1')
+                (Join-Path $directory 'Workflow.Tests.ps1')
             ) -WorkingDirectory $Root -Mode Convention -ConventionData $data -EnvVars @{} -InProcess
-            @{ Summary = $summary; Workflow = $data.NativeWorkflowExpected; Ownership = $data.NativeOwnershipExpected }
+            @{ Summary = $summary; Workflow = $data.NativeWorkflowExpected }
         }
         $run.Workflow | Should -Be 20
-        $run.Ownership | Should -Be 17
-        $run.Summary.Total | Should -Be 37
-        $run.Summary.Passed | Should -Be 37 -Because (@($run.Summary.Issues | ForEach-Object Message) -join '; ')
+        $run.Summary.Total | Should -Be 20
+        $run.Summary.Passed | Should -Be 20 -Because (@($run.Summary.Issues | ForEach-Object Message) -join '; ')
         @($run.Summary.Issues) | Should -HaveCount 0
     }
 
@@ -693,98 +691,15 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
 
         $result.Issues.Code | Should -Contain 'avm.bicep.workflow-file'
-        if ($Case -eq 'GitHub') {
-            $result.Issues.Code | Should -Contain 'avm.bicep.codeowners-file'
-        }
     }
 
-    It 'rejects a missing CODEOWNERS file without silently skipping repository governance' {
+    It 'does not enforce the retired CODEOWNERS convention' {
         $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
         Remove-Item -LiteralPath $path
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
         $issue = @($result.Issues | Where-Object Code -EQ 'avm.bicep.codeowners-file')
-        $issue.Count | Should -Be 1
-        $issue[0].File | Should -Be '.github/CODEOWNERS'
-    }
-
-    It 'checks the CODEOWNERS default, ownerless module tree, and final overrides' {
-        $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
-        $content = [System.IO.File]::ReadAllText($path).
-        Replace('* @Azure/azure-verified-modules-tooling-contributors', '* @Contoso/team').
-        Replace('/avm/', '/avm/ @Contoso/team').
-        Replace('metadata.json @Azure/azure-verified-modules-engineering-owners', 'metadata.json @Contoso/team')
-        [System.IO.File]::WriteAllText($path, $content)
-
-        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $result.Issues.Code | Should -Contain 'avm.bicep.codeowners-default'
-        $result.Issues.Code | Should -Contain 'avm.bicep.codeowners-module'
-        $result.Issues.Code | Should -Contain 'avm.bicep.codeowners-override'
-    }
-
-    It 'requires module-owner review for deployment exclusions' {
-        $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
-        $content = [System.IO.File]::ReadAllText($path).Replace(
-            '*.e2eignore @Azure/azure-verified-modules-module-owners',
-            '*.e2eignore @Azure/azure-verified-modules-tooling-contributors')
-        [System.IO.File]::WriteAllText($path, $content)
-
-        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $result.Issues.Code | Should -Contain 'avm.bicep.codeowners-override'
-    }
-
-    It 'reports duplicate and module-specific CODEOWNERS patterns with line numbers' {
-        $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
-        [System.IO.File]::AppendAllText(
-            $path, "/avm/res/mock/widget/ @Contoso/team`nmetadata.json @Contoso/team`n")
-
-        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $moduleRule = @($result.Issues | Where-Object Code -EQ 'avm.bicep.codeowners-per-module')
-        $duplicate = @($result.Issues | Where-Object Code -EQ 'avm.bicep.codeowners-duplicate')
-        $moduleRule.Count | Should -Be 1
-        $moduleRule[0].Line | Should -BeGreaterThan 2
-        $duplicate.Count | Should -Be 1
-        $duplicate[0].Line | Should -BeGreaterThan $moduleRule[0].Line
-    }
-
-    It 'rejects CODEOWNERS patterns that can override ownerless modules: <Case>' -TestCases @(
-        @{ Case = 'unanchored module entry'; Pattern = 'avm/res/mock/widget/** @Contoso/team'; ExpectedCode = 'avm.bicep.codeowners-per-module' }
-        @{ Case = 'unanchored module glob'; Pattern = 'avm/** @Contoso/team'; ExpectedCode = 'avm.bicep.codeowners-per-module' }
-        @{ Case = 'broad glob'; Pattern = '**/widget/** @Contoso/team'; ExpectedCode = 'avm.bicep.codeowners-module-override' }
-        @{ Case = 'root wildcard'; Pattern = '/** @Contoso/team'; ExpectedCode = 'avm.bicep.codeowners-module-override' }
-    ) {
-        param($Case, $Pattern, $ExpectedCode)
-
-        $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
-        $content = [System.IO.File]::ReadAllText($path)
-        $anchor = '*avm.core.team.tests.ps1 @Azure/azure-verified-modules-tooling-contributors'
-        [System.IO.File]::WriteAllText($path, $content.Replace($anchor, "$Pattern`n$anchor"))
-
-        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $issue = @($result.Issues | Where-Object Code -EQ $ExpectedCode)
-        $issue.Count | Should -Be 1
-        $issue[0].Line | Should -BeGreaterThan 2
-    }
-
-    It 'allows additional ownership patterns anchored outside the module tree' {
-        $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
-        $content = [System.IO.File]::ReadAllText($path)
-        $anchor = '*avm.core.team.tests.ps1 @Azure/azure-verified-modules-tooling-contributors'
-        [System.IO.File]::WriteAllText($path, $content.Replace($anchor, "/docs/** @Contoso/team`n$anchor"))
-
-        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        @($result.Issues | Where-Object { $_.Code -like 'avm.bicep.codeowners-*' }).Count |
-            Should -Be 0
-    }
-
-    It 'names a CODEOWNERS file that cannot be decoded as UTF-8' {
-        $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
-        [System.IO.File]::WriteAllBytes($path, [byte[]]@(0xC3, 0x28))
-
-        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $issue = @($result.Issues | Where-Object Code -EQ 'avm.bicep.codeowners-read')
-        $issue.Count | Should -Be 1
-        $issue[0].File | Should -Be '.github/CODEOWNERS'
+        $issue.Count | Should -Be 0
     }
 
     It 'names root, child, and e2e compilation failures without skipping the other sources' {

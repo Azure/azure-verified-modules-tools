@@ -13,6 +13,9 @@ function Invoke-AvmPreCommit {
         executed step reports Status='pass' (format reports an implicit
         pass when no errors are thrown).
 
+        Step warnings and errors are reported as the steps run; the final summary
+        lists their statuses and timings. Verbose output includes additional details.
+
         Bicep lint and build validation run in 'avm pr-check'; pre-commit
         formats sources and generates the compiled templates and READMEs.
 
@@ -237,6 +240,7 @@ function Invoke-AvmPreCommit {
         }) + $stepDefs
 
     $steps = New-Object System.Collections.Generic.List[object]
+    $presentedDiagnostics = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     $overall = 'pass'
     $stepIndex = 0
     $syncParameterNames = @(
@@ -325,28 +329,25 @@ function Invoke-AvmPreCommit {
                 $_.Exception.Message
             }
         }
+        Write-AvmStepDiagnostic -Result $stepResult -Name $def.Name -Status $stepStatus `
+            -ErrorMessage $stepError -Presented $presentedDiagnostics
         $stepSw.Stop()
         $stepEnd = $stepStart.AddMilliseconds($stepSw.Elapsed.TotalMilliseconds)
 
         $completionLevel = if ($stepStatus -eq 'pass') { 'Pass' } elseif ($stepStatus -in @('fail', 'error')) { 'Fail' } else { 'Info' }
         Write-AvmLog ('step {0}/{1}: {2} -> {3} ({4})' -f $stepIndex, $stepDefs.Count, $def.Name, $stepStatus, (Format-AvmDuration -Duration $stepSw.Elapsed)) -Level $completionLevel | Out-Null
 
-        if ($stepStatus -in @('fail', 'error') -and -not [string]::IsNullOrWhiteSpace($stepError)) {
-            # F41: narration only. Assert-AvmCommandSuccess promotes the same
-            # text to the single GitHub Actions annotation for the run.
-            $headline = ($stepError -split "`r?`n", 2)[0]
-            Write-AvmLog ('  {0}: {1}' -f $def.Name, $headline) -Level Fail | Out-Null
+        $step = [pscustomobject][ordered]@{
+            Step       = $def.Name
+            Status     = $stepStatus
+            Error      = $stepError
+            Result     = $stepResult
+            StartTime  = $stepStart
+            EndTime    = $stepEnd
+            DurationMs = [int]$stepSw.Elapsed.TotalMilliseconds
         }
-
-        $steps.Add([pscustomobject][ordered]@{
-                Step       = $def.Name
-                Status     = $stepStatus
-                Error      = $stepError
-                Result     = $stepResult
-                StartTime  = $stepStart
-                EndTime    = $stepEnd
-                DurationMs = [int]$stepSw.Elapsed.TotalMilliseconds
-            })
+        Register-AvmPresentedIssue -Issue $step
+        $steps.Add($step)
 
         if ($stepStatus -eq 'fail' -or $stepStatus -eq 'error') { $overall = $stepStatus }
         if ($stepStatus -eq 'error') { break }

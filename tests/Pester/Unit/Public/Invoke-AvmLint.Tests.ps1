@@ -18,7 +18,7 @@ Describe 'Invoke-AvmLint' {
         $entry.Cmdlet   | Should -Be 'Invoke-AvmLint'
     }
 
-    It 'dispatches a bicep context to Invoke-AvmBicepLint' {
+    It 'dispatches a bicep context to the build validation engine' {
         $dir = Join-Path $TestDrive ("bicep-lint-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -28,7 +28,7 @@ Describe 'Invoke-AvmLint' {
                 Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
             }
             Mock Get-AvmModuleContextInternal { $ctx }
-            Mock Invoke-AvmBicepLint {
+            Mock Invoke-AvmBicepTest {
                 [pscustomobject]@{ Engine = 'bicep'; Status = 'pass'; FilesProcessed = 3; Issues = @() }
             }
             Mock Invoke-AvmTerraformLint { throw 'wrong engine' }
@@ -38,7 +38,7 @@ Describe 'Invoke-AvmLint' {
         $result.Status | Should -Be 'pass'
 
         InModuleScope 'Avm.Authoring' {
-            Should -Invoke Invoke-AvmBicepLint -Exactly 1
+            Should -Invoke Invoke-AvmBicepTest -Exactly 1
             Should -Invoke Invoke-AvmTerraformLint -Times 0 -Exactly
         }
     }
@@ -56,7 +56,7 @@ Describe 'Invoke-AvmLint' {
             Mock Invoke-AvmTerraformLint {
                 [pscustomobject]@{ Engine = 'terraform'; Status = 'pass'; Issues = @() }
             }
-            Mock Invoke-AvmBicepLint { throw 'wrong engine' }
+            Mock Invoke-AvmBicepTest { throw 'wrong engine' }
             Mock Write-AvmLog
             Invoke-AvmLint -Path $D -ThrottleLimit 7
         }
@@ -86,7 +86,7 @@ Describe 'Invoke-AvmLint' {
                     Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep'; Source = 'path-heuristic'
                 }
             }
-            Mock Invoke-AvmBicepLint {
+            Mock Invoke-AvmBicepTest {
                 [pscustomobject]@{ Engine = 'bicep'; Status = 'pass'; FilesProcessed = 0; Issues = @() }
             }
             Invoke-AvmLint -Path $D -Ecosystem 'bicep' | Out-Null
