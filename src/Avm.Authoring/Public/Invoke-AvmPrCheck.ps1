@@ -13,6 +13,9 @@ function Invoke-AvmPrCheck {
         executed step reports Status='pass' (or didn't throw, for verbs
         that don't carry a Status field).
 
+        Step warnings and errors are reported as the steps run. GitHub Actions
+        annotations include file and line information when available.
+
         This is the broader sibling of Invoke-AvmPreCommit. It adds the
         credentialled policy evaluation and read-only drift checks used to
         verify that pre-commit output is current. Before any step runs, git
@@ -378,6 +381,29 @@ function Invoke-AvmPrCheck {
         if ($def.Name -eq 'initialize' -and $stepStatus -ne 'pass') {
             if ($stepStatus -ne 'error') { $stepStatus = 'fail' }
             $stepError = "Terraform initialization prerequisite failed: $stepError"
+        }
+        if ($null -ne $stepResult -and $null -ne $stepResult.PSObject.Properties['Issues']) {
+            $presented = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+            foreach ($issue in @($stepResult.Issues)) {
+                if ($null -eq $issue -or $null -eq $issue.PSObject.Properties['Severity'] -or
+                    $issue.Severity -isnot [string] -or $issue.Severity -notin @('warning', 'error')) { continue }
+                $fields = @{ File = ''; Line = 0; Column = 0; Code = ''; Message = '' }
+                foreach ($name in @($fields.Keys)) {
+                    $property = $issue.PSObject.Properties[$name]
+                    if ($null -ne $property -and $null -ne $property.Value) { $fields[$name] = $property.Value }
+                }
+                $key = ConvertTo-Json -InputObject @(
+                    $issue.Severity, $fields.File, $fields.Line, $fields.Column, $fields.Code, $fields.Message
+                ) -Compress
+                if ($presented.Add($key) -and -not (Test-AvmIssuePresented -Issue $issue)) {
+                    $message = [string]$fields.Message
+                    $code = [string]$fields.Code
+                    if ($code) { $message = '[{0}] {1}' -f $code, $message }
+                    Write-AvmLog -Message $message -Level $issue.Severity `
+                        -File ([string]$fields.File) -Line ([int]$fields.Line) -Column ([int]$fields.Column)
+                }
+                Register-AvmPresentedIssue -Issue $issue
+            }
         }
         $stepSw.Stop()
         $stepEnd = $stepStart.AddMilliseconds($stepSw.Elapsed.TotalMilliseconds)

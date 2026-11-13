@@ -493,6 +493,62 @@ Describe 'Invoke-AvmPrCheck' {
         @($observed.DebugInfo) | Should -Contain 'nested lint pass'
     }
 
+    It 'presents each <Ecosystem> step warning and error once with GitHub location metadata' -ForEach @(
+        @{ Ecosystem = 'bicep' }
+        @{ Ecosystem = 'terraform' }
+    ) {
+        $dir = Join-Path $TestDrive 'step-annotations'
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        $observed = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir; E = $Ecosystem } {
+            param($D, $E)
+            $savedActions = [System.Environment]::GetEnvironmentVariable('GITHUB_ACTIONS')
+            $savedWorkspace = [System.Environment]::GetEnvironmentVariable('GITHUB_WORKSPACE')
+            try {
+                $env:GITHUB_ACTIONS = 'true'
+                $env:GITHUB_WORKSPACE = $D
+                Mock Get-AvmModuleContextInternal {
+                    [pscustomobject]@{ Kind = "$E-module"; Root = $D; Ecosystem = $E }
+                }
+                Mock Test-AvmMetadataModules {
+                    [pscustomobject]@{ Status = 'pass'; Issues = @(
+                            [pscustomobject]@{ Severity = 'warning'; File = (Join-Path $D 'metadata.json'); Line = 2; Column = 3; Code = 'metadata-warning'; Message = 'Metadata warning.' }
+                        ) }
+                }
+                Mock Invoke-AvmTest {
+                    [pscustomobject]@{ Status = 'fail'; Issues = @(
+                            [pscustomobject]@{ Severity = 'error'; File = (Join-Path $D 'main.bicep'); Line = 4; Column = 5; Code = 'build-error'; Message = 'Build error.' }
+                            [pscustomobject]@{ Severity = 'error'; File = (Join-Path $D 'main.bicep'); Line = 4; Column = 5; Code = 'build-error'; Message = 'Build error.' }
+                        ) }
+                }
+                Mock Invoke-AvmSync { [pscustomobject]@{ Status = 'pass' } }
+                Mock Invoke-AvmFormat { [pscustomobject]@{ Status = 'pass' } }
+                Mock Invoke-AvmTransform { [pscustomobject]@{ Status = 'pass' } }
+                Mock Invoke-AvmDocs {
+                    [pscustomobject]@{
+                        Status = 'pass'; FilesSelected = 0; FilesProcessed = 0; NotRendered = @()
+                        Issues = @([pscustomobject]@{ Severity = 'warning'; File = (Join-Path $D 'README.md'); Code = 'docs-warning'; Message = 'Documentation warning.' })
+                    }
+                }
+                Mock Invoke-AvmLint { [pscustomobject]@{ Status = 'pass' } }
+                Mock Invoke-AvmCheckPolicy { [pscustomobject]@{ Status = 'pass' } }
+                Mock Invoke-AvmCheckConvention { [pscustomobject]@{ Status = 'pass' } }
+                $output = @(Invoke-AvmPrCheck -Path $D 6>&1)
+                $result = $output | Where-Object { $null -ne $_.PSObject.Properties['Steps'] } | Select-Object -Last 1
+                $messages = @($output | Where-Object { $_ -is [System.Management.Automation.InformationRecord] } |
+                        ForEach-Object { [string]$_.MessageData })
+                [pscustomobject]@{ Result = $result; Messages = $messages }
+            }
+            finally {
+                [System.Environment]::SetEnvironmentVariable('GITHUB_ACTIONS', $(if ($null -eq $savedActions) { [NullString]::Value } else { $savedActions }))
+                [System.Environment]::SetEnvironmentVariable('GITHUB_WORKSPACE', $(if ($null -eq $savedWorkspace) { [NullString]::Value } else { $savedWorkspace }))
+            }
+        }
+        $observed.Result.Status | Should -Be 'fail'
+        @($observed.Messages | Where-Object { $_ -eq '::warning file=metadata.json,line=2,col=3::[metadata-warning] Metadata warning.' }).Count | Should -Be 1
+        @($observed.Messages | Where-Object { $_ -eq '::error file=main.bicep,line=4,col=5::[build-error] Build error.' }).Count | Should -Be 1
+        @($observed.Messages | Where-Object { $_ -eq '::warning file=README.md::[docs-warning] Documentation warning.' }).Count | Should -Be 1
+    }
+
     It 'preserves an inline deprecated-interface warning through nested lint and omits its green summary duplicate' {
         $dir = Join-Path $TestDrive ("prcheck-deprecation-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null

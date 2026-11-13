@@ -17,6 +17,9 @@ result is captured. The overall Status is 'pass' only when every
 executed step reports Status='pass' (or didn't throw, for verbs
 that don't carry a Status field).
 
+Step warnings and errors are reported as the steps run. GitHub Actions
+annotations include file and line information when available.
+
 This is the broader sibling of Invoke-AvmPreCommit. It adds the
 credentialled policy evaluation and read-only drift checks used to
 verify that pre-commit output is current. Before any step runs, git

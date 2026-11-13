@@ -213,6 +213,36 @@ Describe 'Invoke-AvmBicepTest' {
         }
     }
 
+    It 'anchors deduplicated warnings in GitHub Actions' {
+        InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; A = $script:fileA } {
+            param($C, $A)
+            $savedActions = [System.Environment]::GetEnvironmentVariable('GITHUB_ACTIONS')
+            $savedWorkspace = [System.Environment]::GetEnvironmentVariable('GITHUB_WORKSPACE')
+            try {
+                $env:GITHUB_ACTIONS = 'true'
+                $env:GITHUB_WORKSPACE = $C.Root
+                Mock Resolve-AvmTool {
+                    [pscustomobject]@{ Name = 'bicep'; Version = 'pinned'; Source = 'cache'; Path = 'bicep' }
+                }
+                Mock Invoke-AvmProcess {
+                    [pscustomobject]@{
+                        ExitCode = 0; StdOut = '{}'
+                        StdErr = "$A(3,5) : Warning no-unused-params: Unused parameter."
+                    }
+                }
+                $output = @(Invoke-AvmBicepTest -Context $C 6>&1)
+                $annotations = @($output | Where-Object { $_ -is [System.Management.Automation.InformationRecord] } |
+                        ForEach-Object { [string]$_.MessageData })
+                @($annotations).Count | Should -Be 1
+                $annotations[0] | Should -BeExactly '::warning file=main.bicep,line=3,col=5::[no-unused-params] Unused parameter.'
+            }
+            finally {
+                [System.Environment]::SetEnvironmentVariable('GITHUB_ACTIONS', $(if ($null -eq $savedActions) { [NullString]::Value } else { $savedActions }))
+                [System.Environment]::SetEnvironmentVariable('GITHUB_WORKSPACE', $(if ($null -eq $savedWorkspace) { [NullString]::Value } else { $savedWorkspace }))
+            }
+        }
+    }
+
     It 'reports the bicep tool identity in the returned object' {
         $ctx = $script:context
         $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx } {

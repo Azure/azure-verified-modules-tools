@@ -75,13 +75,13 @@ function Invoke-AvmBicepTest {
                 $severity = $Matches['sev'].ToLowerInvariant()
                 if ($severity -eq 'error') { $hasError = $true }
                 $issue = [pscustomobject][ordered]@{
-                        File     = $Matches['path']
-                        Line     = [int]$Matches['l']
-                        Column   = [int]$Matches['c']
-                        Severity = $severity
-                        Code     = $Matches['code'].Trim()
-                        Message  = $Matches['msg'].Trim()
-                    }
+                    File     = $Matches['path']
+                    Line     = [int]$Matches['l']
+                    Column   = [int]$Matches['c']
+                    Severity = $severity
+                    Code     = $Matches['code'].Trim()
+                    Message  = $Matches['msg'].Trim()
+                }
                 if ($severity -eq 'warning') {
                     $warningKey = ConvertTo-Json -InputObject @($issue.File, $issue.Line, $issue.Column, $issue.Code, $issue.Message) -Compress
                     if (-not $presentedWarnings.Add($warningKey)) { continue }
