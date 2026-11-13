@@ -386,7 +386,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         @{ Enabled = 'none' }, @{ Enabled = 'format' }, @{ Enabled = 'transform' }
         @{ Enabled = 'lint' }, @{ Enabled = 'check policy' }, @{ Enabled = 'docs' }
     ) {
-        $names = @('metadata', 'sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
+        $names = @('metadata', 'validate', 'sync', 'format', 'transform', 'docs', 'lint', 'check policy', 'check convention')
         $excluded = @($names | Where-Object { $_ -ne $Enabled })
         $sourceExample = Join-Path $script:fixtureRoot 'examples' 'foo'
         $dataPath = Join-Path $sourceExample '.terraform'
@@ -419,7 +419,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
         }
     }
 
-    It 'pr-check composes ten steps with explicit initialization before the drift checks' {
+    It 'pr-check validates after initialization and runs docs after transform' {
         $savedTrace = $env:AVM_STUB_TERRAFORM_TRACE
         $trace = Join-Path $TestDrive 'pr-check-initialization-trace.jsonl'
         $env:AVM_STUB_TERRAFORM_TRACE = $trace
@@ -436,7 +436,7 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
 
         $steps = $result.PSObject.Properties['Steps'].Value
         $steps.Count | Should -Be 10
-        $expected = @('metadata', 'initialize', 'sync', 'format', 'transform', 'lint', 'check policy', 'check convention', 'validate', 'docs')
+        $expected = @('metadata', 'initialize', 'validate', 'sync', 'format', 'transform', 'docs', 'lint', 'check policy', 'check convention')
         ($steps | ForEach-Object { $_.PSObject.Properties['Step'].Value }) | Should -Be $expected
 
         $byName = @{}

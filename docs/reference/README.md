@@ -6,7 +6,32 @@ This reference is generated from the comment-based help on the public PowerShell
 
 | Cmdlet | CLI command(s) | Purpose |
 | --- | --- | --- |
+| [Invoke-AvmPreCommit](Invoke-AvmPreCommit.md) | `avm pre-commit` | Run the standard pre-commit gauntlet against the resolved module:<br>bicep:     metadata -> format -> transform -> docs.<br>terraform: metadata -> initialize -> sync -> check convention -> transform -> format -> docs. |
+| [Invoke-AvmPrCheck](Invoke-AvmPrCheck.md) | `avm pr-check` | Run the pull-request linting and drift gauntlet against the resolved module:<br>metadata -> initialize (Terraform) -> validate -> sync (Terraform) -> format -><br>transform -> docs -> lint -> check policy -> check convention. |
+| [Invoke-AvmTestUnit](Invoke-AvmTestUnit.md) | `avm test unit` | Run the module's Bicep Pester or Terraform unit-test tier. |
+| [Invoke-AvmTestIntegration](Invoke-AvmTestIntegration.md) | `avm test integration` | Run Bicep ARM validation/what-if or Terraform integration tests. |
+| [Invoke-AvmTestE2e](Invoke-AvmTestE2e.md) | `avm test e2e` | Run Bicep or Terraform deployment tests with ordinary cleanup. |
+| [Initialize-AvmModule](Initialize-AvmModule.md) | `avm init` | Initialize a Bicep module locally, or create and set up a Terraform module repository. |
+| [Get-AvmVersion](Get-AvmVersion.md) | `avm version` | Reports the running Avm.Authoring module version and host runtime. |
+| [Update-AvmAuthoring](Update-AvmAuthoring.md) | `avm upgrade` | Update Avm.Authoring using the configured PowerShell repositories. |
+| [Invoke-AvmDoctor](Invoke-AvmDoctor.md) | `avm doctor` | Diagnoses the local environment for running Avm.Authoring. |
+| [Get-AvmTool](Get-AvmTool.md) | `avm tool list`<br>`avm tool which` | List or query managed tools from the avm.pins manifest. |
+| [Install-AvmTool](Install-AvmTool.md) | `avm tool install` | Install one, several, or all managed tools from avm.pins. |
+| [Get-AvmModuleContext](Get-AvmModuleContext.md) | `avm context` | Classify a directory as a Bicep or Terraform module/monorepo context. |
+| [Test-AvmModuleMetadata](Test-AvmModuleMetadata.md) | `avm metadata validate` | Validate existing or supplied module metadata with packaged Pester tests. |
+| [Get-AvmModuleMetadata](Get-AvmModuleMetadata.md) | `avm metadata show` | Read and validate an existing module metadata.json file. |
+| [Initialize-AvmModuleMetadata](Initialize-AvmModuleMetadata.md) | `avm metadata initialize` | Create metadata.json without overwriting an existing file. |
+| [Invoke-AvmFormat](Invoke-AvmFormat.md) | `avm format` | Format all source files in the resolved module under $Path. |
+| [Invoke-AvmLint](Invoke-AvmLint.md) | `avm lint` | Lint all source files in the resolved module under $Path. |
+| [Invoke-AvmTest](Invoke-AvmTest.md) | `avm test` | Build Bicep sources or validate Terraform examples under $Path. |
+| [Invoke-AvmTestCleanup](Invoke-AvmTestCleanup.md) | `avm test cleanup` | Resume Bicep test cleanup from its saved JSON state. |
+| [Register-AvmFeature](Register-AvmFeature.md) | `avm register-features` | Ensure features declared at a module root are registered in one Azure test subscription. |
+| [Invoke-AvmDocs](Invoke-AvmDocs.md) | `avm docs` | Generate or refresh module documentation under $Path. |
 | [Export-AvmReadmeNote](Export-AvmReadmeNote.md) | `avm docs export-notes` | Extract authored Bicep README Notes into an adjacent, tracked sidecar. |
+| [Invoke-AvmSync](Invoke-AvmSync.md) | `avm sync` | Synchronise the current Terraform module repository's managed files<br>against the AVM governance source-of-truth (file sync only, no PR). |
+| [Invoke-AvmTransform](Invoke-AvmTransform.md) | `avm transform` | Transform the module's authored source into governed artifacts. |
+| [Invoke-AvmCheckPolicy](Invoke-AvmCheckPolicy.md) | `avm check policy` | Run policy checks against the resolved module. |
+| [Invoke-AvmCheckConvention](Invoke-AvmCheckConvention.md) | `avm check convention` | Run convention checks against the resolved module. |
 | [Get-AvmAuthoringPlaceholder](Get-AvmAuthoringPlaceholder.md) |  | Returns a placeholder message confirming the Avm.Authoring module is installed. |
 | [Get-AvmBicepAzureDependency](Get-AvmBicepAzureDependency.md) |  | List Azure PowerShell dependencies required for Bicep deployment tests. |
 | [Get-AvmBicepE2eDeploymentMatrix](Get-AvmBicepE2eDeploymentMatrix.md) |  | Build native Bicep E2E deployment selections without Azure access. |
@@ -15,34 +40,9 @@ This reference is generated from the comment-based help on the public PowerShell
 | [Get-AvmBicepWorkflowModuleMatrix](Get-AvmBicepWorkflowModuleMatrix.md) |  | Build a deterministic Bicep module workflow matrix. |
 | [Get-AvmBicepWorkflowTestFiles](Get-AvmBicepWorkflowTestFiles.md) |  | Discover native Bicep test files and policy candidates for one module. |
 | [Get-AvmCatalogTelemetryPrefix](Get-AvmCatalogTelemetryPrefix.md) |  | Read current and historical telemetry prefixes from the public AVM catalog. |
-| [Get-AvmModuleContext](Get-AvmModuleContext.md) | `avm context` | Classify a directory as a Bicep or Terraform module/monorepo context. |
-| [Get-AvmModuleMetadata](Get-AvmModuleMetadata.md) | `avm metadata show` | Read and validate an existing module metadata.json file. |
-| [Get-AvmTool](Get-AvmTool.md) | `avm tool list`<br>`avm tool which` | List or query managed tools from the avm.pins manifest. |
-| [Get-AvmVersion](Get-AvmVersion.md) | `avm version` | Reports the running Avm.Authoring module version and host runtime. |
 | [Initialize-AvmBicepReleaseMatrix](Initialize-AvmBicepReleaseMatrix.md) |  | Build a guarded top-level Bicep release matrix. |
 | [Initialize-AvmBicepWorkflowMatrix](Initialize-AvmBicepWorkflowMatrix.md) |  | Discover a checked-out Bicep workflow matrix for a push, pull request, or manual run. |
-| [Initialize-AvmModule](Initialize-AvmModule.md) | `avm init` | Initialize a Bicep module locally, or create and set up a Terraform module repository. |
-| [Initialize-AvmModuleMetadata](Initialize-AvmModuleMetadata.md) | `avm metadata initialize` | Create metadata.json without overwriting an existing file. |
-| [Install-AvmTool](Install-AvmTool.md) | `avm tool install` | Install one, several, or all managed tools from avm.pins. |
 | [Invoke-Avm](Invoke-Avm.md) | `avm` | Avm CLI dispatcher. The 'avm' alias is the user-facing entry point. |
-| [Invoke-AvmCheckConvention](Invoke-AvmCheckConvention.md) | `avm check convention` | Run convention checks against the resolved module. |
-| [Invoke-AvmCheckPolicy](Invoke-AvmCheckPolicy.md) | `avm check policy` | Run policy checks against the resolved module. |
-| [Invoke-AvmDocs](Invoke-AvmDocs.md) | `avm docs` | Generate or refresh module documentation under $Path. |
-| [Invoke-AvmDoctor](Invoke-AvmDoctor.md) | `avm doctor` | Diagnoses the local environment for running Avm.Authoring. |
-| [Invoke-AvmFormat](Invoke-AvmFormat.md) | `avm format` | Format all source files in the resolved module under $Path. |
-| [Invoke-AvmLint](Invoke-AvmLint.md) | `avm lint` | Lint all source files in the resolved module under $Path. |
-| [Invoke-AvmPrCheck](Invoke-AvmPrCheck.md) | `avm pr-check` | Run the pull-request linting and drift gauntlet against the resolved module:<br>metadata -> initialize (Terraform) -> sync -> format -> transform -> lint -> check policy -><br>check convention -> validate -> docs. |
-| [Invoke-AvmPreCommit](Invoke-AvmPreCommit.md) | `avm pre-commit` | Run the standard pre-commit gauntlet against the resolved module:<br>bicep:     metadata -> format -> lint -> validate -> transform -> docs.<br>terraform: metadata -> initialize -> sync -> check convention -> transform -> format -> docs. |
-| [Invoke-AvmSync](Invoke-AvmSync.md) | `avm sync` | Synchronise the current Terraform module repository's managed files<br>against the AVM governance source-of-truth (file sync only, no PR). |
-| [Invoke-AvmTest](Invoke-AvmTest.md) | `avm test` | Build Bicep sources or validate Terraform examples under $Path. |
-| [Invoke-AvmTestCleanup](Invoke-AvmTestCleanup.md) | `avm test cleanup` | Resume Bicep test cleanup from its saved JSON state. |
-| [Invoke-AvmTestE2e](Invoke-AvmTestE2e.md) | `avm test e2e` | Run Bicep or Terraform deployment tests with ordinary cleanup. |
-| [Invoke-AvmTestIntegration](Invoke-AvmTestIntegration.md) | `avm test integration` | Run Bicep ARM validation/what-if or Terraform integration tests. |
-| [Invoke-AvmTestUnit](Invoke-AvmTestUnit.md) | `avm test unit` | Run the module's Bicep Pester or Terraform unit-test tier. |
-| [Invoke-AvmTransform](Invoke-AvmTransform.md) | `avm transform` | Transform the module's authored source into governed artifacts. |
 | [New-AvmTelemetryIdPrefix](New-AvmTelemetryIdPrefix.md) |  | Generate a seven-character hexadecimal telemetry identifier. |
-| [Register-AvmFeature](Register-AvmFeature.md) | `avm register-features` | Ensure features declared at a module root are registered in one Azure test subscription. |
 | [Select-AvmTestSubscription](Select-AvmTestSubscription.md) |  | Select a Bicep test subscription using the repository's exact reservation map. |
 | [Set-AvmBicepReleaseTags](Set-AvmBicepReleaseTags.md) |  | Create guarded Bicep module release tags from a checked-out target. |
-| [Test-AvmModuleMetadata](Test-AvmModuleMetadata.md) | `avm metadata validate` | Validate existing or supplied module metadata with packaged Pester tests. |
-| [Update-AvmAuthoring](Update-AvmAuthoring.md) | `avm upgrade` | Update Avm.Authoring using the configured PowerShell repositories. |

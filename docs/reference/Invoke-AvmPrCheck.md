@@ -5,8 +5,8 @@
 ## Synopsis
 
 Run the pull-request linting and drift gauntlet against the resolved module:
-metadata -> initialize (Terraform) -> sync -> format -> transform -> lint -> check policy ->
-check convention -> validate -> docs.
+metadata -> initialize (Terraform) -> validate -> sync (Terraform) -> format ->
+transform -> docs -> lint -> check policy -> check convention.
 
 ## Description
 
@@ -31,11 +31,11 @@ Excluded steps remain visible as 'skipped' in the result and log.
 Excluding every step returns overall Status='skipped', not 'pass'.
 
 When Terraform validation is enabled, an explicit initialize step
-prepares each source example once after metadata and before the remaining
-checks, reusing compatible locked dependency selections without requesting
+prepares each source example once after metadata and before validation,
+reusing compatible locked dependency selections without requesting
 upgrades. An incompatible locked selection fails initialization rather
 than being silently upgraded. The validate step reuses that persistent
-`.terraform` state.
+`.terraform` state and runs before drift checks.
 Initialization has its own step log, result and duration, matching
 pre-commit. Failure aborts the chain even without StopOnFail.
 Excluding validate omits the initialize step; formatting needs only the
@@ -55,15 +55,15 @@ Invalid nonempty values fail configuration. Preservation does not
 exclude any checks, relax exact-pin validation or approve dependency
 changes; ordinary policy evaluation remains enabled.
 
-After metadata validation, the managed-files sync step (terraform
-only) in **drift-check mode** (-CheckDrift): unlike pre-commit,
+After validation, the Terraform managed-files sync step runs in
+**drift-check mode** (-CheckDrift): unlike pre-commit,
 which reconciles the governed files by writing them, pr-check
 writes nothing and instead treats any needed add/update/remove
 as Status='fail'. This makes stale governed files a hard CI
 failure so the module is refreshed before merge rather than
-silently rewritten in CI. For Bicep the sync step is unsupported and
-skipped. Bicep policy runs the required and advisory PSRule baselines
-when its repository config and selected test sources are available.
+silently rewritten in CI. Bicep has no sync step. Bicep policy runs
+the required and advisory PSRule baselines when its repository config
+and selected test sources are available.
 Its public namePrefix test token defaults to 'gci'; other missing
 inputs fail the check. Bicep policy, convention, and docs
 must report inspectable results rather than skipping. The required
@@ -136,8 +136,9 @@ Force the ecosystem selector. Defaults to 'auto'.
 
 ### -ExcludeSteps
 
-Step names to skip: metadata, sync, format, transform, lint,
-check policy, check convention, validate, docs. Accepts an array;
+Step names to skip: metadata, validate, sync, format, transform,
+docs, lint, check policy, check convention. Sync applies to Terraform.
+Accepts an array;
 names are case-insensitive and duplicates are ignored. Unknown or
 empty names are rejected. Omit this parameter or supply an empty
 array to run every step.

@@ -2,7 +2,7 @@ function Invoke-AvmPreCommit {
     <#
     .SYNOPSIS
         Run the standard pre-commit gauntlet against the resolved module:
-        bicep:     metadata -> format -> lint -> validate -> transform -> docs.
+        bicep:     metadata -> format -> transform -> docs.
         terraform: metadata -> initialize -> sync -> check convention -> transform -> format -> docs.
 
     .DESCRIPTION
@@ -12,6 +12,9 @@ function Invoke-AvmPreCommit {
         result is captured. The overall Status is 'pass' only when every
         executed step reports Status='pass' (format reports an implicit
         pass when no errors are thrown).
+
+        Bicep lint and build validation run in 'avm pr-check'; pre-commit
+        formats sources and generates the compiled templates and READMEs.
 
         The Terraform chain follows the legacy Terraform governance
         pre-commit.porch.yaml philosophy: its initialize step prepares the shared
@@ -221,8 +224,6 @@ function Invoke-AvmPreCommit {
     else {
         @(
             [pscustomobject]@{ Name = 'format'; Cmdlet = 'Invoke-AvmFormat' }
-            [pscustomobject]@{ Name = 'lint'; Cmdlet = 'Invoke-AvmLint' }
-            [pscustomobject]@{ Name = 'validate'; Cmdlet = 'Invoke-AvmTest' }
             [pscustomobject]@{ Name = 'transform'; Cmdlet = 'Invoke-AvmTransform' }
             [pscustomobject]@{ Name = 'docs'; Cmdlet = 'Invoke-AvmDocs' }
         )
