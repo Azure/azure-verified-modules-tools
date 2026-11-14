@@ -1,0 +1,79 @@
+---
+name: 'Repos: Resource Name Rules Sync'
+
+on:
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-management-resource-name-rules-sync
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  publish:
+    name: Publish resource name rules
+    if: >-
+      github.repository == 'Azure/azure-verified-modules-tools' &&
+      !github.event.repository.fork &&
+      github.ref == 'refs/heads/main' &&
+      github.workflow_ref == 'Azure/azure-verified-modules-tools/.github/workflows/repository-management-resource-name-rules-sync.yml@refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: avm
+    steps:
+      - name: Create scoped naming repository token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AVM_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
+          owner: Azure
+          repositories: terraform-azure-avm-utl-naming
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Resolve naming repository default branch
+        id: target
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $branch = (gh api repos/Azure/terraform-azure-avm-utl-naming --jq '.default_branch').Trim()
+          git check-ref-format --branch $branch
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The naming repository returned an invalid default branch.'
+          }
+
+          "default-branch=$branch" >> $env:GITHUB_OUTPUT
+
+      - name: Check out the naming repository default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Azure/terraform-azure-avm-utl-naming
+          ref: ${{ steps.target.outputs.default-branch }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: naming
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Test parser and mocked publication
+        working-directory: naming
+        run: .\scripts\tests\Test-ResourceNameRules.ps1
+
+      - name: Install AVM authoring for generated-data validation
+        run: Install-PSResource -Name Avm.Authoring -Repository PSGallery -TrustRepository
+
+      - name: Regenerate runtime catalogs and propose changes
+        working-directory: naming
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          NAMING_RULES_BASE_BRANCH: ${{ steps.target.outputs.default-branch }}
+        run: .\scripts\Publish-ResourceNameRules.ps1
