@@ -36,27 +36,27 @@
     Test-AvmPins by importing the Avm.Authoring module.
 
 .PARAMETER Terraform
-    Terraform version to lock, e.g. '1.16.5'. Skip the terraform tool when
+    Terraform version to lock, e.g. '1.17.2'. Skip the terraform tool when
     omitted.
 
 .PARAMETER Bicep
-    Bicep version to lock, e.g. '0.46.1' (no leading 'v'). Skip the bicep
+    Bicep version to lock, e.g. '0.49.2' (no leading 'v'). Skip the bicep
     tool when omitted.
 
 .PARAMETER Tflint
-    Tflint version to lock, e.g. '0.64.0' (no leading 'v'). Skip the tflint
+    Tflint version to lock, e.g. '0.66.0' (no leading 'v'). Skip the tflint
     tool when omitted.
 
 .PARAMETER TerraformDocs
-    terraform-docs version to lock, e.g. '0.24.0' (no leading 'v'). Skip
+    terraform-docs version to lock, e.g. '0.25.1' (no leading 'v'). Skip
     the terraform-docs tool when omitted.
 
 .PARAMETER Conftest
-    conftest version to lock, e.g. '0.69.0' (no leading 'v'). Skip the
+    conftest version to lock, e.g. '0.71.1' (no leading 'v'). Skip the
     conftest tool when omitted.
 
 .PARAMETER Mapotf
-    mapotf version to lock, e.g. '0.1.10' (no leading 'v'). Skip the mapotf
+    mapotf version to lock, e.g. '1.0.0' (no leading 'v'). Skip the mapotf
     tool when omitted.
 
 .PARAMETER PolicyLibrary
@@ -81,13 +81,13 @@
     Show what would change without writing the file.
 
 .EXAMPLE
-    ./scripts/Update-AvmPins.ps1 -Terraform 1.16.5 -Bicep 0.46.1
+    ./scripts/Update-AvmPins.ps1 -Terraform 1.17.2 -Bicep 0.49.2
 
 .EXAMPLE
-    ./scripts/Update-AvmPins.ps1 -Terraform 1.9.8
+    ./scripts/Update-AvmPins.ps1 -Terraform 1.17.2
 
 .EXAMPLE
-    ./scripts/Update-AvmPins.ps1 -Conftest 0.69.0 -Mapotf 0.1.10
+    ./scripts/Update-AvmPins.ps1 -Conftest 0.71.1 -Mapotf 1.0.0
 
 .NOTES
     Intended for maintainers and CI 'refresh tools' workflows. Not part
