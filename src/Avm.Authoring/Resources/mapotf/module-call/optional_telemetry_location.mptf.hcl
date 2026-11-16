@@ -84,11 +84,11 @@ locals {
   location_source_files = {
     for filename in fileset(".", "*.tf") : filename => file(filename)
   }
-  location_owned_removal = "(?m)^[[:space:]]*removed[[:space:]]*\\{[[:space:]]*from[[:space:]]*=[[:space:]]*(modtm_telemetry[.]telemetry|random_uuid[.]telemetry|azurerm_resource_group_template_deployment[.]telemetry|random_id[.]telem)[[:space:]]+lifecycle[[:space:]]*\\{[[:space:]]*destroy[[:space:]]*=[[:space:]]*false[[:space:]]*\\}[[:space:]]*\\}"
+  location_state_removal = "(?m)^[[:space:]]*removed[[:space:]]*\\{[[:space:]]*from[[:space:]]*=[[:space:]]*[A-Za-z_][A-Za-z0-9_-]*([.][A-Za-z_][A-Za-z0-9_-]*)+[[:space:]]+lifecycle[[:space:]]*\\{[[:space:]]*destroy[[:space:]]*=[[:space:]]*false[[:space:]]*\\}[[:space:]]*\\}"
   location_uninspected_blocks = length(fileset(".", "*.tf.json")) > 0 || anytrue([
     for filename, source in local.location_source_files :
     length(regexall("(?m)^[[:space:]]*(provider|import|action|list)[[:space:]\"]", source)) > 0 ||
-    length(regexall("(?m)^[[:space:]]*removed[[:space:]]*\\{", source)) != length(regexall(local.location_owned_removal, source))
+    length(regexall("(?m)^[[:space:]]*removed[[:space:]]*\\{", source)) != length(regexall(local.location_state_removal, source))
   ])
   location_business_required = (
     length(local.location_required_children) > 0 ||
