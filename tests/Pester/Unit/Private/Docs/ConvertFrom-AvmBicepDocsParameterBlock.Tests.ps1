@@ -11,6 +11,82 @@ AfterAll {
 }
 
 Describe 'ConvertFrom-AvmBicepDocsParameterBlock' {
+    It 'renders formatted ternaries exactly like their single-line equivalents' {
+        $singleLine = @'
+  name: 'example'
+  customLocationResourceId: preparedHciEnvironment != null ? preparedHciEnvironment.customLocationResourceId : customLocation!.id
+  vmSwitchName: preparedHciEnvironment != null ? preparedHciEnvironment.vSwitchName : azlocal!.outputs.vSwitchName
+  enabled: true
+'@
+        $multiline = @'
+  name: 'example'
+  customLocationResourceId: preparedHciEnvironment != null
+    ? preparedHciEnvironment.customLocationResourceId
+    : customLocation!.id
+  vmSwitchName: preparedHciEnvironment != null
+    ? preparedHciEnvironment.vSwitchName
+    : azlocal!.outputs.vSwitchName
+  enabled: true
+'@
+        InModuleScope 'Avm.Authoring' -Parameters @{ S = $singleLine; M = $multiline } {
+            param($S, $M)
+            $expected = ConvertFrom-AvmBicepDocsParameterBlock -Block $S -SourcePath 'single.bicep'
+            $actual = ConvertFrom-AvmBicepDocsParameterBlock -Block $M -SourcePath 'formatted.bicep'
+            $actual.Count | Should -Be 4
+            $actual.customLocationResourceId.value | Should -BeExactly '<customLocationResourceId>'
+            $actual.vmSwitchName.value | Should -BeExactly '<vmSwitchName>'
+            $actual.name.value | Should -BeExactly 'example'
+            $actual.enabled.value | Should -BeTrue
+            $expectedExamples = ConvertTo-AvmBicepDocsExampleParameter -Parameters $expected
+            $actualExamples = ConvertTo-AvmBicepDocsExampleParameter -Parameters $actual
+            foreach ($format in @('BicepParameters', 'JsonParameters', 'BicepParameterFile')) {
+                $actualExamples.$format | Should -BeExactly $expectedExamples.$format
+            }
+        }
+    }
+
+    It 'keeps nested conditional branches and comments inside their property boundary' {
+        $block = @'
+  settings: {
+    network: preparedHciEnvironment != null // choose prepared dependencies
+      // The branches contain nested objects, arrays, functions, and conditionals.
+      ? {
+          routes: [
+            {
+              name: 'https://example.test/a?b:c' // punctuation is not a branch delimiter
+              enabled: true
+            }
+          ]
+        }
+      /* otherwise */
+      : fallbackEnabled
+        ? union(
+            {
+              name: 'fallback'
+            },
+            {}
+          )
+        : {}
+    label: 'Keep ?: and https://example.test/foo'
+    resourceIds: [
+      nestedDependencies.outputs.resourceId // Keep reference comment
+    ]
+  }
+  location: 'eastus'
+'@
+        $parameters = InModuleScope 'Avm.Authoring' -Parameters @{ B = $block } {
+            param($B)
+            ConvertFrom-AvmBicepDocsParameterBlock -Block $B -SourcePath 'nested.bicep'
+        }
+        $parameters.Count | Should -Be 2
+        $parameters.settings.value.Count | Should -Be 3
+        $parameters.settings.value.network | Should -BeExactly '<network>'
+        $parameters.settings.value.label | Should -BeExactly 'Keep ?: and https://example.test/foo'
+        $parameters.settings.value.resourceIds[0] |
+            Should -BeExactly '<resourceId // Keep reference comment>'
+        $parameters.location.value | Should -BeExactly 'eastus'
+    }
+
     It 'replaces computed output references and multi-line functions with copy-ready placeholders' {
         $block = @'
   name: 'example'

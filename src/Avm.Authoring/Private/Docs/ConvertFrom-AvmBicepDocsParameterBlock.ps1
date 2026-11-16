@@ -50,6 +50,17 @@ function ConvertFrom-AvmBicepDocsParameterBlock {
         }
         $line = [regex]::Replace($line, '^\s*"{0}([0-9a-zA-Z_]+):', '"$1":', 1)
         if ($line -match '^\s*.+?:\s+') {
+            $propertyIndent = ([regex]::Match($jsonLines[$index], '^(\s*)')).Groups[1].Value.Length
+            $continuation = $index + 1
+            if ($continuation -lt $jsonLines.Count -and
+                $jsonLines[$continuation] -match "^\s{$($propertyIndent+1),}\?(?![?.])") {
+                while ($continuation -lt $jsonLines.Count -and
+                    $jsonLines[$continuation] -match "^\s{$($propertyIndent+1),}") {
+                    $line += ' ' + $jsonLines[$continuation].Trim()
+                    $jsonLines[$continuation] = $null
+                    $continuation++
+                }
+            }
             $value = ($line -split '^\s*.+?:\s+')[1].Trim()
             $emptyObject = $line -match '^.+:\s*{\s*}\s*$'
             $propertyReference = $value -match '(?<=[^"])\b\.\b(?=[^"]*$)'
