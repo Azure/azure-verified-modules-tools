@@ -24,7 +24,7 @@ function Invoke-AvmReleaseBranch {
         Upstream github.com repository in owner/name form.
 
     .PARAMETER PullRequest
-        Number of an open external fork pull request targeting main.
+        Number of an open external fork pull request in the upstream repository.
 
     .PARAMETER SkipModuleVersionCheck
         Skip the PowerShell Gallery check for a newer Avm.Authoring release.
@@ -87,12 +87,11 @@ function Invoke-AvmReleaseBranch {
     $endpoint = "repos/$Repository/pulls/$PullRequest"
     $pr = Invoke-AvmGitHubApi -Endpoint $endpoint
     if ($pr['state'] -cne 'open' -or $pr['draft'] -ne $false -or
-        $pr['base']['ref'] -cne 'main' -or
         $pr['base']['repo']['full_name'] -ine $Repository -or
         $null -eq $pr['head']['repo'] -or $pr['head']['repo']['fork'] -ne $true -or
         $pr['head']['repo']['owner']['login'] -ieq $repo['owner']['login']) {
         throw [System.InvalidOperationException]::new(
-            "Pull request $PullRequest must be open, ready for review, target upstream main, and originate from an external fork.")
+            "Pull request $PullRequest must be open, ready for review, target the upstream repository, and originate from an external fork.")
     }
     $headCommit = [string]$pr['head']['sha']
     if ($headCommit -notmatch '^[a-fA-F0-9]{40}$') {

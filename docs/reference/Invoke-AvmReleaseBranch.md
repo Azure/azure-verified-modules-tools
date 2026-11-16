@@ -38,7 +38,7 @@ Invoke-AvmReleaseBranch [-Repository] <string> [-PullRequest] <int> [-SkipModule
 
 ### -PullRequest
 
-Number of an open external fork pull request targeting main.
+Number of an open external fork pull request in the upstream repository.
 
 | Property | Value |
 | --- | --- |

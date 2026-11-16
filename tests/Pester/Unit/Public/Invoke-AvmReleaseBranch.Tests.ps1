@@ -104,6 +104,7 @@ Describe 'Invoke-AvmReleaseBranch' {
     It 'uses the current PR head and creates the release branch from main' {
         InModuleScope Avm.Authoring {
             $script:scenario.Pr.head.sha = 'cccccccccccccccccccccccccccccccccccccccc'
+            $script:scenario.Pr.base.ref = 'maintenance'
             $result = Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' -PullRequest 123
             $result.HeadCommit | Should -BeExactly 'cccccccccccccccccccccccccccccccccccccccc'
             $result.ReleaseBranch | Should -BeExactly 'release/fork-pr-123-cccccccccccc'
@@ -166,7 +167,7 @@ Describe 'Invoke-AvmReleaseBranch' {
     It 'rejects invalid trust and permission boundaries before writing (<Case>)' -ForEach @(
         @{ Case = 'same owner' }
         @{ Case = 'not a fork' }
-        @{ Case = 'wrong base' }
+        @{ Case = 'wrong upstream' }
         @{ Case = 'draft' }
         @{ Case = 'closed' }
         @{ Case = 'no write permission' }
@@ -178,7 +179,7 @@ Describe 'Invoke-AvmReleaseBranch' {
             switch ($Case) {
                 'same owner' { $script:scenario.Pr.head.repo.owner.login = 'Azure' }
                 'not a fork' { $script:scenario.Pr.head.repo.fork = $false }
-                'wrong base' { $script:scenario.Pr.base.ref = 'other' }
+                'wrong upstream' { $script:scenario.Pr.base.repo.full_name = 'Azure/other' }
                 'draft' { $script:scenario.Pr.draft = $true }
                 'closed' { $script:scenario.Pr.state = 'closed' }
                 'no write permission' { $script:scenario.Repo.permissions.push = $false }
