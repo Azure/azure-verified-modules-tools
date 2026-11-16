@@ -125,7 +125,8 @@ $configuration.Run.Container = @(
 $configuration.Run.PassThru = $true
 $configuration.Run.Exit = $false
 $configuration.Run.Throw = $false
-$configuration.Output.Verbosity = 'None'
+$configuration.Output.Verbosity = if ($inputData.Contains('VerboseOutput') -and $inputData.VerboseOutput) { 'Detailed' } else { 'None' }
+$configuration.Output.CIFormat = 'None'
 if ($inputData.Tag.Count -gt 0) {
     $configuration.Filter.Tag = [string[]]$inputData.Tag
 }

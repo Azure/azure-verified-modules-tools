@@ -20,7 +20,7 @@ function Invoke-AvmMetadataValidation {
     $configuration.Run.PassThru = $true
     $configuration.Run.Exit = $false
     $configuration.Run.Throw = $false
-    $configuration.Output.Verbosity = 'None'
+    $configuration.Output.Verbosity = if (Test-AvmVerboseEnabled) { 'Detailed' } else { 'None' }
     $configuration.Output.CIFormat = 'None'
     $result = & $pester.ExportedCommands['Invoke-Pester'] -Configuration $configuration
     $issues = [System.Collections.Generic.List[object]]::new()
