@@ -45,7 +45,7 @@ Describe 'Invoke-AvmTerraformDocs' {
             param($C, $R)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Name = 'terraform-docs'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform-docs'
                 }
             }
@@ -58,7 +58,7 @@ Describe 'Invoke-AvmTerraformDocs' {
         }
         $result.Status         | Should -Be 'pass'
         $result.Engine         | Should -Be 'terraform'
-        $result.Tool           | Should -Be 'terraform-docs/0.20.0'
+        $result.Tool           | Should -Be 'terraform-docs/test'
         $result.FilesProcessed | Should -Be 1
         $result.Changed        | Should -Be @('README.md')
 
@@ -79,7 +79,7 @@ Describe 'Invoke-AvmTerraformDocs' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Name = 'terraform-docs'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform-docs'
                 }
             }
@@ -98,7 +98,7 @@ Describe 'Invoke-AvmTerraformDocs' {
                 param($C)
                 Mock Resolve-AvmTool {
                     [pscustomobject]@{
-                        Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                        Name = 'terraform-docs'; Version = 'test'; Platform = 'linux-amd64'
                         Source = 'cache'; Path = '/fake/terraform-docs'
                     }
                 }
@@ -122,7 +122,7 @@ Describe 'Invoke-AvmTerraformDocs' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Name = 'terraform-docs'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform-docs'
                 }
             }
@@ -160,7 +160,7 @@ Describe 'Invoke-AvmTerraformDocs' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Name = 'terraform-docs'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform-docs'
                 }
             }
@@ -189,7 +189,7 @@ Describe 'Invoke-AvmTerraformDocs' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Name = 'terraform-docs'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform-docs'
                 }
             }
@@ -218,7 +218,7 @@ Describe 'Invoke-AvmTerraformDocs' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Name = 'terraform-docs'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform-docs'
                 }
             }
@@ -250,7 +250,7 @@ Describe 'Invoke-AvmTerraformDocs' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Name = 'terraform-docs'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform-docs'
                 }
             }
@@ -272,7 +272,7 @@ Describe 'Invoke-AvmTerraformDocs' {
             param($C, $R)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Name = 'terraform-docs'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform-docs'
                 }
             }
@@ -296,7 +296,7 @@ Describe 'Invoke-AvmTerraformDocs' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Name = 'terraform-docs'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform-docs'
                 }
             }
@@ -316,7 +316,7 @@ Describe 'Invoke-AvmTerraformDocs' {
             param($C, $R)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Name = 'terraform-docs'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform-docs'
                 }
             }
@@ -340,7 +340,7 @@ Describe 'Invoke-AvmTerraformDocs' {
             param($C, $R)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Name = 'terraform-docs'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform-docs'
                 }
             }
@@ -364,7 +364,7 @@ Describe 'Invoke-AvmTerraformDocs' {
                 param($C, $R)
                 Mock Resolve-AvmTool {
                     [pscustomobject]@{
-                        Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                        Name = 'terraform-docs'; Version = 'test'; Platform = 'linux-amd64'
                         Source = 'cache'; Path = '/fake/terraform-docs'
                     }
                 }
@@ -388,7 +388,7 @@ Describe 'Invoke-AvmTerraformDocs' {
             param($C, $R)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform-docs'; Version = '0.20.0'; Platform = 'linux-amd64'
+                    Name = 'terraform-docs'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/terraform-docs'
                 }
             }

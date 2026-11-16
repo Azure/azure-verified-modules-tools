@@ -16,10 +16,10 @@ AfterAll {
 }
 
 Describe 'Bicep scoped e2e template safety' {
-    It 'inspects pinned Bicep 0.47.16 symbolic resources and telemetry' {
+    It 'inspects symbolic resources and telemetry in the scoped template' {
         $template = Get-Content -LiteralPath $script:pinnedFixturePath -Raw -Encoding utf8 |
             ConvertFrom-Json -AsHashtable
-        $template.metadata._generator.version | Should -Be '0.47.16.16243'
+        $template.metadata._generator.version | Should -Be 'other-compiler-version'
         $template.resources[0].properties.template.languageVersion | Should -BeExactly '2.0'
         $symbols = @($template.resources[0].properties.template.resources.Keys)
         $symbols.Count | Should -Be 2

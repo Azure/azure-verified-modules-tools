@@ -98,7 +98,7 @@ function New-TerraformAcceptanceContext {
     try {
         if ($InitializeLock) {
             if ($IsWindows) {
-                # Terraform 1.16.5 reuses downloads with Mkdir on Windows test-file module keys.
+                # Terraform reuses downloads with Mkdir on Windows test-file module keys.
                 $null = [IO.Directory]::CreateDirectory((Join-Path $root '.terraform' 'modules' 'test.tests' 'unit'))
             }
             $null = & (Get-Module Avm.Authoring) {

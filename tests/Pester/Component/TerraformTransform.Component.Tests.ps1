@@ -66,7 +66,7 @@ Describe 'Invoke-AvmTerraformTransform' -Tag Component {
             }
             Mock Invoke-AvmProcess { throw 'Native processes must not run.' }
             { Invoke-AvmTerraformTransform -Context $C } |
-                Should -Throw -ExceptionType ([AvmToolException]) -ExpectedMessage '*MaPoTF 1.0.0 or later*'
+                Should -Throw -ExceptionType ([AvmToolException]) -ExpectedMessage '*MaPoTF * or later*'
             Should -Invoke Resolve-AvmTool -Exactly 1 -ParameterFilter { $Name -eq 'mapotf' }
             Should -Invoke Resolve-AvmTool -Exactly 0 -ParameterFilter { $Name -eq 'terraform' }
             Should -Invoke Get-AvmTerraformUtilityMigrationPlan -Exactly 0
@@ -249,7 +249,7 @@ Describe 'Invoke-AvmTerraformTransform' -Tag Component {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
+                    Name = 'mapotf'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
@@ -258,7 +258,7 @@ Describe 'Invoke-AvmTerraformTransform' -Tag Component {
             Invoke-AvmTerraformTransform -Context $C
         }
         $result.Engine         | Should -Be 'terraform'
-        $result.Tool           | Should -Be 'mapotf/0.1.5'
+        $result.Tool           | Should -Be 'mapotf/test'
         $result.ToolPath       | Should -Be '/fake/mapotf'
         $result.ToolSource     | Should -Be 'cache'
         $result.Status         | Should -Be 'pass'
@@ -653,13 +653,13 @@ variable "location" {
                 Mock Resolve-AvmTool {
                     if ($Name -eq 'terraform') {
                         [pscustomobject]@{
-                            Name = 'terraform'; Version = '1.15.8'; Platform = 'test'
+                            Name = 'terraform'; Version = 'test'; Platform = 'test'
                             Source = 'cache'; Path = $P
                         }
                     }
                     else {
                         [pscustomobject]@{
-                            Name = 'mapotf'; Version = '0.1.5'; Platform = 'test'
+                            Name = 'mapotf'; Version = 'test'; Platform = 'test'
                             Source = 'cache'; Path = (Join-Path $TestDrive 'mapotf')
                         }
                     }
@@ -693,7 +693,7 @@ variable "location" {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
+                    Name = 'mapotf'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
@@ -1462,7 +1462,7 @@ run "telemetry" {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
+                    Name = 'mapotf'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
@@ -1491,7 +1491,7 @@ run "telemetry" {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
+                    Name = 'mapotf'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
@@ -1512,7 +1512,7 @@ run "telemetry" {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
+                    Name = 'mapotf'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
@@ -1540,7 +1540,7 @@ run "telemetry" {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
+                    Name = 'mapotf'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
@@ -1569,7 +1569,7 @@ run "telemetry" {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
+                    Name = 'mapotf'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
@@ -1653,7 +1653,7 @@ run "telemetry" {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
+                    Name = 'mapotf'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
@@ -1678,7 +1678,7 @@ run "telemetry" {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
+                    Name = 'mapotf'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }
@@ -1704,7 +1704,7 @@ run "telemetry" {
                 param($C)
                 Mock Resolve-AvmTool {
                     [pscustomobject]@{
-                        Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
+                        Name = 'mapotf'; Version = 'test'; Platform = 'linux-amd64'
                         Source = 'cache'; Path = '/fake/mapotf'
                     }
                 }
@@ -1736,7 +1736,7 @@ run "telemetry" {
                 param($C)
                 Mock Resolve-AvmTool {
                     [pscustomobject]@{
-                        Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
+                        Name = 'mapotf'; Version = 'test'; Platform = 'linux-amd64'
                         Source = 'cache'; Path = '/fake/mapotf'
                     }
                 }
@@ -1783,7 +1783,7 @@ run "telemetry" {
                 param($C)
                 Mock Resolve-AvmTool {
                     [pscustomobject]@{
-                        Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
+                        Name = 'mapotf'; Version = 'test'; Platform = 'linux-amd64'
                         Source = 'cache'; Path = '/fake/mapotf'
                     }
                 }
@@ -1830,7 +1830,7 @@ run "telemetry" {
                 param($C)
                 Mock Resolve-AvmTool {
                     [pscustomobject]@{
-                        Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
+                        Name = 'mapotf'; Version = 'test'; Platform = 'linux-amd64'
                         Source = 'cache'; Path = '/fake/mapotf'
                     }
                 }
@@ -1851,7 +1851,7 @@ run "telemetry" {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'mapotf'; Version = '0.1.5'; Platform = 'linux-amd64'
+                    Name = 'mapotf'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/mapotf'
                 }
             }

@@ -70,7 +70,7 @@ of known tools without replacing their download definitions:
 
 ```json
 {
-  "terraform": "1.16.5",
+  "terraform": "1.17.2",
   "Pester": "5.7.1"
 }
 ```

@@ -61,7 +61,7 @@
   "tools": [
     {
       "name": "bicep",
-      "version": "0.48.1",
+      "version": "0.49.2",
       "urlTemplate": "https://github.com/Azure/bicep/releases/download/v{version}/bicep-{platform}",
       "archive": "raw",
       "entrypoint": "bicep",
@@ -74,17 +74,17 @@
         "darwin-arm64": "osx-arm64"
       },
       "sha256": {
-        "windows-amd64": "398af294cf16ac4becdbd008a77d148d0e8e91492309a6b60ec911b7e1cab082",
-        "windows-arm64": "613a0afb0ffed4dca106e6466688d780b7db0eac7cf3576f62ae9eab11554b05",
-        "linux-amd64": "b09ec25a9d376c1f8e33ede6ed22b587f915ad68488d5db77a6f9541748c7f6e",
-        "linux-arm64": "9cbf6a211137e894a863fbc842e355c2197fc2124a7bda902afe1bceffa35245",
-        "darwin-amd64": "6a8188d521a7c6740c8b58983093dfd9f7897d37bdf1551f775022e22397d7c5",
-        "darwin-arm64": "62cd5958c62fa1b738e9b69f24799fabddb90ed83fdb7d6d2563dde376ce479d"
+        "windows-amd64": "acfff0453c9bcf442aa97103acbcd845ef366634e6ea2a2ba5734514409ce9c3",
+        "windows-arm64": "0576e45158736546ef16bf0f5f6403cb3ec88cc560b23f802bb9d48e0edf65ea",
+        "linux-amd64": "0ab9de90c2493f206f8281bae74f9ee2d5ed3605548dab1adf41fef185e1f7c5",
+        "linux-arm64": "48d8f152bd78c8848a41a07ac2d12b573306d9329fc961a85354a98a95cc275e",
+        "darwin-amd64": "1403cd4b17178c40ee87a40222ce318a31a2b95db7bbcd964c03780cad89dc5e",
+        "darwin-arm64": "8ae74a6cf9cbba0cb220c40cf0e955f98d59df950afab07c21b7bcb78c9c5d68"
       }
     },
     {
       "name": "conftest",
-      "version": "0.69.0",
+      "version": "0.71.1",
       "urlTemplate": "https://github.com/open-policy-agent/conftest/releases/download/v{version}/conftest_{version}_{platform}{ext}",
       "archive": "tar.gz",
       "entrypoint": "conftest",
@@ -105,12 +105,12 @@
         "darwin-arm64": "tar.gz"
       },
       "sha256": {
-        "windows-amd64": "be95f90cd22d00e709a7ad37bdac357c103b4f81d92dc51ca75a60e5f3905cf5",
-        "windows-arm64": "3a37240aa7a4ec755b7bffd6bb117eab656eefeefd19c47f293636ed364d1dce",
-        "linux-amd64": "96fc2fbf11f0afde51256647127e6f00a64ce839a4d9a0a1aef2426c0e6f4b3f",
-        "linux-arm64": "3b9c35223fe35f9988e153cdffb0144f911201306c746758b73be82831c543d9",
-        "darwin-amd64": "74fc9073fc7a5f11ffe00db7599d2b155d179acc70e83ffc7ab4a8750e6ee24e",
-        "darwin-arm64": "78302d045f0ec52e9786a06c6c621ac4516b4c5dd1e54efc8050c86c29b964d9"
+        "windows-amd64": "34d623334b5e7ed4465bf62a4cb3b092684859cd3d224bbd390925a0852b922a",
+        "windows-arm64": "a96dd3eea3034b8d6f4fbccd721e5a296dbf5c302af0e32b0bd16ecb2fab69f0",
+        "linux-amd64": "c3f6b2a753bd56e377a1e51a95ae3e057f926f2e9139f7d5b5dfbbaf810f7985",
+        "linux-arm64": "218c682e110ae7e826dc14a746a6f9b43eb782643dbe730b771fd305634e3f47",
+        "darwin-amd64": "a309853b5763c18486768157442d440248ee683b20a2aa1f6b28214e818bd780",
+        "darwin-arm64": "e1cc50d2590b6c5e3da6912666a71264bae82d60bdd62d7ae2b99971ccc8eedd"
       }
     },
     {
@@ -138,22 +138,22 @@
     },
     {
       "name": "terraform",
-      "version": "1.16.5",
+      "version": "1.17.2",
       "urlTemplate": "https://releases.hashicorp.com/terraform/{version}/terraform_{version}_{os}_{arch}.zip",
       "archive": "zip",
       "entrypoint": "terraform",
       "sha256": {
-        "windows-amd64": "01700102b7291f95c0ab61394b55bfd5f57a12ac65632c2c1958691c8cf438ef",
-        "windows-arm64": "f5978cc73678af764c0799cd4960f93a600d89daa23f833c6f3070f2e758c490",
-        "linux-amd64": "2bc2fcfff033265c9e02ca0351f01794eb122f62a9b2a49a3294b9e49eaab5e4",
-        "linux-arm64": "61a50b00485ee4810cf20581ef080fc54d34d666e175c58d9a10501c65c1ccde",
-        "darwin-amd64": "9809158e481cf2d3a8433e59179f397b8edb5172397711bd98f6bb32edcaf53b",
-        "darwin-arm64": "ecdef65e24193d627f27c39baeda31295f08c938d8a3d4764f442fb916d4b7dc"
+        "windows-amd64": "2244b7a379ea8c4b224a2eab411b7288f41ef36316fca27ae4b51b1cf2a53024",
+        "windows-arm64": "4b614fe5aacfe76f6b167c9caad19358a505a601ade0ed25c664fb8ab6f1df19",
+        "linux-amd64": "e6f16b2f0b137ee5729caa8c4e79a3bae4ee261acd198a1fcfa8584a6296605b",
+        "linux-arm64": "858e08c181a76b6b223e8c767a8e983922eebe2d062db949a2de66ce040c368c",
+        "darwin-amd64": "66b472dcc36cf770d83757ed4d002c476174842c05c68637b40a7e99519cf3e1",
+        "darwin-arm64": "da0c7ef278a911347862758e7573a5907365e66485c2637cf5c217c5e227992e"
       }
     },
     {
       "name": "terraform-docs",
-      "version": "0.24.0",
+      "version": "0.25.1",
       "urlTemplate": "https://github.com/terraform-docs/terraform-docs/releases/download/v{version}/terraform-docs-v{version}-{os}-{arch}{ext}",
       "archive": "tar.gz",
       "entrypoint": "terraform-docs",
@@ -166,17 +166,17 @@
         "darwin-arm64": "tar.gz"
       },
       "sha256": {
-        "windows-amd64": "afc02cbdf63726d3e5fb26a077ca1f24acd4820d7e44c21b03a3e030f9266490",
-        "windows-arm64": "1168c12929531ac9132c97fff794ef531ebb2a5b54c41870b9e19911950b6fd4",
-        "linux-amd64": "9005daf969de0b50134493a2c00078b49f5f5b39d021cda7c89bf4d4f3d776d3",
-        "linux-arm64": "d12bd7b73c1fc9c64efc79f8157dd713dabd559f1ecf3cfc0f42e32279a155fd",
-        "darwin-amd64": "3c3f7f18f908457fd1209cbe341418f7f6bae78c08126cfbe8de0d1b06aa8781",
-        "darwin-arm64": "f6b114f4b032f3f9202ab6c23bfd28c3c8e68aeeb8a8f12fc118bf2073081d71"
+        "windows-amd64": "b9d1ceaf9136fcf4ddce55a5590cc4fca19ac349542c51c28b8dfa642ed85fa8",
+        "windows-arm64": "1a47cf415b13e909b124803a7a6de8662a821b0c895dcf82f8faceab654043b7",
+        "linux-amd64": "246f1a3211c9dbbed4c4af82b856dbd40acda78816ac8cdb5203c2869b659c76",
+        "linux-arm64": "a5b4b1ae887138fe1c617fe4e1aea272511d9a7ffc2cf98b0a2aacd87b348b56",
+        "darwin-amd64": "a6d20108903921988075dabd5ce85602ccd551a4c8d8c83070289d928829e04e",
+        "darwin-arm64": "b2d2c6a618f331cacb2f766102a8e917fec758bca9573e3e539a799ae4bce225"
       }
     },
     {
       "name": "tflint",
-      "version": "0.64.0",
+      "version": "0.66.0",
       "urlTemplate": "https://github.com/terraform-linters/tflint/releases/download/v{version}/tflint_{os}_{arch}.zip",
       "archive": "zip",
       "entrypoint": "tflint",
@@ -184,11 +184,11 @@
         "windows-arm64"
       ],
       "sha256": {
-        "windows-amd64": "fb42fb859d844b156a8ea9d3363078c4d8b85ca78782e60876b08c9b8e59f303",
-        "linux-amd64": "cca9d13e2e1d7a2c627af60ff899a3c9b74212899416aeb96ec764d2ef954537",
-        "linux-arm64": "560da89aacf59389d4eb029730dd5b109b7288096c32f2726a0d9e783a5ea8eb",
-        "darwin-amd64": "0f3a9fd17526014646a2dfc3f9122f7b4161abe3d6b0f0f03f9014483ddf4d19",
-        "darwin-arm64": "2496e9cb3d24992d553b45e7c87a0fdc9449ca975233876247a9bfeda857e6c0"
+        "windows-amd64": "e3acd1d89c735ce6e09108c9277f26076ebeb385c1f77a73c1cbf1826ed626a7",
+        "linux-amd64": "22be11cadc25cd02401e94c0ccc91aa63467debb8485c2a755d98f4c0a9d1e2e",
+        "linux-arm64": "1105a0a5ddee7cdac7957a3475571a946b839192ea1bc0c722c6c4686001067e",
+        "darwin-amd64": "e2d98b60adb2602a252ee9efb036e237edf13c8fda91f4d513d3357e1a01a889",
+        "darwin-arm64": "859b26af07ead7e65cee7eec9d050b2e2571dc28395b7a39191cae088cd67803"
       }
     }
   ],
@@ -236,7 +236,7 @@
   // manifest. They are mirrored here so every pinned version is visible in one
   // place, and a packaging test cross-checks the two so they cannot drift.
   "tflintPlugins": {
-    "terraform": "0.15.0",
+    "terraform": "0.17.0",
     "avm": "1.4.1"
   },
 

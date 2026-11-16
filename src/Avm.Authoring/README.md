@@ -64,7 +64,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Private/Tools/Resolve-AvmTool.ps1`               | Cache-first path resolver used by the engines (cache -> optional PATH -> throw).   |
 | `Resources/PSScriptAnalyzerSettings.psd1`         | Lint rules consumed by `./build.ps1 lint`.                                         |
 | `Resources/Schemas/v1/`                           | Authoritative, packaged module metadata and catalog JSON schemas.                 |
-| `Resources/avm.pins.jsonc`                       | Bundled tool manifest. Populated entries for `bicep` and `terraform` with per-platform SHA256. |
+| `Resources/avm.pins.jsonc`                       | Bundled pins and per-platform SHA256 hashes for all six managed CLI tools. |
 | `Resources/bicep/avm-readme-v1.scriban`          | Versioned, model-driven Bicep README template; copy into the repository and select it in `bicepconfig.json`. |
 | `Resources/Scaffolds/Terraform/`                 | Minimal Terraform module files written by `avm init`.                             |
 
@@ -438,14 +438,15 @@ avm -SkipModuleVersionCheck pre-commit -Ecosystem terraform -ManagedFilesLocalPa
 Remove-Module Avm.Authoring
 ```
 
-The bundled `Resources/avm.pins.jsonc` ships verified hashes for `bicep`, `terraform`, `tflint`, and `terraform-docs`; `avm tool list` returns those entries out of the box. Tests cover the install pipeline end-to-end via `file://` fixtures under `tests/Pester/Unit/Public/`.
+The bundled `Resources/avm.pins.jsonc` ships verified hashes for `bicep`, `conftest`, `mapotf`, `terraform`, `terraform-docs`, and `tflint`; `avm tool list` returns those entries out of the box. Tests cover the install pipeline end-to-end via `file://` fixtures under `tests/Pester/Unit/Public/`.
 
 Terraform validation includes every direct example, even `.e2eignore` examples.
 It warns if the checkout's root module or a direct `modules/` configuration is
 not reached by an example. Registry/Git copies and test-only helper modules do
 not count. Coverage gaps are non-failing; no examples returns `skipped`.
 
-The Terraform lint bundle pins TFLint 0.64.0 and `tflint-ruleset-avm` 1.4.1.
+The Terraform lint bundle pins TFLint 0.66.0, the Terraform ruleset 0.17.0,
+and `tflint-ruleset-avm` 1.4.1.
 All three packaged configurations require GitHub Artifact Attestation; there is
 no PGP signing-key fallback. AzureRM remains optional, but its version constraint
 must exclude 5.0.0 and later.
@@ -511,13 +512,20 @@ Maintainers refresh canonical entries with `scripts/Update-AvmPins.ps1`. The scr
 
 ```powershell
 # Refresh every supported tool
-./scripts/Update-AvmPins.ps1 -Terraform 1.15.8 -Bicep 0.30.3 -Tflint 0.64.0 -TerraformDocs 0.20.0
+./scripts/Update-AvmPins.ps1 `
+    -Terraform 1.17.2 `
+    -Bicep 0.49.2 `
+    -Tflint 0.66.0 `
+    -TerraformDocs 0.25.1 `
+    -Conftest 0.71.1 `
+    -Mapotf 1.0.0 `
+    -TflintPlugin @{ terraform = '0.17.0' }
 
 # Refresh just one
-./scripts/Update-AvmPins.ps1 -TerraformDocs 0.20.0
+./scripts/Update-AvmPins.ps1 -TerraformDocs 0.25.1
 
 # Preview without writing
-./scripts/Update-AvmPins.ps1 -Terraform 1.15.8 -WhatIf
+./scripts/Update-AvmPins.ps1 -Terraform 1.17.2 -WhatIf
 ```
 
 The lock schema accepts an optional `platformAliases` map for tools whose release assets don't follow `{os}_{arch}` naming (such as bicep). When present, `urlTemplate` may reference the `{platform}` placeholder, which is substituted per-platform at download time. It also accepts an optional `unsupportedPlatforms` array for tools that don't ship a build for every platform (tflint, for example, has no `windows-arm64` release); listed platforms must be ABSENT from `sha256` and runtime resolve/install throws `AvmToolException` (AVM1012) when the current host matches. Finally, an optional `archives` map allows tools that ship different archive types per OS (terraform-docs, for example, uses `tar.gz` on darwin/linux and `zip` on windows) — when present, every supported platform must be listed and `urlTemplate` may reference the `{ext}` placeholder which expands to `.zip` / `.tar.gz` / `''` per the resolved archive type. don't follow `{os}_{arch}` naming (such as bicep). When present, `urlTemplate` may reference the `{platform}` placeholder, which is substituted per-platform at download time. It also accepts an optional `unsupportedPlatforms` array for tools that don't ship a build for every platform (tflint, for example, has no `windows-arm64` release); listed platforms must be ABSENT from `sha256` and runtime resolve/install throws `AvmToolException` (AVM1012) when the current host matches.
