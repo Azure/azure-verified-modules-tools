@@ -120,7 +120,7 @@ Describe 'Invoke-AvmForkPrE2eHandoff' {
 
     It 'routes the shared CLI verb and WhatIf without making writes' {
         InModuleScope Avm.Authoring {
-            $null = Invoke-Avm 'fork-pr' 'e2e-handoff' '--repository' 'Azure/bicep-registry-modules' `
+            $null = Invoke-Avm 'release-branch' '--repository' 'Azure/bicep-registry-modules' `
                 '--pull-request' '123' '--reviewed-head-commit' $script:scenario.Pr.head.sha '--whatif'
             @($script:scenario.Calls | Where-Object Method -NE 'GET').Count | Should -Be 0
             @($script:scenario.Calls | Where-Object Method -EQ 'GET').Count | Should -Be 3

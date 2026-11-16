@@ -119,7 +119,7 @@ that can access credentials. Restrict write access to the release branch and
 review any later changes. Use the existing authenticated GitHub CLI session:
 
 ```powershell
-avm fork-pr e2e-handoff `
+avm release-branch `
   --repository Azure/example `
   --pull-request 123 `
   --reviewed-head-commit $reviewedSha `

@@ -24,7 +24,7 @@ Inspect their state before recovering manually; do not blindly rerun.
 
 ## CLI commands
 
-- `avm fork-pr e2e-handoff`
+- `avm release-branch`
 
 ## Syntax
 
@@ -101,7 +101,7 @@ Invoke-AvmForkPrE2eHandoff `
 ### EXAMPLE 2
 
 ```powershell
-avm fork-pr e2e-handoff `
+avm release-branch `
     --repository Azure/example `
     --pull-request 123 `
     --reviewed-head-commit $reviewedSha

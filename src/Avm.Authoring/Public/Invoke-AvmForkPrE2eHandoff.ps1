@@ -48,7 +48,7 @@ function Invoke-AvmForkPrE2eHandoff {
             -WhatIf
 
     .EXAMPLE
-        avm fork-pr e2e-handoff `
+        avm release-branch `
             --repository Azure/example `
             --pull-request 123 `
             --reviewed-head-commit $reviewedSha

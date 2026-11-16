@@ -50,7 +50,7 @@ function Get-AvmVerbRegistry {
             Summary = 'Initialize a local Bicep module, or create and set up a Terraform module repository (resumable).'
         }
         [pscustomobject]@{
-            Path    = [string[]]@('fork-pr', 'e2e-handoff')
+            Path    = [string[]]@('release-branch')
             Cmdlet  = 'Invoke-AvmForkPrE2eHandoff'
             Summary = 'Prepare a reviewed external fork PR for credentialed E2E testing.'
         }
