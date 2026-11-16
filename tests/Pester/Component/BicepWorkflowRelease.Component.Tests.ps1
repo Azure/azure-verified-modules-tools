@@ -5,6 +5,7 @@ BeforeAll {
     $script:repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
     Import-Module (Join-Path $script:repoRoot 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
     . (Join-Path $PSScriptRoot '..' '..' '..' 'scripts' 'bicep-workflows' 'Release.ps1')
+    . (Join-Path $PSScriptRoot '..' '..' '..' 'scripts' 'bicep-workflows' 'Invoke-AvmBicepReleaseAudit.ps1')
     $script:savedEnvironment = @{}
     foreach ($name in @('GITHUB_REPOSITORY', 'GITHUB_REF', 'GITHUB_TOKEN')) {
         $script:savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
@@ -275,6 +276,7 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
         $null = Invoke-AvmReleaseFixtureGit -Arguments @('init', '--quiet', '--initial-branch=main')
         $null = Invoke-AvmReleaseFixtureGit -Arguments @('config', 'core.autocrlf', 'false')
         $null = Invoke-AvmReleaseFixtureGit -Arguments @('remote', 'add', 'origin', 'https://github.com/Azure/bicep-registry-modules')
+        $null = Invoke-AvmReleaseFixtureGit -Arguments @('commit', '--quiet', '--allow-empty', '-m', 'empty baseline')
         foreach ($path in @($script:modulePath, "$script:modulePath/child")) {
             Set-AvmReleaseFixtureFile -Path "$path/main.bicep" -Value "metadata name = 'fixture'"
             Set-AvmReleaseFixtureFile -Path "$path/main.json" -Value '{"resources":[]}'
@@ -286,17 +288,29 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
         $script:releaseTarget = $script:initialReleaseCommit
     }
 
-    It 'finds pending publishable changes older than the latest main commit' {
+    It 'does not select older pending changes for an unrelated manual target' {
         Set-AvmReleaseFixtureFile -Path "$script:modulePath/main.json" -Value '{"resources":[{}]}'
         $null = New-AvmReleaseFixtureCommit -Message 'unreleased compiled change'
         Set-AvmReleaseFixtureFile -Path "$script:modulePath/README.md" -Value 'Later documentation.'
         $script:releaseTarget = New-AvmReleaseFixtureCommit -Message 'later unrelated change'
         $matrix = Initialize-AvmWorkflowReleaseMatrix -Root $script:releaseRoot -EventName workflow_dispatch -TargetCommit $script:releaseTarget
-        $matrix.include.modulePath | Should -Be @($script:modulePath)
+        $matrix.include | Should -HaveCount 0
         $tags = @(Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
                 -TargetCommit $script:releaseTarget -PendingRelease -WhatIf)
         $tags.Tag | Should -Be @("$script:modulePath/1.2.3")
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('push', 'tag') }
+    }
+
+    It 'does not contact remote tags when the selected range has no publishable changes' {
+        Set-AvmReleaseFixtureFile -Path "$script:modulePath/README.md" -Value 'Documentation only.'
+        $script:releaseTarget = New-AvmReleaseFixtureCommit -Message 'documentation'
+        Mock Invoke-AvmProcess -ModuleName Avm.Authoring { throw 'Unexpected remote lookup.' } -ParameterFilter {
+            $ArgumentList[0] -eq 'ls-remote'
+        }
+        (Initialize-AvmWorkflowReleaseMatrix -Root $script:releaseRoot -EventName push `
+                -TargetCommit $script:releaseTarget -BaseCommit $script:initialReleaseCommit).include | Should -HaveCount 0
+        @(Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
+                -TargetCommit $script:releaseTarget -BaseCommit $script:initialReleaseCommit -PendingRelease -WhatIf) | Should -HaveCount 0
     }
 
     It 'retries the historical target against release tags without including later main changes' {
@@ -364,7 +378,7 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
                 -TargetCommit $script:releaseTarget -PendingRelease -WhatIf) | Should -HaveCount 0
     }
 
-    It 'releases a pending child without re-releasing its already released parent' {
+    It 'leaves an older pending child outside a later manual release selection' {
         Set-AvmReleaseFixtureFile -Path "$script:modulePath/child/main.json" -Value '{"resources":[{}]}'
         $null = New-AvmReleaseFixtureCommit -Message 'pending child change'
         Set-AvmReleaseFixtureFile -Path "$script:modulePath/main.json" -Value '{"resources":[{}]}'
@@ -374,7 +388,7 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
                 -TargetCommit $script:releaseTarget -PendingRelease -WhatIf)
         $tags.Tag | Should -Be @("$script:modulePath/child/1.2.5")
         (Initialize-AvmWorkflowReleaseMatrix -Root $script:releaseRoot -EventName workflow_dispatch `
-                -TargetCommit $script:releaseTarget).include.modulePath | Should -Be @($script:modulePath)
+                -TargetCommit $script:releaseTarget).include | Should -HaveCount 0
     }
 
     It 'orders independently pending children before their parent and resets a changed minor version' {
@@ -396,6 +410,26 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
         (Initialize-AvmWorkflowReleaseMatrix -Root $script:releaseRoot -EventName push `
                 -TargetCommit $script:releaseTarget -BaseCommit $script:initialReleaseCommit).include.modulePath |
             Should -Be @($script:modulePath)
+    }
+
+    It 'retries the original multi-commit range without including an older pending descendant' {
+        Set-AvmReleaseFixtureFile -Path "$script:modulePath/child/main.json" -Value '{"resources":[{"older":true}]}'
+        $before = New-AvmReleaseFixtureCommit -Message 'older pending child'
+        Set-AvmReleaseFixtureFile -Path "$script:modulePath/main.json" -Value '{"resources":[{"first":true}]}'
+        $null = New-AvmReleaseFixtureCommit -Message 'first push commit'
+        Set-AvmReleaseFixtureFile -Path "$script:modulePath/main.json" -Value '{"resources":[{"second":true}]}'
+        Set-AvmReleaseFixtureChangelog -ModulePath $script:modulePath -Version '1.2.3'
+        $script:releaseTarget = New-AvmReleaseFixtureCommit -Message 'last push commit'
+        $matrix = Initialize-AvmWorkflowReleaseMatrix -Root $script:releaseRoot -EventName workflow_dispatch `
+            -TargetCommit $script:releaseTarget -BaseCommit $before
+        $matrix.baseCommit | Should -BeExactly $before
+        $matrix.include.modulePath | Should -Be @($script:modulePath)
+        $tags = @(Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
+                -TargetCommit $script:releaseTarget -BaseCommit $before -PendingRelease -RequireChangelog -WhatIf)
+        $tags.Tag | Should -Be @("$script:modulePath/1.2.3")
+        $script:releaseTags["$script:modulePath/1.2.3"] = $script:releaseTarget
+        (Initialize-AvmWorkflowReleaseMatrix -Root $script:releaseRoot -EventName workflow_dispatch `
+                -TargetCommit $script:releaseTarget -BaseCommit $before).include | Should -HaveCount 0
     }
 
     It 'fails on unavailable or invalid release history rather than returning a no-op (<Failure>)' -ForEach @(
@@ -430,7 +464,7 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
 
     It 'rejects missing push history and unsupported or nonupstream contexts without publication' {
         { Initialize-AvmWorkflowReleaseMatrix -Root $script:releaseRoot -EventName push -TargetCommit $script:releaseTarget } |
-            Should -Throw '*full commit identifiers*'
+            Should -Throw '*full base commit identifier*'
         { Initialize-AvmWorkflowReleaseMatrix -Root $script:releaseRoot -EventName pull_request -TargetCommit $script:releaseTarget } |
             Should -Throw
         $env:GITHUB_REF = 'refs/heads/feature'
@@ -454,12 +488,61 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
                 -TargetCommit $script:releaseTarget } | Should -Throw '*Missing version*'
     }
 
-    It 'does not allow a pending release to force a module or override its tag baseline' {
+    It 'does not allow a pending release to force an unchanged module' {
         { Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
-                -TargetCommit $script:releaseTarget -PendingRelease -Force -WhatIf } | Should -Throw '*cannot override*'
-        { Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
-                -TargetCommit $script:releaseTarget -PendingRelease -BaseCommit $script:initialReleaseCommit -WhatIf } |
-            Should -Throw '*cannot override*'
+                -TargetCommit $script:releaseTarget -PendingRelease -Force -WhatIf } | Should -Throw '*cannot force*'
+    }
+
+    It 'releases only the selected change and audits an unrelated pending child' {
+        Set-AvmReleaseFixtureFile -Path "$script:modulePath/child/main.json" -Value '{"resources":[{"older":true}]}'
+        $before = New-AvmReleaseFixtureCommit -Message 'older pending child'
+        Set-AvmReleaseFixtureFile -Path "$script:modulePath/main.json" -Value '{"resources":[{"current":true}]}'
+        Set-AvmReleaseFixtureChangelog -ModulePath $script:modulePath -Version '1.2.3'
+        $script:releaseTarget = New-AvmReleaseFixtureCommit -Message 'current parent release'
+
+        $matrix = Initialize-AvmWorkflowReleaseMatrix -Root $script:releaseRoot -EventName push `
+            -TargetCommit $script:releaseTarget -BaseCommit $before
+        $matrix.include.modulePath | Should -Be @($script:modulePath)
+        $tags = @(Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
+                -TargetCommit $script:releaseTarget -BaseCommit $before -PendingRelease -RequireChangelog -WhatIf)
+        $tags.Tag | Should -Be @("$script:modulePath/1.2.3")
+        $auditOutput = [Collections.Generic.List[string]]::new()
+        try {
+            Invoke-AvmBicepReleaseAudit -Root $script:releaseRoot -TargetCommit $script:releaseTarget |
+                ForEach-Object { $auditOutput.Add($_) }
+            throw 'The audit should have failed.'
+        }
+        catch {
+            $_.Exception.Message | Should -Match 'audit found 1 module failure'
+        }
+        ($auditOutput -join "`n") | Should -Match ([regex]::Escape("CHANGELOG.md for $script:modulePath/child release 1.2.5"))
+        ($auditOutput -join "`n") | Should -Match '2 pending; 1 failed'
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('push', 'tag') }
+    }
+
+    It 'reports an empty pending audit without mutations' {
+        $output = @(Invoke-AvmBicepReleaseAudit -Root $script:releaseRoot -TargetCommit $script:releaseTarget)
+        $output[-1] | Should -Match '2 versioned modules; 0 pending; 0 failed'
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('push', 'tag') }
+    }
+
+    It 'reports every failing pending module before failing the audit' {
+        foreach ($path in @($script:modulePath, "$script:modulePath/child")) {
+            Set-AvmReleaseFixtureFile -Path "$path/main.json" -Value '{"resources":[{}]}'
+        }
+        $script:releaseTarget = New-AvmReleaseFixtureCommit -Message 'missing notes for two modules'
+        $output = [Collections.Generic.List[string]]::new()
+        try {
+            Invoke-AvmBicepReleaseAudit -Root $script:releaseRoot -TargetCommit $script:releaseTarget |
+                ForEach-Object { $output.Add($_) }
+            throw 'The audit should have failed.'
+        }
+        catch {
+            $_.Exception.Message | Should -Match 'audit found 2 module failure'
+        }
+        ($output -join "`n") | Should -Match ([regex]::Escape("CHANGELOG.md for $script:modulePath release 1.2.3"))
+        ($output -join "`n") | Should -Match ([regex]::Escape("CHANGELOG.md for $script:modulePath/child release 1.2.5"))
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('push', 'tag') }
     }
 
     It 'tags the exact preflighted version with valid notes in <Mode> mode' -ForEach @(

@@ -1,0 +1,44 @@
+name: 'Repos: Bicep Release Audit'
+
+on:
+  schedule:
+    - cron: '47 5 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bicep-release-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Audit pending Bicep releases
+    if: github.repository == 'Azure/azure-verified-modules-tools'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Checkout Bicep registry
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Azure/bicep-registry-modules
+          ref: main
+          path: bicep-source
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Audit release readiness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module (Join-Path $env:GITHUB_WORKSPACE 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -ErrorAction Stop
+          . (Join-Path $env:GITHUB_WORKSPACE 'scripts' 'bicep-workflows' 'Invoke-AvmBicepReleaseAudit.ps1')
+          $root = Join-Path $env:GITHUB_WORKSPACE 'bicep-source'
+          $head = Invoke-AvmWorkflowPackagePrivate -Name Invoke-AvmBicepWorkflowGit -Parameters @{
+            Root = $root; Arguments = @('rev-parse', 'HEAD')
+          }
+          Invoke-AvmBicepReleaseAudit -Root $root -TargetCommit $head.StdOut.Trim()

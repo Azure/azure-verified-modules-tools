@@ -304,7 +304,10 @@ function Get-AvmBicepWorkflowPendingReleasePlanInternal {
     param(
         [Parameter(Mandatory)] [string] $Root,
         [Parameter(Mandatory)] [string] $ModulePath,
-        [Parameter(Mandatory)] [string] $TargetCommit
+        [Parameter(Mandatory)] [string] $TargetCommit,
+        [string] $SelectionBaseCommit,
+        [switch] $ExactModule,
+        [Collections.IDictionary] $RemoteTags
     )
 
     if ($TargetCommit -cnotmatch '^[0-9a-f]{40}$') {
@@ -315,14 +318,25 @@ function Get-AvmBicepWorkflowPendingReleasePlanInternal {
     if ($shallow.StdOut.Trim() -cne 'false') {
         throw [InvalidOperationException]::new('Pending release discovery requires complete Git history.')
     }
-    $files = Invoke-AvmBicepWorkflowGit -Root $Root -Arguments @('ls-tree', '-r', '--name-only', $TargetCommit, '--', $ModulePath)
-    $paths = @($files.StdOut -split '\r?\n' | Where-Object { $_ -cmatch '/main\.json$' } |
-            ForEach-Object { $_.Substring(0, $_.LastIndexOf('/')) } |
-            Where-Object {
-                Test-Path -LiteralPath (Join-Path -Path $Root -ChildPath $_ -AdditionalChildPath 'version.json') -PathType Leaf
-            } |
-            Sort-Object @{ Expression = { $_.Length }; Descending = $true }, @{ Expression = { $_ } })
-    $tags = Get-AvmBicepWorkflowRemoteTags -Root $Root -Pattern "$ModulePath/*"
+    if ($ExactModule) {
+        $paths = @($ModulePath)
+    }
+    else {
+        $files = Invoke-AvmBicepWorkflowGit -Root $Root -Arguments @('ls-tree', '-r', '--name-only', $TargetCommit, '--', $ModulePath)
+        $paths = @($files.StdOut -split '\r?\n' | Where-Object { $_ -cmatch '/main\.json$' } |
+                ForEach-Object { $_.Substring(0, $_.LastIndexOf('/')) } |
+                Where-Object { Test-Path -LiteralPath (Join-Path -Path $Root -ChildPath $_ -AdditionalChildPath 'version.json') -PathType Leaf } |
+                Sort-Object @{ Expression = { $_.Length }; Descending = $true }, @{ Expression = { $_ } })
+    }
+    if ($SelectionBaseCommit) {
+        $selected = @(Get-AvmBicepWorkflowPublishableChangesInternal -Root $Root -ModulePath $ModulePath `
+                -TargetCommit $TargetCommit -BaseCommit $SelectionBaseCommit)
+        $paths = @($paths | Where-Object { $_ -cin $selected })
+    }
+    if ($paths.Count -eq 0) { return }
+    $tags = if ($PSBoundParameters.ContainsKey('RemoteTags')) { $RemoteTags } else {
+        Get-AvmBicepWorkflowRemoteTags -Root $Root -Pattern "$ModulePath/*"
+    }
     $plan = [Collections.Generic.List[object]]::new()
     foreach ($relative in $paths) {
         $pattern = "^$([regex]::Escape($relative))/\d+\.\d+\.\d+$"
@@ -544,14 +558,18 @@ function Initialize-AvmBicepReleaseMatrixInternal {
     if (-not [string]::IsNullOrWhiteSpace($dirty.StdOut)) {
         throw [InvalidOperationException]::new('Release discovery requires module files unchanged from the target commit.')
     }
-    if ($EventName -ceq 'push') {
-        $paths = @(Get-AvmBicepWorkflowPublishableChangesInternal -Root $Root -ModulePath avm `
-                -TargetCommit $TargetCommit -BaseCommit $BaseCommit)
+    if ($EventName -ceq 'workflow_dispatch' -and [string]::IsNullOrEmpty($BaseCommit)) {
+        $BaseCommit = (Invoke-AvmBicepWorkflowGit -Root $Root -Arguments @('rev-parse', '--verify', "${TargetCommit}^")).StdOut.Trim()
     }
-    else {
-        $paths = @(Get-AvmBicepWorkflowPendingReleasePlanInternal -Root $Root -ModulePath avm -TargetCommit $TargetCommit |
-                ForEach-Object { $_.ModulePath })
+    if ($BaseCommit -cnotmatch '^[0-9a-f]{40}$') {
+        throw [ArgumentException]::new('Release selection requires a full base commit identifier.')
     }
+    $ancestor = Invoke-AvmBicepWorkflowGit -Root $Root -Arguments @('merge-base', '--is-ancestor', $BaseCommit, $TargetCommit) -AllowFailure
+    if ($ancestor.ExitCode -ne 0) {
+        throw [InvalidOperationException]::new('The release selection base must be an ancestor of the target.')
+    }
+    $paths = @(Get-AvmBicepWorkflowPendingReleasePlanInternal -Root $Root -ModulePath avm `
+            -TargetCommit $TargetCommit -SelectionBaseCommit $BaseCommit | ForEach-Object { $_.ModulePath })
     $modules = [Collections.Generic.SortedSet[string]]::new([StringComparer]::Ordinal)
     foreach ($path in $paths) {
         $match = [regex]::Match($path, '^(avm/(?:res|ptn|utl)/[a-z0-9-]+/[a-z0-9-]+)(?:/|$)')
@@ -563,7 +581,7 @@ function Initialize-AvmBicepReleaseMatrixInternal {
     if ($modules.Count -gt 256) {
         throw [InvalidOperationException]::new('The release selection exceeds the 256-job matrix limit.')
     }
-    return @{ include = @(foreach ($path in $modules) { @{ modulePath = $path } }) }
+    return @{ baseCommit = $BaseCommit; include = @(foreach ($path in $modules) { @{ modulePath = $path } }) }
 }
 
 function Set-AvmBicepReleaseTagsInternal {
@@ -591,8 +609,8 @@ function Set-AvmBicepReleaseTagsInternal {
     if ($IncludeAllVersionedModules -and -not $WhatIfPreference) {
         throw [ArgumentException]::new('The missing-base all-module fallback is preview-only.')
     }
-    if ($PendingRelease -and ($Force -or $IncludeAllVersionedModules -or $BaseCommit)) {
-        throw [ArgumentException]::new('Pending releases cannot override per-module baselines or force unchanged modules.')
+    if ($PendingRelease -and ($Force -or $IncludeAllVersionedModules)) {
+        throw [ArgumentException]::new('Pending releases cannot force unchanged modules.')
     }
     Assert-AvmBicepWorkflowReleaseContext -Root $Root -TargetCommit $TargetCommit
     $module = Resolve-AvmBicepWorkflowPath -Root $Root -RelativePath $ModulePath
@@ -610,6 +628,12 @@ function Set-AvmBicepReleaseTagsInternal {
             $null = Invoke-AvmBicepWorkflowGit -Root $Root -Arguments @('fetch', '--no-tags', 'origin', $BaseCommit) -Remote
             $null = Invoke-AvmBicepWorkflowGit -Root $Root -Arguments @('cat-file', '-e', "${BaseCommit}^{commit}")
         }
+        if ($PendingRelease) {
+            $ancestor = Invoke-AvmBicepWorkflowGit -Root $Root -Arguments @('merge-base', '--is-ancestor', $BaseCommit, $TargetCommit) -AllowFailure
+            if ($ancestor.ExitCode -ne 0) {
+                throw [InvalidOperationException]::new('The release selection base must be an ancestor of the target.')
+            }
+        }
     }
     $candidates = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     if ($IncludeAllVersionedModules) {
@@ -619,7 +643,7 @@ function Set-AvmBicepReleaseTagsInternal {
             }
         }
     }
-    elseif (-not [string]::IsNullOrEmpty($BaseCommit)) {
+    elseif (-not $PendingRelease -and -not [string]::IsNullOrEmpty($BaseCommit)) {
         foreach ($relative in Get-AvmBicepWorkflowPublishableChangesInternal -Root $Root -ModulePath $ModulePath `
                 -BaseCommit $BaseCommit -TargetCommit $TargetCommit) {
             $null = $candidates.Add($relative)
@@ -632,47 +656,15 @@ function Set-AvmBicepReleaseTagsInternal {
         $null = $candidates.Add($ModulePath)
     }
     $plan = if ($PendingRelease) {
-        @(Get-AvmBicepWorkflowPendingReleasePlanInternal -Root $Root -ModulePath $ModulePath -TargetCommit $TargetCommit)
+        @(Get-AvmBicepWorkflowPendingReleasePlanInternal -Root $Root -ModulePath $ModulePath `
+                -TargetCommit $TargetCommit -SelectionBaseCommit $BaseCommit)
     }
     else {
         @(foreach ($relative in @($candidates | Sort-Object @{ Expression = { $_.Length }; Descending = $true }, @{ Expression = { $_ } })) {
                 [pscustomobject]@{ ModulePath = $relative; BaseCommit = $BaseCommit }
             })
     }
-    $proposals = [Collections.Generic.List[object]]::new()
-    foreach ($candidate in $plan) {
-        $relative = $candidate.ModulePath
-        $candidateBase = $candidate.BaseCommit
-        $versionPath = Resolve-AvmBicepWorkflowPath -Root $Root -RelativePath "$relative/version.json"
-        $version = (ConvertFrom-Json -InputObject (Get-Content -LiteralPath $versionPath -Raw)).version
-        if ($version -isnot [string] -or $version -cnotmatch '^\d+\.\d+$') {
-            throw [ArgumentException]::new("The version file for $relative must contain MAJOR.MINOR.")
-        }
-        $remoteTags = Get-AvmBicepWorkflowRemoteTags -Root $Root -Pattern "$relative/$version.*"
-        $valid = @($remoteTags.Keys | Where-Object { $_ -cmatch "^$([regex]::Escape("$relative/$version."))\d+$" })
-        $existing = @($valid | Where-Object { $remoteTags[$_] -ceq $TargetCommit } |
-                Sort-Object { [version]($_.Substring($_.LastIndexOf('/') + 1)) } -Descending)
-        $reused = $existing.Count -gt 0
-        if ($reused) { $tag = $existing[0] }
-        else {
-            $changedVersion = $false
-            if (-not [string]::IsNullOrEmpty($candidateBase)) {
-                $previous = Invoke-AvmBicepWorkflowGit -Root $Root -Arguments @('show', "${candidateBase}:$relative/version.json") -AllowFailure
-                $changedVersion = $previous.ExitCode -ne 0 -or (ConvertFrom-Json -InputObject $previous.StdOut).version -cne $version
-            }
-            $patch = 0
-            if (-not $changedVersion -and $valid.Count -gt 0) {
-                $patch = 1 + ($valid | ForEach-Object { [int]$_.Substring($_.LastIndexOf('.') + 1) } |
-                        Measure-Object -Maximum).Maximum
-            }
-            $tag = "$relative/$version.$patch"
-        }
-        $null = Invoke-AvmBicepWorkflowGit -Root $Root -Arguments @('check-ref-format', "refs/tags/$tag")
-        if ($remoteTags.ContainsKey($tag) -and $remoteTags[$tag] -cne $TargetCommit) {
-            throw [InvalidOperationException]::new("Release tag $tag already points to a different commit.")
-        }
-        $proposals.Add([pscustomobject]@{ Module = $relative; Tag = $tag; Commit = $TargetCommit; Reused = $reused; Created = $false })
-    }
+    $proposals = @(Get-AvmBicepWorkflowReleaseProposalsInternal -Root $Root -TargetCommit $TargetCommit -Plan @($plan))
     if ($RequireChangelog) {
         foreach ($proposal in $proposals) {
             Assert-AvmBicepWorkflowReleaseChangelog -Root $Root -ModulePath $proposal.Module `
@@ -718,6 +710,55 @@ function Set-AvmBicepReleaseTagsInternal {
             }
         }
         $proposal.Created = $true
+    }
+    return [pscustomobject[]]$proposals
+}
+
+function Get-AvmBicepWorkflowReleaseProposalsInternal {
+    [CmdletBinding()]
+    [OutputType([pscustomobject[]])]
+    param(
+        [Parameter(Mandatory)] [string] $Root,
+        [Parameter(Mandatory)] [string] $TargetCommit,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Plan,
+        [Collections.IDictionary] $RemoteTags
+    )
+
+    $proposals = [Collections.Generic.List[object]]::new()
+    foreach ($candidate in $plan) {
+        $relative = $candidate.ModulePath
+        $candidateBase = $candidate.BaseCommit
+        $versionPath = Resolve-AvmBicepWorkflowPath -Root $Root -RelativePath "$relative/version.json"
+        $version = (ConvertFrom-Json -InputObject (Get-Content -LiteralPath $versionPath -Raw)).version
+        if ($version -isnot [string] -or $version -cnotmatch '^\d+\.\d+$') {
+            throw [ArgumentException]::new("The version file for $relative must contain MAJOR.MINOR.")
+        }
+        $tags = if ($PSBoundParameters.ContainsKey('RemoteTags')) { $RemoteTags } else {
+            Get-AvmBicepWorkflowRemoteTags -Root $Root -Pattern "$relative/$version.*"
+        }
+        $valid = @($tags.Keys | Where-Object { $_ -cmatch "^$([regex]::Escape("$relative/$version."))\d+$" })
+        $existing = @($valid | Where-Object { $tags[$_] -ceq $TargetCommit } |
+                Sort-Object { [version]($_.Substring($_.LastIndexOf('/') + 1)) } -Descending)
+        $reused = $existing.Count -gt 0
+        if ($reused) { $tag = $existing[0] }
+        else {
+            $changedVersion = $false
+            if (-not [string]::IsNullOrEmpty($candidateBase)) {
+                $previous = Invoke-AvmBicepWorkflowGit -Root $Root -Arguments @('show', "${candidateBase}:$relative/version.json") -AllowFailure
+                $changedVersion = $previous.ExitCode -ne 0 -or (ConvertFrom-Json -InputObject $previous.StdOut).version -cne $version
+            }
+            $patch = 0
+            if (-not $changedVersion -and $valid.Count -gt 0) {
+                $patch = 1 + ($valid | ForEach-Object { [int]$_.Substring($_.LastIndexOf('.') + 1) } |
+                        Measure-Object -Maximum).Maximum
+            }
+            $tag = "$relative/$version.$patch"
+        }
+        $null = Invoke-AvmBicepWorkflowGit -Root $Root -Arguments @('check-ref-format', "refs/tags/$tag")
+        if ($tags.Contains($tag) -and $tags[$tag] -cne $TargetCommit) {
+            throw [InvalidOperationException]::new("Release tag $tag already points to a different commit.")
+        }
+        $proposals.Add([pscustomobject]@{ Module = $relative; Tag = $tag; Commit = $TargetCommit; Reused = $reused; Created = $false })
     }
     return $proposals.ToArray()
 }

@@ -15,6 +15,10 @@ on:
         description: 'Manual retry target: full lowercase commit SHA on upstream main (blank = triggering SHA).'
         type: string
         default: ''
+      baseCommit:
+        description: 'Manual retry comparison base for a multi-commit push (blank = target first parent).'
+        type: string
+        default: ''
 
 permissions: {}
 
@@ -50,6 +54,7 @@ jobs:
       moduleMatrix: ${{ steps.initialize.outputs.moduleMatrix }}
       hasModules: ${{ steps.initialize.outputs.hasModules }}
       targetCommit: ${{ steps.target.outputs.sha }}
+      baseCommit: ${{ steps.initialize.outputs.baseCommit }}
     steps:
       - name: Validate release target
         id: target
@@ -97,6 +102,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_COMMIT: ${{ github.event.before }}
+          REQUESTED_BASE: ${{ inputs.baseCommit }}
           TARGET_COMMIT: ${{ steps.target.outputs.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -105,14 +111,24 @@ jobs:
           if ($capabilities.BicepWorkflowOrchestration -isnot [int] -or $capabilities.BicepWorkflowOrchestration -ne 1) {
             throw 'The installed Avm.Authoring package does not provide BicepWorkflowOrchestration = 1.'
           }
+          if ($capabilities.BicepReleaseSelection -isnot [int] -or $capabilities.BicepReleaseSelection -ne 1) {
+            throw 'The installed Avm.Authoring package does not provide BicepReleaseSelection = 1.'
+          }
           $parameters = @{
             Root = $env:GITHUB_WORKSPACE
             EventName = $env:EVENT_NAME
             TargetCommit = $env:TARGET_COMMIT
             SkipModuleVersionCheck = $true
           }
-          if ($env:EVENT_NAME -ceq 'push') { $parameters.BaseCommit = $env:BASE_COMMIT }
+          if ($env:EVENT_NAME -ceq 'push') {
+            if ($env:REQUESTED_BASE) { throw 'baseCommit is only supported for manual releases.' }
+            $parameters.BaseCommit = $env:BASE_COMMIT
+          }
+          elseif ($env:REQUESTED_BASE) { $parameters.BaseCommit = $env:REQUESTED_BASE }
           $matrix = Initialize-AvmBicepReleaseMatrix @parameters
+          Write-Output "Release selection: $($matrix.BaseCommit)..$env:TARGET_COMMIT"
+          if (@($matrix.Include).Count -eq 0) { Write-Output 'No pending publishable modules in the selected range.' }
+          "baseCommit=$($matrix.BaseCommit)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           $value = ConvertTo-Json -InputObject @{ include = @($matrix.Include | ForEach-Object {
                 @{ modulePath = $_.ModulePath }
               }) } -Depth 20 -Compress
@@ -133,6 +149,7 @@ jobs:
     with:
       modulePath: ${{ matrix.modulePath }}
       targetCommit: ${{ needs.initialize.outputs.targetCommit }}
+      baseCommit: ${{ needs.initialize.outputs.baseCommit }}
       pendingRelease: true
       requireChangelog: true
       requirePublishApproval: true

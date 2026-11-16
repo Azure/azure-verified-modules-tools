@@ -5,10 +5,9 @@ function Initialize-AvmBicepReleaseMatrix {
 
     .DESCRIPTION
         Verifies the exact upstream registry main checkout and push remote before
-        selecting release roots. Push mode discovers changed publishable modules
-        from BaseCommit. Manual mode discovers pending releases from complete
-        tag history. The result contains top-level module roots only; tag
-        creation later preserves independent child and parent baselines.
+        selecting release roots with publishable changes since BaseCommit.
+        Manual mode defaults to the target's first parent when no base is
+        provided. Tag creation preserves independent child and parent baselines.
 
     .PARAMETER Root
         Existing filesystem repository root.
@@ -20,13 +19,14 @@ function Initialize-AvmBicepReleaseMatrix {
         Full SHA-1 release target checked out at Root.
 
     .PARAMETER BaseCommit
-        Full SHA-1 push comparison commit.
+        Full SHA-1 comparison commit. Required for push; optional for a manual
+        retry of a release covering more than one commit.
 
     .PARAMETER SkipModuleVersionCheck
         Skip the PowerShell Gallery version check for source or offline callers.
 
     .OUTPUTS
-        PSCustomObject with an Include array of top-level module paths.
+        PSCustomObject with BaseCommit and an Include array of top-level module paths.
 
     .EXAMPLE
         PS> Initialize-AvmBicepReleaseMatrix -Root $repo -EventName workflow_dispatch -TargetCommit $sha
@@ -48,6 +48,7 @@ function Initialize-AvmBicepReleaseMatrix {
     $null = $parameters.Remove('SkipModuleVersionCheck')
     $matrix = Initialize-AvmBicepReleaseMatrixInternal @parameters
     return [pscustomobject]@{
-        Include = @($matrix.include | ForEach-Object { [pscustomobject]@{ ModulePath = $_.modulePath } })
+        BaseCommit = $matrix.baseCommit
+        Include    = @($matrix.include | ForEach-Object { [pscustomobject]@{ ModulePath = $_.modulePath } })
     }
 }

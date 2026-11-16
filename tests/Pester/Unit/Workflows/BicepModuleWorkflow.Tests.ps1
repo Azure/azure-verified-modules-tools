@@ -213,7 +213,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
                 @('authoringRef', 'authoringSource', 'initializeOnly')
             }
             else {
-                @('authoringRef', 'authoringSource', 'targetCommit')
+                @('authoringRef', 'authoringSource', 'baseCommit', 'targetCommit')
             }
             @($entrypoint.on.workflow_call.inputs.Keys | Sort-Object) | Should -Be $expectedInputs
             $entrypoint.on.workflow_call.inputs.authoringSource.default | Should -BeExactly 'gallery'
@@ -948,14 +948,25 @@ Describe 'Bicep release-tag safety contracts' {
         $release.jobs.release.with.pendingRelease | Should -BeTrue
         $release.jobs.release.with.requireChangelog | Should -BeTrue
         $release.jobs.release.with.requirePublishApproval | Should -BeTrue
-        $release.jobs.release.with.Contains('baseCommit') | Should -BeFalse
+        $release.jobs.release.with.baseCommit | Should -BeExactly '${{ needs.initialize.outputs.baseCommit }}'
         $runtime = $script:workflows['bicep-module-runtime-release']
         $runtime.on.workflow_call.inputs.pendingRelease.default | Should -BeFalse
         $runtime.on.workflow_call.inputs.requireChangelog.default | Should -BeFalse
         $tagging = $runtime.jobs.release.steps | Where-Object { $_.name -eq 'Create module release tags' }
         $tagging.env.PENDING_RELEASE | Should -BeExactly '${{ inputs.pendingRelease }}'
         $tagging.env.REQUIRE_CHANGELOG | Should -BeExactly '${{ inputs.requireChangelog }}'
+        $tagging.env.BASE_COMMIT | Should -BeExactly '${{ inputs.baseCommit }}'
         $tagging.run | Should -Match 'Set-AvmBicepReleaseTags'
+    }
+
+    It 'runs the backlog audit on its own read-only daily schedule' {
+        $audit = ConvertFrom-Yaml (Get-Content -LiteralPath (Join-Path $script:root '.github' 'workflows' 'bicep-release-audit.yml') -Raw)
+        $audit.on.schedule[0].cron | Should -BeExactly '47 5 * * *'
+        $audit.permissions.contents | Should -BeExactly 'read'
+        $audit.permissions.Count | Should -Be 1
+        $text = $audit | ConvertTo-Json -Depth 30
+        $text | Should -Not -Match 'id-token|contents.*write|GITHUB_TOKEN|Set-AvmBicepReleaseTags'
+        $audit.jobs.audit.steps[-1].run | Should -Match 'Invoke-AvmBicepReleaseAudit'
     }
 
     It 'preserves preview-only push behavior and explicit release approval' {
