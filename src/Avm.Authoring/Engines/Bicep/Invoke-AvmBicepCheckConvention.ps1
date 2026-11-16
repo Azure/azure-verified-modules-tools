@@ -5,7 +5,7 @@ function Invoke-AvmBicepCheckConvention {
 
     .DESCRIPTION
         Checks layout, versions, changelogs, compiled ARM templates, checked-in
-        main.json drift, e2e test sources, and workflows across root
+        main.json drift, e2e test sources, and applicable workflows across root
         and child modules without modifying them. The separate required docs
         step in pr-check checks README regeneration and render completeness.
 
@@ -193,9 +193,18 @@ function Invoke-AvmBicepCheckConvention {
         }
     }
     $repositoryRoot = if ($scopes.Count -gt 0) { $scopes[0].RepositoryRoot } else { $Context.Root }
+    $reservationMap = @(Get-ChildItem -LiteralPath $repositoryRoot -Force |
+            Where-Object { $_.Name -ieq '.reserved-test-subscriptions.json' }).Count -gt 0
     $workflows = @(foreach ($scope in $scopes) {
             if ($scope.IsTopLevel) {
-                [pscustomobject]@{ Scope = $scope; Input = Get-AvmBicepConventionWorkflowInput -Scope $scope }
+                $required = $false
+                if ($reservationMap) {
+                    $required = (Get-AvmBicepTestSubscriptionTag -RepositoryRoot $repositoryRoot -ModulePath $scope.ModuleRelativePath) -cne 'General'
+                }
+                $workflowInput = Get-AvmBicepConventionWorkflowInput -Scope $scope -Required:$required
+                if ($null -ne $workflowInput) {
+                    [pscustomobject]@{ Scope = $scope; Input = $workflowInput }
+                }
             }
         })
     $publication = if ($scopes.Count -gt 0) {

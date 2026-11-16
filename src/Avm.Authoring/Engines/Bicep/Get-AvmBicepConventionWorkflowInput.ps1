@@ -6,12 +6,15 @@ function Get-AvmBicepConventionWorkflowInput {
     .OUTPUTS
         pscustomobject with Path, FileName, Workflow (null when unusable), and
         Issues describing a missing, linked, mis-cased or unparsable file.
+        Returns no input when an optional workflow is absent.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)]
-        $Scope
+        $Scope,
+
+        [switch] $Required
     )
 
     Set-StrictMode -Version 3.0
@@ -33,6 +36,9 @@ function Get-AvmBicepConventionWorkflowInput {
     foreach ($segment in @('.github', 'workflows')) {
         $directoryEntries = @(Get-ChildItem -LiteralPath $parent -Force |
                 Where-Object { $_.Name -ieq $segment })
+        if ($directoryEntries.Count -eq 0 -and -not $Required) {
+            return
+        }
         if ($directoryEntries.Count -ne 1 -or -not $directoryEntries[0].PSIsContainer -or
             $directoryEntries[0].Name -cne $segment -or
             ($directoryEntries[0].Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
@@ -45,6 +51,9 @@ function Get-AvmBicepConventionWorkflowInput {
     }
     $files = @(Get-ChildItem -LiteralPath $directory -Force |
             Where-Object { $_.Name -ieq $fileName })
+    if ($files.Count -eq 0 -and -not $Required) {
+        return
+    }
     if ($files.Count -ne 1 -or $files[0].PSIsContainer -or $files[0].Name -cne $fileName -or
         ($files[0].Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
         $result.Issues = @(New-AvmBicepConventionIssue -Root $root -Path $path `
