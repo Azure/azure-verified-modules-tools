@@ -349,7 +349,8 @@ new AsyncFunction('github', 'core', 'context', script)(github, core, fixture.con
             } $script:releaseNode $script:releaseTargetHarness $environment
         }
         $script:releaseEntrypointEnvironment = @{}
-        foreach ($name in @('GITHUB_WORKSPACE', 'GITHUB_OUTPUT', 'RUNNER_TEMP', 'EVENT_NAME', 'BASE_COMMIT', 'REQUESTED_BASE', 'TARGET_COMMIT')) {
+        foreach ($name in @('GITHUB_WORKSPACE', 'GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY', 'RUNNER_TEMP', 'EVENT_NAME',
+                'BASE_COMMIT', 'REQUESTED_BASE', 'TARGET_COMMIT')) {
             $script:releaseEntrypointEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
         }
     }
@@ -387,8 +388,14 @@ function Write-AvmWorkflowOutput {
         $script:releaseEntrypointBootstraps = 0
         $script:releaseEntrypointImports = 0
         $script:releaseEntrypointInvocation = $null
+        $script:releaseModulePaths = @('avm/res/mock/widget')
+        $script:releasePlanTags = @{
+            'avm/res/mock/widget' = @('avm/res/mock/widget/child/1.2.5', 'avm/res/mock/widget/1.2.3')
+        }
+        $script:releasePlanCalls = [Collections.Generic.List[object]]::new()
         $env:GITHUB_WORKSPACE = $root
         $env:GITHUB_OUTPUT = Join-Path $root 'outputs'
+        $env:GITHUB_STEP_SUMMARY = Join-Path $root 'summary'
         $env:RUNNER_TEMP = $root
         $env:EVENT_NAME = 'workflow_dispatch'
         $env:BASE_COMMIT = ''
@@ -417,7 +424,20 @@ function Write-AvmWorkflowOutput {
             $script:releaseEntrypointInvocation = @{
                 Root = $Root; EventName = $EventName; TargetCommit = $TargetCommit; BaseCommit = $BaseCommit
             }
-            [pscustomobject]@{ BaseCommit = 'b' * 40; Include = @([pscustomobject]@{ ModulePath = 'avm/res/mock/widget' }) }
+            [pscustomobject]@{
+                BaseCommit = 'b' * 40
+                Include = @($script:releaseModulePaths | ForEach-Object { [pscustomobject]@{ ModulePath = $_ } })
+            }
+        }
+        Mock Set-AvmBicepReleaseTags {
+            $null = $script:releasePlanCalls.Add(@{
+                    ModulePath = $ModulePath
+                    BaseCommit = $BaseCommit
+                    TargetCommit = $TargetCommit
+                    PendingRelease = [bool]$PendingRelease
+                    RequireChangelog = [bool]$RequireChangelog
+                })
+            foreach ($tag in $script:releasePlanTags[$ModulePath]) { [pscustomobject]@{ Tag = $tag } }
         }
     }
 
@@ -430,9 +450,43 @@ function Write-AvmWorkflowOutput {
         $script:releaseEntrypointInvocation.EventName | Should -BeExactly 'workflow_dispatch'
         $script:releaseEntrypointInvocation.TargetCommit | Should -BeExactly ('a' * 40)
         $script:releaseEntrypointInvocation.BaseCommit | Should -BeNullOrEmpty
-        ($outputs.moduleMatrix | ConvertFrom-Json).include.modulePath | Should -BeExactly 'avm/res/mock/widget'
+        $matrixLine = @(Get-Content -LiteralPath $env:GITHUB_OUTPUT | Where-Object { $_.StartsWith('moduleMatrix=') })[0]
+        $releaseMatrix = $matrixLine.Substring('moduleMatrix='.Length) | ConvertFrom-Json
+        $releaseMatrix.include.modulePath | Should -BeExactly 'avm/res/mock/widget'
+        @(ConvertFrom-Json -InputObject $releaseMatrix.include[0].plannedTags) |
+            Should -Be $script:releasePlanTags['avm/res/mock/widget']
+        $releaseMatrix.include[0].releaseTagLabel |
+            Should -BeExactly ($script:releasePlanTags['avm/res/mock/widget'] -join ', ')
+        $summary = Get-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Raw
+        $summary | Should -Match ([regex]::Escape(
+                '| avm/res/mock/widget | avm/res/mock/widget/child/1.2.5, avm/res/mock/widget/1.2.3 |'))
+        $script:releasePlanCalls | Should -HaveCount 1
+        $script:releasePlanCalls[0].ModulePath | Should -BeExactly 'avm/res/mock/widget'
+        $script:releasePlanCalls[0].BaseCommit | Should -BeExactly ('b' * 40)
+        $script:releasePlanCalls[0].TargetCommit | Should -BeExactly ('a' * 40)
+        $script:releasePlanCalls[0].PendingRelease | Should -BeTrue
+        $script:releasePlanCalls[0].RequireChangelog | Should -BeFalse
         $outputs.hasModules | Should -BeExactly 'true'
         $outputs.baseCommit | Should -BeExactly ('b' * 40)
+    }
+
+    It 'lists every selected module and child tag in the selector summary' {
+        $secondModule = 'avm/res/mock/reserved'
+        $script:releaseModulePaths = @('avm/res/mock/widget', $secondModule)
+        $script:releasePlanTags[$secondModule] = @("$secondModule/2.0.0", "$secondModule/child/2.1.0")
+
+        . ([scriptblock]::Create($script:releaseEntrypoint.jobs.initialize.steps[-1].run))
+
+        $matrixLine = @(Get-Content -LiteralPath $env:GITHUB_OUTPUT | Where-Object { $_.StartsWith('moduleMatrix=') })[0]
+        $releaseMatrix = $matrixLine.Substring('moduleMatrix='.Length) | ConvertFrom-Json
+        $releaseMatrix.include | Should -HaveCount 2
+        $releaseMatrix.include.modulePath | Should -Be $script:releaseModulePaths
+        $summary = Get-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Raw
+        foreach ($modulePath in $script:releaseModulePaths) {
+            $tags = $script:releasePlanTags[$modulePath] -join ', '
+            $summary | Should -Match ([regex]::Escape("| $modulePath | $tags |"))
+        }
+        $script:releasePlanCalls | Should -HaveCount 2
     }
 
     It 'forwards the explicit push range instead of manual pending discovery input' {
@@ -461,7 +515,9 @@ function Write-AvmWorkflowOutput {
         $release.jobs.release.with.targetCommit | Should -BeExactly '${{ needs.initialize.outputs.targetCommit }}'
         $release.jobs.release.with.pendingRelease | Should -BeTrue
         $release.jobs.release.with.requireChangelog | Should -BeTrue
-        $release.jobs.release.with.requirePublishApproval | Should -BeTrue
+        $release.on.workflow_call.inputs.initializeOnly.default | Should -BeFalse
+        $release.on.workflow_call.outputs.moduleMatrix.value | Should -BeExactly '${{ jobs.initialize.outputs.moduleMatrix }}'
+        $release.jobs.release.if | Should -Match '!inputs.initializeOnly'
     }
 
     It 'accepts a <Selection> on current upstream main' -ForEach @(
