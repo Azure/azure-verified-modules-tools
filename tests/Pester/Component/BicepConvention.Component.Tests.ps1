@@ -581,15 +581,67 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $issue[0].Severity | Should -Be 'error'
     }
 
-    It 'reports a missing module workflow once for its top-level scope' {
+    It 'allows an ordinary module without a workflow and retains other checks' {
         $path = Join-Path $script:workingRoot '.github' 'workflows' 'avm.res.mock.widget.yml'
         Remove-Item -LiteralPath $path
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'pass' -Because (@($result.Issues | ForEach-Object Message) -join '; ')
+        @($result.Issues | Where-Object Code -EQ 'avm.bicep.workflow-file') | Should -HaveCount 0
+
+        [IO.File]::WriteAllText((Join-Path $script:modulePath 'version.json'), '{invalid')
+        $invalid = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $invalid.Status | Should -Be 'fail'
+        $invalid.Issues.Code | Should -Contain 'avm.bicep.version-invalid'
+    }
+
+    It 'requires a reserved module workflow once for its top-level scope' {
+        $path = Join-Path $script:workingRoot '.github' 'workflows' 'avm.res.mock.widget.yml'
+        Remove-Item -LiteralPath $path
+        [IO.File]::WriteAllText((Join-Path $script:workingRoot '.reserved-test-subscriptions.json'),
+            '{"avm/res/mock/widget":"Azure Local"}')
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
         $missing = @($result.Issues | Where-Object Code -EQ 'avm.bicep.workflow-file')
         $missing.Count | Should -Be 1
         $missing[0].File | Should -Be '.github/workflows/avm.res.mock.widget.yml'
         $result.Status | Should -Be 'fail'
+    }
+
+    It 'allows a missing workflow for an unmapped module when a reservation map exists' {
+        Remove-Item -LiteralPath (Join-Path $script:workingRoot '.github' 'workflows' 'avm.res.mock.widget.yml')
+        [IO.File]::WriteAllText((Join-Path $script:workingRoot '.reserved-test-subscriptions.json'),
+            '{"avm/res/mock/other":"Azure Local"}')
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'pass' -Because (@($result.Issues | ForEach-Object Message) -join '; ')
+    }
+
+    It 'allows an ordinary module without a workflows directory' {
+        $directory = Join-Path $script:workingRoot '.github' 'workflows'
+        Remove-Item -LiteralPath (Join-Path $directory 'avm.res.mock.widget.yml')
+        Remove-Item -LiteralPath $directory
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'pass' -Because (@($result.Issues | ForEach-Object Message) -join '; ')
+    }
+
+    It 'does not treat an invalid reservation map as an unreserved module' {
+        [IO.File]::WriteAllText((Join-Path $script:workingRoot '.reserved-test-subscriptions.json'), '{invalid')
+
+        { Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck } |
+            Should -Throw '*must contain valid UTF-8 JSON*'
+    }
+
+    It 'validates the contents of a reserved module workflow' {
+        [IO.File]::WriteAllText((Join-Path $script:workingRoot '.reserved-test-subscriptions.json'),
+            '{"avm/res/mock/widget":"Azure Local"}')
+        $path = Join-Path $script:workingRoot '.github' 'workflows' 'avm.res.mock.widget.yml'
+        [IO.File]::WriteAllText($path, 'on: [unterminated')
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain 'avm.bicep.workflow-parse'
     }
 
     It 'rejects malformed YAML without treating the workflow as checked' {
@@ -617,7 +669,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.Status | Should -Be 'fail'
     }
 
-    It 'checks each top-level workflow separately in a monorepo' {
+    It 'checks present ordinary and required reserved workflows separately in a monorepo' {
         $second = Join-Path $script:workingRoot 'avm' 'res' 'mock' 'gadget'
         Copy-Item -LiteralPath $script:modulePath -Destination $second -Recurse
         $workflowDirectory = Join-Path $script:workingRoot '.github' 'workflows'
@@ -625,6 +677,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $other = Join-Path $workflowDirectory 'avm.res.mock.gadget.yml'
         $content = [System.IO.File]::ReadAllText($first).Replace('widget', 'gadget')
         [System.IO.File]::WriteAllText($other, $content)
+        [IO.File]::WriteAllText((Join-Path $script:workingRoot '.reserved-test-subscriptions.json'),
+            '{"avm/res/mock/gadget":"Azure Local"}')
         $context = [pscustomobject]@{
             Kind = 'bicep-monorepo'; Root = $script:workingRoot; Ecosystem = 'bicep'
         }
