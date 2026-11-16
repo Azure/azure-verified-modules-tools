@@ -12,6 +12,7 @@ This reference is generated from the comment-based help on the public PowerShell
 | [Invoke-AvmTestIntegration](Invoke-AvmTestIntegration.md) | `avm test integration` | Run Bicep ARM validation/what-if or Terraform integration tests. |
 | [Invoke-AvmTestE2e](Invoke-AvmTestE2e.md) | `avm test e2e` | Run Bicep or Terraform deployment tests with ordinary cleanup. |
 | [Initialize-AvmModule](Initialize-AvmModule.md) | `avm init` | Initialize a Bicep module locally, or create and set up a Terraform module repository. |
+| [Invoke-AvmReleaseBranch](Invoke-AvmReleaseBranch.md) | `avm release-branch` | Prepare a reviewed external fork pull request for credentialed E2E testing. |
 | [Get-AvmVersion](Get-AvmVersion.md) | `avm version` | Reports the running Avm.Authoring module version and host runtime. |
 | [Update-AvmAuthoring](Update-AvmAuthoring.md) | `avm upgrade` | Update Avm.Authoring using the configured PowerShell repositories. |
 | [Invoke-AvmDoctor](Invoke-AvmDoctor.md) | `avm doctor` | Diagnoses the local environment for running Avm.Authoring. |

@@ -32,6 +32,7 @@
         'Invoke-AvmDoctor',
         'Invoke-AvmDocs',
         'Invoke-AvmFormat',
+        'Invoke-AvmReleaseBranch',
         'Invoke-AvmLint',
         'Invoke-AvmPrCheck',
         'Invoke-AvmPreCommit',
