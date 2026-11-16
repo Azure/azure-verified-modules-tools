@@ -19,6 +19,26 @@ on:
         description: 'Manual retry comparison base for a multi-commit push (blank = target first parent).'
         type: string
         default: ''
+      initializeOnly:
+        description: Return the selected module release plan without creating tags.
+        type: boolean
+        default: false
+    outputs:
+      moduleMatrix:
+        description: Selected root modules and their planned release tags.
+        value: ${{ jobs.initialize.outputs.moduleMatrix }}
+      hasModules:
+        description: Whether any root modules remain selected for release.
+        value: ${{ jobs.initialize.outputs.hasModules }}
+      baseCommit:
+        description: Comparison base used to select pending release roots.
+        value: ${{ jobs.initialize.outputs.baseCommit }}
+      targetCommit:
+        description: Validated release target commit.
+        value: ${{ jobs.initialize.outputs.targetCommit }}
+      authoringArtifact:
+        description: Prepared authoring runtime artifact for per-module release jobs.
+        value: ${{ jobs.bootstrap.outputs.artifact }}
 
 permissions: {}
 
@@ -127,19 +147,53 @@ jobs:
           elseif ($env:REQUESTED_BASE) { $parameters.BaseCommit = $env:REQUESTED_BASE }
           $matrix = Initialize-AvmBicepReleaseMatrix @parameters
           Write-Output "Release selection: $($matrix.BaseCommit)..$env:TARGET_COMMIT"
-          if (@($matrix.Include).Count -eq 0) { Write-Output 'No pending publishable modules in the selected range.' }
+          $releaseMatrix = [Collections.Generic.List[object]]::new()
+          $summary = [Collections.Generic.List[string]]::new()
+          if (@($matrix.Include).Count -eq 0) {
+            $message = 'No pending publishable modules in the selected range.'
+            Write-Output $message
+            $null = $summary.Add($message)
+          }
+          else {
+            $null = $summary.Add('| Module | Planned release tags |')
+            $null = $summary.Add('| --- | --- |')
+            foreach ($entry in $matrix.Include) {
+              $planned = @(Set-AvmBicepReleaseTags -Root $env:GITHUB_WORKSPACE -ModulePath $entry.ModulePath `
+                  -BaseCommit $matrix.BaseCommit -TargetCommit $env:TARGET_COMMIT -PendingRelease -WhatIf `
+                  -SkipModuleVersionCheck)
+              $tags = @($planned | ForEach-Object { $_.Tag })
+              if ($tags.Count -eq 0) {
+                $row = "| $($entry.ModulePath) | No pending release tags remain. |"
+                Write-Output $row
+                $null = $summary.Add($row)
+                continue
+              }
+              $tagLabel = $tags -join ', '
+              $null = $releaseMatrix.Add(@{
+                  modulePath = $entry.ModulePath
+                  plannedTags = ConvertTo-Json -InputObject $tags -Depth 20 -Compress
+                  releaseTagLabel = $tagLabel
+                })
+              $row = "| $($entry.ModulePath) | $tagLabel |"
+              Write-Output $row
+              $null = $summary.Add($row)
+            }
+          }
+          if ([string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+            throw 'The release selection summary file path is required.'
+          }
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ($summary -join "`n") -Encoding utf8
           "baseCommit=$($matrix.BaseCommit)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          $value = ConvertTo-Json -InputObject @{ include = @($matrix.Include | ForEach-Object {
-                @{ modulePath = $_.ModulePath }
-              }) } -Depth 20 -Compress
+          $value = ConvertTo-Json -InputObject @{ include = @($releaseMatrix) } -Depth 20 -Compress
           "moduleMatrix=$value" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "hasModules=$((@($matrix.Include).Count -gt 0).ToString().ToLowerInvariant())" |
+          $hasModules = ($releaseMatrix.Count -gt 0).ToString().ToLowerInvariant()
+          "hasModules=$hasModules" |
             Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
   release:
-    name: Release [${{ matrix.modulePath }}]
+    name: '${{ matrix.modulePath }}'
     needs: [bootstrap, initialize]
-    if: needs.initialize.outputs.hasModules == 'true'
+    if: ${{ !inputs.initializeOnly && needs.initialize.outputs.hasModules == 'true' }}
     permissions:
       contents: write
     strategy:
@@ -148,9 +202,10 @@ jobs:
     uses: ./.github/workflows/bicep-module-runtime-release.yml
     with:
       modulePath: ${{ matrix.modulePath }}
+      plannedTags: ${{ matrix.plannedTags }}
+      releaseTagLabel: ${{ matrix.releaseTagLabel }}
       targetCommit: ${{ needs.initialize.outputs.targetCommit }}
       baseCommit: ${{ needs.initialize.outputs.baseCommit }}
       pendingRelease: true
       requireChangelog: true
-      requirePublishApproval: true
       authoringArtifact: ${{ needs.bootstrap.outputs.artifact }}
