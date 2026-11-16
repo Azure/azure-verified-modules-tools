@@ -6,14 +6,16 @@ function Get-AvmBicepTestSubscriptionTag {
         [string] $RepositoryRoot,
 
         [Parameter(Mandatory)]
-        [string] $ModulePath
+        [string] $ModulePath,
+
+        [switch] $AllowNonCanonicalModulePath
     )
 
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
     $modulePattern = '\Aavm/(res|ptn|utl)/[a-z0-9]+(?:-[a-z0-9]+)*(?:/[a-z0-9]+(?:-[a-z0-9]+)*)+\z'
-    if ($ModulePath -cnotmatch $modulePattern) {
+    if (-not $AllowNonCanonicalModulePath -and $ModulePath -cnotmatch $modulePattern) {
         throw [AvmConfigurationException]::new('Reservation ModulePath must be an exact canonical avm/res, avm/ptn, or avm/utl module path.')
     }
     $fileName = '.reserved-test-subscriptions.json'

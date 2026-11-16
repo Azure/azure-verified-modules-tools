@@ -199,7 +199,8 @@ function Invoke-AvmBicepCheckConvention {
             if ($scope.IsTopLevel) {
                 $required = $false
                 if ($reservationMap) {
-                    $required = (Get-AvmBicepTestSubscriptionTag -RepositoryRoot $repositoryRoot -ModulePath $scope.ModuleRelativePath) -cne 'General'
+                    $required = (Get-AvmBicepTestSubscriptionTag -RepositoryRoot $repositoryRoot `
+                            -ModulePath $scope.ModuleRelativePath -AllowNonCanonicalModulePath) -cne 'General'
                 }
                 $workflowInput = Get-AvmBicepConventionWorkflowInput -Scope $scope -Required:$required
                 if ($null -ne $workflowInput) {
