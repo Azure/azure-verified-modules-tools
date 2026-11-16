@@ -111,6 +111,28 @@ a known nested/admin name, with guidance to run from the module root. This can
 also reject a checkout whose higher parent directory happens to use a reserved
 name. Mixed direct Bicep and Terraform source requires explicit `-Ecosystem`.
 
+## External fork E2E handoff
+
+For external fork pull requests requiring credentialed E2E testing, an authorized
+FTE must first review the exact fork commit, including workflows and dependencies
+that can access credentials. Restrict write access to the release branch and
+review any later changes. Use the existing authenticated GitHub CLI session:
+
+```powershell
+avm fork-pr e2e-handoff `
+  --repository Azure/example `
+  --pull-request 123 `
+  --reviewed-head-commit $reviewedSha `
+  --whatif
+```
+
+Remove `--whatif` to create the release branch, retarget and merge the fork PR,
+and open a follow-up PR to main. The command does not approve reviews or bypass
+branch protections. For the Bicep registry, it adds `PR: Run E2E Tests` to the
+follow-up PR. If it stops, inspect the branch and PR before manual recovery.
+Normal PR checks do not require this process. The follow-up PR remains subject
+to the protections configured for main.
+
 ## Bicep deployment tests
 
 `avm pr-check` runs static authoring checks. `avm test unit` runs module-owned
