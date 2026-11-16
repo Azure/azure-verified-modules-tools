@@ -22,7 +22,9 @@ function Set-AvmBicepReleaseTags {
         Full SHA-1 commit to tag.
 
     .PARAMETER BaseCommit
-        Optional full SHA-1 baseline for push discovery.
+        Optional full SHA-1 comparison commit. With PendingRelease, restricts
+        selection to modules changed since this commit while retaining each
+        module's independent tag baseline.
 
     .PARAMETER Force
         Include the top-level module even when no publishable changes are found.

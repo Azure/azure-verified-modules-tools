@@ -349,7 +349,7 @@ new AsyncFunction('github', 'core', 'context', script)(github, core, fixture.con
             } $script:releaseNode $script:releaseTargetHarness $environment
         }
         $script:releaseEntrypointEnvironment = @{}
-        foreach ($name in @('GITHUB_WORKSPACE', 'GITHUB_OUTPUT', 'RUNNER_TEMP', 'EVENT_NAME', 'BASE_COMMIT', 'TARGET_COMMIT')) {
+        foreach ($name in @('GITHUB_WORKSPACE', 'GITHUB_OUTPUT', 'RUNNER_TEMP', 'EVENT_NAME', 'BASE_COMMIT', 'REQUESTED_BASE', 'TARGET_COMMIT')) {
             $script:releaseEntrypointEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
         }
     }
@@ -392,6 +392,7 @@ function Write-AvmWorkflowOutput {
         $env:RUNNER_TEMP = $root
         $env:EVENT_NAME = 'workflow_dispatch'
         $env:BASE_COMMIT = ''
+        $env:REQUESTED_BASE = ''
         $env:TARGET_COMMIT = 'a' * 40
         $script:targetFixture = @{
             requested = ''; main = 'c' * 40; mergeBase = 'a' * 40
@@ -408,7 +409,7 @@ function Write-AvmWorkflowOutput {
         Mock Install-PSResource { $script:releaseEntrypointBootstraps++ }
         Mock Get-Module {
             [pscustomobject]@{
-                PrivateData = @{ AvmCapabilities = @{ BicepWorkflowOrchestration = 1 } }
+                PrivateData = @{ AvmCapabilities = @{ BicepWorkflowOrchestration = 1; BicepReleaseSelection = 1 } }
             }
         } -ParameterFilter { $Name -eq 'Avm.Authoring' }
         Mock Initialize-AvmBicepReleaseMatrix {
@@ -416,7 +417,7 @@ function Write-AvmWorkflowOutput {
             $script:releaseEntrypointInvocation = @{
                 Root = $Root; EventName = $EventName; TargetCommit = $TargetCommit; BaseCommit = $BaseCommit
             }
-            [pscustomobject]@{ Include = @([pscustomobject]@{ ModulePath = 'avm/res/mock/widget' }) }
+            [pscustomobject]@{ BaseCommit = 'b' * 40; Include = @([pscustomobject]@{ ModulePath = 'avm/res/mock/widget' }) }
         }
     }
 
@@ -431,6 +432,7 @@ function Write-AvmWorkflowOutput {
         $script:releaseEntrypointInvocation.BaseCommit | Should -BeNullOrEmpty
         ($outputs.moduleMatrix | ConvertFrom-Json).include.modulePath | Should -BeExactly 'avm/res/mock/widget'
         $outputs.hasModules | Should -BeExactly 'true'
+        $outputs.baseCommit | Should -BeExactly ('b' * 40)
     }
 
     It 'forwards the explicit push range instead of manual pending discovery input' {
@@ -439,6 +441,15 @@ function Write-AvmWorkflowOutput {
         . ([scriptblock]::Create($script:releaseEntrypoint.jobs.initialize.steps[-1].run))
         $script:releaseEntrypointInvocation.EventName | Should -BeExactly 'push'
         $script:releaseEntrypointInvocation.BaseCommit | Should -BeExactly ('b' * 40)
+    }
+
+    It 'forwards an explicit manual retry base and refuses a base on push' {
+        $env:REQUESTED_BASE = 'd' * 40
+        . ([scriptblock]::Create($script:releaseEntrypoint.jobs.initialize.steps[-1].run))
+        $script:releaseEntrypointInvocation.BaseCommit | Should -BeExactly ('d' * 40)
+        $env:EVENT_NAME = 'push'
+        { . ([scriptblock]::Create($script:releaseEntrypoint.jobs.initialize.steps[-1].run)) } |
+            Should -Throw '*only supported for manual releases*'
     }
 
     It 'validates and forwards the selected target consistently without weakening release controls' {

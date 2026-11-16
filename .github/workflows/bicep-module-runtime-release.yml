@@ -9,6 +9,9 @@ on:
       targetCommit:
         type: string
         required: true
+      baseCommit:
+        type: string
+        default: ''
       pendingRelease:
         type: boolean
         required: false
@@ -106,6 +109,7 @@ jobs:
         env:
           MODULE_PATH: ${{ inputs.modulePath }}
           TARGET_COMMIT: ${{ inputs.targetCommit }}
+          BASE_COMMIT: ${{ inputs.baseCommit }}
           PENDING_RELEASE: ${{ inputs.pendingRelease }}
           REQUIRE_CHANGELOG: ${{ inputs.requireChangelog }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -116,7 +120,10 @@ jobs:
           if ($capabilities.BicepWorkflowOrchestration -isnot [int] -or $capabilities.BicepWorkflowOrchestration -ne 1) {
             throw 'The installed Avm.Authoring package does not provide BicepWorkflowOrchestration = 1.'
           }
-          $tags = @(Set-AvmBicepReleaseTags -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH `
+          if ($capabilities.BicepReleaseSelection -isnot [int] -or $capabilities.BicepReleaseSelection -ne 1) {
+            throw 'The installed Avm.Authoring package does not provide BicepReleaseSelection = 1.'
+          }
+          $tags = @(Set-AvmBicepReleaseTags -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH -BaseCommit $env:BASE_COMMIT `
               -TargetCommit $env:TARGET_COMMIT -PendingRelease:([bool]::Parse($env:PENDING_RELEASE)) `
               -RequireChangelog:([bool]::Parse($env:REQUIRE_CHANGELOG)) -SkipModuleVersionCheck -Confirm:$false)
           if ($tags.Count -eq 0) { Write-Output 'No publishable module changes were found.' }
