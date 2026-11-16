@@ -21,7 +21,7 @@ function Get-AvmBicepPolicyConfiguration {
         (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '..'))
     $ancestor = [System.IO.DirectoryInfo]::new($directory)
     while ($null -ne $ancestor) {
-        if ($ancestor.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+        if ($null -ne $ancestor.LinkTarget) {
             throw [AvmConfigurationException]::new(
                 'Bicep PSRule configuration cannot traverse linked directories.')
         }
@@ -35,14 +35,13 @@ function Get-AvmBicepPolicyConfiguration {
             'Bicep PSRule configuration is outside the installed package.')
     }
     foreach ($itemPath in @($directory, $optionPath, $rulePath)) {
-        if ((Get-Item -LiteralPath $itemPath -Force).Attributes -band
-            [System.IO.FileAttributes]::ReparsePoint) {
+        if ($null -ne (Get-Item -LiteralPath $itemPath -Force).LinkTarget) {
             throw [AvmConfigurationException]::new(
                 'Bicep PSRule configuration and rules cannot be linked outside the installed package.')
         }
     }
     foreach ($entry in @(Get-ChildItem -LiteralPath $rulePath -Recurse -Force)) {
-        if (($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or
+        if (($null -ne $entry.LinkTarget) -or
             (-not $entry.PSIsContainer -and $entry.Name -cnotmatch '\.Rule\.yaml$')) {
             throw [AvmConfigurationException]::new(
                 'Bicep PSRule rules must be regular .Rule.yaml files under rules/.')

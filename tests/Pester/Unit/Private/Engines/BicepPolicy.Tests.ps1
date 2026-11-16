@@ -289,6 +289,36 @@ Describe 'Bicep PSRule configuration boundaries' {
         } | Should -Throw '*installed Avm.Authoring package is missing*'
     }
 
+    It 'accepts cloud-storage reparse points that do not redirect policy assets' {
+        InModuleScope Avm.Authoring {
+            Mock Get-Item {
+                [pscustomobject]@{
+                    Attributes = [System.IO.FileAttributes]::ReparsePoint
+                    LinkTarget = $null
+                }
+            }
+            Mock Get-ChildItem {
+                [pscustomobject]@{
+                    Attributes    = [System.IO.FileAttributes]::ReparsePoint
+                    LinkTarget    = $null
+                    PSIsContainer = $false
+                    Name          = 'cloud.Rule.yaml'
+                }
+            }
+            function New-PSRuleOption {
+                param($Option)
+                [pscustomobject]@{
+                    Input = @{ PathIgnore = @('*', '!avm/**/defaults/*.test.bicep', '!avm/**/waf-aligned/*.test.bicep',
+                            '!avm/**/*.defaults/*.test.bicep', '!avm/**/*.waf-aligned/*.test.bicep') }
+                    Include = @{ Module = @('PSRule.Rules.Azure'); Path = '' }
+                    Rule = @{ IncludeLocal = $false }
+                    Configuration = @{ AZURE_BICEP_FILE_EXPANSION = 'true'; AZURE_PARAMETER_FILE_EXPANSION = 'false' }
+                }
+            }
+            (Get-AvmBicepPolicyConfiguration).Option | Should -Not -BeNullOrEmpty
+        }
+    }
+
     It 'rejects executable rules inserted into an installed policy bundle' {
         $package = Join-Path $TestDrive 'invalid-package'
         $engine = Join-Path $package 'Engines' 'Bicep'
@@ -327,6 +357,25 @@ Describe 'Bicep PSRule configuration boundaries' {
                 Get-AvmBicepPolicyConfiguration
             }
         } | Should -Throw '*rules cannot be linked outside the installed package*'
+    }
+
+    It 'rejects linked policy ancestors before loading any policy options' {
+        $package = Join-Path $TestDrive 'linked-ancestor-package'
+        $engine = Join-Path $package 'Engines' 'Bicep'
+        $null = New-Item -ItemType Directory -Path $engine -Force
+        $resolver = Join-Path $engine 'Get-AvmBicepPolicyConfiguration.ps1'
+        Copy-Item -LiteralPath (Join-Path $script:moduleRoot 'Engines' 'Bicep' 'Get-AvmBicepPolicyConfiguration.ps1') `
+            -Destination $resolver
+        $linkType = if ($IsWindows) { 'Junction' } else { 'SymbolicLink' }
+        $null = New-Item -ItemType $linkType -Path (Join-Path $package 'Resources') `
+            -Target (Join-Path $script:moduleRoot 'Resources')
+        {
+            InModuleScope Avm.Authoring -Parameters @{ Resolver = $resolver } {
+                param($Resolver)
+                . $Resolver
+                Get-AvmBicepPolicyConfiguration
+            }
+        } | Should -Throw '*cannot traverse linked directories*'
     }
 }
 
