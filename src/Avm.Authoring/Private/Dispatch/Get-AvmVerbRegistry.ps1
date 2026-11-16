@@ -51,7 +51,7 @@ function Get-AvmVerbRegistry {
         }
         [pscustomobject]@{
             Path    = [string[]]@('release-branch')
-            Cmdlet  = 'Invoke-AvmForkPrE2eHandoff'
+            Cmdlet  = 'Invoke-AvmReleaseBranch'
             Summary = 'Prepare a reviewed external fork PR for credentialed E2E testing.'
         }
         [pscustomobject]@{

@@ -7,7 +7,7 @@ BeforeAll {
 
 AfterAll { Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue }
 
-Describe 'Invoke-AvmForkPrE2eHandoff' {
+Describe 'Invoke-AvmReleaseBranch' {
     BeforeEach {
         InModuleScope Avm.Authoring {
             $script:scenario = @{
@@ -74,7 +74,7 @@ Describe 'Invoke-AvmForkPrE2eHandoff' {
 
     It 'creates the Bicep handoff in order and labels the follow-up for E2E' {
         InModuleScope Avm.Authoring {
-            $result = Invoke-AvmForkPrE2eHandoff -Repository 'Azure/bicep-registry-modules' `
+            $result = Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
                 -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha
             $result.ReleaseBranch | Should -BeExactly 'release/fork-pr-123-aaaaaaaaaaaa'
             $result.FollowUpPullRequestUrl | Should -BeExactly 'https://github.com/Azure/example/pull/456'
@@ -94,7 +94,7 @@ Describe 'Invoke-AvmForkPrE2eHandoff' {
     It 'creates a Terraform handoff without applying the Bicep-specific label' {
         InModuleScope Avm.Authoring {
             $script:scenario.Pr.base.repo.full_name = 'Azure/terraform-azurerm-avm-res-example'
-            $null = Invoke-AvmForkPrE2eHandoff -Repository 'Azure/terraform-azurerm-avm-res-example' `
+            $null = Invoke-AvmReleaseBranch -Repository 'Azure/terraform-azurerm-avm-res-example' `
                 -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha
             @($script:scenario.Calls | Where-Object Endpoint -Match '/labels$').Count | Should -Be 0
         }
@@ -104,7 +104,7 @@ Describe 'Invoke-AvmForkPrE2eHandoff' {
         InModuleScope Avm.Authoring {
             $script:scenario.Repo.allow_squash_merge = $false
             $script:scenario.Repo.allow_merge_commit = $true
-            $null = Invoke-AvmForkPrE2eHandoff -Repository 'Azure/bicep-registry-modules' `
+            $null = Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
                 -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha
             @($script:scenario.Calls | Where-Object Method -EQ 'PUT')[0].Body.merge_method | Should -BeExactly 'merge'
         }
@@ -112,7 +112,7 @@ Describe 'Invoke-AvmForkPrE2eHandoff' {
 
     It 'previews without making writes' {
         InModuleScope Avm.Authoring {
-            $null = Invoke-AvmForkPrE2eHandoff -Repository 'Azure/bicep-registry-modules' `
+            $null = Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
                 -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha -WhatIf
             @($script:scenario.Calls | Where-Object Method -NE 'GET').Count | Should -Be 0
         }
@@ -132,7 +132,7 @@ Describe 'Invoke-AvmForkPrE2eHandoff' {
             $original = [Environment]::GetEnvironmentVariable('AVM_OFFLINE', 'Process')
             try {
                 $env:AVM_OFFLINE = '1'
-                { Invoke-AvmForkPrE2eHandoff -Repository 'Azure/bicep-registry-modules' `
+                { Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
                         -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha } |
                     Should -Throw '*AVM_OFFLINE=1*'
                 $script:scenario.Calls.Count | Should -Be 0
@@ -170,7 +170,7 @@ Describe 'Invoke-AvmForkPrE2eHandoff' {
                 'no merge method' { $script:scenario.Repo.allow_squash_merge = $false }
                 'changed head' { $script:scenario.Pr.head.sha = 'cccccccccccccccccccccccccccccccccccccccc' }
             }
-            { Invoke-AvmForkPrE2eHandoff -Repository 'Azure/bicep-registry-modules' `
+            { Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
                     -PullRequest 123 -ReviewedHeadCommit 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } | Should -Throw
             @($script:scenario.Calls | Where-Object Method -NE 'GET').Count | Should -Be 0
         }
@@ -179,7 +179,7 @@ Describe 'Invoke-AvmForkPrE2eHandoff' {
     It 'stops after retargeting when the reviewed head changes' {
         InModuleScope Avm.Authoring {
             $script:scenario.ChangedHead = $true
-            { Invoke-AvmForkPrE2eHandoff -Repository 'Azure/bicep-registry-modules' `
+            { Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
                     -PullRequest 123 -ReviewedHeadCommit 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } |
                 Should -Throw '*manual recovery*reviewed head changed*'
             @($script:scenario.Calls | Where-Object Method -EQ 'PUT').Count | Should -Be 0
@@ -189,7 +189,7 @@ Describe 'Invoke-AvmForkPrE2eHandoff' {
     It 'does not bypass blocked branch protections' {
         InModuleScope Avm.Authoring {
             $script:scenario.Pr.mergeable_state = 'blocked'
-            { Invoke-AvmForkPrE2eHandoff -Repository 'Azure/bicep-registry-modules' `
+            { Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
                     -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha } |
                 Should -Throw '*blocked*without bypassing protections*'
             @($script:scenario.Calls | Where-Object Method -EQ 'PUT').Count | Should -Be 0
@@ -199,7 +199,7 @@ Describe 'Invoke-AvmForkPrE2eHandoff' {
     It 'does not open a follow-up when GitHub rejects the merge' {
         InModuleScope Avm.Authoring {
             $script:scenario.Failure = 'PUT repos/Azure/bicep-registry-modules/pulls/123/merge'
-            { Invoke-AvmForkPrE2eHandoff -Repository 'Azure/bicep-registry-modules' `
+            { Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
                     -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha } |
                 Should -Throw '*merging the reviewed fork pull request*injected failure*'
             @($script:scenario.Calls | Where-Object Method -EQ 'PUT').Count | Should -Be 1
@@ -210,7 +210,7 @@ Describe 'Invoke-AvmForkPrE2eHandoff' {
     It 'stops if the release branch changes before the merge' {
         InModuleScope Avm.Authoring {
             $script:scenario.ReleaseSha = 'dddddddddddddddddddddddddddddddddddddddd'
-            { Invoke-AvmForkPrE2eHandoff -Repository 'Azure/bicep-registry-modules' `
+            { Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
                     -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha } |
                 Should -Throw '*release branch changed before the fork merge*'
             @($script:scenario.Calls | Where-Object Method -EQ 'PUT').Count | Should -Be 0
@@ -220,7 +220,7 @@ Describe 'Invoke-AvmForkPrE2eHandoff' {
     It 'does not open a follow-up when the release branch changes after the merge' {
         InModuleScope Avm.Authoring {
             $script:scenario.ChangedReleaseAfterMerge = $true
-            { Invoke-AvmForkPrE2eHandoff -Repository 'Azure/bicep-registry-modules' `
+            { Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
                     -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha } |
                 Should -Throw '*release branch no longer points*'
             @($script:scenario.Calls | Where-Object { $_.Method -eq 'POST' -and $_.Endpoint -match '/pulls$' }).Count | Should -Be 0
@@ -230,7 +230,7 @@ Describe 'Invoke-AvmForkPrE2eHandoff' {
     It 'surfaces label failure with the follow-up URL and does not retry' {
         InModuleScope Avm.Authoring {
             $script:scenario.Failure = 'POST repos/Azure/bicep-registry-modules/issues/456/labels'
-            { Invoke-AvmForkPrE2eHandoff -Repository 'Azure/bicep-registry-modules' `
+            { Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
                     -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha } |
                 Should -Throw '*https://github.com/Azure/example/pull/456*injected failure*'
             @($script:scenario.Calls | Where-Object Endpoint -Match '/labels$').Count | Should -Be 1

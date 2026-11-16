@@ -1,4 +1,4 @@
-function Invoke-AvmForkPrE2eHandoff {
+function Invoke-AvmReleaseBranch {
     <#
     .SYNOPSIS
         Prepare a reviewed external fork pull request for credentialed E2E testing.
@@ -41,7 +41,7 @@ function Invoke-AvmForkPrE2eHandoff {
         ReviewedHeadCommit, and FollowUpPullRequestUrl.
 
     .EXAMPLE
-        Invoke-AvmForkPrE2eHandoff `
+        Invoke-AvmReleaseBranch `
             -Repository 'Azure/example' `
             -PullRequest 123 `
             -ReviewedHeadCommit $reviewedSha `
