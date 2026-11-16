@@ -114,15 +114,16 @@ name. Mixed direct Bicep and Terraform source requires explicit `-Ecosystem`.
 ## External fork E2E handoff
 
 For external fork pull requests requiring credentialed E2E testing, an authorized
-FTE must first review the exact fork commit, including workflows and dependencies
-that can access credentials. Restrict write access to the release branch and
-review any later changes. Use the existing authenticated GitHub CLI session:
+FTE must first review the current fork head, including workflows and dependencies
+that can access credentials. The command cannot verify which commit was reviewed;
+it prevents head changes during the handoff. Restrict write access to the
+release branch and review any later changes. Use the existing authenticated
+GitHub CLI session:
 
 ```powershell
 avm release-branch `
   --repository Azure/example `
   --pull-request 123 `
-  --reviewed-head-commit $reviewedSha `
   --whatif
 ```
 

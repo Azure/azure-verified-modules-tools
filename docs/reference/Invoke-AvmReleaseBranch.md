@@ -10,11 +10,13 @@ Prepare a reviewed external fork pull request for credentialed E2E testing.
 
 For an external fork pull request that requires credentialed E2E tests,
 an authorized FTE must first review all code, workflows, and dependencies
-that could access credentials. Supply the exact reviewed head commit.
+that could access credentials on the current pull request head. The
+command cannot verify which commit was reviewed. It snapshots the head
+when invoked and refuses to merge if it changes during the handoff.
 Restrict write access to the release branch and review any later changes.
 Using the installed GitHub CLI and its existing github.com authentication,
 this command creates a release branch from upstream main, retargets the
-fork pull request, merges the reviewed changes, and opens a follow-up
+fork pull request, merges the captured head, and opens a follow-up
 pull request to main. For Azure/bicep-registry-modules, it adds the
 PR: Run E2E Tests label to the follow-up. It does not approve reviews
 or bypass protections. Ordinary checks do not require this handoff.
@@ -29,7 +31,7 @@ Inspect their state before recovering manually; do not blindly rerun.
 ## Syntax
 
 ```powershell
-Invoke-AvmReleaseBranch [-Repository] <string> [-PullRequest] <int> [-ReviewedHeadCommit] <string> [-SkipModuleVersionCheck] [-WhatIf] [-Confirm] [<CommonParameters>]
+Invoke-AvmReleaseBranch [-Repository] <string> [-PullRequest] <int> [-SkipModuleVersionCheck] [-WhatIf] [-Confirm] [<CommonParameters>]
 ```
 
 ## Parameters
@@ -60,19 +62,6 @@ Upstream github.com repository in owner/name form.
 | Accept pipeline input | false |
 | Accept wildcard characters | false |
 
-### -ReviewedHeadCommit
-
-Full SHA-1 of the fork commit reviewed for credentialed execution.
-
-| Property | Value |
-| --- | --- |
-| Type | `String` |
-| Required | true |
-| Position | 3 |
-| Default value |  |
-| Accept pipeline input | false |
-| Accept wildcard characters | false |
-
 ### -SkipModuleVersionCheck
 
 Skip the PowerShell Gallery check for a newer Avm.Authoring release.
@@ -94,7 +83,6 @@ Skip the PowerShell Gallery check for a newer Avm.Authoring release.
 Invoke-AvmReleaseBranch `
     -Repository 'Azure/example' `
     -PullRequest 123 `
-    -ReviewedHeadCommit $reviewedSha `
     -WhatIf
 ```
 
@@ -103,11 +91,10 @@ Invoke-AvmReleaseBranch `
 ```powershell
 avm release-branch `
     --repository Azure/example `
-    --pull-request 123 `
-    --reviewed-head-commit $reviewedSha
+    --pull-request 123
 ```
 
 ## Outputs
 
 - `PSCustomObject with Repository, OriginalPullRequest, ReleaseBranch,
-ReviewedHeadCommit, and FollowUpPullRequestUrl.`
+HeadCommit, and FollowUpPullRequestUrl.`

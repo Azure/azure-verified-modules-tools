@@ -75,7 +75,7 @@ Describe 'Invoke-AvmReleaseBranch' {
     It 'creates the Bicep handoff in order and labels the follow-up for E2E' {
         InModuleScope Avm.Authoring {
             $result = Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
-                -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha
+                -PullRequest 123
             $result.ReleaseBranch | Should -BeExactly 'release/fork-pr-123-aaaaaaaaaaaa'
             $result.FollowUpPullRequestUrl | Should -BeExactly 'https://github.com/Azure/example/pull/456'
             $writes = @($script:scenario.Calls | Where-Object Method -NE 'GET')
@@ -83,7 +83,8 @@ Describe 'Invoke-AvmReleaseBranch' {
             $writes[0].Body.sha | Should -BeExactly 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
             $writes[0].Body.ref | Should -BeExactly 'refs/heads/release/fork-pr-123-aaaaaaaaaaaa'
             $writes[1].Body.base | Should -BeExactly $result.ReleaseBranch
-            $writes[2].Body.sha | Should -BeExactly $result.ReviewedHeadCommit
+            $result.HeadCommit | Should -BeExactly 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+            $writes[2].Body.sha | Should -BeExactly $result.HeadCommit
             $writes[2].Body.merge_method | Should -BeExactly 'squash'
             $writes[3].Body.head | Should -BeExactly $result.ReleaseBranch
             $writes[3].Body.base | Should -BeExactly 'main'
@@ -95,8 +96,22 @@ Describe 'Invoke-AvmReleaseBranch' {
         InModuleScope Avm.Authoring {
             $script:scenario.Pr.base.repo.full_name = 'Azure/terraform-azurerm-avm-res-example'
             $null = Invoke-AvmReleaseBranch -Repository 'Azure/terraform-azurerm-avm-res-example' `
-                -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha
+                -PullRequest 123
             @($script:scenario.Calls | Where-Object Endpoint -Match '/labels$').Count | Should -Be 0
+        }
+    }
+
+    It 'uses the current PR head and creates the release branch from main' {
+        InModuleScope Avm.Authoring {
+            $script:scenario.Pr.head.sha = 'cccccccccccccccccccccccccccccccccccccccc'
+            $result = Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' -PullRequest 123
+            $result.HeadCommit | Should -BeExactly 'cccccccccccccccccccccccccccccccccccccccc'
+            $result.ReleaseBranch | Should -BeExactly 'release/fork-pr-123-cccccccccccc'
+            @($script:scenario.Calls | Where-Object Method -EQ 'PUT')[0].Body.sha | Should -BeExactly $result.HeadCommit
+            @($script:scenario.Calls | Where-Object Endpoint -Match '/git/refs$')[0].Body.sha |
+                Should -BeExactly 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+            @($script:scenario.Calls | Where-Object { $_.Method -eq 'POST' -and $_.Endpoint -match '/pulls$' })[0].Body.base |
+                Should -BeExactly 'main'
         }
     }
 
@@ -105,7 +120,7 @@ Describe 'Invoke-AvmReleaseBranch' {
             $script:scenario.Repo.allow_squash_merge = $false
             $script:scenario.Repo.allow_merge_commit = $true
             $null = Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
-                -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha
+                -PullRequest 123
             @($script:scenario.Calls | Where-Object Method -EQ 'PUT')[0].Body.merge_method | Should -BeExactly 'merge'
         }
     }
@@ -113,7 +128,7 @@ Describe 'Invoke-AvmReleaseBranch' {
     It 'previews without making writes' {
         InModuleScope Avm.Authoring {
             $null = Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
-                -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha -WhatIf
+                -PullRequest 123 -WhatIf
             @($script:scenario.Calls | Where-Object Method -NE 'GET').Count | Should -Be 0
         }
     }
@@ -121,7 +136,7 @@ Describe 'Invoke-AvmReleaseBranch' {
     It 'routes the shared CLI verb and WhatIf without making writes' {
         InModuleScope Avm.Authoring {
             $null = Invoke-Avm 'release-branch' '--repository' 'Azure/bicep-registry-modules' `
-                '--pull-request' '123' '--reviewed-head-commit' $script:scenario.Pr.head.sha '--whatif'
+                '--pull-request' '123' '--whatif'
             @($script:scenario.Calls | Where-Object Method -NE 'GET').Count | Should -Be 0
             @($script:scenario.Calls | Where-Object Method -EQ 'GET').Count | Should -Be 3
         }
@@ -133,7 +148,7 @@ Describe 'Invoke-AvmReleaseBranch' {
             try {
                 $env:AVM_OFFLINE = '1'
                 { Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
-                        -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha } |
+                        -PullRequest 123 } |
                     Should -Throw '*AVM_OFFLINE=1*'
                 $script:scenario.Calls.Count | Should -Be 0
             }
@@ -156,7 +171,7 @@ Describe 'Invoke-AvmReleaseBranch' {
         @{ Case = 'closed' }
         @{ Case = 'no write permission' }
         @{ Case = 'no merge method' }
-        @{ Case = 'changed head' }
+        @{ Case = 'invalid head' }
     ) {
         InModuleScope Avm.Authoring -Parameters @{ Case = $Case } {
             param($Case)
@@ -168,20 +183,20 @@ Describe 'Invoke-AvmReleaseBranch' {
                 'closed' { $script:scenario.Pr.state = 'closed' }
                 'no write permission' { $script:scenario.Repo.permissions.push = $false }
                 'no merge method' { $script:scenario.Repo.allow_squash_merge = $false }
-                'changed head' { $script:scenario.Pr.head.sha = 'cccccccccccccccccccccccccccccccccccccccc' }
+                'invalid head' { $script:scenario.Pr.head.sha = 'not-a-commit' }
             }
             { Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
-                    -PullRequest 123 -ReviewedHeadCommit 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } | Should -Throw
+                    -PullRequest 123 } | Should -Throw
             @($script:scenario.Calls | Where-Object Method -NE 'GET').Count | Should -Be 0
         }
     }
 
-    It 'stops after retargeting when the reviewed head changes' {
+    It 'stops after retargeting when the captured head changes' {
         InModuleScope Avm.Authoring {
             $script:scenario.ChangedHead = $true
             { Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
-                    -PullRequest 123 -ReviewedHeadCommit 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } |
-                Should -Throw '*manual recovery*reviewed head changed*'
+                    -PullRequest 123 } |
+                Should -Throw '*manual recovery*captured head changed*'
             @($script:scenario.Calls | Where-Object Method -EQ 'PUT').Count | Should -Be 0
         }
     }
@@ -190,7 +205,7 @@ Describe 'Invoke-AvmReleaseBranch' {
         InModuleScope Avm.Authoring {
             $script:scenario.Pr.mergeable_state = 'blocked'
             { Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
-                    -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha } |
+                    -PullRequest 123 } |
                 Should -Throw '*blocked*without bypassing protections*'
             @($script:scenario.Calls | Where-Object Method -EQ 'PUT').Count | Should -Be 0
         }
@@ -200,8 +215,8 @@ Describe 'Invoke-AvmReleaseBranch' {
         InModuleScope Avm.Authoring {
             $script:scenario.Failure = 'PUT repos/Azure/bicep-registry-modules/pulls/123/merge'
             { Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
-                    -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha } |
-                Should -Throw '*merging the reviewed fork pull request*injected failure*'
+                    -PullRequest 123 } |
+                Should -Throw '*merging the fork pull request*injected failure*'
             @($script:scenario.Calls | Where-Object Method -EQ 'PUT').Count | Should -Be 1
             @($script:scenario.Calls | Where-Object { $_.Method -eq 'POST' -and $_.Endpoint -match '/pulls$' }).Count | Should -Be 0
         }
@@ -211,7 +226,7 @@ Describe 'Invoke-AvmReleaseBranch' {
         InModuleScope Avm.Authoring {
             $script:scenario.ReleaseSha = 'dddddddddddddddddddddddddddddddddddddddd'
             { Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
-                    -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha } |
+                    -PullRequest 123 } |
                 Should -Throw '*release branch changed before the fork merge*'
             @($script:scenario.Calls | Where-Object Method -EQ 'PUT').Count | Should -Be 0
         }
@@ -221,7 +236,7 @@ Describe 'Invoke-AvmReleaseBranch' {
         InModuleScope Avm.Authoring {
             $script:scenario.ChangedReleaseAfterMerge = $true
             { Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
-                    -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha } |
+                    -PullRequest 123 } |
                 Should -Throw '*release branch no longer points*'
             @($script:scenario.Calls | Where-Object { $_.Method -eq 'POST' -and $_.Endpoint -match '/pulls$' }).Count | Should -Be 0
         }
@@ -231,7 +246,7 @@ Describe 'Invoke-AvmReleaseBranch' {
         InModuleScope Avm.Authoring {
             $script:scenario.Failure = 'POST repos/Azure/bicep-registry-modules/issues/456/labels'
             { Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
-                    -PullRequest 123 -ReviewedHeadCommit $script:scenario.Pr.head.sha } |
+                    -PullRequest 123 } |
                 Should -Throw '*https://github.com/Azure/example/pull/456*injected failure*'
             @($script:scenario.Calls | Where-Object Endpoint -Match '/labels$').Count | Should -Be 1
         }

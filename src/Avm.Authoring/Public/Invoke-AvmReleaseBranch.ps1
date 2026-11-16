@@ -6,11 +6,13 @@ function Invoke-AvmReleaseBranch {
     .DESCRIPTION
         For an external fork pull request that requires credentialed E2E tests,
         an authorized FTE must first review all code, workflows, and dependencies
-        that could access credentials. Supply the exact reviewed head commit.
+        that could access credentials on the current pull request head. The
+        command cannot verify which commit was reviewed. It snapshots the head
+        when invoked and refuses to merge if it changes during the handoff.
         Restrict write access to the release branch and review any later changes.
         Using the installed GitHub CLI and its existing github.com authentication,
         this command creates a release branch from upstream main, retargets the
-        fork pull request, merges the reviewed changes, and opens a follow-up
+        fork pull request, merges the captured head, and opens a follow-up
         pull request to main. For Azure/bicep-registry-modules, it adds the
         PR: Run E2E Tests label to the follow-up. It does not approve reviews
         or bypass protections. Ordinary checks do not require this handoff.
@@ -24,9 +26,6 @@ function Invoke-AvmReleaseBranch {
     .PARAMETER PullRequest
         Number of an open external fork pull request targeting main.
 
-    .PARAMETER ReviewedHeadCommit
-        Full SHA-1 of the fork commit reviewed for credentialed execution.
-
     .PARAMETER SkipModuleVersionCheck
         Skip the PowerShell Gallery check for a newer Avm.Authoring release.
 
@@ -38,20 +37,18 @@ function Invoke-AvmReleaseBranch {
 
     .OUTPUTS
         PSCustomObject with Repository, OriginalPullRequest, ReleaseBranch,
-        ReviewedHeadCommit, and FollowUpPullRequestUrl.
+        HeadCommit, and FollowUpPullRequestUrl.
 
     .EXAMPLE
         Invoke-AvmReleaseBranch `
             -Repository 'Azure/example' `
             -PullRequest 123 `
-            -ReviewedHeadCommit $reviewedSha `
             -WhatIf
 
     .EXAMPLE
         avm release-branch `
             --repository Azure/example `
-            --pull-request 123 `
-            --reviewed-head-commit $reviewedSha
+            --pull-request 123
     #>
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     [OutputType([pscustomobject])]
@@ -63,10 +60,6 @@ function Invoke-AvmReleaseBranch {
         [Parameter(Mandatory)]
         [ValidateRange(1, [int]::MaxValue)]
         [int] $PullRequest,
-
-        [Parameter(Mandatory)]
-        [ValidatePattern('^[a-fA-F0-9]{40}$')]
-        [string] $ReviewedHeadCommit,
 
         [switch] $SkipModuleVersionCheck
     )
@@ -101,9 +94,9 @@ function Invoke-AvmReleaseBranch {
         throw [System.InvalidOperationException]::new(
             "Pull request $PullRequest must be open, ready for review, target upstream main, and originate from an external fork.")
     }
-    if ($pr['head']['sha'] -ine $ReviewedHeadCommit) {
-        throw [System.InvalidOperationException]::new(
-            'The fork head does not match the reviewed commit. Review the current head before proceeding.')
+    $headCommit = [string]$pr['head']['sha']
+    if ($headCommit -notmatch '^[a-fA-F0-9]{40}$') {
+        throw [System.InvalidOperationException]::new('GitHub did not return a valid pull request head commit.')
     }
 
     $main = Invoke-AvmGitHubApi -Endpoint "repos/$Repository/git/ref/heads/main"
@@ -111,9 +104,9 @@ function Invoke-AvmReleaseBranch {
     if ($mainSha -notmatch '^[a-fA-F0-9]{40}$') {
         throw [System.InvalidOperationException]::new('GitHub did not return a valid main commit.')
     }
-    $branch = 'release/fork-pr-{0}-{1}' -f $PullRequest, $ReviewedHeadCommit.Substring(0, 12).ToLowerInvariant()
+    $branch = 'release/fork-pr-{0}-{1}' -f $PullRequest, $headCommit.Substring(0, 12).ToLowerInvariant()
     if (-not $PSCmdlet.ShouldProcess("$Repository pull request #$PullRequest",
-            "Create $branch, retarget and merge the reviewed fork changes, and open a pull request to main")) {
+            "Create $branch, retarget and merge fork head $headCommit, and open a pull request to main")) {
         return
     }
 
@@ -130,9 +123,9 @@ function Invoke-AvmReleaseBranch {
         for ($attempt = 0; $attempt -lt 10; $attempt++) {
             $current = Invoke-AvmGitHubApi -Endpoint $endpoint
             if ($current['state'] -cne 'open' -or $current['base']['ref'] -cne $branch -or
-                $current['head']['sha'] -ine $ReviewedHeadCommit) {
+                $current['head']['sha'] -ine $headCommit) {
                 throw [System.InvalidOperationException]::new(
-                    'The pull request state, target, or reviewed head changed during the handoff.')
+                    'The pull request state, target, or captured head changed during the handoff.')
             }
             if ($current['mergeable_state'] -cne 'unknown') { break }
             if ($attempt -lt 9) { Start-Sleep -Seconds 2 }
@@ -147,9 +140,9 @@ function Invoke-AvmReleaseBranch {
         if ($release['object']['sha'] -ine $mainSha) {
             throw [System.InvalidOperationException]::new('The release branch changed before the fork merge.')
         }
-        $stage = 'merging the reviewed fork pull request'
+        $stage = 'merging the fork pull request'
         $merge = Invoke-AvmGitHubApi -Endpoint "$endpoint/merge" -Method PUT -Body @{
-            sha          = $ReviewedHeadCommit
+            sha          = $headCommit
             merge_method = $mergeMethod
         }
         if ($merge['merged'] -ne $true -or $merge['sha'] -notmatch '^[a-fA-F0-9]{40}$') {
@@ -165,7 +158,7 @@ function Invoke-AvmReleaseBranch {
             title = "E2E: $($pr['title'])"
             head  = $branch
             base  = 'main'
-            body  = "Credentialed E2E follow-up for #$PullRequest (reviewed fork commit ``$ReviewedHeadCommit``)."
+            body  = "Credentialed E2E follow-up for #$PullRequest (fork commit ``$headCommit``)."
         }
         if ([string]::IsNullOrWhiteSpace([string]$followUp['html_url'])) {
             throw [System.InvalidOperationException]::new('GitHub did not return the follow-up pull request URL.')
@@ -184,7 +177,7 @@ function Invoke-AvmReleaseBranch {
             Repository             = $Repository
             OriginalPullRequest    = $PullRequest
             ReleaseBranch          = $branch
-            ReviewedHeadCommit     = $ReviewedHeadCommit
+            HeadCommit             = $headCommit
             FollowUpPullRequestUrl = $followUpUrl
         }
     }
