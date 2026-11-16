@@ -309,6 +309,45 @@ Describe 'Component: Bicep release entrypoint discovery and publication' -Tag Co
     BeforeAll {
         $script:releaseEntrypoint = ConvertFrom-Yaml (Get-Content -LiteralPath (
                 Join-Path $script:repoRoot '.github' 'workflows' 'bicep-release.yml') -Raw)
+        $script:releaseTargetScript = ($script:releaseEntrypoint.jobs.initialize.steps |
+                Where-Object { $_['id'] -ceq 'target' }).with.script
+        $script:releaseTargetHarness = @'
+const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+const fixture = JSON.parse(process.env.AVM_FIXTURE);
+const script = Buffer.from(process.env.AVM_SCRIPT, 'base64').toString('utf8');
+const calls = [];
+const github = { rest: { repos: {
+  getBranch: async args => {
+    calls.push({ method: 'getBranch', ...args });
+    if (fixture.branchError) throw new Error('branch unavailable');
+    return { data: { commit: { sha: fixture.main } } };
+  },
+  compareCommits: async args => {
+    calls.push({ method: 'compareCommits', ...args });
+    if (fixture.compareError) throw new Error('comparison unavailable');
+    return { data: { merge_base_commit: { sha: fixture.mergeBase } } };
+  }
+} } };
+const outputs = {};
+const core = { setOutput: (name, value) => { outputs[name] = value; } };
+process.env.REQUESTED_COMMIT = fixture.requested;
+new AsyncFunction('github', 'core', 'context', script)(github, core, fixture.context)
+  .then(() => process.stdout.write(JSON.stringify({ outputs, calls })))
+  .catch(error => { process.stderr.write(error.message); process.exitCode = 1; });
+'@
+        $script:releaseNode = (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+        $script:releaseModule = Get-Module Avm.Authoring
+        function Invoke-AvmReleaseTargetFixture {
+            param([hashtable] $Fixture)
+            $environment = @{
+                AVM_FIXTURE = ConvertTo-Json -InputObject $Fixture -Depth 10 -Compress
+                AVM_SCRIPT = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($script:releaseTargetScript))
+            }
+            & $script:releaseModule {
+                param($Node, $Harness, $Environment)
+                Invoke-AvmProcess -FilePath $Node -ArgumentList @('-e', $Harness) -EnvVars $Environment -IgnoreExitCode
+            } $script:releaseNode $script:releaseTargetHarness $environment
+        }
         $script:releaseEntrypointEnvironment = @{}
         foreach ($name in @('GITHUB_WORKSPACE', 'GITHUB_OUTPUT', 'RUNNER_TEMP', 'EVENT_NAME', 'BASE_COMMIT', 'TARGET_COMMIT')) {
             $script:releaseEntrypointEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
@@ -354,6 +393,13 @@ function Write-AvmWorkflowOutput {
         $env:EVENT_NAME = 'workflow_dispatch'
         $env:BASE_COMMIT = ''
         $env:TARGET_COMMIT = 'a' * 40
+        $script:targetFixture = @{
+            requested = ''; main = 'c' * 40; mergeBase = 'a' * 40
+            context = @{
+                repo = @{ owner = 'Azure'; repo = 'bicep-registry-modules' }
+                ref = 'refs/heads/main'; eventName = 'workflow_dispatch'; sha = 'a' * 40
+            }
+        }
         Mock Install-Module {}
         Mock Import-Module {
             $Name | Should -BeExactly (Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1')
@@ -393,6 +439,63 @@ function Write-AvmWorkflowOutput {
         . ([scriptblock]::Create($script:releaseEntrypoint.jobs.initialize.steps[-1].run))
         $script:releaseEntrypointInvocation.EventName | Should -BeExactly 'push'
         $script:releaseEntrypointInvocation.BaseCommit | Should -BeExactly ('b' * 40)
+    }
+
+    It 'validates and forwards the selected target consistently without weakening release controls' {
+        $release = $script:releaseEntrypoint
+        $release.on.workflow_call.inputs.targetCommit.default | Should -BeExactly ''
+        $release.jobs.initialize.steps[1].with.ref | Should -BeExactly '${{ steps.target.outputs.sha }}'
+        $release.jobs.initialize.steps[-1].env.TARGET_COMMIT | Should -BeExactly '${{ steps.target.outputs.sha }}'
+        $release.jobs.initialize.outputs.targetCommit | Should -BeExactly '${{ steps.target.outputs.sha }}'
+        $release.jobs.release.with.targetCommit | Should -BeExactly '${{ needs.initialize.outputs.targetCommit }}'
+        $release.jobs.release.with.pendingRelease | Should -BeTrue
+        $release.jobs.release.with.requireChangelog | Should -BeTrue
+        $release.jobs.release.with.requirePublishApproval | Should -BeTrue
+    }
+
+    It 'accepts a <Selection> on current upstream main' -ForEach @(
+        @{ Selection = 'manual historical target'; Event = 'workflow_dispatch'; Requested = 'b' * 40; Target = 'b' * 40 }
+        @{ Selection = 'manual default target'; Event = 'workflow_dispatch'; Requested = ''; Target = 'a' * 40 }
+        @{ Selection = 'automatic push target'; Event = 'push'; Requested = ''; Target = 'a' * 40 }
+        @{ Selection = 'current main target'; Event = 'workflow_dispatch'; Requested = 'c' * 40; Target = 'c' * 40 }
+    ) {
+        $script:targetFixture.context.eventName = $Event
+        $script:targetFixture.requested = $Requested
+        $script:targetFixture.mergeBase = $Target
+        $result = Invoke-AvmReleaseTargetFixture -Fixture $script:targetFixture
+        $result.ExitCode | Should -Be 0
+        $output = $result.StdOut | ConvertFrom-Json
+        $output.outputs.sha | Should -BeExactly $Target
+        $output.calls[0].branch | Should -BeExactly 'main'
+        $output.calls[1].base | Should -BeExactly $Target
+        $output.calls[1].head | Should -BeExactly ('c' * 40)
+    }
+
+    It 'fails closed for <Failure>' -ForEach @(
+        @{ Failure = 'short SHA' }
+        @{ Failure = 'option-shaped SHA' }
+        @{ Failure = 'uppercase SHA' }
+        @{ Failure = 'push override' }
+        @{ Failure = 'non-main ref' }
+        @{ Failure = 'fork' }
+        @{ Failure = 'nonancestor' }
+        @{ Failure = 'missing commit' }
+        @{ Failure = 'unavailable main' }
+    ) {
+        switch ($Failure) {
+            'short SHA' { $script:targetFixture.requested = 'abc' }
+            'option-shaped SHA' { $script:targetFixture.requested = '--help' }
+            'uppercase SHA' { $script:targetFixture.requested = 'A' * 40 }
+            'push override' { $script:targetFixture.context.eventName = 'push'; $script:targetFixture.requested = 'b' * 40 }
+            'non-main ref' { $script:targetFixture.context.ref = 'refs/heads/feature' }
+            'fork' { $script:targetFixture.context.repo.owner = 'fork' }
+            'nonancestor' { $script:targetFixture.mergeBase = 'd' * 40 }
+            'missing commit' { $script:targetFixture.compareError = $true }
+            'unavailable main' { $script:targetFixture.branchError = $true }
+        }
+        $result = Invoke-AvmReleaseTargetFixture -Fixture $script:targetFixture
+        $result.ExitCode | Should -Not -Be 0
+        $result.StdOut | Should -BeNullOrEmpty
     }
 }
 
