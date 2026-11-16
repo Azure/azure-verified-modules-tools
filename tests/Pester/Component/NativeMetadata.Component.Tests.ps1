@@ -16,6 +16,34 @@ AfterAll {
 }
 
 Describe 'Component: native shared metadata assertions' -Tag Component {
+    It 'shows metadata assertions only with verbose output enabled: <Detailed>' -TestCases @(
+        @{ Detailed = $false }
+        @{ Detailed = $true }
+    ) {
+        param($Detailed)
+        InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:metadataFixture; Detailed = $Detailed } {
+            param($Fixture, $Detailed)
+            Mock Assert-AvmGitWorkingTreeClean {}
+            Mock Resolve-AvmCommandTool { @() }
+            Mock Get-AvmModuleContextInternal {
+                [pscustomobject]@{ Root = $Path; Ecosystem = 'bicep'; Kind = 'bicep-module' }
+            }
+            $excluded = @('validate', 'sync', 'format', 'transform', 'docs', 'lint', 'check policy', 'check convention')
+            $messages = @(& {
+                    $result = Invoke-AvmPrCheck -Path (Split-Path $Fixture -Parent) -Ecosystem bicep `
+                        -ExcludeSteps $excluded -Verbose:$Detailed -SkipModuleVersionCheck
+                    $result.Status | Should -Be 'pass'
+                    $result.Steps[0].Step | Should -Be 'metadata'
+                } 6>&1)
+            if ($Detailed) {
+                ($messages -join "`n") | Should -Match 'matches the packaged root or child schema'
+            }
+            else {
+                ($messages -join "`n") | Should -Not -Match 'matches the packaged root or child schema'
+            }
+        }
+    }
+
     It 'disables dependency name checks without suppressing validation warnings globally' {
         InModuleScope Avm.Authoring -Parameters @{ Fixture = $script:metadataFixture } {
             param($Fixture)

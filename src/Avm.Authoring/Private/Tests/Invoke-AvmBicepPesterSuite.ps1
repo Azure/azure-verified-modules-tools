@@ -56,6 +56,7 @@ function Invoke-AvmBicepPesterSuite {
         TestName                = $TestName
         TestInputData           = $TestInputData
         Convention              = $ConventionData
+        VerboseOutput           = Test-AvmVerboseEnabled
         PesterPath              = Join-Path $pester.ModuleBase 'Pester.psd1'
         PesterVersion           = $pester.Version.ToString()
         AuthoringManifest       = (Resolve-Path -LiteralPath $authoringManifest).Path
@@ -97,7 +98,8 @@ function Invoke-AvmBicepPesterSuite {
             }
             $processResult = Invoke-AvmProcess -FilePath $pwshPath `
                 -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $runnerPath, '-InputPath', $inputPath, '-ResultPath', $resultPath) `
-                -WorkingDirectory $WorkingDirectory -EnvVars $EnvVars -TimeoutSec $TimeoutSec -IgnoreExitCode
+                -WorkingDirectory $WorkingDirectory -EnvVars $EnvVars -TimeoutSec $TimeoutSec `
+                -StreamOutput:$inputData.VerboseOutput -IgnoreExitCode
             if ($processResult.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
                 $detail = Add-AvmProcessFailureDetail `
                     -Message "Bicep Pester runner failed (exit $($processResult.ExitCode))." `

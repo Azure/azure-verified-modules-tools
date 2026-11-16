@@ -269,6 +269,10 @@ function Invoke-AvmBicepCheckPolicy {
                                 -SourcePath $test.FullName -ModuleRoot $Context.Root
                             foreach ($issue in $result.Issues) { $issues.Add($issue) }
                             if (-not $result.Valid) { continue }
+                            foreach ($record in $records) {
+                                Write-AvmLog ("PSRule [{0}] {1}: {2} ({3})" -f
+                                    $baselineDefinition.Name, $record.RuleName, $record.Outcome, $record.TargetType) -Level Verbose
+                            }
                             $evaluations.Add([pscustomobject]@{
                                     File            = [System.IO.Path]::GetRelativePath(
                                         $Context.Root, $test.FullName).Replace('\', '/')

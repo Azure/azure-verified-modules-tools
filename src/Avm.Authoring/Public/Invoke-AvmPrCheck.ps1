@@ -16,7 +16,8 @@ function Invoke-AvmPrCheck {
         Step warnings and errors are reported as the steps run; the final summary
         lists their statuses and timings. GitHub Actions annotations include file
         and line information when available. Verbose output includes additional
-        step details.
+        step details, individual Pester assertions for metadata and Bicep
+        validation suites, and individual PSRule outcomes.
 
         This is the broader sibling of Invoke-AvmPreCommit. It adds the
         credentialled policy evaluation and read-only drift checks used to

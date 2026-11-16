@@ -9,6 +9,43 @@ BeforeAll {
 }
 
 Describe 'Component: native Bicep convention diagnostics' -Tag Component {
+    It 'shows child assertions only with verbose output enabled: <Detailed>' -TestCases @(
+        @{ Detailed = $false }
+        @{ Detailed = $true }
+    ) {
+        param($Detailed)
+        $suite = Join-Path $TestDrive 'verbose.Tests.ps1'
+        Set-Content -LiteralPath $suite -Encoding utf8NoBOM -Value @'
+Describe 'verbose probe' {
+    It 'shows the passing assertion' { $true | Should -BeTrue }
+    It 'shows the failing assertion' { $false | Should -BeTrue }
+}
+'@
+        InModuleScope Avm.Authoring -Parameters @{
+            Suite = $suite; Root = $TestDrive; Detailed = $Detailed
+        } {
+            param($Suite, $Root, $Detailed)
+            $messages = @(& {
+                    $summary = Invoke-AvmNestedCommand {
+                        Invoke-AvmBicepPesterSuite -Files @($Suite) -WorkingDirectory $Root `
+                            -EnvVars @{} -TimeoutSec 30
+                    } -Verbose:$Detailed
+                    $summary.Total | Should -Be 2
+                    $summary.Passed | Should -Be 1
+                    $summary.Failed | Should -Be 1
+                    $summary.Issues | Should -HaveCount 1
+                } 6>&1)
+            $text = $messages -join "`n"
+            if ($Detailed) {
+                $text | Should -Match 'shows the passing assertion'
+                $text | Should -Match 'shows the failing assertion'
+            }
+            else {
+                $text | Should -BeNullOrEmpty
+            }
+        }
+    }
+
     It 'uses the executing module when another authoring copy is loaded' {
         $copy = Join-Path $TestDrive 'other' 'Avm.Authoring'
         $null = New-Item -ItemType Directory -Path (Split-Path $copy -Parent)
@@ -60,11 +97,21 @@ Describe 'native diagnostics' -ForEach @(@{ IssuePath = (Join-Path $Convention.R
     It 'reports an unexpected skip' -Tag 'avm.bicep.sample-skip', 'severity:warning' -Skip {}
 }
 '@
-        $summary = InModuleScope 'Avm.Authoring' -Parameters @{ Suite = $suite; Root = $TestDrive } {
+        $captured = InModuleScope 'Avm.Authoring' -Parameters @{ Suite = $suite; Root = $TestDrive } {
             param($Suite, $Root)
-            Invoke-AvmBicepPesterSuite -Mode Convention -Files @($Suite) -WorkingDirectory $Root `
-                -ConventionData @{ Root = $Root } -EnvVars @{} -InProcess
+            $capture = @{}
+            $messages = @(& {
+                    $capture.Summary = Invoke-AvmBicepPesterSuite -Mode Convention -Files @($Suite) -WorkingDirectory $Root `
+                        -ConventionData @{ Root = $Root } `
+                        -EnvVars @{ GITHUB_ACTIONS = 'true'; GITHUB_STEP_SUMMARY = $null } -InProcess -Verbose
+                } 6>&1)
+            $capture.Text = $messages -join "`n"
+            $capture
         }
+        $captured.Text | Should -Match 'reports an advisory'
+        $captured.Text | Should -Match 'reports an unexpected skip'
+        $captured.Text | Should -Not -Match '::error'
+        $summary = $captured.Summary
         $summary.Total | Should -Be 4
         $summary.Failed | Should -Be 3
         $summary.Skipped | Should -Be 1
