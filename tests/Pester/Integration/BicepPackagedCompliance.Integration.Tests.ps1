@@ -71,6 +71,7 @@ Describe 'Integration: packaged Bicep compliance' -Tag Integration {
         Test-Path -LiteralPath (Join-Path $script:consumer 'utilities') | Should -BeFalse
         Test-Path -LiteralPath (Join-Path $script:consumer '.git') | Should -BeFalse
         @(Get-ChildItem -LiteralPath $script:consumer -Filter '*.scriban' -Recurse -File) | Should -HaveCount 0
+        Remove-Item -LiteralPath (Join-Path $script:consumer '.github' 'workflows' 'avm.res.storage.storage-account.yml')
         (Get-Module Avm.Authoring).ModuleBase | Should -BeExactly $script:package
         (Get-Module Avm.Authoring).PrivateData.AvmCapabilities.BicepPackagedCompliance | Should -Be 1
         $result = Invoke-AvmTestUnit -Path $script:modulePath -Recurse -IncludeCompliance
@@ -78,7 +79,7 @@ Describe 'Integration: packaged Bicep compliance' -Tag Integration {
         $result.ComplianceFile | Should -BeExactly (Join-Path $script:package 'Resources' 'bicep' 'Compliance.Tests.ps1')
         $result.UnitFiles | Should -Be 1
         $result.FilesProcessed | Should -Be 2
-        $result.RunsTotal | Should -Be 187
+        $result.RunsTotal | Should -Be 150
         $result.RunsPassed | Should -Be $result.RunsTotal -Because (@($result.Issues | ForEach-Object Message) -join '; ')
         $result.RunsFailed | Should -Be 0
         $result.Issues | Should -HaveCount 0

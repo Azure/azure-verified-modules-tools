@@ -22,7 +22,7 @@ function Get-AvmVerbRegistry {
         [pscustomobject]@{
             Path    = [string[]]@('pre-commit')
             Cmdlet  = 'Invoke-AvmPreCommit'
-            Summary = 'Validate metadata, then run the fast pre-commit gauntlet (terraform: sync, check convention, transform, format, docs; bicep: format, lint, validate, transform, docs).'
+            Summary = 'Validate metadata, then run the fast pre-commit gauntlet (terraform: sync, check convention, transform, format, docs; bicep: format, transform, docs).'
         }
         [pscustomobject]@{
             Path    = [string[]]@('pr-check')
@@ -48,6 +48,11 @@ function Get-AvmVerbRegistry {
             Path    = [string[]]@('init')
             Cmdlet  = 'Initialize-AvmModule'
             Summary = 'Initialize a local Bicep module, or create and set up a Terraform module repository (resumable).'
+        }
+        [pscustomobject]@{
+            Path    = [string[]]@('release-branch')
+            Cmdlet  = 'Invoke-AvmReleaseBranch'
+            Summary = 'Prepare a reviewed external fork PR for credentialed E2E testing.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('version')
@@ -128,11 +133,6 @@ function Get-AvmVerbRegistry {
             Path    = [string[]]@('docs')
             Cmdlet  = 'Invoke-AvmDocs'
             Summary = 'Generate or refresh README docs via the resolved engine.'
-        }
-        [pscustomobject]@{
-            Path    = [string[]]@('docs', 'export-notes')
-            Cmdlet  = 'Export-AvmReadmeNote'
-            Summary = 'Extract an existing Bicep README Notes section into README.notes.md once.'
         }
         [pscustomobject]@{
             Path    = [string[]]@('sync')

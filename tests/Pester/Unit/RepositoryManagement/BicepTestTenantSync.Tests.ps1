@@ -1281,7 +1281,13 @@ Describe 'Bicep workflow isolation and trusted input boundary' {
         $script:identitiesJob | Should -Match '\-ModuleClientIdPath .* -Apply'
         @([regex]::Matches($script:identitiesJob, "(?m)^        if: github.event_name != 'workflow_dispatch' \|\| !inputs.plan_only$")) |
             Should -HaveCount 2
-        $script:identitiesJob | Should -Not -Match 'permission-secrets|permission-contents|permission-workflows|azure/login'
+        $script:identitiesJob | Should -Not -Match 'permission-secrets|permission-contents|permission-workflows'
+        $login = [regex]::Match($script:identitiesJob, '(?ms)^      - name: Sign in with the state backend identity\n.*?(?=^      - |\z)').Value
+        $login | Should -Match 'uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c'
+        $login | Should -Match 'tenant-id: \$\{\{ vars\.ARM_BACKEND_TENANT_ID \}\}'
+        $login | Should -Match 'subscription-id: \$\{\{ vars\.ARM_BACKEND_SUBSCRIPTION_ID \}\}'
+        $login | Should -Match 'client-id: \$\{\{ vars\.ARM_BACKEND_CLIENT_ID \}\}'
+        @([regex]::Matches($script:identitiesJob, '(?m)^\s+uses: azure/login@')) | Should -HaveCount 1
         foreach ($field in @('TENANT_ID', 'SUBSCRIPTION_ID', 'CLIENT_ID', 'STORAGE_ACCOUNT_NAME', 'STORAGE_CONTAINER_NAME')) {
             $script:identitiesJob | Should -Match "ARM_BACKEND_${field}:"
         }

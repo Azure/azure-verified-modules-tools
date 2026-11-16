@@ -43,7 +43,7 @@ Describe 'Invoke-AvmTerraformTest' {
 
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.15.8'; Source = 'cache'; Path = 'terraform-stub'
+                    Name = 'terraform'; Version = 'test'; Source = 'cache'; Path = 'terraform-stub'
                 }
             }
             Mock Get-AvmTerraformValidationScope { $script:validationScope }
@@ -85,7 +85,7 @@ Describe 'Invoke-AvmTerraformTest' {
             $result = Invoke-AvmTerraformTest -Context $script:validationContext
             $result.Status | Should -Be 'pass'
             $result.Engine | Should -Be 'terraform'
-            $result.Tool | Should -Be 'terraform/1.15.8'
+            $result.Tool | Should -Be 'terraform/test'
             $result.ToolPath | Should -Be 'terraform-stub'
             $result.ToolSource | Should -Be 'cache'
             $result.FilesProcessed | Should -Be 2

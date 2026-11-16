@@ -49,8 +49,13 @@ missing, stale, or unexpected. It runs as part of `pre-commit`, `ci`, `ci-tests`
 regenerated.
 Never hand-edit generated reference pages.
 
-Run `./build.ps1 pre-commit` before committing code changes. Documentation-only
-changes that do not affect generated cmdlet reference may skip the full gate.
+Run only the local checks needed to validate the change. For code changes, run
+`./build.ps1 test` for unit tests; run `./build.ps1 docs` only when exported
+cmdlet help changes, and commit the generated Markdown. Run other checks locally
+only when they directly cover the change or help diagnose a failure. Do not run
+the full `pre-commit` gate by default: pull-request workflows run the broader
+checks concurrently. After pushing, monitor the pull request checks, investigate
+failures, and fix them; use focused local checks to verify any fixes.
 
 ## Mandatory implementation practices
 
@@ -73,6 +78,8 @@ changes that do not affect generated cmdlet reference may skip the full gate.
 - Stage the complete focused change, including generated docs.
 - Use a Conventional Commit with a first line no longer than 72 characters.
 - Include the required Copilot commit trailers supplied by the session.
-- Push the current feature branch after the local gate passes.
+- Push the current feature branch after the relevant local checks pass.
 - Reuse an existing open pull request for the branch. If none exists, open one
   against `main`. Do not merge or close it without explicit user instruction.
+- Monitor the pull request checks to completion and resolve failures before
+  considering the change complete.

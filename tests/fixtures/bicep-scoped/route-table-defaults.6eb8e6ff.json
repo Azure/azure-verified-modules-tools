@@ -4,7 +4,7 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.47.16.16243",
+      "version": "other-compiler-version",
       "templateHash": "13630527855541390857"
     },
     "name": "Using only defaults",
@@ -70,7 +70,7 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
+              "version": "other-compiler-version",
               "templateHash": "14119398292843140289"
             },
             "name": "Route Tables",

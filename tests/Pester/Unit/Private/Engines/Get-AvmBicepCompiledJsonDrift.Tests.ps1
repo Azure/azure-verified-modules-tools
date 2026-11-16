@@ -12,7 +12,7 @@ AfterAll {
 
 Describe 'Get-AvmBicepCompiledJsonDrift' {
     BeforeEach {
-        $script:compiled = '{"metadata":{"_generator":{"name":"bicep","version":"0.48.1.52935","templateHash":"987654321"}},"resources":[]}'
+        $script:compiled = '{"metadata":{"_generator":{"name":"bicep","version":"compiler-version","templateHash":"987654321"}},"resources":[]}'
     }
 
     It 'classifies an absent artifact as missing' {
@@ -45,10 +45,10 @@ Describe 'Get-AvmBicepCompiledJsonDrift' {
     }
 
     It 'ignores only the two root generator string values, including escaped token contents' -ForEach @(
-        @{ Version = '0.47.16.16243'; Hash = '18275710714278981656' }
+        @{ Version = 'other-compiler-version'; Hash = '18275710714278981656' }
         @{ Version = '0.47\u002e16\"quoted\\value'; Hash = 'hash\"with\\escapes' }
     ) {
-        $current = $script:compiled.Replace('0.48.1.52935', $Version).Replace('987654321', $Hash)
+        $current = $script:compiled.Replace('compiler-version', $Version).Replace('987654321', $Hash)
         InModuleScope 'Avm.Authoring' -Parameters @{ Compiled = $script:compiled; Current = $current } {
             param($Compiled, $Current)
             Get-AvmBicepCompiledJsonDrift -CompiledJson $Compiled -CurrentBytes ([Text.Encoding]::UTF8.GetBytes($Current)) |
@@ -66,7 +66,7 @@ Describe 'Get-AvmBicepCompiledJsonDrift' {
         @{ Case = 'array generator'; Tail = ',"resources":[{"metadata":{"_generator":{"version":"changed","templateHash":"changed"}}}]'; Generator = ''; Metadata = '' }
     ) {
         $name = if ($Case -ceq 'generator name') { '' } else { '"name":"bicep",' }
-        $current = '{"metadata":{"_generator":{' + $name + '"version":"0.47.16.16243","templateHash":"old"' +
+        $current = '{"metadata":{"_generator":{' + $name + '"version":"other-compiler-version","templateHash":"old"' +
             $Generator + '}' + $Metadata + '}' + $Tail + '}'
         InModuleScope 'Avm.Authoring' -Parameters @{ Compiled = $script:compiled; Current = $current } {
             param($Compiled, $Current)
@@ -78,9 +78,9 @@ Describe 'Get-AvmBicepCompiledJsonDrift' {
     It 'locates provenance after Unicode, escaped names, decoy strings and nested objects without changing them' {
         $compiled = ' {"decoy":{"metadata":{"_generator":{"version":"keep","templateHash":"keep"}}},' +
             '"text":"\u00e9 \"metadata\": { \"_generator\": {} }","metadata":{"\u005fgenerator":{' +
-            '"templateHash":"987654321","unknown":{"version":"keep"},"version":"0.48.1.52935"}}} '
+            '"templateHash":"987654321","unknown":{"version":"keep"},"version":"compiler-version"}}} '
         $compiled = $compiled.Replace('\u00e9', [string][char]0xE9)
-        $current = $compiled.Replace('0.48.1.52935', '0.47.16.16243').Replace('987654321', 'old')
+        $current = $compiled.Replace('compiler-version', 'other-compiler-version').Replace('987654321', 'old')
         InModuleScope 'Avm.Authoring' -Parameters @{ Compiled = $compiled; Current = $current } {
             param($Compiled, $Current)
             Get-AvmBicepCompiledJsonDrift -CompiledJson $Compiled -CurrentBytes ([Text.Encoding]::UTF8.GetBytes($Current)) |
@@ -93,7 +93,7 @@ Describe 'Get-AvmBicepCompiledJsonDrift' {
 
     It 'preserves formatting, casing, key order and encoding when provenance also changes: <Case>' -ForEach @(
         @{ Case = 'whitespace'; Find = ',"resources"'; Replace = ', "resources"' }
-        @{ Case = 'key order'; Find = '"name":"bicep","version":"0.48.1.52935"'; Replace = '"version":"0.48.1.52935","name":"bicep"' }
+        @{ Case = 'key order'; Find = '"name":"bicep","version":"compiler-version"'; Replace = '"version":"compiler-version","name":"bicep"' }
         @{ Case = 'escaped property name'; Find = '"version"'; Replace = '"\u0076ersion"' }
         @{ Case = 'path casing'; Find = '"metadata"'; Replace = '"Metadata"' }
         @{ Case = 'CRLF'; Find = '}'; Replace = "}`r`n" }
@@ -197,7 +197,7 @@ Describe 'Get-AvmBicepCompiledJsonDrift' {
     "publishedModule": {
       "type": "Microsoft.Resources/deployments",
       "properties": {"template": {
-        "metadata": {"_generator": {"name": "bicep", "version": "0.41.2.15936", "templateHash": "published-hash"}},
+        "metadata": {"_generator": {"name": "bicep", "version": "test", "templateHash": "published-hash"}},
         "resources": []
       }}
     }
@@ -222,7 +222,7 @@ Describe 'Get-AvmBicepCompiledJsonDrift' {
                 $compiled = $template | ConvertTo-Json -Depth 100
             }
             $current = $compiled.Replace('current-root', 'old-root').Replace('root-hash', 'old-root-hash').
-            Replace('current-local', '0.47.16.16243').Replace('local-hash', 'old-local-hash').
+            Replace('current-local', 'other-compiler-version').Replace('local-hash', 'old-local-hash').
             Replace('current-leaf', 'old-leaf').Replace('leaf-hash', 'old-leaf-hash')
             InModuleScope 'Avm.Authoring' -Parameters @{ Compiled = $compiled; Current = $current } {
                 param($Compiled, $Current)

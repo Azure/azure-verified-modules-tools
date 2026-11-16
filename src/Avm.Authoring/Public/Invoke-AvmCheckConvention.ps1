@@ -7,15 +7,17 @@ function Invoke-AvmCheckConvention {
         Routes to the engine matching the module's ecosystem:
 
           - bicep      -> first-party layout, version, changelog, test-source,
-                          compiled ARM, checked-in JSON, workflow, and CODEOWNERS
+                          compiled ARM, checked-in JSON, and workflow
                           checks
           - terraform  -> built-in AVM convention rules
 
         The ecosystem is determined by Get-AvmModuleContext, which honours
         the .avm/context.psd1 override file and the -Ecosystem filter.
-        Bicep workflow checks require powershell-yaml 0.4.12, loaded only
-        when a module workflow is inspected. Install it separately with
-        Install-PSResource; missing or invalid YAML fails the check.
+        Bicep workflows are required for modules with reserved test
+        subscriptions in the root .reserved-test-subscriptions.json map
+        and optional for other modules, including when the map is absent.
+        Inspected workflows require powershell-yaml 0.4.12. Install it
+        separately with Install-PSResource; invalid YAML fails the check.
         Bicep rules run in process as the packaged Pester suite under
         Resources/bicep/conventions, so Pester 5.5.0 or later must be
         installed. A rule that throws is reported as an error issue.

@@ -18,7 +18,6 @@ Describe 'Integration: packaged Bicep lint' -Tag Integration {
             $script:previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
         }
         $script:tool = InModuleScope Avm.Authoring { Resolve-AvmTool -Name bicep }
-        $script:tool.Version | Should -BeExactly '0.48.1'
         $env:AVM_OFFLINE = '1'
         $env:AVM_NO_AUTO_INSTALL = '1'
         $env:AVM_LINT_PACKAGE = $script:packageManifest
@@ -53,7 +52,7 @@ Describe 'Integration: packaged Bicep lint' -Tag Integration {
         (Get-Module Avm.Authoring).ModuleBase | Should -BeExactly $script:package
         $result = Invoke-AvmLint -Path $fixture -Ecosystem bicep -SkipModuleVersionCheck
         $result.FilesProcessed | Should -Be 1
-        $result.Tool | Should -BeExactly 'bicep/0.48.1'
+        $result.Tool | Should -BeExactly "bicep/$($script:tool.Version)"
         $result.ToolSource | Should -BeExactly 'cache'
         $result.ToolPath | Should -BeExactly $script:tool.Path
         $result.Status | Should -BeExactly $Status

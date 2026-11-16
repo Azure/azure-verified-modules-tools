@@ -9,10 +9,9 @@ Build a guarded top-level Bicep release matrix.
 ## Description
 
 Verifies the exact upstream registry main checkout and push remote before
-selecting release roots. Push mode discovers changed publishable modules
-from BaseCommit. Manual mode discovers pending releases from complete
-tag history. The result contains top-level module roots only; tag
-creation later preserves independent child and parent baselines.
+selecting release roots with publishable changes since BaseCommit.
+Manual mode defaults to the target's first parent when no base is
+provided. Tag creation preserves independent child and parent baselines.
 
 ## Syntax
 
@@ -24,7 +23,8 @@ Initialize-AvmBicepReleaseMatrix [-Root] <string> [-EventName] <string> [-Target
 
 ### -BaseCommit
 
-Full SHA-1 push comparison commit.
+Full SHA-1 comparison commit. Required for push; optional for a manual
+retry of a release covering more than one commit.
 
 | Property | Value |
 | --- | --- |
@@ -97,4 +97,4 @@ Initialize-AvmBicepReleaseMatrix -Root $repo -EventName workflow_dispatch -Targe
 
 ## Outputs
 
-- `PSCustomObject with an Include array of top-level module paths.`
+- `PSCustomObject with BaseCommit and an Include array of top-level module paths.`

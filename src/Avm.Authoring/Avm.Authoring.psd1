@@ -9,7 +9,6 @@
     PowerShellVersion    = '7.4'
     CompatiblePSEditions = @('Core')
     FunctionsToExport    = @(
-        'Export-AvmReadmeNote',
         'Get-AvmAuthoringPlaceholder',
         'Get-AvmBicepAzureDependency',
         'Get-AvmBicepE2eDeploymentMatrix',
@@ -33,6 +32,7 @@
         'Invoke-AvmDoctor',
         'Invoke-AvmDocs',
         'Invoke-AvmFormat',
+        'Invoke-AvmReleaseBranch',
         'Invoke-AvmLint',
         'Invoke-AvmPrCheck',
         'Invoke-AvmPreCommit',
@@ -60,6 +60,7 @@
             BicepRequiredResourceProviders  = 1
             PowerShellModuleArchiveRecovery = 1
             BicepWorkflowOrchestration      = 1
+            BicepReleaseSelection           = 1
             BicepWorkflowE2eRuntime         = 1
             BicepAzureDependencyInventory   = 1
         }

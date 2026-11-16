@@ -106,6 +106,20 @@ Describe 'Bicep reserved subscription contract' {
         }
     }
 
+    It 'allows convention checks to inspect a noncanonical path without bypassing map validation' {
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:root } {
+            param($Root)
+            Get-AvmBicepTestSubscriptionTag -RepositoryRoot $Root -ModulePath 'avm/res/mock/widgetStore' `
+                -AllowNonCanonicalModulePath | Should -BeExactly 'General'
+        }
+        [IO.File]::WriteAllText($script:path, '{invalid')
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:root } {
+            param($Root)
+            { Get-AvmBicepTestSubscriptionTag -RepositoryRoot $Root -ModulePath 'avm/res/mock/widgetStore' `
+                    -AllowNonCanonicalModulePath } | Should -Throw '*must contain valid UTF-8 JSON*'
+        }
+    }
+
     It 'validates the entire map, including unrelated entries: <Case>' -ForEach @(
         @{ Case = 'duplicate'; Json = '{"avm/res/test/one":"General","avm/res/test/one":"Azure Local"}' }
         @{ Case = 'miscased key'; Json = '{"avm/res/Test/one":"General"}' }

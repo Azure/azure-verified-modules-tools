@@ -1,0 +1,222 @@
+---
+name: 'Repos: Regions Data Sync'
+
+on:
+  schedule:
+    - cron: '15 4 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: repository-management-regions-data-sync
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  collect:
+    name: Collect regions data
+    if: >-
+      github.repository == 'Azure/azure-verified-modules-tools' &&
+      !github.event.repository.fork &&
+      github.ref == 'refs/heads/main' &&
+      github.workflow_ref == 'Azure/azure-verified-modules-tools/.github/workflows/repository-management-regions-data-sync.yml@refs/heads/main' &&
+      vars.REGIONS_DATA_SYNC_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: regions-update-data
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+    steps:
+      - name: Check out the regions repository default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Azure/terraform-azurerm-avm-utl-regions
+          path: regions
+          persist-credentials: false
+
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 'stable'
+
+      - name: Install JSON diff
+        run: go install github.com/josephburnett/jd/v2/jd@e37eef06c8638ac7a223d21fe3ff14082c5c0700 # v2.5.0
+
+      - name: Sign in to Azure
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Regenerate locations data
+        working-directory: regions
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cachePath = Join-Path $PWD 'modules' 'cached-data' 'locations.tf.json'
+          Copy-Item -LiteralPath $cachePath -Destination "$cachePath.original"
+          $locations = az rest --method GET --uri "/subscriptions/$env:AZURE_SUBSCRIPTION_ID/locations?api-version=2023-07-01" |
+            ConvertFrom-Json
+          $data = [ordered]@{
+            locals = [ordered]@{
+              locations_cached = [ordered]@{
+                value = @($locations.value | Sort-Object -Property name)
+              }
+            }
+          }
+          $data | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $cachePath -Encoding utf8NoBOM
+
+      - name: Compare regions data
+        id: compare
+        working-directory: regions
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cachePath = Join-Path $PWD 'modules' 'cached-data' 'locations.tf.json'
+          & jd -set "$cachePath.original" $cachePath
+          if ($LASTEXITCODE -eq 0) {
+            'changed=false' >> $env:GITHUB_OUTPUT
+            return
+          }
+
+          if ($LASTEXITCODE -ne 1) {
+            throw "jd failed while comparing regions data (exit code $LASTEXITCODE)."
+          }
+
+          'changed=true' >> $env:GITHUB_OUTPUT
+
+      - name: Upload generated regions data
+        if: steps.compare.outputs.changed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: regions-locations-data
+          path: regions/modules/cached-data/locations.tf.json
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish regions data
+    needs: collect
+    if: needs.collect.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: avm
+    steps:
+      - name: Create scoped regions repository token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AVM_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AVM_APP_PRIVATE_KEY }}
+          owner: Azure
+          repositories: terraform-azurerm-avm-utl-regions
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Resolve regions repository default branch
+        id: target
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $branch = (gh api repos/Azure/terraform-azurerm-avm-utl-regions --jq '.default_branch').Trim()
+          git check-ref-format --branch $branch
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The regions repository returned an invalid default branch.'
+          }
+
+          "default-branch=$branch" >> $env:GITHUB_OUTPUT
+
+      - name: Check out the regions repository default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Azure/terraform-azurerm-avm-utl-regions
+          ref: ${{ steps.target.outputs.default-branch }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: regions
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download generated regions data
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: regions-locations-data
+          path: ${{ runner.temp }}/regions-locations-data
+
+      - name: Validate and publish regions data
+        working-directory: regions
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          AVM_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          BASE_BRANCH: ${{ steps.target.outputs.default-branch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:AVM_APP_SLUG -cne 'azure-verified-modules') {
+            throw 'The configured GitHub App is not azure-verified-modules.'
+          }
+
+          $generatedPath = Join-Path $env:RUNNER_TEMP 'regions-locations-data' 'locations.tf.json'
+          $targetPath = Join-Path $PWD 'modules' 'cached-data' 'locations.tf.json'
+          if (-not (Test-Path -LiteralPath $generatedPath)) {
+            throw 'The generated regions data artifact is missing.'
+          }
+
+          Copy-Item -LiteralPath $generatedPath -Destination $targetPath -Force
+          $changedPaths = @(git diff --name-only)
+          if ($changedPaths.Count -eq 0) {
+            Write-Information 'The regions data is current; no publication was needed.' -InformationAction Continue
+            return
+          }
+          if ($changedPaths.Count -ne 1 -or $changedPaths[0] -cne 'modules/cached-data/locations.tf.json') {
+            throw 'Generated regions data changed an unexpected path.'
+          }
+
+          ./avm pre-commit
+          $changedPaths = @(git diff --name-only)
+          if ($changedPaths.Count -ne 1 -or $changedPaths[0] -cne 'modules/cached-data/locations.tf.json') {
+            throw 'Pre-commit changed an unexpected path.'
+          }
+
+          $branch = "update$env:GITHUB_RUN_ID"
+          git check-ref-format --branch $branch
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The generated update branch is invalid.'
+          }
+
+          git config user.name 'GitHub Actions'
+          git config user.email 'actions@github.com'
+          git checkout -b $branch
+          git add -- 'modules/cached-data/locations.tf.json'
+          git commit -m 'feat: update data from Azure'
+
+          $authentication = @('-c', 'credential.helper=', '-c', 'credential.https://github.com.helper=!gh auth git-credential')
+          git @authentication push origin $branch
+          $pullRequestUrl = gh pr create `
+            --repo Azure/terraform-azurerm-avm-utl-regions `
+            --title 'feat: update data from Azure' `
+            --body "Updated from GitHub Actions run ID: $env:GITHUB_RUN_ID" `
+            --base $env:BASE_BRANCH `
+            --head $branch
+          $pullRequestNumber = gh pr view $pullRequestUrl --json number --jq '.number'
+          if ($pullRequestNumber -notmatch '^[1-9][0-9]*$') {
+            throw 'GitHub did not return a valid pull request number.'
+          }
+
+          $openPullRequests = @(gh pr list `
+            --repo Azure/terraform-azurerm-avm-utl-regions `
+            --search 'is:open "feat: update data from Azure" in:title' `
+            --json number,headRefName | ConvertFrom-Json)
+          foreach ($pullRequest in $openPullRequests) {
+            if ($pullRequest.number -ne [int]$pullRequestNumber -and $pullRequest.headRefName -match '^update[0-9]+$') {
+              gh pr close $pullRequest.number `
+                --repo Azure/terraform-azurerm-avm-utl-regions `
+                --delete-branch `
+                --comment "Superseded by #$pullRequestNumber"
+            }
+          }

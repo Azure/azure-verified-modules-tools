@@ -6,7 +6,7 @@ function Invoke-AvmLint {
     .DESCRIPTION
         Routes to the engine matching the module's ecosystem:
 
-          - bicep      -> Invoke-AvmBicepLint     ('bicep lint <file>' per file)
+          - bicep      -> Invoke-AvmBicepTest     (build and lint each Bicep file)
           - terraform  -> Invoke-AvmTerraformLint (AVM tflint rulesets, per scope)
 
         The ecosystem is determined by Get-AvmModuleContext, which honours
@@ -81,7 +81,7 @@ function Invoke-AvmLint {
 
     switch ($context.Ecosystem) {
         'bicep' {
-            Invoke-AvmBicepLint -Context $context -AllowPathFallback:$AllowPathFallback
+            Invoke-AvmBicepTest -Context $context -AllowPathFallback:$AllowPathFallback
         }
         'terraform' {
             Invoke-AvmTerraformLint `

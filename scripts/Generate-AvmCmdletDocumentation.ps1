@@ -305,10 +305,14 @@ try {
     }
 
     $cliCommandsByCmdlet = @{}
+    $cliCmdletOrder = [System.Collections.Generic.List[string]]::new()
     foreach ($entry in @(& $module { Get-AvmVerbRegistry })) {
         $cmdlet = [string]$entry.Cmdlet
         if (-not $cliCommandsByCmdlet.ContainsKey($cmdlet)) {
             $cliCommandsByCmdlet[$cmdlet] = [System.Collections.Generic.List[string]]::new()
+        }
+        if (-not $cliCmdletOrder.Contains($cmdlet)) {
+            $cliCmdletOrder.Add($cmdlet)
         }
         $cliCommandsByCmdlet[$cmdlet].Add("avm $($entry.Path -join ' ')")
     }
@@ -333,6 +337,19 @@ try {
             -CliCommands $cliCommands
     }
 
+    $indexCommands = [System.Collections.Generic.List[System.Management.Automation.CommandInfo]]::new()
+    foreach ($cmdlet in $cliCmdletOrder) {
+        $command = $commands | Where-Object Name -CEQ $cmdlet
+        if ($null -ne $command) {
+            $indexCommands.Add($command)
+        }
+    }
+    foreach ($command in $commands) {
+        if ($command.Name -notin $cliCmdletOrder) {
+            $indexCommands.Add($command)
+        }
+    }
+
     $index = [System.Collections.Generic.List[string]]::new()
     $index.Add($generatedNotice)
     $index.Add('')
@@ -342,7 +359,7 @@ try {
     $index.Add('')
     $index.Add('| Cmdlet | CLI command(s) | Purpose |')
     $index.Add('| --- | --- | --- |')
-    foreach ($command in $commands) {
+    foreach ($command in $indexCommands) {
         $help = Get-Help -Name $command.Name
         $cliCommands = if ($cliCommandsByCmdlet.ContainsKey($command.Name)) {
             ($cliCommandsByCmdlet[$command.Name] | ForEach-Object { "``$_``" }) -join '<br>'

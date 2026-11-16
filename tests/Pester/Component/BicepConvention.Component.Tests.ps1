@@ -221,7 +221,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             if ($Variant -in @('provenance', 'template-drift', 'malformed-artifact', 'crlf-artifact', 'bom-artifact')) {
                 $artifact = Join-Path $Path 'main.json'
                 $original = [System.IO.File]::ReadAllText($artifact)
-                $script:provenanceCompiled = $original.Replace('0.47.16.16243', '0.48.1.52935').Replace(
+                $script:provenanceCompiled = $original.Replace('other-compiler-version', 'compiler-version').Replace(
                     '18275710714278981656', '987654321')
                 Mock Invoke-AvmProcess {
                     [pscustomobject]@{ ExitCode = 0; StdOut = $script:provenanceCompiled; StdErr = '' }
@@ -295,7 +295,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         }
     }
 
-    It 'executes independent native workflow and ownership requirements' {
+    It 'executes independent native workflow requirements' {
         $run = InModuleScope 'Avm.Authoring' -Parameters @{
             Path = $script:modulePath; Root = $script:workingRoot
         } {
@@ -303,19 +303,17 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             $scope = Get-AvmBicepConventionScope -Path $Path
             $data = @{
                 Root = $Root; RepositoryRoot = $Root
-                Workflows      = @(@{ Scope = $scope; Input = Get-AvmBicepConventionWorkflowInput -Scope $scope })
-                CodeownerInput = Get-AvmBicepCodeownerInput -RepositoryRoot $Root
+                Workflows = @(@{ Scope = $scope; Input = Get-AvmBicepConventionWorkflowInput -Scope $scope })
             }
             $directory = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Resources' 'bicep' 'conventions'
             $summary = Invoke-AvmBicepPesterSuite -Files @(
-                (Join-Path $directory 'Workflow.Tests.ps1'), (Join-Path $directory 'Ownership.Tests.ps1')
+                (Join-Path $directory 'Workflow.Tests.ps1')
             ) -WorkingDirectory $Root -Mode Convention -ConventionData $data -EnvVars @{} -InProcess
-            @{ Summary = $summary; Workflow = $data.NativeWorkflowExpected; Ownership = $data.NativeOwnershipExpected }
+            @{ Summary = $summary; Workflow = $data.NativeWorkflowExpected }
         }
         $run.Workflow | Should -Be 20
-        $run.Ownership | Should -Be 17
-        $run.Summary.Total | Should -Be 37
-        $run.Summary.Passed | Should -Be 37 -Because (@($run.Summary.Issues | ForEach-Object Message) -join '; ')
+        $run.Summary.Total | Should -Be 20
+        $run.Summary.Passed | Should -Be 20 -Because (@($run.Summary.Issues | ForEach-Object Message) -join '; ')
         @($run.Summary.Issues) | Should -HaveCount 0
     }
 
@@ -583,15 +581,67 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $issue[0].Severity | Should -Be 'error'
     }
 
-    It 'reports a missing module workflow once for its top-level scope' {
+    It 'allows an ordinary module without a workflow and retains other checks' {
         $path = Join-Path $script:workingRoot '.github' 'workflows' 'avm.res.mock.widget.yml'
         Remove-Item -LiteralPath $path
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'pass' -Because (@($result.Issues | ForEach-Object Message) -join '; ')
+        @($result.Issues | Where-Object Code -EQ 'avm.bicep.workflow-file') | Should -HaveCount 0
+
+        [IO.File]::WriteAllText((Join-Path $script:modulePath 'version.json'), '{invalid')
+        $invalid = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $invalid.Status | Should -Be 'fail'
+        $invalid.Issues.Code | Should -Contain 'avm.bicep.version-invalid'
+    }
+
+    It 'requires a reserved module workflow once for its top-level scope' {
+        $path = Join-Path $script:workingRoot '.github' 'workflows' 'avm.res.mock.widget.yml'
+        Remove-Item -LiteralPath $path
+        [IO.File]::WriteAllText((Join-Path $script:workingRoot '.reserved-test-subscriptions.json'),
+            '{"avm/res/mock/widget":"Azure Local"}')
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
         $missing = @($result.Issues | Where-Object Code -EQ 'avm.bicep.workflow-file')
         $missing.Count | Should -Be 1
         $missing[0].File | Should -Be '.github/workflows/avm.res.mock.widget.yml'
         $result.Status | Should -Be 'fail'
+    }
+
+    It 'allows a missing workflow for an unmapped module when a reservation map exists' {
+        Remove-Item -LiteralPath (Join-Path $script:workingRoot '.github' 'workflows' 'avm.res.mock.widget.yml')
+        [IO.File]::WriteAllText((Join-Path $script:workingRoot '.reserved-test-subscriptions.json'),
+            '{"avm/res/mock/other":"Azure Local"}')
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'pass' -Because (@($result.Issues | ForEach-Object Message) -join '; ')
+    }
+
+    It 'allows an ordinary module without a workflows directory' {
+        $directory = Join-Path $script:workingRoot '.github' 'workflows'
+        Remove-Item -LiteralPath (Join-Path $directory 'avm.res.mock.widget.yml')
+        Remove-Item -LiteralPath $directory
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'pass' -Because (@($result.Issues | ForEach-Object Message) -join '; ')
+    }
+
+    It 'does not treat an invalid reservation map as an unreserved module' {
+        [IO.File]::WriteAllText((Join-Path $script:workingRoot '.reserved-test-subscriptions.json'), '{invalid')
+
+        { Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck } |
+            Should -Throw '*must contain valid UTF-8 JSON*'
+    }
+
+    It 'validates the contents of a reserved module workflow' {
+        [IO.File]::WriteAllText((Join-Path $script:workingRoot '.reserved-test-subscriptions.json'),
+            '{"avm/res/mock/widget":"Azure Local"}')
+        $path = Join-Path $script:workingRoot '.github' 'workflows' 'avm.res.mock.widget.yml'
+        [IO.File]::WriteAllText($path, 'on: [unterminated')
+
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Status | Should -Be 'fail'
+        $result.Issues.Code | Should -Contain 'avm.bicep.workflow-parse'
     }
 
     It 'rejects malformed YAML without treating the workflow as checked' {
@@ -619,7 +669,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.Status | Should -Be 'fail'
     }
 
-    It 'checks each top-level workflow separately in a monorepo' {
+    It 'checks present ordinary and required reserved workflows separately in a monorepo' {
         $second = Join-Path $script:workingRoot 'avm' 'res' 'mock' 'gadget'
         Copy-Item -LiteralPath $script:modulePath -Destination $second -Recurse
         $workflowDirectory = Join-Path $script:workingRoot '.github' 'workflows'
@@ -627,6 +677,8 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $other = Join-Path $workflowDirectory 'avm.res.mock.gadget.yml'
         $content = [System.IO.File]::ReadAllText($first).Replace('widget', 'gadget')
         [System.IO.File]::WriteAllText($other, $content)
+        [IO.File]::WriteAllText((Join-Path $script:workingRoot '.reserved-test-subscriptions.json'),
+            '{"avm/res/mock/gadget":"Azure Local"}')
         $context = [pscustomobject]@{
             Kind = 'bicep-monorepo'; Root = $script:workingRoot; Ecosystem = 'bicep'
         }
@@ -693,87 +745,15 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
 
         $result.Issues.Code | Should -Contain 'avm.bicep.workflow-file'
-        if ($Case -eq 'GitHub') {
-            $result.Issues.Code | Should -Contain 'avm.bicep.codeowners-file'
-        }
     }
 
-    It 'rejects a missing CODEOWNERS file without silently skipping repository governance' {
+    It 'does not enforce the retired CODEOWNERS convention' {
         $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
         Remove-Item -LiteralPath $path
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
         $issue = @($result.Issues | Where-Object Code -EQ 'avm.bicep.codeowners-file')
-        $issue.Count | Should -Be 1
-        $issue[0].File | Should -Be '.github/CODEOWNERS'
-    }
-
-    It 'checks the CODEOWNERS default, ownerless module tree, and final overrides' {
-        $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
-        $content = [System.IO.File]::ReadAllText($path).
-        Replace('* @Azure/azure-verified-modules-tooling-contributors', '* @Contoso/team').
-        Replace('/avm/', '/avm/ @Contoso/team').
-        Replace('metadata.json @Azure/azure-verified-modules-engineering-owners', 'metadata.json @Contoso/team')
-        [System.IO.File]::WriteAllText($path, $content)
-
-        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $result.Issues.Code | Should -Contain 'avm.bicep.codeowners-default'
-        $result.Issues.Code | Should -Contain 'avm.bicep.codeowners-module'
-        $result.Issues.Code | Should -Contain 'avm.bicep.codeowners-override'
-    }
-
-    It 'reports duplicate and module-specific CODEOWNERS patterns with line numbers' {
-        $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
-        [System.IO.File]::AppendAllText(
-            $path, "/avm/res/mock/widget/ @Contoso/team`nmetadata.json @Contoso/team`n")
-
-        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $moduleRule = @($result.Issues | Where-Object Code -EQ 'avm.bicep.codeowners-per-module')
-        $duplicate = @($result.Issues | Where-Object Code -EQ 'avm.bicep.codeowners-duplicate')
-        $moduleRule.Count | Should -Be 1
-        $moduleRule[0].Line | Should -BeGreaterThan 2
-        $duplicate.Count | Should -Be 1
-        $duplicate[0].Line | Should -BeGreaterThan $moduleRule[0].Line
-    }
-
-    It 'rejects CODEOWNERS patterns that can override ownerless modules: <Case>' -TestCases @(
-        @{ Case = 'unanchored module entry'; Pattern = 'avm/res/mock/widget/** @Contoso/team'; ExpectedCode = 'avm.bicep.codeowners-per-module' }
-        @{ Case = 'unanchored module glob'; Pattern = 'avm/** @Contoso/team'; ExpectedCode = 'avm.bicep.codeowners-per-module' }
-        @{ Case = 'broad glob'; Pattern = '**/widget/** @Contoso/team'; ExpectedCode = 'avm.bicep.codeowners-module-override' }
-        @{ Case = 'root wildcard'; Pattern = '/** @Contoso/team'; ExpectedCode = 'avm.bicep.codeowners-module-override' }
-    ) {
-        param($Case, $Pattern, $ExpectedCode)
-
-        $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
-        $content = [System.IO.File]::ReadAllText($path)
-        $anchor = '*avm.core.team.tests.ps1 @Azure/azure-verified-modules-tooling-contributors'
-        [System.IO.File]::WriteAllText($path, $content.Replace($anchor, "$Pattern`n$anchor"))
-
-        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $issue = @($result.Issues | Where-Object Code -EQ $ExpectedCode)
-        $issue.Count | Should -Be 1
-        $issue[0].Line | Should -BeGreaterThan 2
-    }
-
-    It 'allows additional ownership patterns anchored outside the module tree' {
-        $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
-        $content = [System.IO.File]::ReadAllText($path)
-        $anchor = '*avm.core.team.tests.ps1 @Azure/azure-verified-modules-tooling-contributors'
-        [System.IO.File]::WriteAllText($path, $content.Replace($anchor, "/docs/** @Contoso/team`n$anchor"))
-
-        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        @($result.Issues | Where-Object { $_.Code -like 'avm.bicep.codeowners-*' }).Count |
-            Should -Be 0
-    }
-
-    It 'names a CODEOWNERS file that cannot be decoded as UTF-8' {
-        $path = Join-Path $script:workingRoot '.github' 'CODEOWNERS'
-        [System.IO.File]::WriteAllBytes($path, [byte[]]@(0xC3, 0x28))
-
-        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $issue = @($result.Issues | Where-Object Code -EQ 'avm.bicep.codeowners-read')
-        $issue.Count | Should -Be 1
-        $issue[0].File | Should -Be '.github/CODEOWNERS'
+        $issue.Count | Should -Be 0
     }
 
     It 'names root, child, and e2e compilation failures without skipping the other sources' {
@@ -1721,64 +1701,35 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.Issues.Code | Should -Contain 'avm.bicep.test-file-missing'
     }
 
-    It 'blocks skipping required resource tests and requires a reason for permitted exclusions' {
-        Set-Content -LiteralPath (Join-Path $script:modulePath 'tests' 'e2e' 'defaults' '.e2eignore') -Value 'Not allowed'
-        Set-Content -LiteralPath (Join-Path $script:modulePath 'tests' 'e2e' 'max' '.e2eignore') -Value ''
-
-        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
-        $result.Issues.Code | Should -Contain 'avm.bicep.e2eignore-required-test'
-        $result.Issues.Code | Should -Contain 'avm.bicep.e2eignore-reason'
-    }
-
-    It 'matches only actual resource paths for E2E ignore exemptions: <ModuleRelativePath> <Folder>' -TestCases @(
-        @{
-            ModuleRelativePath = 'avm/res/operational-insights/cluster'
-            Folder = 'defaults'
-            Required = $false
-        }
-        @{
-            ModuleRelativePath = 'avm/res/dev-center/devcenter'
-            Folder = 'waf-aligned'
-            Required = $false
-        }
-        @{
-            ModuleRelativePath = 'avm/res/dev-center/project'
-            Folder = 'waf-aligned'
-            Required = $false
-        }
-        @{
-            ModuleRelativePath = 'avm/res/dev-center/devcenter'
-            Folder = 'defaults'
-            Required = $true
-        }
-        @{
-            ModuleRelativePath = 'avm/res/dev-center/project'
-            Folder = 'defaults'
-            Required = $true
-        }
-        @{
-            ModuleRelativePath = 'avm/res/dev-center/project-child'
-            Folder = 'waf-aligned'
-            Required = $true
-        }
+    It 'permits owner-reviewed exclusions with a reason for <Folder>' -TestCases @(
+        @{ Folder = 'defaults' }
+        @{ Folder = 'waf-aligned' }
+        @{ Folder = 'max' }
     ) {
-        param([string] $ModuleRelativePath, [string] $Folder, [bool] $Required)
+        param([string] $Folder)
 
-        $target = Join-Path $script:workingRoot ($ModuleRelativePath.Split('/') -join [IO.Path]::DirectorySeparatorChar)
-        $null = New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force
-        Copy-Item -LiteralPath $script:modulePath -Destination $target -Recurse -Force
-        Set-Content -LiteralPath (Join-Path $target 'tests' 'e2e' $Folder '.e2eignore') `
-            -Value 'This module is excluded by an explicit convention exemption.' -Encoding utf8NoBOM
-        $scope = InModuleScope 'Avm.Authoring' -Parameters @{ Path = $target } {
+        Set-Content -LiteralPath (Join-Path $script:modulePath 'tests' 'e2e' $Folder '.e2eignore') `
+            -Value 'Temporarily excluded while the documented provider failure is investigated.' -Encoding utf8NoBOM
+        $scope = InModuleScope 'Avm.Authoring' -Parameters @{ Path = $script:modulePath } {
             param($Path)
             Get-AvmBicepConventionScope -Path $Path
         }
-        $scope.ModuleRelativePath | Should -BeExactly $ModuleRelativePath
 
         $run = Invoke-NativeLayoutFixture -Root $script:workingRoot -Scopes @($scope)
         $run.Summary.Total | Should -Be $run.Expected
-        @($run.Issues | Where-Object Code -EQ 'avm.bicep.e2eignore-required-test').Count |
-            Should -Be ([int]$Required)
+        $run.Summary.Failed | Should -Be 0
+    }
+
+    It 'requires a reason for deployment exclusions in <Folder>' -TestCases @(
+        @{ Folder = 'defaults' }
+        @{ Folder = 'waf-aligned' }
+        @{ Folder = 'max' }
+    ) {
+        param([string] $Folder)
+
+        Set-Content -LiteralPath (Join-Path $script:modulePath 'tests' 'e2e' $Folder '.e2eignore') -Value ''
+        $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Issues.Code | Should -Contain 'avm.bicep.e2eignore-reason'
     }
 
     It 'reports source errors instead of accepting commented-out test metadata or namePrefix' {

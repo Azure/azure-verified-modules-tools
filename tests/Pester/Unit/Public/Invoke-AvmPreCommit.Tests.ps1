@@ -47,13 +47,11 @@ Describe 'Invoke-AvmPreCommit' {
                     }
                 }
                 Mock Invoke-AvmFormat { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
-                Mock Invoke-AvmLint {
+                Mock Invoke-AvmTransform {
                     Write-AvmLog 'nested pre-commit info' -Level Info
                     Write-AvmLog 'nested pre-commit pass' -Level Pass
                     [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' }
                 }
-                Mock Invoke-AvmTest { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
-                Mock Invoke-AvmTransform { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
                 Mock Invoke-AvmDocs { [pscustomobject]@{ Engine = 'bicep'; Status = 'pass' } }
 
                 $defaultOutput = @(Invoke-AvmPreCommit -Path $D 6>&1)
@@ -80,11 +78,61 @@ Describe 'Invoke-AvmPreCommit' {
             }
         }
 
-        ($observed.DefaultInfo -join "`n") | Should -Match 'step 3/6: lint'
+        ($observed.DefaultInfo -join "`n") | Should -Match 'step 3/4: transform'
         @($observed.DefaultInfo) | Should -Not -Contain 'nested pre-commit info'
         @($observed.DefaultInfo) | Should -Not -Contain 'nested pre-commit pass'
         @($observed.VerboseInfo) | Should -Contain 'nested pre-commit info'
         @($observed.VerboseInfo) | Should -Contain 'nested pre-commit pass'
+    }
+
+    It 'reports actionable diagnostics once and keeps details available in verbose output and results' {
+        $dir = Join-Path $TestDrive ('precommit-diagnostics-' + [guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $dir
+        $observed = InModuleScope 'Avm.Authoring' -Parameters @{ D = $dir } {
+            param($D)
+            $savedActions = [System.Environment]::GetEnvironmentVariable('GITHUB_ACTIONS')
+            $savedWorkspace = [System.Environment]::GetEnvironmentVariable('GITHUB_WORKSPACE')
+            try {
+                $env:GITHUB_ACTIONS = 'true'
+                $env:GITHUB_WORKSPACE = $D
+                Mock Get-AvmModuleContextInternal {
+                    [pscustomobject]@{ Kind = 'bicep-module'; Root = $D; Ecosystem = 'bicep' }
+                }
+                Mock Invoke-AvmFormat {
+                    [pscustomobject]@{ Status = 'fail'; RunsTotal = 2; RunsPassed = 1; RunsFailed = 1; Issues = @(
+                            [pscustomobject]@{ Severity = 'error'; File = (Join-Path $D 'main.bicep'); Line = 4; Column = 5; Code = 'format-error'; Message = 'Format error.' }
+                            [pscustomobject]@{ Severity = 'error'; File = (Join-Path $D 'main.bicep'); Line = 4; Column = 5; Code = 'format-error'; Message = 'Format error.' }
+                            [pscustomobject]@{ Severity = 'notice'; Message = 'Additional detail.' }
+                        ) }
+                }
+                Mock Invoke-AvmTransform { [pscustomobject]@{ Status = 'pass' } }
+                Mock Invoke-AvmDocs { [pscustomobject]@{ Status = 'pass' } }
+                $output = @(Invoke-AvmPreCommit -Path $D 6>&1)
+                $result = $output | Where-Object { $null -ne $_.PSObject.Properties['Steps'] } | Select-Object -Last 1
+                $verboseOutput = @(Invoke-AvmPreCommit -Path $D -Verbose 4>&1 6>&1)
+                [pscustomobject]@{
+                    Result = $result
+                    Messages = @($output | Where-Object { $_ -is [System.Management.Automation.InformationRecord] } |
+                            ForEach-Object { [string]$_.MessageData })
+                    Verbose = @($verboseOutput | Where-Object { $_ -is [System.Management.Automation.VerboseRecord] } |
+                            ForEach-Object { [string]$_ })
+                    Summary = @(ConvertTo-AvmResultLine -Result $result -Verb 'pre-commit' -ExcludePresentedIssues)
+                    Full = @(ConvertTo-AvmResultLine -Result $result -Verb 'pre-commit')
+                }
+            }
+            finally {
+                [System.Environment]::SetEnvironmentVariable('GITHUB_ACTIONS', $(if ($null -eq $savedActions) { [NullString]::Value } else { $savedActions }))
+                [System.Environment]::SetEnvironmentVariable('GITHUB_WORKSPACE', $(if ($null -eq $savedWorkspace) { [NullString]::Value } else { $savedWorkspace }))
+            }
+        }
+        $observed.Result.Status | Should -Be 'fail'
+        @($observed.Messages | Where-Object { $_ -eq '::error file=main.bicep,line=4,col=5::[format-error] Format error.' }).Count | Should -Be 1
+        ($observed.Messages -join "`n") | Should -Not -Match 'Additional detail|2 runs'
+        ($observed.Summary -join "`n") | Should -Not -Match 'format-error|Additional detail|2 runs'
+        ($observed.Full -join "`n") | Should -Match 'format-error|Additional detail|2 runs'
+        ($observed.Verbose -join "`n") | Should -Match 'Additional detail'
+        ($observed.Verbose -join "`n") | Should -Match '2 runs, 1 passed, 1 failed'
+        ($observed.Result.Steps | Where-Object Step -eq 'format').Result.Issues | Should -HaveCount 3
     }
 
     It 'accepts every managed-files sync option the engine exposes' {
@@ -167,7 +215,7 @@ Describe 'Invoke-AvmPreCommit' {
         $probe.Result.Steps.Step | Should -Be @('metadata')
     }
 
-    It 'compiles Bicep artifacts after validation on a passing chain' {
+    It 'compiles Bicep artifacts without running PR-check-only lint or validation' {
         $dir = Join-Path $TestDrive ("precommit-bicep-pass-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
@@ -192,10 +240,12 @@ Describe 'Invoke-AvmPreCommit' {
 
         $result.Status                    | Should -Be 'pass'
         $result.Ecosystem                 | Should -Be 'bicep'
-        $result.Steps.Count               | Should -Be 6
-        $result.Steps.Step | Should -Be @('metadata', 'format', 'lint', 'validate', 'transform', 'docs')
+        $result.Steps.Count               | Should -Be 4
+        $result.Steps.Step | Should -Be @('metadata', 'format', 'transform', 'docs')
         ($result.Steps | ForEach-Object Status | Select-Object -Unique) | Should -Be 'pass'
         InModuleScope 'Avm.Authoring' {
+            Should -Invoke Invoke-AvmLint -Exactly 0
+            Should -Invoke Invoke-AvmTest -Exactly 0
             Should -Invoke Resolve-AvmCommandTool -Exactly 1 -ParameterFilter {
                 $Command -eq 'pre-commit' -and $Ecosystem -eq 'bicep'
             }

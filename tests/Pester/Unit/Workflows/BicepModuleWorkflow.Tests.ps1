@@ -213,7 +213,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
                 @('authoringRef', 'authoringSource', 'initializeOnly')
             }
             else {
-                @('authoringRef', 'authoringSource')
+                @('authoringRef', 'authoringSource', 'baseCommit', 'initializeOnly', 'targetCommit')
             }
             @($entrypoint.on.workflow_call.inputs.Keys | Sort-Object) | Should -Be $expectedInputs
             $entrypoint.on.workflow_call.inputs.authoringSource.default | Should -BeExactly 'gallery'
@@ -947,15 +947,67 @@ Describe 'Bicep release-tag safety contracts' {
         $release.jobs.release.permissions.contents | Should -BeExactly 'write'
         $release.jobs.release.with.pendingRelease | Should -BeTrue
         $release.jobs.release.with.requireChangelog | Should -BeTrue
-        $release.jobs.release.with.requirePublishApproval | Should -BeTrue
-        $release.jobs.release.with.Contains('baseCommit') | Should -BeFalse
+        $release.jobs.release.with.baseCommit | Should -BeExactly '${{ needs.initialize.outputs.baseCommit }}'
         $runtime = $script:workflows['bicep-module-runtime-release']
         $runtime.on.workflow_call.inputs.pendingRelease.default | Should -BeFalse
         $runtime.on.workflow_call.inputs.requireChangelog.default | Should -BeFalse
         $tagging = $runtime.jobs.release.steps | Where-Object { $_.name -eq 'Create module release tags' }
         $tagging.env.PENDING_RELEASE | Should -BeExactly '${{ inputs.pendingRelease }}'
         $tagging.env.REQUIRE_CHANGELOG | Should -BeExactly '${{ inputs.requireChangelog }}'
+        $tagging.env.BASE_COMMIT | Should -BeExactly '${{ inputs.baseCommit }}'
         $tagging.run | Should -Match 'Set-AvmBicepReleaseTags'
+    }
+
+    It 'groups tag creation under each module with planned tags and no approval job' {
+        $release = $script:entrypoints | Where-Object name -EQ 'Reusable: Bicep release'
+        $rootJob = $release.jobs.release
+        $runtime = $script:workflows['bicep-module-runtime-release']
+
+        $release.on.workflow_call.inputs.initializeOnly.default | Should -BeFalse
+        @($release.on.workflow_call.outputs.Keys | Sort-Object) |
+            Should -Be @('authoringArtifact', 'baseCommit', 'hasModules', 'moduleMatrix', 'targetCommit')
+        $release.on.workflow_call.outputs.moduleMatrix.value | Should -BeExactly '${{ jobs.initialize.outputs.moduleMatrix }}'
+        $release.on.workflow_call.outputs.authoringArtifact.value | Should -BeExactly '${{ jobs.bootstrap.outputs.artifact }}'
+        $rootJob.name | Should -BeExactly '${{ matrix.modulePath }}'
+        $rootJob.strategy.matrix | Should -BeExactly '${{ fromJSON(needs.initialize.outputs.moduleMatrix) }}'
+        $rootJob.uses | Should -BeExactly './.github/workflows/bicep-module-runtime-release.yml'
+        $rootJob.if | Should -Match '!inputs.initializeOnly'
+        $rootJob.with.modulePath | Should -BeExactly '${{ matrix.modulePath }}'
+        $rootJob.with.plannedTags | Should -BeExactly '${{ matrix.plannedTags }}'
+        $rootJob.with.releaseTagLabel | Should -BeExactly '${{ matrix.releaseTagLabel }}'
+        $rootJob.with.Contains('requirePublishApproval') | Should -BeFalse
+
+        $selector = $release.jobs.initialize.steps | Where-Object { $_.name -eq 'Initialize release' }
+        $selector.run | Should -Match 'Set-AvmBicepReleaseTags'
+        $selector.run | Should -Match '\-WhatIf'
+        $selector.run | Should -Match 'GITHUB_STEP_SUMMARY'
+
+        @($runtime.jobs.Keys | Sort-Object) | Should -Be @('release')
+        $runtime.jobs.release.name | Should -BeExactly 'Create ${{ inputs.modulePath }}: ${{ inputs.releaseTagLabel }}'
+        $runtime.jobs.release.environment | Should -BeExactly 'publish-approval'
+        $runtime.jobs.release.Contains('needs') | Should -BeFalse
+        $runtime.jobs.release.Contains('strategy') | Should -BeFalse
+        $tagging = $runtime.jobs.release.steps | Where-Object { $_.name -eq 'Create module release tags' }
+        $tagging.env.EXPECTED_RELEASE_TAGS | Should -BeExactly '${{ inputs.plannedTags }}'
+        $tagging.run | Should -Match 'planned release tags changed after selection'
+        $tagging.run.IndexOf('Set-AvmBicepReleaseTags @parameters -WhatIf') |
+            Should -BeLessThan $tagging.run.IndexOf('$tags = @(Set-AvmBicepReleaseTags')
+
+        $module = 'avm/res/mock/widget'
+        $tags = "$module/child/1.2.5, $module/1.2.3"
+        $releaseName = $runtime.jobs.release.name.Replace('${{ inputs.modulePath }}', $module).
+            Replace('${{ inputs.releaseTagLabel }}', $tags)
+        $releaseName | Should -BeExactly "Create ${module}: $tags"
+    }
+
+    It 'runs the backlog audit on its own read-only daily schedule' {
+        $audit = ConvertFrom-Yaml (Get-Content -LiteralPath (Join-Path $script:root '.github' 'workflows' 'bicep-release-audit.yml') -Raw)
+        $audit.on.schedule[0].cron | Should -BeExactly '47 5 * * *'
+        $audit.permissions.contents | Should -BeExactly 'read'
+        $audit.permissions.Count | Should -Be 1
+        $text = $audit | ConvertTo-Json -Depth 30
+        $text | Should -Not -Match 'id-token|contents.*write|GITHUB_TOKEN|Set-AvmBicepReleaseTags'
+        $audit.jobs.audit.steps[-1].run | Should -Match 'Invoke-AvmBicepReleaseAudit'
     }
 
     It 'preserves preview-only push behavior and explicit release approval' {

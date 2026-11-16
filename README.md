@@ -70,7 +70,7 @@ of known tools without replacing their download definitions:
 
 ```json
 {
-  "terraform": "1.16.5",
+  "terraform": "1.17.2",
   "Pester": "5.7.1"
 }
 ```
@@ -108,6 +108,16 @@ different target. `InvalidAuthenticationTokenTenant` is an identity/target
 mismatch, not a logging failure: check those inputs and the configured pool
 without switching accounts or granting access. Updating the reusable workflow
 ref does not update a separately pinned Gallery authoring runtime.
+
+The reusable Bicep release workflow accepts an optional `targetCommit` for a
+manual retry. Supply a full lowercase commit SHA reachable from current upstream
+`main`; blank uses the triggering SHA. Releases select only modules changed
+in the push's before/after range. Manual releases default to the target's first
+parent; provide `baseCommit` to retry the original range of a multi-commit push.
+The initialization log records that range.
+Selected modules retain independent tag baselines and reject newer,
+non-ancestor tags. A separate read-only Tools workflow audits all pending
+Bicep modules daily without creating release tags.
 
 ## Verify the signature
 

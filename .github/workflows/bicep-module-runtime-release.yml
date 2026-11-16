@@ -6,18 +6,25 @@ on:
       modulePath:
         type: string
         required: true
+      plannedTags:
+        description: JSON array of release tags shown in the selector summary and revalidated before creation.
+        type: string
+        required: true
+      releaseTagLabel:
+        description: Human-readable release tags shown in the per-module tag-creation job.
+        type: string
+        required: true
       targetCommit:
         type: string
         required: true
+      baseCommit:
+        type: string
+        default: ''
       pendingRelease:
         type: boolean
         required: false
         default: false
       requireChangelog:
-        type: boolean
-        required: false
-        default: false
-      requirePublishApproval:
         type: boolean
         required: false
         default: false
@@ -28,21 +35,10 @@ on:
 permissions: {}
 
 jobs:
-  approval:
-    name: Approve release tag creation
-    environment: publish-approval
-    runs-on: ubuntu-latest
-    permissions: {}
-    if: inputs.requirePublishApproval && github.ref == 'refs/heads/main' && github.repository == 'Azure/bicep-registry-modules'
-    steps:
-      - name: Record approval
-        shell: pwsh
-        run: Write-Output 'Release tag creation approved.'
-
   release:
-    name: Create release tags
-    needs: approval
+    name: 'Create ${{ inputs.modulePath }}: ${{ inputs.releaseTagLabel }}'
     runs-on: ubuntu-latest
+    environment: publish-approval
     permissions:
       contents: write
     env:
@@ -52,7 +48,6 @@ jobs:
       queue: max
     if: |
       !cancelled() &&
-      (!inputs.requirePublishApproval || needs.approval.result == 'success') &&
       github.ref == 'refs/heads/main' &&
       github.repository == 'Azure/bicep-registry-modules'
     steps:
@@ -106,8 +101,10 @@ jobs:
         env:
           MODULE_PATH: ${{ inputs.modulePath }}
           TARGET_COMMIT: ${{ inputs.targetCommit }}
+          BASE_COMMIT: ${{ inputs.baseCommit }}
           PENDING_RELEASE: ${{ inputs.pendingRelease }}
           REQUIRE_CHANGELOG: ${{ inputs.requireChangelog }}
+          EXPECTED_RELEASE_TAGS: ${{ inputs.plannedTags }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -116,7 +113,31 @@ jobs:
           if ($capabilities.BicepWorkflowOrchestration -isnot [int] -or $capabilities.BicepWorkflowOrchestration -ne 1) {
             throw 'The installed Avm.Authoring package does not provide BicepWorkflowOrchestration = 1.'
           }
-          $tags = @(Set-AvmBicepReleaseTags -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH `
+          if ($capabilities.BicepReleaseSelection -isnot [int] -or $capabilities.BicepReleaseSelection -ne 1) {
+            throw 'The installed Avm.Authoring package does not provide BicepReleaseSelection = 1.'
+          }
+          $expectedTags = @(ConvertFrom-Json -InputObject $env:EXPECTED_RELEASE_TAGS)
+          if ($expectedTags.Count -eq 0) { throw 'The selected release plan must contain at least one tag.' }
+          $parameters = @{
+            Root = $env:GITHUB_WORKSPACE
+            ModulePath = $env:MODULE_PATH
+            BaseCommit = $env:BASE_COMMIT
+            TargetCommit = $env:TARGET_COMMIT
+            PendingRelease = [bool]::Parse($env:PENDING_RELEASE)
+            RequireChangelog = [bool]::Parse($env:REQUIRE_CHANGELOG)
+            SkipModuleVersionCheck = $true
+          }
+          $planned = @(Set-AvmBicepReleaseTags @parameters -WhatIf)
+          $plannedTags = @($planned | ForEach-Object { $_.Tag })
+          if ($plannedTags.Count -ne $expectedTags.Count) {
+            throw 'The planned release tags changed after selection. No tags were created.'
+          }
+          for ($index = 0; $index -lt $plannedTags.Count; $index++) {
+            if ($plannedTags[$index] -cne $expectedTags[$index]) {
+              throw 'The planned release tags changed after selection. No tags were created.'
+            }
+          }
+          $tags = @(Set-AvmBicepReleaseTags -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH -BaseCommit $env:BASE_COMMIT `
               -TargetCommit $env:TARGET_COMMIT -PendingRelease:([bool]::Parse($env:PENDING_RELEASE)) `
               -RequireChangelog:([bool]::Parse($env:REQUIRE_CHANGELOG)) -SkipModuleVersionCheck -Confirm:$false)
           if ($tags.Count -eq 0) { Write-Output 'No publishable module changes were found.' }

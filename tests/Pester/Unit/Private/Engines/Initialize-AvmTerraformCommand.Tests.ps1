@@ -24,7 +24,7 @@ Describe 'Initialize-AvmTerraformCommand' {
             Mock Write-AvmLog {}
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'terraform'; Version = '1.16.5'; Path = 'terraform-stub'; Source = 'cache'
+                    Name = 'terraform'; Version = 'test'; Path = 'terraform-stub'; Source = 'cache'
                 }
             }
             Mock Invoke-AvmTerraformInit {

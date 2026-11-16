@@ -55,6 +55,30 @@ Describe 'Cmdlet documentation generation' -Tag 'Component' {
         $index | Should -Match '\| Cmdlet \| CLI command\(s\) \| Purpose \|'
         $index | Should -Match '\| \[Invoke-AvmPreCommit\]\(Invoke-AvmPreCommit\.md\) \| `avm pre-commit` \|'
         $index | Should -Not -Match 'avm update|avm test intn'
+
+        $module = Import-Module -Name $manifest -Force -PassThru
+        try {
+            $cliCmdlets = [System.Collections.Generic.List[string]]::new()
+            foreach ($entry in @(& $module { Get-AvmVerbRegistry })) {
+                if (-not $cliCmdlets.Contains([string]$entry.Cmdlet)) {
+                    $cliCmdlets.Add([string]$entry.Cmdlet)
+                }
+            }
+        }
+        finally {
+            Remove-Module -ModuleInfo $module -Force -ErrorAction SilentlyContinue
+        }
+        $indexedCmdlets = @(
+            foreach ($line in ($index -split "`r?`n")) {
+                if ($line -match '^\| \[([^\]]+)\]\(') {
+                    $Matches[1]
+                }
+            }
+        )
+        $expectedOrder = @($cliCmdlets) + @(
+            $indexedCmdlets | Where-Object { $_ -notin $cliCmdlets } | Sort-Object
+        )
+        $indexedCmdlets | Should -Be $expectedOrder
     }
 
     It 'reports <Problem> pages without rewriting the destination' -ForEach @(

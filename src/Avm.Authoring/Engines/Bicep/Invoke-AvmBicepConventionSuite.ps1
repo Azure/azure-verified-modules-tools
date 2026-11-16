@@ -37,7 +37,6 @@ function Invoke-AvmBicepConventionSuite {
     $root = [string]$Convention.Root
     $Convention.NativeCompiledExpected = 0
     $Convention.NativeWorkflowExpected = 0
-    $Convention.NativeOwnershipExpected = 0
     $Convention.NativeChildPublishExpected = -1
     $Convention.NativeVersionExpected = -1
     $Convention.NativeApiVersionExpected = 0
@@ -73,8 +72,6 @@ function Invoke-AvmBicepConventionSuite {
             $files += Join-Path $suiteDirectory 'Workflow.Tests.ps1'
         }
         if ($scopeCount -gt 0) {
-            $Convention.CodeownerInput = Get-AvmBicepCodeownerInput -RepositoryRoot $Convention.RepositoryRoot
-            $files += Join-Path $suiteDirectory 'Ownership.Tests.ps1'
             $files += Join-Path $suiteDirectory 'ChildPublish.Tests.ps1'
             $Convention.VersionInputs = @(foreach ($scope in @($Convention.Scopes)) {
                     $versionInput = Get-AvmBicepVersionInput -Scope $scope
@@ -143,7 +140,7 @@ function Invoke-AvmBicepConventionSuite {
                     -Code 'avm.bicep.convention-rule-failed' `
                     -Message "The convention suite reported $($summary.Failed) failed test(s) without a recorded finding."))
     }
-    $expected += $Convention.NativeCompiledExpected + $Convention.NativeWorkflowExpected + $Convention.NativeOwnershipExpected
+    $expected += $Convention.NativeCompiledExpected + $Convention.NativeWorkflowExpected
     $expected += $Convention.NativeApiVersionExpected
     $expected += [Math]::Max(0, $Convention.NativeMetadataExpected) + [Math]::Max(0, $Convention.NativeReadmeExpected)
     if ($scopeCount -gt 0) { $expected += [Math]::Max(0, $Convention.NativeChildPublishExpected) }
@@ -154,7 +151,6 @@ function Invoke-AvmBicepConventionSuite {
     if (($compiledCount -gt 0 -and $Convention.NativeCompiledExpected -lt (11 * $compiledCount)) -or
         ($compiledCount -gt 0 -and $Convention.NativeApiVersionExpected -lt 1) -or
         $Convention.NativeWorkflowExpected -lt $workflowCount -or
-        ($scopeCount -gt 0 -and $Convention.NativeOwnershipExpected -lt 1) -or
         ($scopeCount -gt 0 -and $Convention.NativeChildPublishExpected -lt 0) -or
         ($scopeCount -gt 0 -and $Convention.NativeVersionExpected -lt 0) -or
         ($scopeCount -gt 0 -and $Convention.NativeTestSourceExpected -lt 0) -or

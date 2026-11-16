@@ -53,7 +53,7 @@ Describe 'Get-AvmCommandTool excluded steps' {
         @{ Ecosystem = 'bicep'; Step = 'lint'; Names = @('bicep') }
         @{ Ecosystem = 'bicep'; Step = 'check policy'; Names = @('bicep', 'PSRule', 'PSRule.Rules.Azure') }
         @{ Ecosystem = 'bicep'; Step = 'check convention'; Names = @('bicep', 'Pester', 'powershell-yaml') }
-        @{ Ecosystem = 'bicep'; Step = 'validate'; Names = @('bicep') }
+        @{ Ecosystem = 'bicep'; Step = 'validate'; Names = @() }
         @{ Ecosystem = 'bicep'; Step = 'docs'; Names = @('bicep', 'Pester') }
         @{ Ecosystem = 'terraform'; Step = 'none'; Names = @() }
         @{ Ecosystem = 'bicep'; Step = 'none'; Names = @() }

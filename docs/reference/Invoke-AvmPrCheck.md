@@ -5,8 +5,8 @@
 ## Synopsis
 
 Run the pull-request linting and drift gauntlet against the resolved module:
-metadata -> initialize (Terraform) -> sync -> format -> transform -> lint -> check policy ->
-check convention -> validate -> docs.
+metadata -> initialize -> validate -> sync (Terraform only) -> format ->
+transform -> docs -> lint -> check policy -> check convention.
 
 ## Description
 
@@ -16,6 +16,12 @@ sequence against that same module root. Each step's structured
 result is captured. The overall Status is 'pass' only when every
 executed step reports Status='pass' (or didn't throw, for verbs
 that don't carry a Status field).
+
+Step warnings and errors are reported as the steps run; the final summary
+lists their statuses and timings. GitHub Actions annotations include file
+and line information when available. Verbose output includes additional
+step details, individual Pester assertions for metadata and Bicep
+validation suites, and individual PSRule outcomes.
 
 This is the broader sibling of Invoke-AvmPreCommit. It adds the
 credentialled policy evaluation and read-only drift checks used to
@@ -31,18 +37,19 @@ Excluded steps remain visible as 'skipped' in the result and log.
 Excluding every step returns overall Status='skipped', not 'pass'.
 
 When Terraform validation is enabled, an explicit initialize step
-prepares each source example once after metadata and before the remaining
-checks, reusing compatible locked dependency selections without requesting
+prepares each source example once after metadata and before validation,
+reusing compatible locked dependency selections without requesting
 upgrades. An incompatible locked selection fails initialization rather
 than being silently upgraded. The validate step reuses that persistent
-`.terraform` state.
+`.terraform` state and runs before drift checks.
 Initialization has its own step log, result and duration, matching
 pre-commit. Failure aborts the chain even without StopOnFail.
 Excluding validate omits the initialize step; formatting needs only the
 executable, while transform, lint and policy prepare their own working
 directories.
-The 'validate' step is a build-validation
-pass ('terraform validate' / 'bicep build'), not a test run. Unit tests remain a
+The Terraform 'validate' step is a build-validation
+pass ('terraform validate'), not a test run. Bicep lint builds every
+source and reports compiler and linter diagnostics. Unit tests remain a
 separate CI job so a failure produces one actionable signal and
 all contributors receive results without environment approval.
 The convention step requires a tests/unit/*.tftest.hcl fixture,
@@ -55,15 +62,15 @@ Invalid nonempty values fail configuration. Preservation does not
 exclude any checks, relax exact-pin validation or approve dependency
 changes; ordinary policy evaluation remains enabled.
 
-After metadata validation, the managed-files sync step (terraform
-only) in **drift-check mode** (-CheckDrift): unlike pre-commit,
+After validation, the Terraform managed-files sync step runs in
+**drift-check mode** (-CheckDrift): unlike pre-commit,
 which reconciles the governed files by writing them, pr-check
 writes nothing and instead treats any needed add/update/remove
 as Status='fail'. This makes stale governed files a hard CI
 failure so the module is refreshed before merge rather than
-silently rewritten in CI. For Bicep the sync step is unsupported and
-skipped. Bicep policy runs the required and advisory PSRule baselines
-when its repository config and selected test sources are available.
+silently rewritten in CI. Bicep has no sync step. Bicep policy runs
+the required and advisory PSRule baselines when its repository config
+and selected test sources are available.
 Its public namePrefix test token defaults to 'gci'; other missing
 inputs fail the check. Bicep policy, convention, and docs
 must report inspectable results rather than skipping. The required
@@ -136,8 +143,9 @@ Force the ecosystem selector. Defaults to 'auto'.
 
 ### -ExcludeSteps
 
-Step names to skip: metadata, sync, format, transform, lint,
-check policy, check convention, validate, docs. Accepts an array;
+Step names to skip: metadata, validate, sync, format, transform,
+docs, lint, check policy, check convention. Validate and sync apply to Terraform.
+Accepts an array;
 names are case-insensitive and duplicates are ignored. Unknown or
 empty names are rejected. Omit this parameter or supply an empty
 array to run every step.

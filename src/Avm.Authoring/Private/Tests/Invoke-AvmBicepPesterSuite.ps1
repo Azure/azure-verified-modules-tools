@@ -38,9 +38,10 @@ function Invoke-AvmBicepPesterSuite {
     $ErrorActionPreference = 'Stop'
     if (-not $ModuleRoot) { $ModuleRoot = $WorkingDirectory }
     $pester = Import-AvmPowerShellModule -Name Pester -ModuleRoot $ModuleRoot
-    $authoring = @(Get-Module -Name Avm.Authoring)
-    if ($authoring.Count -ne 1) { throw 'Bicep Pester child admission requires exactly one loaded Avm.Authoring module.' }
-    $authoring = $authoring[0]
+    $authoring = $ExecutionContext.SessionState.Module
+    if ($null -eq $authoring -or $authoring.Name -cne 'Avm.Authoring') {
+        throw [System.InvalidOperationException]::new('Bicep Pester admission requires the executing Avm.Authoring module.')
+    }
     $authoringManifest = Join-Path $authoring.ModuleBase 'Avm.Authoring.psd1'
     if (-not (Test-Path -LiteralPath $authoringManifest -PathType Leaf)) { throw 'The loaded Avm.Authoring module has no manifest.' }
 
@@ -55,6 +56,7 @@ function Invoke-AvmBicepPesterSuite {
         TestName                = $TestName
         TestInputData           = $TestInputData
         Convention              = $ConventionData
+        VerboseOutput           = Test-AvmVerboseEnabled
         PesterPath              = Join-Path $pester.ModuleBase 'Pester.psd1'
         PesterVersion           = $pester.Version.ToString()
         AuthoringManifest       = (Resolve-Path -LiteralPath $authoringManifest).Path
@@ -71,6 +73,7 @@ function Invoke-AvmBicepPesterSuite {
     $resultPath = $null
     try {
         if ($InProcess) {
+            $inputData.AuthoringModule = $authoring
             $run = Invoke-AvmBicepTestScript -Path $runnerPath -WorkingDirectory $WorkingDirectory `
                 -Parameters @{ InputData = $inputData } -EnvVars $EnvVars -Confirm:$false
             if ($run.Output.Count -ne 1 -or
@@ -95,7 +98,8 @@ function Invoke-AvmBicepPesterSuite {
             }
             $processResult = Invoke-AvmProcess -FilePath $pwshPath `
                 -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $runnerPath, '-InputPath', $inputPath, '-ResultPath', $resultPath) `
-                -WorkingDirectory $WorkingDirectory -EnvVars $EnvVars -TimeoutSec $TimeoutSec -IgnoreExitCode
+                -WorkingDirectory $WorkingDirectory -EnvVars $EnvVars -TimeoutSec $TimeoutSec `
+                -StreamOutput:$inputData.VerboseOutput -IgnoreExitCode
             if ($processResult.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
                 $detail = Add-AvmProcessFailureDetail `
                     -Message "Bicep Pester runner failed (exit $($processResult.ExitCode))." `

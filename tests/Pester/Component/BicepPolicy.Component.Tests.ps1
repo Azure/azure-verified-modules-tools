@@ -85,6 +85,34 @@ Describe 'Bicep PSRule policy checks' -Tag 'Component' {
         Remove-Item Env:localToken_moduleSuffix -ErrorAction SilentlyContinue
     }
 
+    It 'shows individual PSRule outcomes in pr-check only with verbose output: <Detailed>' -ForEach @(
+        @{ Detailed = $false }
+        @{ Detailed = $true }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Root = $script:modulePath; Detailed = $Detailed } {
+            param($Root, $Detailed)
+            Mock Assert-AvmGitWorkingTreeClean {}
+            Mock Resolve-AvmCommandTool { @() }
+            $excluded = @('metadata', 'validate', 'sync', 'format', 'transform', 'docs', 'lint', 'check convention')
+            $messages = @(& {
+                    $result = Invoke-AvmPrCheck -Path $Root -ExcludeSteps $excluded `
+                        -Verbose:$Detailed -SkipModuleVersionCheck
+                    $result.Status | Should -Be 'pass'
+                    ($result.Steps | Where-Object Step -EQ 'check policy').Result.BaselinesExecuted | Should -Be 8
+                } 4>&1 6>&1)
+            $text = $messages -join "`n"
+            if ($Detailed) {
+                $text | Should -Match 'Azure\.Sample\.Rule.*Pass.*Microsoft\.Storage/storageAccounts'
+                foreach ($baseline in @('Azure.Pillar.Reliability', 'CB.AVM.WAF.Security', 'Azure.Default', 'Azure.Pillar.Security')) {
+                    $text | Should -Match ([regex]::Escape($baseline))
+                }
+            }
+            else {
+                $text | Should -Not -Match 'Azure\.Sample\.Rule'
+            }
+        }
+    }
+
     It 'runs all four baselines against each selected test and stages its references without editing sources' {
         $before = [System.IO.File]::ReadAllText(
             (Join-Path $script:modulePath 'tests/e2e/defaults/main.test.bicep'))

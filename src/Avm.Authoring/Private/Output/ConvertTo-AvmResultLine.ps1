@@ -86,18 +86,23 @@ function ConvertTo-AvmResultDetailLine {
             if ($null -eq $step) { continue }
             $lines.Add(('{0}[{1}] {2}{3}' -f $Indent, $step.Status, $step.Step, (Format-AvmTimingSuffix -InputObject $step)))
 
+            $stepPresented = $ExcludePresentedIssues -and (Test-AvmIssuePresented -Issue $step)
             $errorProperty = $step.PSObject.Properties['Error']
-            if ($null -ne $errorProperty -and -not [string]::IsNullOrWhiteSpace([string]$errorProperty.Value)) {
+            if (-not $stepPresented -and $null -ne $errorProperty -and -not [string]::IsNullOrWhiteSpace([string]$errorProperty.Value)) {
                 $lines.Add(('{0}  {1}' -f $Indent, $errorProperty.Value))
             }
 
             $resultProperty = $step.PSObject.Properties['Result']
             if ($null -ne $resultProperty -and $null -ne $resultProperty.Value) {
-                foreach ($summaryLine in @(ConvertTo-AvmRunSummaryLine -Result $resultProperty.Value -Indent ($Indent + '  '))) {
-                    $lines.Add($summaryLine)
+                if (-not $stepPresented) {
+                    foreach ($summaryLine in @(ConvertTo-AvmRunSummaryLine -Result $resultProperty.Value -Indent ($Indent + '  '))) {
+                        $lines.Add($summaryLine)
+                    }
                 }
-                foreach ($issueLine in @(ConvertTo-AvmIssueLine -Result $resultProperty.Value -Indent ($Indent + '  ') -ExcludePresentedIssues:$ExcludePresentedIssues)) {
-                    $lines.Add($issueLine)
+                if (-not $stepPresented) {
+                    foreach ($issueLine in @(ConvertTo-AvmIssueLine -Result $resultProperty.Value -Indent ($Indent + '  ') -ExcludePresentedIssues:$ExcludePresentedIssues)) {
+                        $lines.Add($issueLine)
+                    }
                 }
             }
         }

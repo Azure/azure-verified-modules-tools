@@ -131,6 +131,13 @@ jobs:
           terraform_version: latest
           terraform_wrapper: false
 
+      - name: Sign in with the state backend identity
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        with:
+          tenant-id: ${{ vars.ARM_BACKEND_TENANT_ID }}
+          subscription-id: ${{ vars.ARM_BACKEND_SUBSCRIPTION_ID }}
+          client-id: ${{ vars.ARM_BACKEND_CLIENT_ID }}
+
       - name: Provision dedicated module identities
         shell: pwsh
         env:

@@ -2,7 +2,7 @@
 
 Source for the **`Avm.Authoring`** PowerShell module published to Microsoft Artifact Registry (MAR). See the [installation and MAR registration instructions](../../README.md#install).
 
-An earlier name-reservation placeholder release exported a single function, `Get-AvmAuthoringPlaceholder`, which is retained here as a back-compat shim. This module adds the **`avm` CLI dispatcher** with verbs for runtime info (`avm version`), module updates (`avm upgrade`), environment diagnosis (`avm doctor`), repo classification (`avm context`), **content-addressed tool management** (`avm tool list|which|install`), the source-formatting / linting / build-validation trio (`avm format`, `avm lint`, `avm test`), README generation (`avm docs`), and a composition verb (`avm pre-commit`) that runs the trio back-to-back. Each verb is backed by the per-ecosystem Bicep and Terraform engine facades. The purpose, architecture, and engineering rules are in [`docs/quality-spec.md`](../../docs/quality-spec.md).
+An earlier name-reservation placeholder release exported a single function, `Get-AvmAuthoringPlaceholder`, which is retained here as a back-compat shim. This module adds the **`avm` CLI dispatcher** with verbs for runtime info (`avm version`), module updates (`avm upgrade`), environment diagnosis (`avm doctor`), repo classification (`avm context`), **content-addressed tool management** (`avm tool list|which|install`), source formatting (`avm format`), linting (`avm lint`), build validation (`avm test`), README generation (`avm docs`), and a composition verb (`avm pre-commit`) that formats sources and updates generated artifacts. Lint and build validation run in `avm pr-check`. Each verb is backed by the per-ecosystem Bicep and Terraform engine facades. The purpose, architecture, and engineering rules are in [`docs/quality-spec.md`](../../docs/quality-spec.md).
 
 ## Layout
 
@@ -27,7 +27,6 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Public/Invoke-AvmLint.ps1`                       | `avm lint` -> route to the bicep / terraform engine and run lint diagnostics.      |
 | `Public/Invoke-AvmTest.ps1`                       | `avm test` -> route to the bicep / terraform engine and run build-validation.      |
 | `Public/Invoke-AvmDocs.ps1`                       | `avm docs` -> route to the bicep / terraform engine and refresh README content.    |
-| `Public/Export-AvmReadmeNote.ps1`                 | `avm docs export-notes` -> extract authored legacy Notes once without overwriting an existing sidecar. |
 | `Public/Invoke-AvmPreCommit.ps1`                  | `avm pre-commit` -> validate metadata, then run the ecosystem's authoring chain.  |
 | `Public/Invoke-AvmTestE2e.ps1`                    | `avm test e2e` -> deploy selected examples, run assertions and clean up. |
 | `Public/Invoke-AvmTestCleanup.ps1`                | `avm test cleanup` -> resume Bicep cleanup from retained local state. |
@@ -35,8 +34,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Public/Get-AvmAuthoringPlaceholder.ps1`          | Back-compat shim from the initial placeholder release.                             |
 | `Engines/`                                        | Per-ecosystem facades over real toolchains. Loaded by the module but not exported. |
 | `Engines/Bicep/Format-AvmBicepModule.ps1`         | Runs `bicep format` over every `.bicep` / `.bicepparam` source in the module.      |
-| `Engines/Bicep/Invoke-AvmBicepLint.ps1`           | Runs `bicep lint` per `.bicep` file and surfaces structured diagnostics.           |
-| `Engines/Bicep/Invoke-AvmBicepTest.ps1`           | Runs `bicep build --stdout` per `.bicep` file as a no-network compile check.       |
+| `Engines/Bicep/Invoke-AvmBicepTest.ps1`           | Builds each `.bicep` file and surfaces structured compiler and lint diagnostics.    |
 | `Engines/Bicep/Invoke-AvmBicepTestUnit.ps1`       | Runs module Pester unit tests in isolation; `-IncludeCompliance` adds packaged native conventions, metadata and README checks. |
 | `Engines/Bicep/Invoke-AvmBicepTestIntegration.ps1` | Validates and previews Bicep `tests/e2e` with Azure CLI using temporary, token-substituted ARM templates. |
 | `Engines/Bicep/Invoke-AvmBicepTestE2e.ps1`        | Native deployment, assertions, post hooks and operation-based cleanup at all four ARM scopes. |
@@ -66,7 +64,7 @@ An earlier name-reservation placeholder release exported a single function, `Get
 | `Private/Tools/Resolve-AvmTool.ps1`               | Cache-first path resolver used by the engines (cache -> optional PATH -> throw).   |
 | `Resources/PSScriptAnalyzerSettings.psd1`         | Lint rules consumed by `./build.ps1 lint`.                                         |
 | `Resources/Schemas/v1/`                           | Authoritative, packaged module metadata and catalog JSON schemas.                 |
-| `Resources/avm.pins.jsonc`                       | Bundled tool manifest. Populated entries for `bicep` and `terraform` with per-platform SHA256. |
+| `Resources/avm.pins.jsonc`                       | Bundled pins and per-platform SHA256 hashes for all six managed CLI tools. |
 | `Resources/bicep/avm-readme-v1.scriban`          | Versioned, model-driven Bicep README template; copy into the repository and select it in `bicepconfig.json`. |
 | `Resources/Scaffolds/Terraform/`                 | Minimal Terraform module files written by `avm init`.                             |
 
@@ -112,6 +110,29 @@ detection. The full authoritative path is rejected if any directory segment is
 a known nested/admin name, with guidance to run from the module root. This can
 also reject a checkout whose higher parent directory happens to use a reserved
 name. Mixed direct Bicep and Terraform source requires explicit `-Ecosystem`.
+
+## External fork E2E handoff
+
+For external fork pull requests requiring credentialed E2E testing, an authorized
+FTE must first review the current fork head, including workflows and dependencies
+that can access credentials. The command cannot verify which commit was reviewed;
+it prevents head changes during the handoff. Restrict write access to the
+release branch and review any later changes. Use the existing authenticated
+GitHub CLI session:
+
+```powershell
+avm release-branch `
+  --repository Azure/example `
+  --pull-request 123 `
+  --whatif
+```
+
+Remove `--whatif` to create the release branch, retarget and merge the fork PR,
+and open a follow-up PR to main. The command does not approve reviews or bypass
+branch protections. For the Bicep registry, it adds `PR: Run E2E Tests` to the
+follow-up PR. If it stops, inspect the branch and PR before manual recovery.
+Normal PR checks do not require this process. The follow-up PR remains subject
+to the protections configured for main.
 
 ## Bicep deployment tests
 
@@ -407,7 +428,7 @@ avm -SkipModuleVersionCheck context         # Get-AvmModuleContext (current work
 avm -SkipModuleVersionCheck init -Ecosystem bicep -ModuleType resource -Path ./avm/res/storage/storage-account -Proposed
 avm -SkipModuleVersionCheck tool list       # Get-AvmTool (lists all tools in the bundled lock)
 avm -SkipModuleVersionCheck format          # Invoke-AvmFormat (engine resolved from module context)
-avm -SkipModuleVersionCheck lint            # Invoke-AvmLint (bicep lint; scoped AVM TFLint rulesets for terraform)
+avm -SkipModuleVersionCheck lint            # Invoke-AvmLint (bicep build and lint; scoped AVM TFLint rulesets for terraform)
 avm -SkipModuleVersionCheck test            # Invoke-AvmTest (bicep build --stdout; terraform validate -json per example)
 avm -SkipModuleVersionCheck test --no-init  # Use initialized examples; module coverage is not assessed
 avm -SkipModuleVersionCheck docs            # Invoke-AvmDocs (terraform-docs inject; Bicep Scriban template)
@@ -417,14 +438,15 @@ avm -SkipModuleVersionCheck pre-commit -Ecosystem terraform -ManagedFilesLocalPa
 Remove-Module Avm.Authoring
 ```
 
-The bundled `Resources/avm.pins.jsonc` ships verified hashes for `bicep`, `terraform`, `tflint`, and `terraform-docs`; `avm tool list` returns those entries out of the box. Tests cover the install pipeline end-to-end via `file://` fixtures under `tests/Pester/Unit/Public/`.
+The bundled `Resources/avm.pins.jsonc` ships verified hashes for `bicep`, `conftest`, `mapotf`, `terraform`, `terraform-docs`, and `tflint`; `avm tool list` returns those entries out of the box. Tests cover the install pipeline end-to-end via `file://` fixtures under `tests/Pester/Unit/Public/`.
 
 Terraform validation includes every direct example, even `.e2eignore` examples.
 It warns if the checkout's root module or a direct `modules/` configuration is
 not reached by an example. Registry/Git copies and test-only helper modules do
 not count. Coverage gaps are non-failing; no examples returns `skipped`.
 
-The Terraform lint bundle pins TFLint 0.64.0 and `tflint-ruleset-avm` 1.4.1.
+The Terraform lint bundle pins TFLint 0.66.0, the Terraform ruleset 0.17.0,
+and `tflint-ruleset-avm` 1.4.1.
 All three packaged configurations require GitHub Artifact Attestation; there is
 no PGP signing-key fallback. AzureRM remains optional, but its version constraint
 must exclude 5.0.0 and later.
@@ -490,13 +512,20 @@ Maintainers refresh canonical entries with `scripts/Update-AvmPins.ps1`. The scr
 
 ```powershell
 # Refresh every supported tool
-./scripts/Update-AvmPins.ps1 -Terraform 1.15.8 -Bicep 0.30.3 -Tflint 0.64.0 -TerraformDocs 0.20.0
+./scripts/Update-AvmPins.ps1 `
+    -Terraform 1.17.2 `
+    -Bicep 0.49.2 `
+    -Tflint 0.66.0 `
+    -TerraformDocs 0.25.1 `
+    -Conftest 0.71.1 `
+    -Mapotf 1.0.0 `
+    -TflintPlugin @{ terraform = '0.17.0' }
 
 # Refresh just one
-./scripts/Update-AvmPins.ps1 -TerraformDocs 0.20.0
+./scripts/Update-AvmPins.ps1 -TerraformDocs 0.25.1
 
 # Preview without writing
-./scripts/Update-AvmPins.ps1 -Terraform 1.15.8 -WhatIf
+./scripts/Update-AvmPins.ps1 -Terraform 1.17.2 -WhatIf
 ```
 
 The lock schema accepts an optional `platformAliases` map for tools whose release assets don't follow `{os}_{arch}` naming (such as bicep). When present, `urlTemplate` may reference the `{platform}` placeholder, which is substituted per-platform at download time. It also accepts an optional `unsupportedPlatforms` array for tools that don't ship a build for every platform (tflint, for example, has no `windows-arm64` release); listed platforms must be ABSENT from `sha256` and runtime resolve/install throws `AvmToolException` (AVM1012) when the current host matches. Finally, an optional `archives` map allows tools that ship different archive types per OS (terraform-docs, for example, uses `tar.gz` on darwin/linux and `zip` on windows) — when present, every supported platform must be listed and `urlTemplate` may reference the `{ext}` placeholder which expands to `.zip` / `.tar.gz` / `''` per the resolved archive type. don't follow `{os}_{arch}` naming (such as bicep). When present, `urlTemplate` may reference the `{platform}` placeholder, which is substituted per-platform at download time. It also accepts an optional `unsupportedPlatforms` array for tools that don't ship a build for every platform (tflint, for example, has no `windows-arm64` release); listed platforms must be ABSENT from `sha256` and runtime resolve/install throws `AvmToolException` (AVM1012) when the current host matches.

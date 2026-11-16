@@ -103,8 +103,17 @@ job log, including plan-only runs. Apply streams resource progress as it
 happens. Both streams use the shared credential redactor; ordinary identity
 names and client IDs stay visible and Terraform's sensitive-value markers
 remain intact. Saved plan files, machine-readable plan/output JSON and raw
-state remain private. No state repair, force-unlock or automatic apply retry
-is used.
+state remain private. Before each plan and saved-plan apply, the identity job
+checks the exact state blob. A held lease is broken once, conditional on its
+observed ETag, and must be verified released before Terraform starts. The
+preflight requires the configured state backend identity and exact Bicep Sync
+workflow. Failures or uncertainty stop the operation; Terraform lock metadata
+and state contents are never downloaded or rewritten, and native operations
+are not retried.
+
+Workflow concurrency does not exclude external Terraform writers. This
+recovery accepts that unknown-owner risk and requires recorded SFI sign-off
+before merge; it does not authorize manual live unlocking.
 
 ### Existing identity naming transition
 

@@ -165,22 +165,31 @@ function Clear-TerraformStateLock {
         TenantId = $tenantId; SubscriptionId = $subscriptionId; ClientId = $clientId
         StorageAccountName = $storageAccountName; ContainerName = $containerName
     }
-    if ($blobName -cnotmatch '^(avm-(res|ptn|utl)-[a-z0-9]+(?:-[a-z0-9]+)*)\.tfstate$') {
-        throw [System.ArgumentException]::new('Lock recovery requires the exact canonical repository state blob.')
+    $repoId = $null
+    if ($blobName -cmatch '^(avm-(res|ptn|utl)-[a-z0-9]+(?:-[a-z0-9]+)*)\.tfstate$') {
+        $repoId = $blobName.Substring(0, $blobName.Length - '.tfstate'.Length)
+        if ($repository -cnotmatch ('^Azure/terraform-(azure|azurerm|azapi)-' + [regex]::Escape($repoId) + '$')) {
+            throw [System.ArgumentException]::new('Lock recovery repository and state blob must identify the same module.')
+        }
+        $workflow = '.github/workflows/repository-management-sync.yml'
     }
-    $repoId = $blobName.Substring(0, $blobName.Length - '.tfstate'.Length)
-    if ($repository -cnotmatch ('^Azure/terraform-(azure|azurerm|azapi)-' + [regex]::Escape($repoId) + '$')) {
-        throw [System.ArgumentException]::new('Lock recovery repository and state blob must identify the same module.')
+    elseif ($blobName -ceq 'bicep-module-identities.tfstate' -and
+        $repository -ceq 'Azure/bicep-registry-modules') {
+        $workflow = '.github/workflows/repository-management-bicep-sync.yml'
+    }
+    else {
+        throw [System.ArgumentException]::new('Lock recovery requires an exact supported repository state blob.')
     }
     if (-not $PSCmdlet.ShouldProcess("$storageAccountName/$containerName/$blobName", 'Inspect the selected state blob and clear a held lease once')) {
         return $false
     }
     $tools = 'Azure/azure-verified-modules-tools'
-    $workflow = '.github/workflows/repository-management-sync.yml'
     if ($env:GITHUB_ACTIONS -cne 'true' -or $env:GITHUB_REPOSITORY -cne $tools -or
         $env:GITHUB_REF -cnotmatch '\Arefs/heads/.+\z' -or
-        $env:GITHUB_WORKFLOW_REF -cne "$tools/$workflow@$env:GITHUB_REF" -or $env:REPO_ID -cne $repoId) {
-        throw [System.InvalidOperationException]::new('State-lock preflight requires the serialized Terraform Sync job for the selected repository on a Tools branch.')
+        $env:GITHUB_WORKFLOW_REF -cne "$tools/$workflow@$env:GITHUB_REF" -or
+        ($repoId -and $env:REPO_ID -cne $repoId)) {
+        $workflowName = if ($repoId) { 'Terraform Sync' } else { 'Bicep Sync' }
+        throw [System.InvalidOperationException]::new("State-lock preflight requires the serialized $workflowName job for the selected repository on a Tools branch.")
     }
     $environment = $environment.Clone()
     foreach ($name in (@([Environment]::GetEnvironmentVariables().Keys) + @($environment.Keys) |

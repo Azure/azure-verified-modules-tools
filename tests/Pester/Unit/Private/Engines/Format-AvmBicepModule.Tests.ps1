@@ -55,7 +55,7 @@ Describe 'Format-AvmBicepModule' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'bicep'; Version = '0.30.3'; Platform = 'linux-amd64'
+                    Name = 'bicep'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/bicep'
                 }
             }
@@ -78,7 +78,7 @@ Describe 'Format-AvmBicepModule' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'bicep'; Version = '0.30.3'; Platform = 'linux-amd64'
+                    Name = 'bicep'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/bicep'
                 }
             }
@@ -86,7 +86,7 @@ Describe 'Format-AvmBicepModule' {
             Format-AvmBicepModule -Context $C
         }
         $result.Engine     | Should -Be 'bicep'
-        $result.Tool       | Should -Be 'bicep/0.30.3'
+        $result.Tool       | Should -Be 'bicep/test'
         $result.ToolPath   | Should -Be '/fake/bicep'
         $result.ToolSource | Should -Be 'cache'
     }
@@ -100,7 +100,7 @@ Describe 'Format-AvmBicepModule' {
             param($C, $A, $B)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'bicep'; Version = '0.30.3'; Platform = 'linux-amd64'
+                    Name = 'bicep'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/bicep'
                 }
             }
@@ -130,7 +130,7 @@ Describe 'Format-AvmBicepModule' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'bicep'; Version = '0.30.3'; Platform = 'linux-amd64'
+                    Name = 'bicep'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/bicep'
                 }
             }
@@ -155,7 +155,7 @@ Describe 'Format-AvmBicepModule' {
             param($C, $N)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'bicep'; Version = '0.30.3'; Platform = 'linux-amd64'
+                    Name = 'bicep'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/bicep'
                 }
             }
@@ -192,7 +192,7 @@ Describe 'Format-AvmBicepModule' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'bicep'; Version = '0.30.3'; Platform = 'linux-amd64'
+                    Name = 'bicep'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/bicep'
                 }
             }
@@ -222,7 +222,7 @@ Describe 'Format-AvmBicepModule' {
             param($C, $ParamFile)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'bicep'; Version = '0.30.3'; Platform = 'linux-amd64'
+                    Name = 'bicep'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/bicep'
                 }
             }
@@ -255,7 +255,7 @@ Describe 'Format-AvmBicepModule' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'bicep'; Version = '0.30.3'; Platform = 'linux-amd64'
+                    Name = 'bicep'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/bicep'
                 }
             }
@@ -282,7 +282,7 @@ Describe 'Format-AvmBicepModule' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'bicep'; Version = '0.30.3'; Platform = 'linux-amd64'
+                    Name = 'bicep'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/bicep'
                 }
             }
@@ -303,7 +303,7 @@ Describe 'Format-AvmBicepModule' {
             param($C, $A)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'bicep'; Version = '0.30.3'; Platform = 'linux-amd64'
+                    Name = 'bicep'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/bicep'
                 }
             }

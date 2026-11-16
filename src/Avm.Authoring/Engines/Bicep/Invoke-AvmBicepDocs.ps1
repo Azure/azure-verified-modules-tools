@@ -7,8 +7,8 @@ function Invoke-AvmBicepDocs {
         Uses the packaged template or a validated nearest-config template.
         Renders all source-backed modules before changing any README;
         source-less READMEs are preserved and reported as not rendered.
-        CheckDrift uses packaged Pester 5.5+ requirements to compare generated
-        bytes without writing module files.
+        CheckDrift uses packaged Pester 5.5+ requirements to compare LF-normalized
+        content without writing module files.
         A private provenance render identifies generated JSON-example comments
         before accepting omitted complete pairs.
         Authored Notes come only from README.notes.md; missing sidecars stop
@@ -196,31 +196,43 @@ function Invoke-AvmBicepDocs {
                 throw [AvmConfigurationException]::new($message)
             }
 
+            $renderedContent = ([string]$result.StdOut).ReplaceLineEndings("`n")
             $filesProcessed++
             if ($IncludeRenderedContent) {
                 $renderedReadmes.Add([pscustomobject]@{
                         Path    = $relative
-                        Content = $result.StdOut
+                        Content = $renderedContent
                     })
             }
-            $expected = $utf8.GetBytes($result.StdOut)
+            $expected = $utf8.GetBytes($renderedContent)
             $current = if ([System.IO.File]::Exists($target)) {
                 , [System.IO.File]::ReadAllBytes($target)
             }
             else {
                 $null
             }
+            $currentForComparison = $current
+            if ($null -ne $current) {
+                try {
+                    $currentForComparison = $utf8.GetBytes(
+                        $utf8.GetString($current).ReplaceLineEndings("`n"))
+                }
+                catch [System.Text.DecoderFallbackException] {
+                    $currentForComparison = $current
+                }
+            }
             $readmeCase = $null
             if ($CheckDrift) {
                 $readmeCase = @{
-                    Current                = $current
+                    Current                = $currentForComparison
                     Expected               = $expected
                     MissingExampleComments = 0
                 }
                 $readmeInputs.Add(@{ Case = $readmeCase; IssuePath = $target })
             }
-            if ($null -ne $current -and
-                [System.Linq.Enumerable]::SequenceEqual([byte[]]$current, [byte[]]$expected)) {
+            if ($null -ne $currentForComparison -and
+                [System.Linq.Enumerable]::SequenceEqual(
+                    [byte[]]$currentForComparison, [byte[]]$expected)) {
                 continue
             }
             $missingExampleComments = 0
@@ -260,8 +272,9 @@ function Invoke-AvmBicepDocs {
                         continue
                     }
                     $missingExampleComments = Get-AvmBicepDocsExampleCommentDifferenceCount `
-                        -CurrentBytes $current -GeneratedContent $result.StdOut `
-                        -ProbeContent $probeResult.StdOut -Markers $probe.Markers
+                        -CurrentBytes $currentForComparison -GeneratedContent $renderedContent `
+                        -ProbeContent ([string]$probeResult.StdOut).ReplaceLineEndings("`n") `
+                        -Markers $probe.Markers
                 }
             }
             if ($missingExampleComments -gt 0) {
@@ -286,7 +299,7 @@ function Invoke-AvmBicepDocs {
             $plan.Add([pscustomobject]@{
                     Path     = $target
                     Original = $original
-                    Content  = $result.StdOut
+                    Content  = $renderedContent
                 })
             $changed.Add($relative)
         }
