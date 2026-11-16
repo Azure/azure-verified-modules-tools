@@ -44,8 +44,20 @@ function Test-AvmTerraformTransientError {
         'currently experiencing high demand in .*? region'
     )
 
-    if (-not $BuiltInOnly -and -not [string]::IsNullOrWhiteSpace($env:AVM_E2E_RETRY_PATTERN)) {
-        $patterns += $env:AVM_E2E_RETRY_PATTERN
+    if (-not $BuiltInOnly) {
+        if (-not (Get-Variable -Name AvmTerraformE2eRetryPatterns -Scope Script -ErrorAction Ignore)) {
+            $root = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath @('..', 'Resources', 'terraform')
+            $json = [System.IO.File]::ReadAllText((Join-Path $root 'e2e-retry-policy.json'))
+            $schema = [System.IO.File]::ReadAllText((Join-Path $root 'e2e-retry-policy.schema.json'))
+            if (-not (Test-Json -Json $json -Schema $schema -ErrorAction SilentlyContinue)) {
+                throw [AvmConfigurationException]::new('The Terraform E2E retry policy is invalid.')
+            }
+            $script:AvmTerraformE2eRetryPatterns = @(($json | ConvertFrom-Json -AsHashtable)['messagePatterns'])
+        }
+        $patterns += $script:AvmTerraformE2eRetryPatterns
+        if (-not [string]::IsNullOrWhiteSpace($env:AVM_E2E_RETRY_PATTERN)) {
+            $patterns += $env:AVM_E2E_RETRY_PATTERN
+        }
     }
 
     return [regex]::IsMatch(

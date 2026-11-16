@@ -10,6 +10,7 @@ BeforeAll {
         'Resource Group Name: "rg-ewz0"'
         'Virtual Network Name: "example"): performing CreateOrUpdate: unexpected status 403 (403 Forbidden) with error: RequestDisallowedByAzure: Resource ''example'' was disallowed by Azure: The selected region is currently not accepting new customers: https://aka.ms/locationineligible.'
     ) -join "`n"
+    $script:sqlQuotaOutput = 'ProvisioningDisabled: The deployment request failed because it would bring the total number of vCores to 4, which exceeds the limit of 0 allowed for the requested hardware family in your subscription. Please submit a support request to extend the quota using the Azure portal: aka.ms/sql-mi-obtain-larger-quota'
 }
 
 AfterAll {
@@ -628,6 +629,38 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             ) -join ',')
     }
 
+    It 'destroys and re-applies an example after a SQL Managed Instance quota failure' {
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
+        $state = @{ Apply = 0; Labels = [System.Collections.Generic.List[string]]::new() }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; S = $state; Failure = $script:sqlQuotaOutput } {
+            param($C, $S, $Failure)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'terraform'; Version = 'test'; Source = 'cache'; Path = '/fake/terraform' }
+            }
+            Mock Invoke-AvmProcess {
+                param($ArgumentList, $Label)
+                $S.Labels.Add($Label)
+                if ($ArgumentList[0] -eq 'apply' -and ++$S.Apply -eq 1) {
+                    return [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = $Failure }
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Invoke-AvmTerraformTestE2e -Context $C
+        }
+        $result.Status | Should -Be 'pass'
+        $result.Issues | Should -HaveCount 1
+        $result.Issues[0].Severity | Should -Be 'warning'
+        ($state.Labels -join ',') | Should -Be (@(
+                'examples/default: terraform init'
+                'examples/default: terraform apply'
+                'examples/default: terraform destroy (retry 1)'
+                'examples/default: terraform apply'
+                'examples/default: terraform plan (idempotency)'
+                'examples/default: terraform destroy'
+            ) -join ',')
+    }
+
     It 'does not retry an apply failure that is not a transient capacity error' {
         New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
@@ -755,6 +788,29 @@ Describe 'Invoke-AvmTerraformTestE2e' {
 }
 
 Describe 'Test-AvmTerraformTransientError' {
+    It 'recognizes SQL vCore quota failures only for E2E, including wrapped output' {
+        $wrapped = $script:sqlQuotaOutput -replace 'number of vCores', "number of`nvCores" -replace 'which exceeds', "which`nexceeds"
+        InModuleScope 'Avm.Authoring' -Parameters @{ Outputs = @($script:sqlQuotaOutput, $wrapped) } {
+            param($Outputs)
+            foreach ($output in $Outputs) {
+                Test-AvmTerraformTransientError -Output $output | Should -BeTrue
+                Test-AvmTerraformTransientError -Output $output -BuiltInOnly | Should -BeFalse
+            }
+        }
+    }
+
+    It 'does not retry unrelated SQL provisioning errors' -ForEach @(
+        @{ Output = 'ProvisioningDisabled: SQL Managed Instance provisioning is disabled for this subscription.' }
+        @{ Output = 'ProvisioningDisabled: The requested hardware family is unavailable in your subscription.' }
+        @{ Output = 'OtherError: The deployment request failed because it would bring the total number of vCores to 4, which exceeds the limit of 0 allowed for the requested hardware family in your subscription.' }
+        @{ Output = "ProvisioningDisabled: an unrelated failure.`nOtherError: The deployment request failed because it would bring the total number of vCores to 4, which exceeds the limit of 0 allowed for the requested hardware family in your subscription." }
+    ) {
+        InModuleScope 'Avm.Authoring' -Parameters @{ Output = $Output } {
+            param($Output)
+            Test-AvmTerraformTransientError -Output $Output | Should -BeFalse
+        }
+    }
+
     It 'classifies known capacity failures as retryable' {
         InModuleScope 'Avm.Authoring' {
             Test-AvmTerraformTransientError -Output 'Error: SkuNotAvailable'                              | Should -BeTrue
