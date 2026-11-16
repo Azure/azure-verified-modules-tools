@@ -109,6 +109,12 @@ mismatch, not a logging failure: check those inputs and the configured pool
 without switching accounts or granting access. Updating the reusable workflow
 ref does not update a separately pinned Gallery authoring runtime.
 
+The reusable Bicep release workflow accepts an optional `targetCommit` for a
+manual retry. Supply a full lowercase commit SHA reachable from current upstream
+`main`; blank uses the triggering SHA. Manual discovery compares that target
+with each module's latest release tag and rejects a newer, non-ancestor tag.
+Automatic pushes retain their original before/after discovery.
+
 ## Verify the signature
 
 Every `.ps1`, `.psm1` and `.psd1` in a released build is Authenticode-signed by Microsoft. To check what you installed:

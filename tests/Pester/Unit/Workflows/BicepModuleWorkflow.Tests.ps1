@@ -213,7 +213,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
                 @('authoringRef', 'authoringSource', 'initializeOnly')
             }
             else {
-                @('authoringRef', 'authoringSource')
+                @('authoringRef', 'authoringSource', 'targetCommit')
             }
             @($entrypoint.on.workflow_call.inputs.Keys | Sort-Object) | Should -Be $expectedInputs
             $entrypoint.on.workflow_call.inputs.authoringSource.default | Should -BeExactly 'gallery'

@@ -299,6 +299,23 @@ Describe 'Component: Bicep pending release discovery' -Tag Component {
         Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('push', 'tag') }
     }
 
+    It 'retries the historical target against release tags without including later main changes' {
+        Set-AvmReleaseFixtureFile -Path "$script:modulePath/main.json" -Value '{"resources":[{"retry":true}]}'
+        Set-AvmReleaseFixtureFile -Path "$script:modulePath/child/main.json" -Value '{"resources":[{"released":true}]}'
+        $retryTarget = New-AvmReleaseFixtureCommit -Message 'partially failed release'
+        $script:releaseTags["$script:modulePath/child/1.2.5"] = $retryTarget
+        Set-AvmReleaseFixtureFile -Path "$script:modulePath/main.json" -Value '{"resources":[{"later":true}]}'
+        $null = New-AvmReleaseFixtureCommit -Message 'later main change'
+        $null = Invoke-AvmReleaseFixtureGit -Arguments @('checkout', '--quiet', '--detach', $retryTarget)
+
+        (Initialize-AvmWorkflowReleaseMatrix -Root $script:releaseRoot -EventName workflow_dispatch `
+                -TargetCommit $retryTarget).include.modulePath | Should -Be @($script:modulePath)
+        $tags = @(Set-AvmWorkflowReleaseTags -Root $script:releaseRoot -ModulePath $script:modulePath `
+                -TargetCommit $retryTarget -PendingRelease -WhatIf)
+        $tags.Tag | Should -Be @("$script:modulePath/1.2.3")
+        Should -Invoke Invoke-AvmProcess -ModuleName Avm.Authoring -Exactly 0 -ParameterFilter { $ArgumentList[0] -in @('push', 'tag') }
+    }
+
     It 'does not release unchanged modules or docs, metadata, source and test-only edits (<ChangedFile>)' -ForEach @(
         @{ ChangedFile = '' }
         @{ ChangedFile = 'README.md' }

@@ -11,6 +11,10 @@ on:
         description: 'Avm.Authoring reference: authoringSource=gallery uses a package version (blank = latest); authoringSource=repo uses a tools SHA, tag or branch (blank = latest stable tag).'
         type: string
         default: ''
+      targetCommit:
+        description: 'Manual retry target: full lowercase commit SHA on upstream main (blank = triggering SHA).'
+        type: string
+        default: ''
 
 permissions: {}
 
@@ -45,11 +49,41 @@ jobs:
     outputs:
       moduleMatrix: ${{ steps.initialize.outputs.moduleMatrix }}
       hasModules: ${{ steps.initialize.outputs.hasModules }}
+      targetCommit: ${{ steps.target.outputs.sha }}
     steps:
+      - name: Validate release target
+        id: target
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        env:
+          REQUESTED_COMMIT: ${{ inputs.targetCommit }}
+        with:
+          script: |
+            if (context.repo.owner !== 'Azure' || context.repo.repo !== 'bicep-registry-modules' ||
+                context.ref !== 'refs/heads/main') {
+              throw new Error('Release targets are restricted to upstream main.');
+            }
+            const requested = process.env.REQUESTED_COMMIT || '';
+            if (requested && context.eventName !== 'workflow_dispatch') {
+              throw new Error('targetCommit is only supported for manual releases.');
+            }
+            const target = requested || context.sha;
+            if (!/^[0-9a-f]{40}$/.test(target)) {
+              throw new Error('targetCommit must be a full lowercase SHA-1 commit identifier.');
+            }
+            const owner = 'Azure';
+            const repo = 'bicep-registry-modules';
+            const main = await github.rest.repos.getBranch({ owner, repo, branch: 'main' });
+            const comparison = await github.rest.repos.compareCommits({
+              owner, repo, base: target, head: main.data.commit.sha, per_page: 1
+            });
+            if (comparison.data.merge_base_commit.sha !== target) {
+              throw new Error('targetCommit must be an ancestor of current upstream main.');
+            }
+            core.setOutput('sha', target);
       - name: Check out caller
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ steps.target.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Download prepared authoring runtime
@@ -63,7 +97,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_COMMIT: ${{ github.event.before }}
-          TARGET_COMMIT: ${{ github.sha }}
+          TARGET_COMMIT: ${{ steps.target.outputs.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module (Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1') -ErrorAction Stop
@@ -98,7 +132,7 @@ jobs:
     uses: ./.github/workflows/bicep-module-runtime-release.yml
     with:
       modulePath: ${{ matrix.modulePath }}
-      targetCommit: ${{ github.sha }}
+      targetCommit: ${{ needs.initialize.outputs.targetCommit }}
       pendingRelease: true
       requireChangelog: true
       requirePublishApproval: true
