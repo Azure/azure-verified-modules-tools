@@ -322,6 +322,62 @@ Describe 'Bicep deployment progress logging' {
         }
     }
 
+    It 'logs a sanitized cancellation type chain before propagating an observer cancellation' {
+        InModuleScope Avm.Authoring {
+            $secret = 'top-secret'
+            Mock Start-Sleep {}
+            Mock Invoke-AzRestMethod {
+                $cancellation = [OperationCanceledException]::new("token=$secret")
+                $record = [Management.Automation.ErrorRecord]::new(
+                    $cancellation, 'FixtureCancellation', 'OperationStopped', $null)
+                throw [Management.Automation.RuntimeException]::new("token=$secret", $null, $record)
+            }
+            { Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed @{} -SensitiveValues @($secret) } | Should -Throw
+            $diagnostics = @($script:messages | Where-Object { $_ -match '^Deployment progress cancellation could not be retried;' })
+            $diagnostics | Should -HaveCount 1
+            $diagnostics[0] | Should -BeExactly (
+                'Deployment progress cancellation could not be retried; exception types: ' +
+                'System.OperationCanceledException.')
+            ($script:messages -join ' ') | Should -Not -Match $secret
+            Should -Invoke Invoke-AzRestMethod -Exactly 1
+            Should -Invoke Start-Sleep -Exactly 0
+        }
+    }
+
+    It 'follows a runtime ErrorRecord type chain without messages' {
+        InModuleScope Avm.Authoring {
+            $secret = 'top-secret'
+            $cancellation = [OperationCanceledException]::new("token=$secret")
+            $record = [Management.Automation.ErrorRecord]::new(
+                $cancellation, 'FixtureCancellation', 'OperationStopped', $null)
+            $runtime = [Management.Automation.RuntimeException]::new("token=$secret", $null, $record)
+            $outer = [Management.Automation.ErrorRecord]::new($runtime, 'FixtureRuntime', 'OperationStopped', $null)
+            Get-AvmBicepExceptionTypeChain -ErrorRecord $outer -SensitiveValues @($secret) | Should -BeExactly (
+                'System.Management.Automation.RuntimeException -> System.OperationCanceledException')
+        }
+    }
+
+    It 'bounds a rejected cancellation type chain without logging its messages' {
+        InModuleScope Avm.Authoring {
+            $secret = 'top-secret'
+            Mock Start-Sleep {}
+            Mock Invoke-AzRestMethod {
+                $inner = [InvalidOperationException]::new("token=$secret")
+                1..7 | ForEach-Object {
+                    $inner = [InvalidOperationException]::new("token=$secret", $inner)
+                }
+                throw [OperationCanceledException]::new("token=$secret", $inner)
+            }
+            { Write-AvmBicepDeploymentProgress -DeploymentId $script:id -Observed @{} -SensitiveValues @($secret) } | Should -Throw
+            $diagnostics = @($script:messages | Where-Object { $_ -match '^Deployment progress cancellation could not be retried;' })
+            $diagnostics | Should -HaveCount 1
+            $diagnostics[0] | Should -Match '\[truncated\]\.$'
+            ($script:messages -join ' ') | Should -Not -Match $secret
+            Should -Invoke Invoke-AzRestMethod -Exactly 1
+            Should -Invoke Start-Sleep -Exactly 0
+        }
+    }
+
     It 'orders and deduplicates nested resource observations without replaying older states' {
         InModuleScope Avm.Authoring {
             $child = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/test/providers/Microsoft.Resources/deployments/nested'

@@ -24,6 +24,7 @@ function Write-AvmBicepDeploymentProgress {
     $deployments = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $pages = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     $snapshot = @{}
+    $cancellationDiagnosticLogged = $false
     try {
         while ($queue.Count -gt 0) {
             $current = $queue.Dequeue()
@@ -43,7 +44,12 @@ function Write-AvmBicepDeploymentProgress {
                     }
                 }
                 catch [System.OperationCanceledException] {
-                    if (-not (Test-AvmBicepAzureOperationCancellation -Exception $_.Exception)) { throw }
+                    if (-not (Test-AvmBicepAzureOperationCancellation -Exception $_.Exception)) {
+                        $shape = Get-AvmBicepExceptionTypeChain -ErrorRecord $_ -SensitiveValues $SensitiveValues
+                        Write-AvmLog -Level Warning -Message "Deployment progress cancellation could not be retried; exception types: $shape."
+                        $cancellationDiagnosticLogged = $true
+                        throw
+                    }
                     $detail = Protect-AvmBicepDiagnosticText -Text $_.Exception.Message -SensitiveValues $SensitiveValues
                     if (-not $Observed.Contains('__readFailure') -or $Observed['__readFailure'] -cne $detail) {
                         Write-AvmLog -Level Warning -Message "Deployment progress is incomplete: $detail"
@@ -123,7 +129,13 @@ function Write-AvmBicepDeploymentProgress {
     }
     catch {
         $kind = Get-AvmBicepDeploymentErrorKind -ErrorRecord $_
-        if ($kind -eq 'Cancellation') { throw }
+        if ($kind -eq 'Cancellation') {
+            if (-not $cancellationDiagnosticLogged) {
+                $shape = Get-AvmBicepExceptionTypeChain -ErrorRecord $_ -SensitiveValues $SensitiveValues
+                Write-AvmLog -Level Warning -Message "Deployment progress cancellation could not be retried; exception types: $shape."
+            }
+            throw
+        }
         if ($kind -eq 'Forbidden') {
             $Observed['__operationsForbidden'] = $true
             Write-AvmLog -Level Warning -Message 'Deployment operations are unavailable (HTTP 403); watching root deployment status instead.'
