@@ -1285,6 +1285,26 @@ It 'requires a telemetry-only location only when enabled and preserves authored 
     @{ Declaration = 'missing'; Source = '' }
     @{ Declaration = 'required'; Source = 'variable "location" { type = string }' }
     @{
+        Declaration = 'state removal'
+        Source = @'
+variable "location" {
+  type    = string
+  default = null
+  validation {
+    condition     = !var.enable_telemetry || var.location != null
+    error_message = "The location must not be null when telemetry is enabled."
+  }
+}
+
+removed {
+  from = azapi_resource.this
+  lifecycle {
+    destroy = false
+  }
+}
+'@
+    }
+    @{
         Declaration = 'previously generated'
         Source = @'
 # tflint-ignore: terraform_unused_declarations
@@ -1338,6 +1358,9 @@ removed {
     $first = [IO.File]::ReadAllText($variablesPath)
     $first | Should -Match '(?s)variable "location" \{[^}]*default\s*=\s*null'
     [regex]::Match($first, '(?ms)^variable "location" \{.*?^\}').Value | Should -Not -Match 'nullable\s*=\s*false'
+    if ($Declaration -eq 'state removal') {
+        $first | Should -Match '(?s)removed \{\s*from\s*=\s*azapi_resource\.this\s*lifecycle \{\s*destroy\s*=\s*false\s*\}\s*\}'
+    }
     if ($Declaration -eq 'previously generated') {
         $first | Should -Not -Match 'tflint-ignore'
     }
@@ -1481,6 +1504,21 @@ check "business" {
 '@
     }
     @{ Usage = 'uninspected provider'; Source = "provider `"azapi`" {`n  environment = var.location`n}" }
+    @{
+        Usage = 'removal provisioner'
+        Source = @'
+removed {
+  from = terraform_data.retired
+  lifecycle {
+    destroy = true
+  }
+  provisioner "local-exec" {
+    when    = destroy
+    command = var.location
+  }
+}
+'@
+    }
 ) {
     $root = Join-Path $TestDrive ("required-location-" + ($Usage -replace ' ', '-'))
     New-TelemetryModule -Root $root
