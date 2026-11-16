@@ -14,9 +14,9 @@ Describe 'Resolve-AvmMirrorUrl' {
     Context 'pass-through cases' {
         It 'returns Source unchanged when Mirror is $null' {
             $result = InModuleScope 'Avm.Authoring' {
-                Resolve-AvmMirrorUrl -Source 'https://releases.hashicorp.com/terraform/1.9.5/foo.zip' -Mirror $null
+                Resolve-AvmMirrorUrl -Source 'https://releases.hashicorp.com/terraform/test-version/foo.zip' -Mirror $null
             }
-            $result | Should -Be 'https://releases.hashicorp.com/terraform/1.9.5/foo.zip'
+            $result | Should -Be 'https://releases.hashicorp.com/terraform/test-version/foo.zip'
         }
 
         It 'returns Source unchanged when Mirror is empty string' {
@@ -52,19 +52,19 @@ Describe 'Resolve-AvmMirrorUrl' {
         It 'strips trailing slash from mirror path and appends source path-and-query' {
             $result = InModuleScope 'Avm.Authoring' {
                 Resolve-AvmMirrorUrl `
-                    -Source 'https://releases.hashicorp.com/terraform/1.9.5/terraform_1.9.5_linux_amd64.zip' `
+                    -Source 'https://releases.hashicorp.com/terraform/test-version/terraform_test-version_linux_amd64.zip' `
                     -Mirror 'https://m.example.com/proxy/'
             }
-            $result | Should -Be 'https://m.example.com/proxy/terraform/1.9.5/terraform_1.9.5_linux_amd64.zip'
+            $result | Should -Be 'https://m.example.com/proxy/terraform/test-version/terraform_test-version_linux_amd64.zip'
         }
 
         It 'handles a mirror with no path (host only)' {
             $result = InModuleScope 'Avm.Authoring' {
                 Resolve-AvmMirrorUrl `
-                    -Source 'https://releases.hashicorp.com/terraform/1.9.5/foo.zip' `
+                    -Source 'https://releases.hashicorp.com/terraform/test-version/foo.zip' `
                     -Mirror 'https://m.example.com'
             }
-            $result | Should -Be 'https://m.example.com/terraform/1.9.5/foo.zip'
+            $result | Should -Be 'https://m.example.com/terraform/test-version/foo.zip'
         }
 
         It 'preserves the source query string' {

@@ -19,7 +19,7 @@ Describe 'Bicep subscription-to-owned-group static safety' {
     It 'recognizes the pinned real compiler shape but refuses its conditional authorization effects' {
         $template = Get-Content -LiteralPath $script:fixturePath -Raw -Encoding utf8 |
             ConvertFrom-Json -AsHashtable
-        $template.metadata._generator.version | Should -Be '0.47.16.16243'
+        $template.metadata._generator.version | Should -Be 'other-compiler-version'
         $template.resources[0].type | Should -BeExactly 'Microsoft.Resources/resourceGroups'
         $template.resources[0].Contains('tags') | Should -BeFalse
         $template.resources[1].resourceGroup | Should -BeExactly $template.resources[0].name

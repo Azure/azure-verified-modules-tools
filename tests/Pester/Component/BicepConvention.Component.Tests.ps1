@@ -221,7 +221,7 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             if ($Variant -in @('provenance', 'template-drift', 'malformed-artifact', 'crlf-artifact', 'bom-artifact')) {
                 $artifact = Join-Path $Path 'main.json'
                 $original = [System.IO.File]::ReadAllText($artifact)
-                $script:provenanceCompiled = $original.Replace('0.47.16.16243', '0.48.1.52935').Replace(
+                $script:provenanceCompiled = $original.Replace('other-compiler-version', 'compiler-version').Replace(
                     '18275710714278981656', '987654321')
                 Mock Invoke-AvmProcess {
                     [pscustomobject]@{ ExitCode = 0; StdOut = $script:provenanceCompiled; StdErr = '' }

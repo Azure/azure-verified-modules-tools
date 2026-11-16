@@ -8,7 +8,6 @@ BeforeAll {
         $script:tools = InModuleScope Avm.Authoring {
             @{ Terraform = Resolve-AvmTool -Name terraform; Conftest = Resolve-AvmTool -Name conftest }
         }
-        $script:tools.Terraform.Version | Should -Be '1.16.5'
         $script:providerCache = Join-Path $TestDrive 'providers'
         $null = New-Item -ItemType Directory -Path $script:providerCache
     }

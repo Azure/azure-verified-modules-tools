@@ -45,7 +45,7 @@ Describe 'Invoke-AvmBicepTest' {
             $script:calls = New-Object System.Collections.Generic.List[object]
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'bicep'; Version = '0.30.3'; Platform = 'linux-amd64'
+                    Name = 'bicep'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/bicep'
                 }
             }
@@ -86,7 +86,7 @@ Describe 'Invoke-AvmBicepTest' {
             param($C, $A)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'bicep'; Version = '0.30.3'; Platform = 'linux-amd64'
+                    Name = 'bicep'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/bicep'
                 }
             }
@@ -177,7 +177,7 @@ Describe 'Invoke-AvmBicepTest' {
             param($C, $A)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'bicep'; Version = '0.30.3'; Platform = 'linux-amd64'
+                    Name = 'bicep'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/bicep'
                 }
             }
@@ -265,7 +265,7 @@ Describe 'Invoke-AvmBicepTest' {
             param($C)
             Mock Resolve-AvmTool {
                 [pscustomobject]@{
-                    Name = 'bicep'; Version = '0.30.3'; Platform = 'linux-amd64'
+                    Name = 'bicep'; Version = 'test'; Platform = 'linux-amd64'
                     Source = 'cache'; Path = '/fake/bicep'
                 }
             }
@@ -273,7 +273,7 @@ Describe 'Invoke-AvmBicepTest' {
             Invoke-AvmBicepTest -Context $C
         }
         $result.Engine     | Should -Be 'bicep'
-        $result.Tool       | Should -Be 'bicep/0.30.3'
+        $result.Tool       | Should -Be 'bicep/test'
         $result.ToolPath   | Should -Be '/fake/bicep'
         $result.ToolSource | Should -Be 'cache'
     }

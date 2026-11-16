@@ -234,10 +234,10 @@ Describe 'Invoke-AvmTerraformCheckPolicy' -Tag Component {
             $script:providerCacheLock = $null
             Mock Resolve-AvmTool {
                 if ($Name -eq 'conftest') {
-                    [pscustomobject]@{ Name = 'conftest'; Version = '0.68.2'; Source = 'cache'; Path = '/fake/conftest' }
+                    [pscustomobject]@{ Name = 'conftest'; Version = 'test'; Source = 'cache'; Path = '/fake/conftest' }
                 }
                 else {
-                    [pscustomobject]@{ Name = 'terraform'; Version = '1.15.8'; Source = 'cache'; Path = '/fake/terraform' }
+                    [pscustomobject]@{ Name = 'terraform'; Version = 'test'; Source = 'cache'; Path = '/fake/terraform' }
                 }
             }
             Mock Resolve-AvmPolicyBundle {

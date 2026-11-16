@@ -68,7 +68,7 @@ BeforeAll {
             SkipInit = [bool]$NoInit; Child = [bool]$Submodule
         } {
             param($S, $Retry, $T, $Config, $SkipInit, $Child)
-            Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'terraform'; Version = '1.15.8'; Path = 'terraform-stub'; Source = 'cache' } }
+            Mock Resolve-AvmTool { [pscustomobject]@{ Name = 'terraform'; Version = 'test'; Path = 'terraform-stub'; Source = 'cache' } }
             Mock Get-AvmTerraformTestTarget {
                 param($Root)
                 [pscustomobject]@{

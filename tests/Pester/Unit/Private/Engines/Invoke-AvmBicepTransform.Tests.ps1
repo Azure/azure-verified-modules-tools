@@ -60,8 +60,8 @@ Describe 'Invoke-AvmBicepTransform' {
 
     It 'preserves artifact bytes and timestamp for provenance-only differences in writing and check modes' {
         $output = Join-Path $script:moduleDir 'main.json'
-        $compiled = $script:compiled.Replace('"resources"', '"metadata":{"_generator":{"name":"bicep","version":"0.48.1.52935","templateHash":"new"}},"resources"')
-        $current = $compiled.Replace('0.48.1.52935', '0.47.16.16243').Replace('"new"', '"18275710714278981656"')
+        $compiled = $script:compiled.Replace('"resources"', '"metadata":{"_generator":{"name":"bicep","version":"compiler-version","templateHash":"new"}},"resources"')
+        $current = $compiled.Replace('compiler-version', 'other-compiler-version').Replace('"new"', '"18275710714278981656"')
         [System.IO.File]::WriteAllText($output, $current, [Text.UTF8Encoding]::new($false))
         $timestamp = [datetime]::UtcNow.AddDays(-2)
         [System.IO.File]::SetLastWriteTimeUtc($output, $timestamp)
