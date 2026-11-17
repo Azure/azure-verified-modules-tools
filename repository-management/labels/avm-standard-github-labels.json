@@ -1,6 +1,16 @@
 {
   "labels": [
     {
+      "name": "PR: Run E2E Tests",
+      "description": "Authorize required end-to-end tests for this pull request.",
+      "color": "0E8A16"
+    },
+    {
+      "name": "PR: Run Optional E2E Tests",
+      "description": "Authorize optional end-to-end tests for this pull request.",
+      "color": "0E8A16"
+    },
+    {
       "name": "AZD :technologist:",
       "description": "These modules are requested/used by the AZD team.",
       "color": "E0BFFA"

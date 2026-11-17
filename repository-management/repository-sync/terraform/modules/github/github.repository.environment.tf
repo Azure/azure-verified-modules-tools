@@ -18,7 +18,7 @@ resource "github_repository_environment" "approval" {
   can_admins_bypass   = true
   prevent_self_review = false
   dynamic "reviewers" {
-    for_each = contains(["pr_check", "examples_test_execution"], each.key) ? [] : [local.environment_approval_team_ids]
+    for_each = var.terraform_pr_test_gates_enabled || contains(["pr_check", "examples_test_execution"], each.key) ? [] : [local.environment_approval_team_ids]
     content {
       teams = reviewers.value
     }

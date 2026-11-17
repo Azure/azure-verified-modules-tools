@@ -9,8 +9,10 @@ BeforeAll {
 }
 
 Describe 'Standard GitHub label catalog' {
-    It 'preserves all 45 labels and their published descriptions' {
-        $script:labels | Should -HaveCount 45
+    It 'preserves existing labels and adds both E2E authorization labels' {
+        $script:labels | Should -HaveCount 47
+        $script:labels.Name | Should -Contain 'PR: Run E2E Tests'
+        $script:labels.Name | Should -Contain 'PR: Run Optional E2E Tests'
         $owner = @($script:labels | Where-Object Name -eq 'Needs: Module Owner :mega:')
         $owner | Should -HaveCount 1
         $owner[0].Description | Should -Match 'In the BRM repository:'
@@ -18,13 +20,13 @@ Describe 'Standard GitHub label catalog' {
         $script:labels[-1].Name | Should -BeExactly 'Class: Child Module :package:'
     }
 
-    It 'renders the published CSV schema and all 45 rows with LF endings' {
+    It 'renders the published CSV schema and all rows with LF endings' {
         $csv = ConvertTo-AvmStandardGitHubLabelsCsv -Labels $script:labels
         $csv | Should -Match '^Name,Description,HEX'
         $csv | Should -Not -Match "`r"
         $csv.EndsWith("`n") | Should -BeTrue
         $rows = @($csv | ConvertFrom-Csv)
-        $rows | Should -HaveCount 45
+        $rows | Should -HaveCount 47
         for ($index = 0; $index -lt $rows.Count; $index++) {
             $rows[$index].Name | Should -BeExactly $script:labels[$index].Name
             $rows[$index].Description | Should -BeExactly $script:labels[$index].Description
@@ -98,7 +100,7 @@ Describe 'Standard GitHub label reconciliation' {
     }
 
     It 'updates only changed colors or GitHub descriptions' {
-        $label = $script:labels[7]
+        $label = $script:labels | Where-Object Name -EQ 'Needs: Module Owner :mega:'
         $existing = @([pscustomobject]@{ name = $label.Name; color = $label.Color; description = 'old' })
         $changes = @(Get-AvmStandardGitHubLabelChanges -Labels @($label) -ExistingLabels $existing)
         $changes | Should -HaveCount 1
@@ -119,7 +121,7 @@ Describe 'Standard GitHub label reconciliation' {
 
 Describe 'Standard GitHub label synchronization flow' {
     BeforeEach {
-        $script:source = @($script:labels[0], $script:labels[7])
+        $script:source = @($script:labels[0], ($script:labels | Where-Object Name -EQ 'Needs: Module Owner :mega:'))
         $script:live = @(
             [pscustomobject]@{
                 name = $script:source[0].Name; description = $script:source[0].GitHubDescription

@@ -36,6 +36,22 @@ resource "github_repository_ruleset" "main" {
     required_linear_history = true
     non_fast_forward        = true
 
+    dynamic "required_status_checks" {
+      for_each = var.terraform_pr_test_gates_enabled ? [1] : []
+      content {
+        strict_required_status_checks_policy = true
+        do_not_enforce_on_create              = false
+        required_check {
+          context        = "run managed workflow / Terraform validation gate"
+          integration_id = 15368
+        }
+        required_check {
+          context        = "run managed workflow / Terraform required E2E gate"
+          integration_id = 15368
+        }
+      }
+    }
+
     pull_request {
       allowed_merge_methods             = ["squash"]
       dismiss_stale_reviews_on_push     = true

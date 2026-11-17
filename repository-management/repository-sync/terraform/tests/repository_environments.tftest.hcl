@@ -165,6 +165,39 @@ run "custom_names_preserve_the_same_approval_split" {
   }
 }
 
+run "label_gate_rollout_removes_approvals_and_requires_both_checks" {
+  command = plan
+
+  module {
+    source = "./modules/github"
+  }
+
+  variables {
+    terraform_pr_test_gates_enabled = true
+  }
+
+  assert {
+    condition = (
+      length(github_repository_environment.approval) == 4 &&
+      alltrue([for environment in github_repository_environment.approval : length(environment.reviewers) == 0])
+    )
+    error_message = "The label-gate rollout must remove reviewers without changing environment addresses."
+  }
+
+  assert {
+    condition = (
+      length(github_repository_ruleset.main[0].rules[0].required_status_checks) == 1 &&
+      github_repository_ruleset.main[0].rules[0].required_status_checks[0].strict_required_status_checks_policy &&
+      toset([for check in github_repository_ruleset.main[0].rules[0].required_status_checks[0].required_check : check.context]) == toset([
+        "run managed workflow / Terraform validation gate",
+        "run managed workflow / Terraform required E2E gate"
+      ]) &&
+      alltrue([for check in github_repository_ruleset.main[0].rules[0].required_status_checks[0].required_check : check.integration_id == 15368])
+    )
+    error_message = "Only the stable validation and required E2E checks from GitHub Actions may gate merging."
+  }
+}
+
 run "execution_cannot_reuse_the_discovery_environment" {
   command = plan
 

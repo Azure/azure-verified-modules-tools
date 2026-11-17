@@ -141,12 +141,14 @@ run "standard_labels_are_read_from_tools_json" {
 
   assert {
     condition = (
-      length(local.labels) == 45 &&
+      length(local.labels) == 47 &&
+      local.labels["PR: Run E2E Tests"].name == "PR: Run E2E Tests" &&
+      local.labels["PR: Run Optional E2E Tests"].name == "PR: Run Optional E2E Tests" &&
       local.labels["Needs: Module Owner :mega:"].name == "Needs: Module Owner :mega:" &&
       local.labels["Needs: Module Owner :mega:"].color == "FF0019" &&
       local.labels["Needs: Module Owner :mega:"].description == "This module needs an owner to develop or maintain it"
     )
-    error_message = "Terraform must use all 45 local JSON labels and preserve the GitHub-safe description."
+    error_message = "Terraform must use the local JSON labels, including both E2E labels, and preserve the GitHub-safe description."
   }
 }
 

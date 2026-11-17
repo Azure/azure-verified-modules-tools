@@ -253,14 +253,49 @@ upsert. Start with one approved repository and verify before any fleet rollout.
 There is no fallback to retired-tenant settings. See the
 [unified ownership and execution prerequisites](repository-sync/README.md#unified-bami-ownership).
 
-The `examples-test` GitHub environment and its reviewer approval gate remain,
-but it no longer receives an Azure federated credential: matrix discovery is
-approval-only. Normal reconciliation deletes only the existing
+The `examples-test` GitHub environment no longer receives an Azure federated
+credential. Normal reconciliation deletes only the existing
 `module-examples-test` credential on each verified Terraform test identity.
 The `examples-test-execution`, `pr-check`, `integration-test`, and Tools
 validation credentials keep their names and addresses. Older callers that
 authenticate in `examples-test` must update their managed workflow files;
 the retired credential is not retained for compatibility.
+
+### Terraform PR test gates
+
+The reusable Terraform workflow runs PR checks, unit tests and integration
+tests automatically. `PR: Run E2E Tests` authorizes existing `examples/default`
+and `examples/waf-aligned` scenarios. `PR: Run Optional E2E Tests` independently
+authorizes other runnable examples. Optional failures do not block the two
+stable merge checks. Both labels select both sets. Missing required scenarios
+are reported without requiring modules to add them yet; an existing required
+scenario cannot bypass validation with `.e2eignore`.
+
+The caller must handle `opened`, `reopened`, `synchronize`, `labeled` and
+`unlabeled` pull-request events, including removal of either E2E label. Labels
+persist across commits, but results must be produced for the new revision.
+Removing the required label makes a new run fail its required E2E gate when
+required examples exist; it does not stop cloud work already authorized.
+Manual dispatch retains both E2E tiers. Merge queues rerun required E2E tests
+for their synthetic revision; optional examples are not requested.
+Forks receive unprivileged checks only and need a same-repository release-branch
+handoff before authenticated validation can satisfy the merge checks.
+
+Roll out the updated, immutable workflow pin and caller events first. Keep
+the caller display name `run managed workflow`, then verify these check names:
+
+- `run managed workflow / Terraform validation gate`
+- `run managed workflow / Terraform required E2E gate`
+
+Only after pilot verification and approval, set
+`terraformPrTestGatesEnabled: true` on the selected matching group in
+`repository-config/config.json`. It is a Boolean, defaults to false and follows
+the existing group ordering. Repository sync passes it to Terraform as
+`terraform_pr_test_gates_enabled`. Enabling it removes test-environment reviewer
+gates and requires both stable GitHub Actions checks on the default branch.
+Environment names, resource addresses and federation remain unchanged.
+No repositories are opted in by default. Keep the rollout setting committed
+so later scheduled syncs retain the same policy.
 
 Bicep variable sync retains its existing eight-field source and five-field
 execution projection. It also publishes a separate, generated module client-ID

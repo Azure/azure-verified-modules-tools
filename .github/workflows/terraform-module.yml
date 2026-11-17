@@ -81,7 +81,7 @@ jobs:
 
   subscriptions:
     name: Select test subscription
-    if: github.event.pull_request.head.repo.fork == false
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
     environment: no-approval
     outputs:
@@ -280,7 +280,7 @@ jobs:
 
   pr-check:
     name: PR check
-    if: github.event.pull_request.head.repo.fork == false
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || github.event.pull_request.head.repo.fork == false
     needs: [bootstrap, subscriptions]
     runs-on: ubuntu-latest
     environment: pr-check
@@ -408,7 +408,7 @@ jobs:
 
   integration-test:
     name: Integration tests
-    if: github.event.pull_request.head.repo.fork == false
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || github.event.pull_request.head.repo.fork == false
     needs: [bootstrap, subscriptions]
     runs-on: ubuntu-latest
     environment: integration-test
@@ -524,13 +524,16 @@ jobs:
 
   discover-examples:
     name: Discover e2e examples
-    if: github.event.repository.name != 'terraform-azurerm-avm-template' && github.event.pull_request.head.repo.fork == false
+    if: github.event.repository.name != 'terraform-azurerm-avm-template'
     needs: bootstrap
     runs-on: ubuntu-latest
-    environment: examples-test
     outputs:
       examples: ${{ steps.list.outputs.examples }}
       hasExamples: ${{ steps.list.outputs.hasExamples }}
+      requiredExamples: ${{ steps.list.outputs.requiredExamples }}
+      optionalExamples: ${{ steps.list.outputs.optionalExamples }}
+      runRequired: ${{ steps.list.outputs.runRequired }}
+      runOptional: ${{ steps.list.outputs.runOptional }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -546,25 +549,62 @@ jobs:
       - name: List runnable examples
         id: list
         shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork == true }}
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module (Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1') -ErrorAction Stop
           $examples = (avm -SkipModuleVersionCheck test e2e --list | Out-String).Trim()
-          if ([string]::IsNullOrWhiteSpace($examples)) { $examples = '[]' }
+          if ([string]::IsNullOrWhiteSpace($examples)) {
+              throw [System.IO.InvalidDataException]::new('E2E discovery returned no JSON array.')
+          }
 
-          $parsed = @($examples | ConvertFrom-Json)
+          $parsed = ConvertFrom-Json -InputObject $examples -NoEnumerate
+          if ($parsed -isnot [array] -or @($parsed | Where-Object { $_ -isnot [string] -or [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
+              throw [System.IO.InvalidDataException]::new('E2E discovery must return an array of nonempty example names.')
+          }
+          $requiredNames = @('default', 'waf-aligned')
+          foreach ($name in $requiredNames) {
+              if ((Test-Path -LiteralPath (Join-Path 'examples' $name) -PathType Container) -and $parsed -cnotcontains $name) {
+                  throw [System.InvalidOperationException]::new("Required E2E example '$name' exists but is not runnable; remove its ignore marker or repair the example.")
+              }
+          }
+          $required = @($parsed | Where-Object { $_ -cin $requiredNames })
+          $optional = @($parsed | Where-Object { $_ -cnotin $requiredNames })
+          $labels = @()
+          if ($env:PR_LABELS -and $env:PR_LABELS -ne 'null') {
+              $labels = @(ConvertFrom-Json -InputObject $env:PR_LABELS)
+          }
+          $trusted = $env:EVENT_NAME -in @('workflow_dispatch', 'merge_group') -or (
+              $env:EVENT_NAME -eq 'pull_request' -and $env:IS_FORK -eq 'false'
+          )
+          $runRequired = $trusted -and (
+              $env:EVENT_NAME -in @('workflow_dispatch', 'merge_group') -or $labels -ccontains 'PR: Run E2E Tests'
+          )
+          $runOptional = $trusted -and (
+              $env:EVENT_NAME -eq 'workflow_dispatch' -or $labels -ccontains 'PR: Run Optional E2E Tests'
+          )
           $hasExamples = if ($parsed.Count -gt 0) { 'true' } else { 'false' }
 
           "examples=$examples" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "hasExamples=$hasExamples" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          Write-Host "Discovered $($parsed.Count) runnable example(s): $examples"
+          "requiredExamples=$(ConvertTo-Json -InputObject $required -Compress)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "optionalExamples=$(ConvertTo-Json -InputObject $optional -Compress)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "runRequired=$($runRequired.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "runOptional=$($runOptional.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Required E2E examples: $($required -join ', '); optional E2E examples: $($optional -join ', ')."
+          foreach ($name in $requiredNames) {
+              if ($required -cnotcontains $name) { Write-Host "Required E2E example '$name' is absent; existence is not yet enforced." }
+          }
 
   e2e-test:
-    name: End-to-end tests (${{ matrix.example }})
+    name: Required E2E tests (${{ matrix.example }})
     if: >-
       github.event.repository.name != 'terraform-azurerm-avm-template' &&
-      github.event.pull_request.head.repo.fork == false &&
-      needs.discover-examples.outputs.hasExamples == 'true'
+      needs.discover-examples.outputs.runRequired == 'true' &&
+      needs.discover-examples.outputs.requiredExamples != '[]'
     needs: [bootstrap, subscriptions, discover-examples]
     runs-on: ubuntu-latest
     environment: examples-test-execution
@@ -576,8 +616,8 @@ jobs:
       # be destroyed - not just the first one to fail.
       fail-fast: false
       matrix:
-        example: ${{ fromJson(needs.discover-examples.outputs.examples) }}
-    steps:
+        example: ${{ fromJson(needs.discover-examples.outputs.requiredExamples) }}
+    steps: &e2e-steps
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -722,7 +762,87 @@ jobs:
 
       - name: Run end-to-end tests
         shell: pwsh
+        env:
+          E2E_EXAMPLE: ${{ matrix.example }}
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module (Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1') -ErrorAction Stop
-          avm -SkipModuleVersionCheck test e2e --example '${{ matrix.example }}'
+          $result = avm -SkipModuleVersionCheck test e2e --example $env:E2E_EXAMPLE --passthru
+          if ($result.Status -cne 'pass' -or $result.FilesProcessed -ne 1) {
+              throw [System.InvalidOperationException]::new("E2E example '$env:E2E_EXAMPLE' did not execute successfully.")
+          }
+
+  optional-e2e-test:
+    name: Optional E2E tests (${{ matrix.example }})
+    if: >-
+      github.event.repository.name != 'terraform-azurerm-avm-template' &&
+      needs.discover-examples.outputs.runOptional == 'true' &&
+      needs.discover-examples.outputs.optionalExamples != '[]'
+    needs: [bootstrap, subscriptions, discover-examples]
+    runs-on: ubuntu-latest
+    environment: examples-test-execution
+    permissions:
+      id-token: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        example: ${{ fromJson(needs.discover-examples.outputs.optionalExamples) }}
+    steps: *e2e-steps
+
+  validation-gate:
+    name: Terraform validation gate
+    if: always()
+    needs: [bootstrap, subscriptions, unit-test, pr-check, pr-check-fork, integration-test]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require successful validation
+        shell: pwsh
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $results = ConvertFrom-Json -InputObject $env:RESULTS -AsHashtable
+          foreach ($name in @('bootstrap', 'subscriptions', 'unit-test', 'pr-check', 'integration-test')) {
+              if ($results[$name].result -ne 'success') {
+                  throw [System.InvalidOperationException]::new("Required validation job '$name' did not pass ($($results[$name].result)). Fork contributions require a same-repository release-branch handoff for authenticated checks.")
+              }
+          }
+
+  required-e2e-gate:
+    name: Terraform required E2E gate
+    if: always()
+    needs: [bootstrap, discover-examples, e2e-test]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require successful required E2E tests
+        shell: pwsh
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          REPOSITORY_NAME: ${{ github.event.repository.name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $results = ConvertFrom-Json -InputObject $env:RESULTS -AsHashtable
+          if ($results.bootstrap.result -ne 'success') {
+              throw [System.InvalidOperationException]::new('The authoring runtime did not prepare successfully.')
+          }
+          if ($env:REPOSITORY_NAME -ceq 'terraform-azurerm-avm-template') {
+              Write-Host 'E2E execution is not applicable to the template repository.'
+              return
+          }
+          $discovery = $results['discover-examples']
+          if ($discovery.result -ne 'success') {
+              throw [System.InvalidOperationException]::new('E2E example discovery did not pass.')
+          }
+          if ($discovery.outputs.requiredExamples -ceq '[]') {
+              Write-Host 'No required E2E examples exist; their existence is not yet enforced.'
+              return
+          }
+          if ($discovery.outputs.runRequired -cne 'true') {
+              throw [System.InvalidOperationException]::new('Existing required E2E tests must pass before merging. Add PR: Run E2E Tests on a same-repository pull request.')
+          }
+          if ($results['e2e-test'].result -ne 'success') {
+              throw [System.InvalidOperationException]::new("Required E2E tests did not pass ($($results['e2e-test'].result)).")
+          }
