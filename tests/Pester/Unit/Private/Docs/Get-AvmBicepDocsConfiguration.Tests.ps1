@@ -27,6 +27,7 @@ Describe 'Get-AvmBicepDocsConfiguration package defaults' {
             $old = Get-AvmBicepDocsConfiguration -ModulePath $Path
             $old.UsesPackageTemplate | Should -BeTrue
             $old.TemplatePath | Should -BeExactly $current.Path
+            $old.Hash | Should -BeExactly $current.Hash
             Copy-Item -LiteralPath $current.Path -Destination $Template -Force
             $new = Get-AvmBicepDocsConfiguration -ModulePath $Path
             $new.UsesPackageTemplate | Should -BeFalse

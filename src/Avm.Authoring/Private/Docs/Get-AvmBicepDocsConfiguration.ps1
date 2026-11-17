@@ -87,7 +87,7 @@ function Get-AvmBicepDocsConfiguration {
         ConfigPath          = $configPath
         TemplatePath        = if ($hash -ceq $template.Hash) { $path } else { $template.Path }
         Version             = $template.Version
-        Hash                = $hash
+        Hash                = $template.Hash
         UsesPackageTemplate = $hash -cne $template.Hash
     }
 }
