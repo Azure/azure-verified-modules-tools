@@ -349,6 +349,9 @@ rule "avm_output_resource_id_required" {
         @{ Version = '1.1.0' }
     ) {
         param($Version)
+        $minimumVersion = InModuleScope Avm.Authoring {
+            [string](Read-AvmPins).tflintPluginCompatibility.minimumModuleClassVersion
+        }
         "plugin `"avm`" {`n  version = `"$Version`"`n}`n" |
             Set-Content -LiteralPath (Join-Path $script:root 'avm.tflint.override.hcl') -Encoding utf8NoBOM
         {
@@ -357,7 +360,7 @@ rule "avm_output_resource_id_required" {
                 New-AvmTflintConfigSet -Root $Root -BaseConfigDir $Base -RootModuleClass pattern `
                     -Scopes @([pscustomobject]@{ RelPath = '.'; Config = (Join-Path $Base 'avm.tflint.hcl') })
             }
-        } | Should -Throw '*requires AVM ruleset 1.2.0 or later*'
+        } | Should -Throw "*requires AVM ruleset $minimumVersion or later*"
     }
 
     It 'applies an authored disabling override after the generated pattern class' {

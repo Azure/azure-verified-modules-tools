@@ -8,6 +8,11 @@ BeforeAll {
     function script:NewValidLock {
         @{
             schemaVersion = 1
+            tflintPlugins = @{ avm = '1.5.0' }
+            tflintPluginCompatibility = @{
+                minimumModuleClassVersion      = '1.2.0'
+                legacyOverrideMigrationVersions = @('1.0.0', '1.2.0')
+            }
             tools         = @(
                 @{
                     name        = 'terraform'
@@ -48,6 +53,7 @@ Describe 'Test-AvmPins' {
                 Test-AvmPins -Pins $L | Should -BeTrue
             }
         }
+
     }
 
     Context 'schema enforcement' {
@@ -97,6 +103,25 @@ Describe 'Test-AvmPins' {
                 param($L)
                 { Test-AvmPins -Pins $L } |
                     Should -Throw -ExceptionType ([System.Data.DataException])
+            }
+        }
+
+        It 'rejects invalid TFLint compatibility metadata' -ForEach @(
+            @{ Label = 'a missing compatibility key'; Change = { param($Pins) $Pins.tflintPluginCompatibility.Remove('minimumModuleClassVersion') }; Message = '*missing required key*' }
+            @{ Label = 'an invalid minimum version'; Change = { param($Pins) $Pins.tflintPluginCompatibility.minimumModuleClassVersion = '1.2' }; Message = '*stable semver version*' }
+            @{ Label = 'a non-array migration list'; Change = { param($Pins) $Pins.tflintPluginCompatibility.legacyOverrideMigrationVersions = '1.0.0' }; Message = '*must be an array*' }
+            @{ Label = 'an invalid migration version'; Change = { param($Pins) $Pins.tflintPluginCompatibility.legacyOverrideMigrationVersions = @('1.0') }; Message = '*must be semver strings*' }
+            @{ Label = 'a duplicate migration version'; Change = { param($Pins) $Pins.tflintPluginCompatibility.legacyOverrideMigrationVersions = @('1.0.0', '1.0.0') }; Message = '*duplicate TFLint migration version*' }
+            @{ Label = 'missing AVM plugin pin'; Change = { param($Pins) $Pins.Remove('tflintPlugins') }; Message = '*requires tflintPlugins.avm*' }
+            @{ Label = 'an AVM plugin pin without compatibility metadata'; Change = { param($Pins) $Pins.Remove('tflintPluginCompatibility') }; Message = "*requires 'tflintPluginCompatibility'*" }
+        ) {
+            $pins = script:NewValidLock
+            $pins.tflintPlugins = @{ avm = '1.5.0' }
+            & $Change $pins
+            InModuleScope 'Avm.Authoring' -Parameters @{ L = $pins; M = $Message } {
+                param($L, $M)
+                { Test-AvmPins -Pins $L } |
+                    Should -Throw -ExceptionType ([System.Data.DataException]) -ExpectedMessage $M
             }
         }
 

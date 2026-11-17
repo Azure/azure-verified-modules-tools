@@ -558,9 +558,9 @@ function script:Get-PolicyLibraryPin {
 
 # ----------------------------------------------------------------------
 # Deterministic renderer for avm.pins.jsonc. The header comment block and
-# everything from the policyLibrary banner onwards are preserved verbatim
-# so hand-written JSONC documentation survives every refresh; only the
-# schemaVersion + tools[] payload between them is regenerated.
+# everything from the first metadata-section banner onward are preserved
+# verbatim so hand-written JSONC documentation and policy survive refreshes;
+# only the schemaVersion + tools[] payload between them is regenerated.
 # ----------------------------------------------------------------------
 function script:Format-JsonString {
     param([AllowEmptyString()] [string] $Value)
@@ -674,9 +674,9 @@ function script:Format-Pins {
 # ----------------------------------------------------------------------
 
 # Split the manifest into (header comments + '{'), the regenerated
-# schemaVersion/tools payload, and the preserved policyLibrary/tflintPlugins
-# tail. Both boundaries are anchored on structural markers so every JSONC
-# comment outside the tools array survives a refresh untouched.
+# schemaVersion/tools payload, and the preserved metadata tail. Both boundaries
+# are anchored on structural markers so JSONC comments outside the tools array
+# survive a refresh untouched.
 $existingText = ((Get-Content -LiteralPath $PinsPath -Raw) -replace "`r`n", "`n")
 $existingLines = $existingText -split "`n"
 

@@ -10,9 +10,10 @@ function Test-AvmPins {
 
         Schema rules are documented at the head of Resources/avm.pins.jsonc.
 
-        The 'tools' array is required. The 'policyLibrary', 'tflintPlugins' and
-        'powerShellModules' sections are optional so fixture manifests can pin tools alone, but are
-        fully validated whenever present.
+        The 'tools' array is required. The 'policyLibrary', 'tflintPlugins',
+        'tflintPluginCompatibility' and 'powerShellModules' sections are optional
+        so fixture manifests can pin tools alone, but are fully validated whenever
+        present. AVM plugin pins require compatibility metadata.
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '',
@@ -284,6 +285,49 @@ function Test-AvmPins {
                         "avm.pins: tflintPlugins['$name'] '$($plugins[$name])' is not semver.")
                 }
             }
+        }
+
+        if ($Pins.ContainsKey('tflintPluginCompatibility')) {
+            $compatibility = $Pins.tflintPluginCompatibility
+            if ($compatibility -isnot [hashtable]) {
+                throw [System.Data.DataException]::new(
+                    "avm.pins: 'tflintPluginCompatibility' must be an object.")
+            }
+            foreach ($key in 'minimumModuleClassVersion', 'legacyOverrideMigrationVersions') {
+                if (-not $compatibility.ContainsKey($key)) {
+                    throw [System.Data.DataException]::new(
+                        "avm.pins: tflintPluginCompatibility is missing required key '$key'.")
+                }
+            }
+            if (-not $Pins.ContainsKey('tflintPlugins') -or -not $Pins.tflintPlugins.ContainsKey('avm')) {
+                throw [System.Data.DataException]::new(
+                    "avm.pins: tflintPluginCompatibility requires tflintPlugins.avm.")
+            }
+            if ($compatibility.minimumModuleClassVersion -isnot [string] -or
+                $compatibility.minimumModuleClassVersion -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+                throw [System.Data.DataException]::new(
+                    'avm.pins: tflintPluginCompatibility.minimumModuleClassVersion must be a stable semver version.')
+            }
+            $migrationVersions = $compatibility.legacyOverrideMigrationVersions
+            if ($migrationVersions -isnot [array]) {
+                throw [System.Data.DataException]::new(
+                    'avm.pins: tflintPluginCompatibility.legacyOverrideMigrationVersions must be an array.')
+            }
+            $seenMigrationVersions = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            foreach ($version in $migrationVersions) {
+                if ($version -isnot [string] -or $version -cnotmatch $semverRegex) {
+                    throw [System.Data.DataException]::new(
+                        'avm.pins: tflintPluginCompatibility migration versions must be semver strings.')
+                }
+                if (-not $seenMigrationVersions.Add($version)) {
+                    throw [System.Data.DataException]::new(
+                        "avm.pins: duplicate TFLint migration version '$version'.")
+                }
+            }
+        }
+        elseif ($Pins.ContainsKey('tflintPlugins') -and $Pins.tflintPlugins.ContainsKey('avm')) {
+            throw [System.Data.DataException]::new(
+                "avm.pins: tflintPlugins.avm requires 'tflintPluginCompatibility'.")
         }
 
         if ($Pins.ContainsKey('powerShellModules')) {

@@ -186,12 +186,26 @@ function Merge-AvmTflintConfig {
     $currentPlugin = $false
     if ($plugins.Count -eq 1) {
         $body = $plugins[0].Groups['body'].Value
-        $pinnedVersion = [string](Read-AvmPins).tflintPlugins.avm
-        $versionPattern = '(?m)^\s*version\s*=\s*"' + [regex]::Escape($pinnedVersion) + '"\s*$'
+        $pins = Read-AvmPins
+        $pinnedVersion = [string]$pins.tflintPlugins.avm
+        $supportedVersions = @($pinnedVersion) + @($pins.tflintPluginCompatibility.legacyOverrideMigrationVersions)
+        $versionMatch = [regex]::Match($body, '(?m)^\s*version\s*=\s*"(?<version>[^"]+)"\s*$')
+        $pluginVersion = if ($versionMatch.Success) {
+            $versionMatch.Groups['version'].Value -as [System.Management.Automation.SemanticVersion]
+        }
+        else {
+            $null
+        }
+        $knownPluginVersion = $null -ne $pluginVersion -and @(
+            $supportedVersions | Where-Object {
+                $candidateVersion = $_ -as [System.Management.Automation.SemanticVersion]
+                $null -ne $candidateVersion -and $pluginVersion -eq $candidateVersion
+            }
+        ).Count -gt 0
         $currentPlugin = [regex]::Matches($body, '(?m)^\s*(?:version|source|enabled)\s*=').Count -eq 3 -and
-        ($body -cmatch $versionPattern -or $body -cmatch '(?m)^\s*version\s*=\s*"(?:1\.0\.0|1\.2\.0|1\.3\.0|1\.4\.0|1\.4\.1)"\s*$') -and
-        $body -cmatch '(?m)^\s*source\s*=\s*"github\.com/Azure/tflint-ruleset-avm"\s*$' -and
-        $body -cmatch '(?m)^\s*enabled\s*=\s*true\s*$'
+            $knownPluginVersion -and
+            $body -cmatch '(?m)^\s*source\s*=\s*"github\.com/Azure/tflint-ruleset-avm"\s*$' -and
+            $body -cmatch '(?m)^\s*enabled\s*=\s*true\s*$'
     }
     if ($currentPlugin) {
         $legacyRules = [ordered]@{
@@ -333,10 +347,11 @@ function Test-AvmTflintRootClassConfiguration {
     $versionValue = [regex]::Match($plugin.Groups['body'].Value, '(?m)^[ \t]*version[ \t]*=[ \t]*"(?<version>[^"]+)"')
     if ($versionValue.Success) {
         $version = $null
+        $minimumVersion = [version](Read-AvmPins).tflintPluginCompatibility.minimumModuleClassVersion
         if (-not [version]::TryParse($versionValue.Groups['version'].Value, [ref]$version) -or
-            $version -lt [version]'1.2.0') {
+            $version -lt $minimumVersion) {
             throw [AvmConfigurationException]::new(
-                "TFLint module_class requires AVM ruleset 1.2.0 or later; update your custom AVM plugin pin or use the packaged configuration. Effective configuration: '$Path'.")
+                "TFLint module_class requires AVM ruleset $minimumVersion or later; update your custom AVM plugin pin or use the packaged configuration. Effective configuration: '$Path'.")
         }
     }
     return $true

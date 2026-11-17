@@ -308,7 +308,12 @@ rule "terraform_output_separate" {
             B = $script:basePath; O = $script:overridePath; D = $script:destinationPath
         } {
             param($B, $O, $D)
-            Mock Read-AvmPins { [pscustomobject]@{ tflintPlugins = [pscustomobject]@{ avm = '9.8.7' } } }
+            Mock Read-AvmPins {
+                [pscustomobject]@{
+                    tflintPlugins = [pscustomobject]@{ avm = '9.8.7' }
+                    tflintPluginCompatibility = [pscustomobject]@{ legacyOverrideMigrationVersions = @() }
+                }
+            }
             Mock Write-AvmLog
             Merge-AvmTflintConfig -BasePath $B -OverridePath $O -DestinationPath $D
             Should -Invoke Write-AvmLog -Exactly 2 -ParameterFilter {

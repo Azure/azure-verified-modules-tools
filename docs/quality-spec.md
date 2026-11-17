@@ -20,7 +20,10 @@ boundary.
   trust, platform, or user-facing boundaries explicit.
 - Add abstractions, dependencies, configuration, and public options only when a
   demonstrated need justifies their ongoing cost.
-- Keep classification and tuning values, including error codes, statuses,
+- Do not hard-code tool versions or supported-version constraints, including
+  minimums and allowlists, in executable code or regular expressions. Define
+  them in versioned, schema-validated configuration.
+- Keep other classification and tuning values, including error codes, statuses,
   message patterns, retry limits, timings, and region lists, in versioned
   resource configuration with a schema rather than inline literals. Tests may
   use literals.
