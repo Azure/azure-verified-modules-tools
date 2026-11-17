@@ -29,8 +29,10 @@ boundary.
   use literals.
 - Keep each function focused on one responsibility. Extract a helper to clarify
   or reuse behavior, not merely to shorten a function.
-- Preserve compatibility for existing users. Make intentional public behavior
-  changes explicit and version them according to the project's release policy.
+- Avoid backward-compatibility shims by default. Quantify their module impact;
+  introduce one only when more than 20% of modules are affected and after
+  human approval. Make intentional public behavior changes explicit and version
+  them according to the project's release policy.
 
 ## Correctness and reliability
 

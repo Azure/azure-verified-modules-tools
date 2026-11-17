@@ -344,23 +344,21 @@ rule "avm_output_resource_id_required" {
         } | Should -Throw '*does not match repository class*'
     }
 
-    It 'rejects a plugin downgrade in the effective root configuration' -TestCases @(
+    It 'leaves custom plugin compatibility failures to TFLint' -TestCases @(
         @{ Version = '1.0.0' }
         @{ Version = '1.1.0' }
     ) {
         param($Version)
-        $minimumVersion = InModuleScope Avm.Authoring {
-            [string](Read-AvmPins).tflintPluginCompatibility.minimumModuleClassVersion
-        }
         "plugin `"avm`" {`n  version = `"$Version`"`n}`n" |
             Set-Content -LiteralPath (Join-Path $script:root 'avm.tflint.override.hcl') -Encoding utf8NoBOM
-        {
-            InModuleScope Avm.Authoring -Parameters @{ Root = $script:root; Base = $script:base } {
-                param($Root, $Base)
-                New-AvmTflintConfigSet -Root $Root -BaseConfigDir $Base -RootModuleClass pattern `
-                    -Scopes @([pscustomobject]@{ RelPath = '.'; Config = (Join-Path $Base 'avm.tflint.hcl') })
-            }
-        } | Should -Throw "*requires AVM ruleset $minimumVersion or later*"
+        $result = InModuleScope Avm.Authoring -Parameters @{ Root = $script:root; Base = $script:base } {
+            param($Root, $Base)
+            New-AvmTflintConfigSet -Root $Root -BaseConfigDir $Base -RootModuleClass pattern `
+                -Scopes @([pscustomobject]@{ RelPath = '.'; Config = (Join-Path $Base 'avm.tflint.hcl') })
+        }
+        $config = Get-Content -LiteralPath (Join-Path $result.ConfigDir 'avm.tflint.hcl') -Raw
+        $config | Should -Match 'module_class\s*=\s*"pattern"'
+        $config | Should -Match ('version\s*=\s*"' + [regex]::Escape($Version) + '"')
     }
 
     It 'applies an authored disabling override after the generated pattern class' {
