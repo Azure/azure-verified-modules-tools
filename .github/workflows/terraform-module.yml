@@ -81,7 +81,7 @@ jobs:
 
   subscriptions:
     name: Select test subscription
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || github.event.pull_request.head.repo.fork == false
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)
     runs-on: ubuntu-latest
     environment: no-approval
     outputs:
@@ -280,7 +280,7 @@ jobs:
 
   pr-check:
     name: PR check
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || github.event.pull_request.head.repo.fork == false
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)
     needs: [bootstrap, subscriptions]
     runs-on: ubuntu-latest
     environment: pr-check
@@ -408,7 +408,7 @@ jobs:
 
   integration-test:
     name: Integration tests
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || github.event.pull_request.head.repo.fork == false
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)
     needs: [bootstrap, subscriptions]
     runs-on: ubuntu-latest
     environment: integration-test
@@ -577,11 +577,11 @@ jobs:
           if ($env:PR_LABELS -and $env:PR_LABELS -ne 'null') {
               $labels = @(ConvertFrom-Json -InputObject $env:PR_LABELS)
           }
-          $trusted = $env:EVENT_NAME -in @('workflow_dispatch', 'merge_group') -or (
+          $trusted = $env:EVENT_NAME -eq 'workflow_dispatch' -or (
               $env:EVENT_NAME -eq 'pull_request' -and $env:IS_FORK -eq 'false'
           )
           $runRequired = $trusted -and (
-              $env:EVENT_NAME -in @('workflow_dispatch', 'merge_group') -or $labels -ccontains 'PR: Run E2E Tests'
+              $env:EVENT_NAME -eq 'workflow_dispatch' -or $labels -ccontains 'PR: Run E2E Tests'
           )
           $runOptional = $trusted -and (
               $env:EVENT_NAME -eq 'workflow_dispatch' -or $labels -ccontains 'PR: Run Optional E2E Tests'
@@ -801,8 +801,12 @@ jobs:
         shell: pwsh
         env:
           RESULTS: ${{ toJSON(needs) }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           $ErrorActionPreference = 'Stop'
+          if ($env:EVENT_NAME -notin @('pull_request', 'workflow_dispatch')) {
+              throw [System.InvalidOperationException]::new('Terraform merge gates support pull_request and workflow_dispatch only; merge queues are not supported.')
+          }
           $results = ConvertFrom-Json -InputObject $env:RESULTS -AsHashtable
           foreach ($name in @('bootstrap', 'subscriptions', 'unit-test', 'pr-check', 'integration-test')) {
               if ($results[$name].result -ne 'success') {
@@ -822,8 +826,12 @@ jobs:
         env:
           RESULTS: ${{ toJSON(needs) }}
           REPOSITORY_NAME: ${{ github.event.repository.name }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           $ErrorActionPreference = 'Stop'
+          if ($env:EVENT_NAME -notin @('pull_request', 'workflow_dispatch')) {
+              throw [System.InvalidOperationException]::new('Terraform merge gates support pull_request and workflow_dispatch only; merge queues are not supported.')
+          }
           $results = ConvertFrom-Json -InputObject $env:RESULTS -AsHashtable
           if ($results.bootstrap.result -ne 'success') {
               throw [System.InvalidOperationException]::new('The authoring runtime did not prepare successfully.')

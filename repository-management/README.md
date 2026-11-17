@@ -276,8 +276,10 @@ The caller must handle `opened`, `reopened`, `synchronize`, `labeled` and
 persist across commits, but results must be produced for the new revision.
 Removing the required label makes a new run fail its required E2E gate when
 required examples exist; it does not stop cloud work already authorized.
-Manual dispatch retains both E2E tiers. Merge queues rerun required E2E tests
-for their synthetic revision; optional examples are not requested.
+Manual dispatch retains both E2E tiers. Merge queues are not supported: callers
+must omit `merge_group`, and legacy merge-group invocations cannot access cloud
+credentials and fail both gates explicitly. Disable any requirement to use a
+merge queue before enabling this rollout.
 Forks receive unprivileged checks only and need a same-repository release-branch
 handoff before authenticated validation can satisfy the merge checks.
 

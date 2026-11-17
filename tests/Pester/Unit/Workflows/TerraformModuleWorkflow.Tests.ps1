@@ -153,16 +153,28 @@ Describe 'Terraform E2E label routing and merge gates' {
         $outputs.runOptional | Should -BeExactly 'false'
     }
 
-    It 'runs required tests for merge queues and preserves full manual execution: <Event>' -ForEach @(
-        @{ Event = 'merge_group'; Optional = 'false' }
-        @{ Event = 'workflow_dispatch'; Optional = 'true' }
-    ) {
-        $env:EVENT_NAME = $Event
+    It 'preserves full manual execution without pull-request labels' {
+        $env:EVENT_NAME = 'workflow_dispatch'
         $env:PR_LABELS = 'null'
         & $script:listScript
         $outputs = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
         $outputs.runRequired | Should -BeExactly 'true'
-        $outputs.runOptional | Should -BeExactly $Optional
+        $outputs.runOptional | Should -BeExactly 'true'
+    }
+
+    It 'refuses merge-group deployment authorization and fails both merge gates' {
+        $env:EVENT_NAME = 'merge_group'
+        $env:PR_LABELS = '["PR: Run E2E Tests","PR: Run Optional E2E Tests"]'
+        & $script:listScript
+        $outputs = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
+        $outputs.runRequired | Should -BeExactly 'false'
+        $outputs.runOptional | Should -BeExactly 'false'
+        $env:RESULTS = ConvertTo-Json -InputObject $script:gateResults -Depth 5
+        { & $script:validationGateScript } | Should -Throw '*merge queues are not supported*'
+        { & $script:e2eGateScript } | Should -Throw '*merge queues are not supported*'
+        foreach ($name in @('subscriptions', 'pr-check', 'integration-test')) {
+            $script:gatesWorkflow.jobs[$name]['if'] | Should -BeExactly "github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)"
+        }
     }
 
     It 'reports only existing required scenarios without inventing missing tests: <Examples>' -ForEach @(
