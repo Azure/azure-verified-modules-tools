@@ -6,6 +6,17 @@ by AVM Terraform repositories, plus the shared Bicep/Terraform module catalog.
 [Module catalog sync](module-catalog/README.md) owns the generated CSV/JSON
 indexes and source CSV row-removal protection.
 
+`Repos: Regions Data Sync` collects subscription-scoped locations using the
+existing `avm` environment's repo-sync `ARM_BACKEND_CLIENT_ID`,
+`ARM_BACKEND_TENANT_ID`, and `ARM_BACKEND_SUBSCRIPTION_ID`. This intentionally
+replaces the former regions repository's source subscription; review the first
+generated catalog for resulting differences. Publication uses the AVM GitHub
+App, changes only the locations cache, and leaves open data updates untouched.
+The workflow stays disabled until `REGIONS_DATA_SYNC_ENABLED=true` is set as a
+Tools repository variable. Enable it only after the Tools change is merged
+and the regions repository's legacy publisher is retired. No new Azure identity
+or GitHub environment is required.
+
 New Terraform repositories are created with `avm init` from
 [Avm.Authoring](../src/Avm.Authoring/README.md#initialize-a-terraform-module-repository),
 which publishes the module's own metadata in its first commit. Repository sync
@@ -168,7 +179,8 @@ before Variables before Key Vault. Manual test-scope inputs remain independent
 of tenant selection. Consumer changes are maintained separately.
 
 The Tools `avm` environment has separate authentication scopes: `ARM_BACKEND_*`
-is the TME state-only identity, `TEST_BAMI_*` supplies test provisioning and
+is the TME state identity, also reused for read-only regions collection;
+`TEST_BAMI_*` supplies test provisioning and
 downstream execution settings. Standalone authoring CI reuses the repository-sync
 Terraform executor: `TEST_BAMI_CONTROLLER_CLIENT_ID`, `TEST_BAMI_TENANT_ID` and
 `TEST_BAMI_ADMIN_SUBSCRIPTION_ID` supply both `azure/login` and the process
