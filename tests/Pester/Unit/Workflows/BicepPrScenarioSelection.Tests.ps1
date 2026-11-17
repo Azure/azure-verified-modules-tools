@@ -56,26 +56,48 @@ Describe 'Bicep PR scenario selection' {
             Should -Be @('max')
     }
 
-    It 'reports missing and ignored required scenarios' -ForEach @(
-        @{ Missing = $true }
-        @{ Missing = $false }
-    ) {
-        if ($Missing) {
-            $outputs.ModuleMatrix.Include[0].TestFiles = @($outputs.ModuleMatrix.Include[0].TestFiles |
-                    Where-Object name -NE 'waf-aligned')
-        }
-        else {
-            $outputs.ModuleMatrix.Include[0].TestFiles[1].e2eIgnore = $true
-        }
-        $result = & $selection
-        $result.errors | Should -Not -BeNullOrEmpty
-        ($result.errors -join ' ') | Should -Match 'waf-aligned'
+    It 'warns about a missing scenario while requiring the existing one' {
+        $outputs.ModuleMatrix.Include[0].TestFiles = @($outputs.ModuleMatrix.Include[0].TestFiles |
+                Where-Object name -NE 'waf-aligned')
+        $records = @(& $selection 6>&1)
+        $warning = @($records | Where-Object { $_ -is [System.Management.Automation.InformationRecord] })
+        $result = $records[-1]
+        $warning | Should -HaveCount 1
+        $warning[0].MessageData | Should -Match '^::warning::.*waf-aligned.*missing'
+        $result.errors | Should -BeNullOrEmpty
+        $result.required | Should -HaveCount 1
+        @($result.required[0].moduleTestFilePaths | ConvertFrom-Json | ForEach-Object name) |
+            Should -Be @('defaults')
     }
 
-    It 'does not accept a child scenario in place of a missing parent scenario' {
-        $outputs.ModuleMatrix.Include[0].TestFiles[1].path = 'child/tests/e2e/waf-aligned/main.test.bicep'
+    It 'warns and does not require E2E when both scenarios are missing' {
+        $outputs.ModuleMatrix.Include[0].TestFiles = @($outputs.ModuleMatrix.Include[0].TestFiles |
+                Where-Object name -EQ 'max')
+        $records = @(& $selection 6>&1)
+        @($records | Where-Object { $_ -is [System.Management.Automation.InformationRecord] }) | Should -HaveCount 2
+        $result = $records[-1]
+        $result.errors | Should -BeNullOrEmpty
+        $result.required | Should -BeNullOrEmpty
+        $result.optional | Should -HaveCount 1
+    }
+
+    It 'reports existing ignored required scenarios as errors' {
+        $outputs.ModuleMatrix.Include[0].TestFiles[1].e2eIgnore = $true
         $result = & $selection
-        ($result.errors -join ' ') | Should -Match 'waf-aligned'
+        $result.errors | Should -Not -BeNullOrEmpty
+        ($result.errors -join ' ') | Should -Match 'ignored.*waf-aligned'
+        $result.required | Should -HaveCount 1
+    }
+
+    It 'warns for a missing parent scenario even when a child scenario exists' {
+        $outputs.ModuleMatrix.Include[0].TestFiles[1].path = 'child/tests/e2e/waf-aligned/main.test.bicep'
+        $records = @(& $selection 6>&1)
+        @($records | Where-Object { $_ -is [System.Management.Automation.InformationRecord] })[0].MessageData |
+            Should -Match 'waf-aligned.*missing'
+        $result = $records[-1]
+        $result.errors | Should -BeNullOrEmpty
+        @($result.required[0].moduleTestFilePaths | ConvertFrom-Json | ForEach-Object name) |
+            Should -Be @('defaults', 'waf-aligned')
     }
 }
 

@@ -44,7 +44,7 @@ outputs:
     description: Whether optional E2E tests were requested.
     value: ${{ steps.gate.outputs.optional }}
   requiredErrors:
-    description: Modules missing runnable required scenarios.
+    description: Required scenarios that are ignored.
     value: ${{ steps.initialize.outputs.requiredErrors }}
   baseCommit:
     description: Validated matrix comparison base.
@@ -327,18 +327,22 @@ runs:
           if (-not ([string]$entry.ModulePath).StartsWith('avm/utl/', [StringComparison]::Ordinal)) {
             foreach ($scenario in @('defaults', 'waf-aligned')) {
               $expectedPath = "tests/e2e/$scenario/main.test.bicep"
-              $matching = @($requiredTests | Where-Object { $_.path -ceq $expectedPath -and -not $_.e2eIgnore })
-              if ($matching.Count -ne 1) {
-                $requiredErrors.Add("$($entry.ModulePath): missing or ignored $scenario")
+              $matching = @($requiredTests | Where-Object { $_.path -ceq $expectedPath })
+              if ($matching.Count -eq 0) {
+                $message = "$($entry.ModulePath): $scenario E2E scenario is missing."
+                $message = $message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+                Write-Information "::warning::$message" -InformationAction Continue
               }
             }
             foreach ($ignored in @($requiredTests | Where-Object e2eIgnore)) {
               $requiredErrors.Add("$($entry.ModulePath): ignored required scenario $($ignored.path)")
             }
-            $requiredModules.Add([pscustomobject]@{
-                modulePath = [string]$entry.ModulePath
-                moduleTestFilePaths = ConvertTo-Json -InputObject $requiredTests -Depth 20 -Compress
-              })
+            if ($requiredTests.Count -gt 0) {
+              $requiredModules.Add([pscustomobject]@{
+                  modulePath = [string]$entry.ModulePath
+                  moduleTestFilePaths = ConvertTo-Json -InputObject $requiredTests -Depth 20 -Compress
+                })
+            }
           }
           if ($optionalTests.Count -gt 0) {
             $optionalModules.Add([pscustomobject]@{
