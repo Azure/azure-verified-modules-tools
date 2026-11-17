@@ -502,13 +502,14 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             Should -Be @('authoringRef', 'authoringSource', 'deploymentValidation', 'modulePaths')
         $initializer.inputs.deploymentValidation.default | Should -BeExactly 'true'
         @($initializer.outputs.Keys | Sort-Object) |
-            Should -Be @('admitted', 'authoringArtifact', 'baseCommit', 'hasModules', 'moduleMatrix', 'targetCommit', 'workflowInput')
+            Should -Be @('admitted', 'authoringArtifact', 'baseCommit', 'hasModules', 'hasOptionalModules', 'hasRequiredModules', 'moduleMatrix', 'optionalMatrix', 'optionalRequested', 'requiredErrors', 'requiredMatrix', 'requiredRequested', 'targetCommit', 'workflowInput')
         $text = Get-Content -LiteralPath (Join-Path $script:root '.github' 'actions' 'bicep-pr-check-initializer' 'action.yml') -Raw
         $text | Should -Match 'Initialize-AvmBicepWorkflowMatrix'
         $text | Should -Match 'BicepWorkflowOrchestration'
         $text | Should -Match 'actions/upload-artifact@[0-9a-f]{40}'
         $text | Should -Match 'deploymentValidation must be exactly true or false'
-        $text | Should -Match '\$deployment = if \(\$manual\)'
+        $text | Should -Match '\$required = if \(\$manual\)'
+        $text | Should -Match '\$optional = if \(\$manual\)'
         $text | Should -Match '\$env:DEPLOYMENT_VALIDATION -ceq ''true'''
         $text | Should -Match "labels -ccontains 'PR: Run E2E Tests'"
         $text | Should -Not -Match 'utilities[/\\]|Get-TestSubscriptionTag|avm\.template\.module\.preview'
