@@ -403,10 +403,10 @@ Describe 'Bicep reusable workflow ownership and syntax' {
     It 'classifies exact scenario names case-sensitively for <ModulePath> in <Workflow>' -ForEach @(
         @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/res/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
         @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/res/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
-        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/utl/example/widget'; Expected = @($false, $false, $false, $false, $false, $false) }
-        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/utl/example/widget'; Expected = @($false, $false, $false, $false, $false, $false) }
-        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'AVM/utl/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
-        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'AVM/utl/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/utl/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/utl/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/ptn/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/ptn/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
     ) {
         $step = $script:workflows[$Workflow].jobs[$Job].steps | Where-Object { $_['id'] -ceq 'select' }
         $tokens = $null
