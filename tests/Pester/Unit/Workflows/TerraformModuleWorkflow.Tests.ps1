@@ -76,10 +76,11 @@ Describe 'Terraform E2E label routing and merge gates' {
     BeforeAll {
         $root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..')).Path
         $module = Import-Module (Join-Path $root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -PassThru
+        $script:gatesModule = $module
         $null = & $module { Import-AvmPowerShellModule -Name powershell-yaml -Global }
         $script:gatesWorkflow = ConvertFrom-Yaml (Get-Content -LiteralPath (Join-Path $root '.github' 'workflows' 'terraform-module.yml') -Raw)
         $script:listScript = [scriptblock]::Create($script:gatesWorkflow.jobs['discover-examples'].steps[-1].run)
-        $script:gateScript = [scriptblock]::Create($script:gatesWorkflow.jobs['module-gate'].steps[0].run)
+        $script:gateScript = [scriptblock]::Create($script:gatesWorkflow.jobs['module-gate'].steps[-1].run)
         $script:matrixScript = [scriptblock]::Create($script:gatesWorkflow.jobs['select-e2e-tests'].steps[-1].run)
         $script:exampleScript = [scriptblock]::Create($script:gatesWorkflow.jobs['e2e-test'].steps[-1].run)
     }
@@ -258,7 +259,118 @@ Describe 'Terraform E2E label routing and merge gates' {
         $script:gateResults['discover-examples'].outputs.runRequired = 'false'
         $script:gateResults['e2e-test'].result = 'skipped'
         $env:RESULTS = ConvertTo-Json -InputObject $script:gateResults -Depth 5
-        { & $script:gateScript } | Should -Throw '*Add PR: Run E2E Tests or PR: Run Optional E2E Tests*'
+        $path = Join-Path $TestDrive 'missing-label-gate.ps1'
+        Set-Content -LiteralPath $path -Value $script:gateScript.ToString() -Encoding utf8
+        $result = & $script:gatesModule {
+            param($Path)
+            Invoke-AvmProcess -FilePath (Get-Command pwsh).Source -ArgumentList @('-NoProfile', '-File', $Path) -IgnoreExitCode
+        } $path
+        $result.ExitCode | Should -Be 1
+        $result.StdOut | Should -Match '::error title=E2E authorization label required::'
+        $result.StdOut | Should -Match '"PR: Run E2E Tests".*"PR: Run Optional E2E Tests"'
+        $result.StdErr | Should -Not -Match 'Exception|throw'
+    }
+
+    It 'publishes actionable label guidance without changing authorization: <Case>' -ForEach @(
+        @{ Case = 'missing label'; Missing = $true; Expected = 'create'; Summary = $true }
+        @{ Case = 'rerun updates existing bot comment'; Missing = $true; Existing = $true; Expected = 'update'; Summary = $true }
+        @{ Case = 'human cannot spoof owned comment'; Missing = $true; Human = $true; Expected = 'create'; Summary = $true }
+        @{ Case = 'required label resolves comment'; Existing = $true; Expected = 'update' }
+        @{ Case = 'optional label resolves comment'; Existing = $true; Optional = $true; Expected = 'update' }
+        @{ Case = 'absent required scenarios resolve comment'; Existing = $true; Empty = $true; Expected = 'update' }
+        @{ Case = 'no unnecessary success comment'; Expected = '' }
+        @{ Case = 'fork receives summary without API calls'; Missing = $true; Fork = $true; Summary = $true; Warning = $true; Expected = '' }
+        @{ Case = 'denied comment permission remains visible'; Missing = $true; Denied = $true; Summary = $true; Warning = $true; Expected = '' }
+        @{ Case = 'stale commit cannot post'; Missing = $true; Stale = $true; Summary = $true; Expected = '' }
+        @{ Case = 'newly added label cannot get stale warning'; Missing = $true; NewlyAuthorized = $true; Summary = $true; Expected = '' }
+        @{ Case = 'removed label cannot get stale resolution'; Existing = $true; NewlyRemoved = $true; Expected = '' }
+        @{ Case = 'failed discovery cannot resolve comment'; Failed = $true; Existing = $true; Expected = '' }
+        @{ Case = 'template remains exempt'; Template = $true; Missing = $true; Expected = '' }
+    ) {
+        param($Missing, $Existing, $Human, $Optional, $Empty, $Fork, $Denied, $Stale, $NewlyAuthorized, $NewlyRemoved, $Failed, $Template, $Expected, $Summary, $Warning)
+        $reporter = $script:gatesWorkflow.jobs['module-gate'].steps[0]
+        $reporter.uses | Should -BeExactly 'actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd'
+        $reporter['if'] | Should -BeExactly "always() && github.event_name == 'pull_request'"
+        $script:gatesWorkflow.jobs['module-gate'].permissions['pull-requests'] | Should -BeExactly 'write'
+        $scenario = @{
+            missing = [bool]$Missing; existing = [bool]$Existing; human = [bool]$Human; optional = [bool]$Optional
+            empty = [bool]$Empty; fork = [bool]$Fork; denied = [bool]$Denied; stale = [bool]$Stale
+            newlyAuthorized = [bool]$NewlyAuthorized; newlyRemoved = [bool]$NewlyRemoved
+            failed = [bool]$Failed; template = [bool]$Template
+        } | ConvertTo-Json -Compress
+        $source = ConvertTo-Json -InputObject $reporter.with.script -Compress
+        $harness = @'
+const scenario = SCENARIO;
+const source = SOURCE;
+const result = { mutations: [], warnings: [], errors: [], summaries: [], api: [] };
+const context = {
+  repo: { owner: 'Azure', repo: scenario.template ? 'terraform-azurerm-avm-template' : 'module' },
+  payload: { pull_request: { number: 42, head: { sha: 'current', repo: { full_name: scenario.fork ? 'fork/module' : 'Azure/module' } } } },
+  serverUrl: 'https://github.com', runId: 123
+};
+const label = scenario.optional ? 'PR: Run Optional E2E Tests' : 'PR: Run E2E Tests';
+const authorized = scenario.newlyAuthorized || (!scenario.missing && !scenario.newlyRemoved);
+process.env.RESULTS = JSON.stringify({ 'discover-examples': {
+  result: scenario.failed ? 'failure' : 'success',
+  outputs: { requiredExamples: scenario.empty ? '[]' : '["default"]', runRequired: scenario.missing ? 'false' : 'true' }
+} });
+const core = {
+  error: message => result.errors.push(message),
+  warning: message => result.warnings.push(message),
+  summary: { addRaw(text) { result.summaries.push(text); return this; }, async write() {} }
+};
+const comments = scenario.existing || scenario.human ? [{
+  id: 7, user: { login: scenario.human ? 'contributor' : 'github-actions[bot]' },
+  body: '<!-- avm-terraform-e2e-label -->\nprevious'
+}] : [];
+const github = {
+  rest: {
+    pulls: { async get() {
+      result.api.push('get');
+      if (scenario.denied) throw new Error('Resource not accessible by integration');
+      return { data: { head: { sha: scenario.stale ? 'newer' : 'current' }, labels: authorized ? [{ name: label }] : [] } };
+    } },
+    issues: {
+      listComments() {},
+      async createComment(params) { result.mutations.push({ operation: 'create', ...params }); },
+      async updateComment(params) { result.mutations.push({ operation: 'update', ...params }); }
+    }
+  },
+  async paginate() { result.api.push('list'); return comments; }
+};
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+new AsyncFunction('github', 'context', 'core', source)(github, context, core)
+  .then(() => console.log(JSON.stringify(result)))
+  .catch(error => { console.error(error); process.exitCode = 1; });
+'@
+        $harness = $harness.Replace('SCENARIO', $scenario).Replace('SOURCE', $source)
+        $path = Join-Path $TestDrive 'label-feedback.cjs'
+        Set-Content -LiteralPath $path -Value $harness -Encoding utf8
+        $execution = & $script:gatesModule {
+            param($Path)
+            Invoke-AvmProcess -FilePath 'node' -ArgumentList @($Path)
+        } $path
+        $result = ConvertFrom-Json -InputObject $execution.StdOut
+        if ($Expected) {
+            $result.mutations.Count | Should -Be 1
+            $result.mutations[0].operation | Should -BeExactly $Expected
+            if ($Missing) {
+                $result.mutations[0].body | Should -Match '`PR: Run E2E Tests`'
+                $result.mutations[0].body | Should -Match '`PR: Run Optional E2E Tests`'
+                $result.mutations[0].body | Should -Match 'required \*\*and\*\* optional'
+                $result.mutations[0].body | Should -Match 'Labels on a fork do not authorize'
+            }
+            else {
+                $result.mutations[0].body | Should -Match 'requirement satisfied'
+                $result.mutations[0].body | Should -Match 'does not mean validation has passed'
+            }
+        }
+        else { $result.mutations.Count | Should -Be 0 }
+        $result.summaries.Count | Should -Be ([int][bool]$Summary)
+        $result.errors.Count | Should -Be ([int][bool]$Summary)
+        $result.warnings.Count | Should -Be ([int][bool]$Warning)
+        if ($Summary) { $result.summaries[0] | Should -Match 'release-branch handoff' }
+        if ($Fork -or $Failed -or $Template) { $result.api.Count | Should -Be 0 }
     }
 
     It 'does not interpret failed, cancelled or skipped E2E dependencies as passing: <Job>/<Result>' -ForEach @(

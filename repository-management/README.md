@@ -284,6 +284,13 @@ merge queue before enabling this rollout.
 Forks receive unprivileged checks only and need a same-repository release-branch
 handoff before authenticated validation can satisfy the merge checks.
 
+When required tests lack authorization, the gate adds an actionable run summary
+and Actions error naming both labels, and creates or updates one bot-owned PR
+comment. The comment is updated when the label requirement is satisfied; it does
+not claim the tests passed. Forks receive the summary and handoff guidance without
+attempting a write with their read-only token. Callers must grant
+`pull-requests: write`; only the reporting job uses that permission.
+
 Roll out the updated, immutable workflow pin and caller events first. Keep
 the caller display name `run managed workflow`, then verify this check name:
 
