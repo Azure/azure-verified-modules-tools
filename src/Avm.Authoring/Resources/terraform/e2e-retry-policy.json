@@ -1,6 +1,0 @@
-{
-  "schemaVersion": 1,
-  "messagePatterns": [
-    "\\bProvisioningDisabled:\\s+The\\s+deployment\\s+request\\s+failed\\s+because\\s+it\\s+would\\s+bring\\s+the\\s+total\\s+number\\s+of\\s+vCores\\s+to\\s+\\d+,\\s+which\\s+exceeds\\s+the\\s+limit\\s+of\\s+\\d+\\s+allowed\\s+for\\s+the\\s+requested\\s+hardware\\s+family\\s+in\\s+your\\s+subscription\\."
-  ]
-}

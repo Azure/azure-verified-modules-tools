@@ -693,6 +693,30 @@ Describe 'Invoke-AvmTerraformTestE2e' {
         }
     }
 
+    It 'does not combine request and quota from separate Terraform output streams' {
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'terraform'; Version = 'test'; Source = 'cache'; Path = '/fake/terraform' }
+            }
+            Mock Invoke-AvmProcess {
+                param($ArgumentList)
+                if ($ArgumentList[0] -eq 'apply') {
+                    return [pscustomobject]@{ ExitCode = 1; StdOut = 'The request failed.'; StdErr = 'Error: quota unavailable.' }
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            $result = Invoke-AvmTerraformTestE2e -Context $C
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'apply' }
+            $result
+        }
+        $result.Status | Should -Be 'fail'
+        $result.Issues | Should -HaveCount 1
+        $result.Issues[0].Severity | Should -Be 'error'
+    }
+
     It 'fails after the retry budget is exhausted' {
         New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
@@ -788,9 +812,30 @@ Describe 'Invoke-AvmTerraformTestE2e' {
 }
 
 Describe 'Test-AvmTerraformTransientError' {
-    It 'recognizes SQL vCore quota failures only for E2E, including wrapped output' {
+    It 'rejects an invalid packaged retry policy' {
+        InModuleScope 'Avm.Authoring' {
+            Remove-Variable -Name AvmTerraformRetryPolicy -Scope Script -ErrorAction Ignore
+            Mock Test-Json { $false }
+            { Get-AvmTerraformRetryPolicy } | Should -Throw '*Terraform retry policy is invalid*'
+        }
+    }
+
+    It 'requires both criteria in each all-match policy' -ForEach @(
+        @{ Property = 'locationIneligiblePatterns' }
+        @{ Property = 'e2eAllMessagePatterns' }
+    ) {
+        $root = Join-Path $script:moduleRoot 'Resources' 'terraform'
+        $policy = Get-Content -LiteralPath (Join-Path $root 'retry-policy.json') -Raw | ConvertFrom-Json -AsHashtable
+        $policy[$Property] = @($policy[$Property][0])
+        $json = ConvertTo-Json -InputObject $policy -Depth 10
+        $schema = Get-Content -LiteralPath (Join-Path $root 'retry-policy.schema.json') -Raw
+        Test-Json -Json $json -Schema $schema -ErrorAction SilentlyContinue | Should -BeFalse
+    }
+
+    It 'recognizes request and quota in either order within one E2E error block' {
         $wrapped = $script:sqlQuotaOutput -replace 'number of vCores', "number of`nvCores" -replace 'which exceeds', "which`nexceeds"
-        InModuleScope 'Avm.Authoring' -Parameters @{ Outputs = @($script:sqlQuotaOutput, $wrapped) } {
+        $outputs = @($script:sqlQuotaOutput, $wrapped, 'Error: quota exceeded for the request.', "REQUEST failed`nquota exceeded")
+        InModuleScope 'Avm.Authoring' -Parameters @{ Outputs = $outputs } {
             param($Outputs)
             foreach ($output in $Outputs) {
                 Test-AvmTerraformTransientError -Output $output | Should -BeTrue
@@ -802,8 +847,9 @@ Describe 'Test-AvmTerraformTransientError' {
     It 'does not retry unrelated SQL provisioning errors' -ForEach @(
         @{ Output = 'ProvisioningDisabled: SQL Managed Instance provisioning is disabled for this subscription.' }
         @{ Output = 'ProvisioningDisabled: The requested hardware family is unavailable in your subscription.' }
-        @{ Output = 'OtherError: The deployment request failed because it would bring the total number of vCores to 4, which exceeds the limit of 0 allowed for the requested hardware family in your subscription.' }
-        @{ Output = "ProvisioningDisabled: an unrelated failure.`nOtherError: The deployment request failed because it would bring the total number of vCores to 4, which exceeds the limit of 0 allowed for the requested hardware family in your subscription." }
+        @{ Output = 'ProvisioningDisabled: request denied for a reason unrelated to capacity.' }
+        @{ Output = 'ProvisioningDisabled: quota is not enabled for this subscription.' }
+        @{ Output = "Error: the request was invalid.`n`nError: the quota is unavailable." }
     ) {
         InModuleScope 'Avm.Authoring' -Parameters @{ Output = $Output } {
             param($Output)

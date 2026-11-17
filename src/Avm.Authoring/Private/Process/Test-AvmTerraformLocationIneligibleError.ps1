@@ -19,5 +19,8 @@ function Test-AvmTerraformLocationIneligibleError {
         [string] $Output
     )
 
-    return ($Output -match '\bRequestDisallowedByAzure\b') -and ($Output -match '\baka\.ms/locationineligible\b')
+    foreach ($pattern in (Get-AvmTerraformRetryPolicy)['locationIneligiblePatterns']) {
+        if ($Output -notmatch $pattern) { return $false }
+    }
+    return $true
 }

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "sharedMessagePatterns": [
+    "SkuNotAvailable",
+    "Capacity Restrictions",
+    "is currently not available in location",
+    "sku_selector found no deployable VM size",
+    "Allocation ?Failed",
+    "results in exceeding approved",
+    "LocationNotAvailableForResourceGroup",
+    "currently experiencing high demand in .*? region"
+  ],
+  "locationIneligiblePatterns": [
+    "\\bRequestDisallowedByAzure\\b",
+    "\\baka\\.ms/locationineligible\\b"
+  ],
+  "e2eAllMessagePatterns": [
+    "\\brequest\\b",
+    "\\bquota\\b"
+  ]
+}

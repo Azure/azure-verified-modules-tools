@@ -260,7 +260,7 @@ function Invoke-AvmTerraformTestE2e {
                         break
                     }
 
-                    $combined = [string]$apply.StdOut + "`n" + [string]$apply.StdErr
+                    $combined = [string]$apply.StdOut + "`n`n" + [string]$apply.StdErr
                     if ($attempt -ge $MaxRetry -or -not (Test-AvmTerraformTransientError -Output $combined)) {
                         break
                     }
