@@ -19,5 +19,7 @@ function Test-AvmTerraformLocationIneligibleError {
         [string] $Output
     )
 
-    return ($Output -match '\bRequestDisallowedByAzure\b') -and ($Output -match '\baka\.ms/locationineligible\b')
+    if ([string]::IsNullOrWhiteSpace($Output)) { return $false }
+    $rule = @((Get-AvmTerraformRetryPolicy)['fresh'] | Where-Object { $_['id'] -ceq 'location-ineligible' })[0]
+    return Test-AvmTerraformRetryRule -Output $Output -Rule $rule
 }

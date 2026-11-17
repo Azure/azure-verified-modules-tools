@@ -25,31 +25,5 @@ function Test-AvmTerraformTransientError {
         [switch] $BuiltInOnly
     )
 
-    if ([string]::IsNullOrWhiteSpace($Output)) {
-        return $false
-    }
-
-    if (Test-AvmTerraformLocationIneligibleError -Output $Output) {
-        return $true
-    }
-
-    $patterns = @(
-        'SkuNotAvailable'
-        'Capacity Restrictions'
-        'is currently not available in location'
-        'sku_selector found no deployable VM size'
-        'Allocation ?Failed'
-        'results in exceeding approved'
-        'LocationNotAvailableForResourceGroup'
-        'currently experiencing high demand in .*? region'
-    )
-
-    if (-not $BuiltInOnly -and -not [string]::IsNullOrWhiteSpace($env:AVM_E2E_RETRY_PATTERN)) {
-        $patterns += $env:AVM_E2E_RETRY_PATTERN
-    }
-
-    return [regex]::IsMatch(
-        $Output,
-        ($patterns -join '|'),
-        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    return -not [string]::IsNullOrEmpty((Get-AvmTerraformRetryMode -Output $Output -BuiltInOnly:$BuiltInOnly))
 }

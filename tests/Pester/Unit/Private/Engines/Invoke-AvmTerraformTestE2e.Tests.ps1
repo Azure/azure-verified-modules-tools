@@ -10,6 +10,7 @@ BeforeAll {
         'Resource Group Name: "rg-ewz0"'
         'Virtual Network Name: "example"): performing CreateOrUpdate: unexpected status 403 (403 Forbidden) with error: RequestDisallowedByAzure: Resource ''example'' was disallowed by Azure: The selected region is currently not accepting new customers: https://aka.ms/locationineligible.'
     ) -join "`n"
+    $script:sqlQuotaOutput = 'ProvisioningDisabled: The deployment request failed because it would bring the total number of vCores to 4, which exceeds the limit of 0 allowed for the requested hardware family in your subscription. Please submit a support request to extend the quota using the Azure portal: aka.ms/sql-mi-obtain-larger-quota'
 }
 
 AfterAll {
@@ -628,6 +629,101 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             ) -join ',')
     }
 
+    It 'destroys and re-applies an example after a SQL Managed Instance quota failure' {
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
+        $state = @{ Apply = 0; Labels = [System.Collections.Generic.List[string]]::new() }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; S = $state; Failure = $script:sqlQuotaOutput } {
+            param($C, $S, $Failure)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'terraform'; Version = 'test'; Source = 'cache'; Path = '/fake/terraform' }
+            }
+            Mock Invoke-AvmProcess {
+                param($ArgumentList, $Label)
+                $S.Labels.Add($Label)
+                if ($ArgumentList[0] -eq 'apply' -and ++$S.Apply -eq 1) {
+                    return [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = $Failure }
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Invoke-AvmTerraformTestE2e -Context $C
+        }
+        $result.Status | Should -Be 'pass'
+        $result.Issues | Should -HaveCount 1
+        $result.Issues[0].Severity | Should -Be 'warning'
+        ($state.Labels -join ',') | Should -Be (@(
+                'examples/default: terraform init'
+                'examples/default: terraform apply'
+                'examples/default: terraform destroy (retry 1)'
+                'examples/default: terraform apply'
+                'examples/default: terraform plan (idempotency)'
+                'examples/default: terraform destroy'
+            ) -join ',')
+    }
+
+    It 'retries an in-place rule without destroying between applies' {
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
+        $state = @{ Apply = 0; Labels = [System.Collections.Generic.List[string]]::new() }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; S = $state } {
+            param($C, $S)
+            Mock Get-AvmTerraformRetryPolicy {
+                @{ fresh = @(); inPlace = @(@{ id = 'test'; integration = $false; anyOf = @('temporary test failure') }) }
+            }
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'terraform'; Version = 'test'; Source = 'cache'; Path = '/fake/terraform' }
+            }
+            Mock Invoke-AvmProcess {
+                param($ArgumentList, $Label)
+                $S.Labels.Add($Label)
+                if ($ArgumentList[0] -eq 'apply' -and ++$S.Apply -eq 1) {
+                    return [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'temporary test failure' }
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Get-AvmTerraformRetryMode -Output 'temporary test failure' -BuiltInOnly | Should -BeNullOrEmpty
+            Invoke-AvmTerraformTestE2e -Context $C
+        }
+        $result.Status | Should -Be 'pass'
+        $result.Issues | Should -HaveCount 1
+        $result.Issues[0].Message | Should -Match 'retrying in place'
+        ($state.Labels -join ',') | Should -Be (@(
+                'examples/default: terraform init'
+                'examples/default: terraform apply'
+                'examples/default: terraform apply'
+                'examples/default: terraform plan (idempotency)'
+                'examples/default: terraform destroy'
+            ) -join ',')
+    }
+
+    It 'still performs final cleanup after in-place retries are exhausted' {
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context } {
+            param($C)
+            Mock Get-AvmTerraformRetryPolicy {
+                @{ fresh = @(); inPlace = @(@{ id = 'test'; integration = $false; anyOf = @('temporary test failure') }) }
+            }
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'terraform'; Version = 'test'; Source = 'cache'; Path = '/fake/terraform' }
+            }
+            Mock Invoke-AvmProcess {
+                param($ArgumentList)
+                if ($ArgumentList[0] -eq 'apply') {
+                    return [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'temporary test failure' }
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            $result = Invoke-AvmTerraformTestE2e -Context $C -MaxRetry 1
+            Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter { $ArgumentList[0] -eq 'apply' }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'destroy' }
+            Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -eq 'plan' }
+            $result
+        }
+        $result.Status | Should -Be 'fail'
+        ($result.Issues | Where-Object Severity -eq 'error').Message | Should -Match 'after 1 retries'
+    }
+
     It 'does not retry an apply failure that is not a transient capacity error' {
         New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
@@ -658,6 +754,30 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'apply' }
             Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'destroy' }
         }
+    }
+
+    It 'does not combine request and quota from separate Terraform output streams' {
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context } {
+            param($C)
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'terraform'; Version = 'test'; Source = 'cache'; Path = '/fake/terraform' }
+            }
+            Mock Invoke-AvmProcess {
+                param($ArgumentList)
+                if ($ArgumentList[0] -eq 'apply') {
+                    return [pscustomobject]@{ ExitCode = 1; StdOut = 'The request failed.'; StdErr = 'Error: quota unavailable.' }
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            $result = Invoke-AvmTerraformTestE2e -Context $C
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'apply' }
+            $result
+        }
+        $result.Status | Should -Be 'fail'
+        $result.Issues | Should -HaveCount 1
+        $result.Issues[0].Severity | Should -Be 'error'
     }
 
     It 'fails after the retry budget is exhausted' {
@@ -755,6 +875,64 @@ Describe 'Invoke-AvmTerraformTestE2e' {
 }
 
 Describe 'Test-AvmTerraformTransientError' {
+    It 'rejects an invalid packaged retry policy' {
+        InModuleScope 'Avm.Authoring' {
+            Remove-Variable -Name AvmTerraformRetryPolicy -Scope Script -ErrorAction Ignore
+            Mock Test-Json { $false }
+            { Get-AvmTerraformRetryPolicy } | Should -Throw '*Terraform retry policy is invalid*'
+        }
+    }
+
+    It 'requires both criteria in each all-match policy' -ForEach @(
+        @{ Id = 'location-ineligible' }
+        @{ Id = 'quota-request' }
+    ) {
+        $root = Join-Path $script:moduleRoot 'Resources' 'terraform'
+        $policy = Get-Content -LiteralPath (Join-Path $root 'retry-policy.json') -Raw | ConvertFrom-Json -AsHashtable
+        $rule = $policy['fresh'] | Where-Object { $_['id'] -eq $Id }
+        $rule['allOf'] = @($rule['allOf'][0])
+        $json = ConvertTo-Json -InputObject $policy -Depth 10
+        $schema = Get-Content -LiteralPath (Join-Path $root 'retry-policy.schema.json') -Raw
+        Test-Json -Json $json -Schema $schema -ErrorAction SilentlyContinue | Should -BeFalse
+    }
+
+    It 'allows in-place rules only outside integration retries' -ForEach @(
+        @{ Integration = $false; Expected = $true }
+        @{ Integration = $true; Expected = $false }
+    ) {
+        $root = Join-Path $script:moduleRoot 'Resources' 'terraform'
+        $policy = Get-Content -LiteralPath (Join-Path $root 'retry-policy.json') -Raw | ConvertFrom-Json -AsHashtable
+        $policy['inPlace'] = @(@{ id = 'test'; integration = $Integration; anyOf = @('temporary test failure') })
+        $json = ConvertTo-Json -InputObject $policy -Depth 10
+        $schema = Get-Content -LiteralPath (Join-Path $root 'retry-policy.schema.json') -Raw
+        Test-Json -Json $json -Schema $schema -ErrorAction SilentlyContinue | Should -Be $Expected
+    }
+
+    It 'recognizes request and quota in either order within one E2E error block' {
+        $wrapped = $script:sqlQuotaOutput -replace 'number of vCores', "number of`nvCores" -replace 'which exceeds', "which`nexceeds"
+        $outputs = @($script:sqlQuotaOutput, $wrapped, 'Error: quota exceeded for the request.', "REQUEST failed`nquota exceeded")
+        InModuleScope 'Avm.Authoring' -Parameters @{ Outputs = $outputs } {
+            param($Outputs)
+            foreach ($output in $Outputs) {
+                Test-AvmTerraformTransientError -Output $output | Should -BeTrue
+                Test-AvmTerraformTransientError -Output $output -BuiltInOnly | Should -BeFalse
+            }
+        }
+    }
+
+    It 'does not retry unrelated SQL provisioning errors' -ForEach @(
+        @{ Output = 'ProvisioningDisabled: SQL Managed Instance provisioning is disabled for this subscription.' }
+        @{ Output = 'ProvisioningDisabled: The requested hardware family is unavailable in your subscription.' }
+        @{ Output = 'ProvisioningDisabled: request denied for a reason unrelated to capacity.' }
+        @{ Output = 'ProvisioningDisabled: quota is not enabled for this subscription.' }
+        @{ Output = "Error: the request was invalid.`n`nError: the quota is unavailable." }
+    ) {
+        InModuleScope 'Avm.Authoring' -Parameters @{ Output = $Output } {
+            param($Output)
+            Test-AvmTerraformTransientError -Output $Output | Should -BeFalse
+        }
+    }
+
     It 'classifies known capacity failures as retryable' {
         InModuleScope 'Avm.Authoring' {
             Test-AvmTerraformTransientError -Output 'Error: SkuNotAvailable'                              | Should -BeTrue

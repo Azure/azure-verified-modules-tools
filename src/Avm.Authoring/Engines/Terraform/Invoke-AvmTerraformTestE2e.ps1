@@ -43,9 +43,9 @@ function Invoke-AvmTerraformTestE2e {
                   up to -MaxRetry retries on a transient failure. e2e deploys
                   real infrastructure, so an apply fails intermittently on
                   region/SKU capacity rather than on a module defect. When the
-                  combined apply output matches the capacity, quota, or
-                  region-ineligible patterns in Test-AvmTerraformTransientError,
-                  the example is destroyed and redeployed. Destroying first is
+                  combined apply output matches a fresh retry rule, the example
+                  is destroyed and redeployed. An in-place rule instead retries
+                  without destroying the example. Destroying for a fresh retry is
                   required, not cosmetic:
                   example names come from module.naming and do not depend on
                   the region, so re-planning in place would replace the
@@ -260,31 +260,38 @@ function Invoke-AvmTerraformTestE2e {
                         break
                     }
 
-                    $combined = [string]$apply.StdOut + "`n" + [string]$apply.StdErr
-                    if ($attempt -ge $MaxRetry -or -not (Test-AvmTerraformTransientError -Output $combined)) {
+                    $combined = [string]$apply.StdOut + "`n`n" + [string]$apply.StdErr
+                    if ($attempt -ge $MaxRetry) {
                         break
                     }
+                    $retryMode = Get-AvmTerraformRetryMode -Output $combined
+                    if (-not $retryMode) { break }
 
                     $attempt++
 
-                    $retryDestroy = Invoke-AvmProcess `
-                        -FilePath $tool.Path `
-                        -ArgumentList $destroyArgs `
-                        -Label ('{0}: terraform destroy (retry {1})' -f $rel, ($attempt)) `
-                        -WorkingDirectory $exampleDir `
-                        -EnvVars $envVars `
-                        -StreamOutput `
-                        -IgnoreExitCode
+                    if ($retryMode -eq 'Fresh') {
+                        $retryDestroy = Invoke-AvmProcess `
+                            -FilePath $tool.Path `
+                            -ArgumentList $destroyArgs `
+                            -Label ('{0}: terraform destroy (retry {1})' -f $rel, ($attempt)) `
+                            -WorkingDirectory $exampleDir `
+                            -EnvVars $envVars `
+                            -StreamOutput `
+                            -IgnoreExitCode
 
-                    if ($retryDestroy.ExitCode -ne 0) {
-                        $detail = if ($retryDestroy.StdErr) { $retryDestroy.StdErr.Trim() } elseif ($retryDestroy.StdOut) { $retryDestroy.StdOut.Trim() } else { '' }
-                        $message = 'retry {0} aborted: terraform destroy failed (exit {1}), refusing to redeploy over partial state: {2}' -f $attempt, $retryDestroy.ExitCode, $detail
-                        $issues.Add((New-AvmE2eIssue -File $rel -Message $message))
-                        $retryAborted = $true
-                        break
+                        if ($retryDestroy.ExitCode -ne 0) {
+                            $detail = if ($retryDestroy.StdErr) { $retryDestroy.StdErr.Trim() } elseif ($retryDestroy.StdOut) { $retryDestroy.StdOut.Trim() } else { '' }
+                            $message = 'retry {0} aborted: terraform destroy failed (exit {1}), refusing to redeploy over partial state: {2}' -f $attempt, $retryDestroy.ExitCode, $detail
+                            $issues.Add((New-AvmE2eIssue -File $rel -Message $message))
+                            $retryAborted = $true
+                            break
+                        }
+
+                        $message = 'terraform apply hit a transient capacity error (exit {0}); destroyed and retrying ({1} of {2}).' -f $apply.ExitCode, $attempt, $MaxRetry
                     }
-
-                    $message = 'terraform apply hit a transient capacity error (exit {0}); destroyed and retrying ({1} of {2}).' -f $apply.ExitCode, $attempt, $MaxRetry
+                    else {
+                        $message = 'terraform apply hit a transient error (exit {0}); retrying in place ({1} of {2}).' -f $apply.ExitCode, $attempt, $MaxRetry
+                    }
                     $issues.Add((New-AvmE2eIssue -File $rel -Severity 'warning' -Message $message))
                 }
 
