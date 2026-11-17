@@ -140,6 +140,9 @@ Describe 'Module Resources packaging' {
         }
         $root | Should -Match '(?s)rule\s+"avm_provider_modtm_version_constraint"\s*\{\s*enabled\s*=\s*false\s*\}'
         $module | Should -Match '(?s)rule\s+"avm_provider_modtm_version_constraint"\s*\{\s*enabled\s*=\s*false\s*\}'
+        foreach ($content in @($root, $module, $example)) {
+            $content | Should -Match '(?s)rule\s+"avm_provider_modtm_disallowed"\s*\{[^}]*enabled\s*=\s*true[^}]*severity\s*=\s*"notice"'
+        }
         foreach ($exampleRule in @(
                 'avm_terraform_literal_heredoc_disallowed',
                 'avm_terraform_provider_block_disallowed',

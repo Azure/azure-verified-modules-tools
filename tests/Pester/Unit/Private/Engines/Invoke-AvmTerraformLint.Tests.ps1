@@ -242,6 +242,7 @@ rule "avm_interface_managed_identities" {
         @{ Version = '1.3.0' }
         @{ Version = '1.4.0' }
         @{ Version = '1.4.1' }
+        @{ Version = '1.5.0' }
     ) {
         [System.IO.File]::WriteAllText($script:basePath, @"
 plugin "avm" {
