@@ -34,7 +34,7 @@ permissions: {}
 
 jobs:
   pr-check:
-    name: Static checks
+    name: PR check
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -98,7 +98,7 @@ jobs:
           if ($capabilities.BicepWorkflowOrchestration -isnot [int] -or $capabilities.BicepWorkflowOrchestration -ne 1) {
             throw 'The installed Avm.Authoring package does not provide BicepWorkflowOrchestration = 1.'
           }
-      - name: Static checks
+      - name: PR check
         shell: pwsh
         working-directory: ${{ inputs.modulePath }}
         run: |

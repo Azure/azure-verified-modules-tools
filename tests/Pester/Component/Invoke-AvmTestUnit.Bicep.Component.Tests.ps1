@@ -185,7 +185,7 @@ Describe 'Component: Bicep Pester unit tier' -Tag 'Component' {
         Import-Module -FullyQualifiedName @{ ModuleName = 'powershell-yaml'; RequiredVersion = '0.4.12' }
         $workflow = ConvertFrom-Yaml (Get-Content -LiteralPath (
                 Join-Path $script:repoRoot '.github' 'workflows' 'bicep-module-runtime.yml') -Raw)
-        $prRun = @($workflow.jobs.'pr-check'.steps | Where-Object name -EQ 'Static checks')[0].run
+        $prRun = @($workflow.jobs.'pr-check'.steps | Where-Object name -EQ 'PR check')[0].run
         $savedModule = [Environment]::GetEnvironmentVariable('AVM_AUTHORING_MODULE', 'Process')
         try {
             $env:AVM_AUTHORING_MODULE = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Avm.Authoring.psd1'

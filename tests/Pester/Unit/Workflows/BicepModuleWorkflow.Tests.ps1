@@ -368,7 +368,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $prCheck.jobs.check.with.workflowInput | Should -BeExactly '${{ needs.initialize.outputs.workflowInput }}'
         $prCheck.jobs.check.with.baseCommit | Should -BeExactly '${{ needs.initialize.outputs.baseCommit }}'
 
-        $runtime.jobs.'pr-check'.name | Should -BeExactly 'Static checks'
+        $runtime.jobs.'pr-check'.name | Should -BeExactly 'PR check'
         $runtime.jobs.'unit-test'.name | Should -BeExactly 'Unit tests'
         $runtime.jobs.'discover-examples'.name | Should -BeExactly 'Select E2E tests and subscriptions'
         $script:workflows['bicep-module-runtime-e2e'].jobs.'select-deployments'.name |
@@ -377,7 +377,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Check out module repository'
             @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Download AVM tools from build job'
         }
-        @($runtime.jobs.'pr-check'.steps | ForEach-Object name) | Should -Contain 'Static checks'
+        @($runtime.jobs.'pr-check'.steps | ForEach-Object name) | Should -Contain 'PR check'
         @($runtime.jobs.'unit-test'.steps | ForEach-Object name) | Should -Contain 'Unit tests'
         @($runtime.jobs.'discover-examples'.steps | ForEach-Object name) | Should -Contain 'Select E2E tests and subscriptions'
         $runtime.jobs.'e2e-test'.needs | Should -BeExactly 'discover-examples'
