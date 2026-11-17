@@ -58,7 +58,7 @@ Describe 'Bicep PR scenario selection' {
     It 'selects <Description> into one shared module entry' -ForEach @(
         @{ Description = 'no tests'; Required = 'false'; Optional = 'false'; Expected = @(); Route = 'none' }
         @{ Description = 'required tests'; Required = 'true'; Optional = 'false'; Expected = @('defaults', 'waf-aligned'); Route = 'native' }
-        @{ Description = 'optional tests'; Required = 'false'; Optional = 'true'; Expected = @('max'); Route = 'native' }
+        @{ Description = 'only the optional flag'; Required = 'false'; Optional = 'true'; Expected = @('max'); Route = 'native' }
         @{ Description = 'the union'; Required = 'true'; Optional = 'true'; Expected = @('defaults', 'waf-aligned', 'max'); Route = 'native' }
     ) {
         $env:REQUIRED = $Required
@@ -199,7 +199,7 @@ Describe 'Bicep PR label admission' {
     BeforeEach {
         $saved = @{}
         foreach ($name in @('EVENT_NAME', 'REPOSITORY', 'HEAD_REPOSITORY', 'EVENT_ACTION', 'EVENT_LABEL',
-                'PR_LABELS', 'DEPLOYMENT_VALIDATION', 'GITHUB_OUTPUT')) {
+                'PR_LABELS', 'DEPLOYMENT_VALIDATION', 'GITHUB_OUTPUT', 'FORK', 'REQUIRED', 'OPTIONAL')) {
             $saved[$name] = [Environment]::GetEnvironmentVariable($name)
         }
         $env:EVENT_NAME = 'pull_request'
@@ -215,11 +215,11 @@ Describe 'Bicep PR label admission' {
         foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
     }
 
-    It 'routes each label independently' -ForEach @(
-        @{ Labels = '[]'; Required = 'false'; Optional = 'false' }
-        @{ Labels = '["PR: Run E2E Tests"]'; Required = 'true'; Optional = 'false' }
-        @{ Labels = '["PR: Run Optional E2E Tests"]'; Required = 'false'; Optional = 'true' }
-        @{ Labels = '["PR: Run E2E Tests","PR: Run Optional E2E Tests"]'; Required = 'true'; Optional = 'true' }
+    It 'selects the correct tests for <Labels>' -ForEach @(
+        @{ Labels = '[]'; Required = 'false'; Optional = 'false'; Expected = @(); Route = 'none' }
+        @{ Labels = '["PR: Run E2E Tests"]'; Required = 'true'; Optional = 'false'; Expected = @('defaults', 'waf-aligned'); Route = 'native' }
+        @{ Labels = '["PR: Run Optional E2E Tests"]'; Required = 'true'; Optional = 'true'; Expected = @('defaults', 'waf-aligned', 'max'); Route = 'native' }
+        @{ Labels = '["PR: Run E2E Tests","PR: Run Optional E2E Tests"]'; Required = 'true'; Optional = 'true'; Expected = @('defaults', 'waf-aligned', 'max'); Route = 'native' }
     ) {
         $env:PR_LABELS = $Labels
         & ([scriptblock]::Create($gate))
@@ -227,15 +227,40 @@ Describe 'Bicep PR label admission' {
         $result.admitted | Should -BeExactly 'true'
         $result.required | Should -BeExactly $Required
         $result.optional | Should -BeExactly $Optional
+        $action.outputs.requiredRequested.value | Should -BeExactly '${{ steps.gate.outputs.required }}'
+        $env:FORK = $result.fork
+        $env:REQUIRED = $result.required
+        $env:OPTIONAL = $result.optional
+        $outputs = [pscustomobject]@{
+            WorkflowInput = @{ deploymentValidation = $result.deployment }
+            ModuleMatrix = @{ Include = @(
+                    [pscustomobject]@{
+                        ModulePath = 'avm/res/example/widget'
+                        TestFiles = @(
+                            @{ path = 'tests/e2e/defaults/main.test.bicep'; name = 'defaults'; e2eIgnore = $false }
+                            @{ path = 'tests/e2e/waf-aligned/main.test.bicep'; name = 'waf-aligned'; e2eIgnore = $false }
+                            @{ path = 'tests/e2e/max/main.test.bicep'; name = 'max'; e2eIgnore = $false }
+                        )
+                        PolicyTestFiles = @()
+                    }
+                ) }
+        }
+        $selected = & $selection
+        $selected.modules[0].e2eRoute | Should -BeExactly $Route
+        @($selected.modules[0].moduleTestFilePaths | ConvertFrom-Json | ForEach-Object name) | Should -Be $Expected
     }
 
-    It 'does not deploy from forks even when both labels are present' {
+    It 'does not deploy from forks for <Labels>' -ForEach @(
+        @{ Labels = '["PR: Run Optional E2E Tests"]' }
+        @{ Labels = '["PR: Run E2E Tests","PR: Run Optional E2E Tests"]' }
+    ) {
         $env:HEAD_REPOSITORY = 'fork/repo'
-        $env:PR_LABELS = '["PR: Run E2E Tests","PR: Run Optional E2E Tests"]'
+        $env:PR_LABELS = $Labels
         & ([scriptblock]::Create($gate))
         $result = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
         $result.required | Should -BeExactly 'false'
         $result.optional | Should -BeExactly 'false'
+        $result.deployment | Should -BeExactly 'false'
     }
 
     It 'supports label removal' {
@@ -245,6 +270,15 @@ Describe 'Bicep PR label admission' {
         $result = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
         $result.admitted | Should -BeExactly 'true'
         $result.required | Should -BeExactly 'false'
+    }
+
+    It 'keeps required tests requested if the required label is removed but the optional label remains' {
+        $env:EVENT_ACTION = 'unlabeled'
+        $env:PR_LABELS = '["PR: Run Optional E2E Tests"]'
+        & ([scriptblock]::Create($gate))
+        $result = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
+        $result.required | Should -BeExactly 'true'
+        $result.optional | Should -BeExactly 'true'
     }
 
     It 'uses the manual deployment override to select both sets or neither' -ForEach @(

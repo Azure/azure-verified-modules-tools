@@ -32,7 +32,7 @@ outputs:
     description: Whether optional E2E tests exist, regardless of request.
     value: ${{ steps.initialize.outputs.hasOptionalModules }}
   requiredRequested:
-    description: Whether required E2E tests were requested.
+    description: Whether required E2E tests were requested, including by the optional E2E label.
     value: ${{ steps.gate.outputs.required }}
   optionalRequested:
     description: Whether optional E2E tests were requested.
@@ -85,7 +85,10 @@ runs:
           $env:DEPLOYMENT_VALIDATION -ceq 'true'
         }
         else {
-          -not $fork -and $labels -ccontains 'PR: Run E2E Tests'
+          -not $fork -and (
+            $labels -ccontains 'PR: Run E2E Tests' -or
+            $labels -ccontains 'PR: Run Optional E2E Tests'
+          )
         }
         $optional = if ($manual) {
           $env:DEPLOYMENT_VALIDATION -ceq 'true'
