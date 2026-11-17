@@ -34,7 +34,7 @@ permissions: {}
 
 jobs:
   pr-check:
-    name: Run PR check
+    name: PR check
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -98,7 +98,7 @@ jobs:
           if ($capabilities.BicepWorkflowOrchestration -isnot [int] -or $capabilities.BicepWorkflowOrchestration -ne 1) {
             throw 'The installed Avm.Authoring package does not provide BicepWorkflowOrchestration = 1.'
           }
-      - name: Run PR check
+      - name: PR check
         shell: pwsh
         working-directory: ${{ inputs.modulePath }}
         run: |
@@ -136,7 +136,7 @@ jobs:
           Write-PrCheckIssues -Result $result
 
   unit-test:
-    name: Run unit tests
+    name: Unit tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -200,7 +200,7 @@ jobs:
           if ($capabilities.BicepWorkflowOrchestration -isnot [int] -or $capabilities.BicepWorkflowOrchestration -ne 1) {
             throw 'The installed Avm.Authoring package does not provide BicepWorkflowOrchestration = 1.'
           }
-      - name: Run unit tests
+      - name: Unit tests
         id: unit-result
         shell: pwsh
         working-directory: ${{ inputs.modulePath }}
@@ -328,7 +328,7 @@ jobs:
         run: throw 'Bicep unit tests failed. Inspect the uploaded machine-readable unit result artifact.'
 
   discover-examples:
-    name: Discover end-to-end test examples
+    name: Select E2E tests and subscriptions
     if: |
       inputs.e2eRoute == 'native' &&
       fromJSON(inputs.workflowInput).deploymentValidation == 'true' &&
@@ -390,7 +390,7 @@ jobs:
       - name: Install AVM tools
         if: env.AVM_AUTHORING_MODULE == 'Avm.Authoring'
         uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
-      - name: Select tests and subscriptions
+      - name: Select E2E tests and subscriptions
         id: select
         shell: pwsh
         env:
@@ -413,11 +413,16 @@ jobs:
               -ModuleClientIds $env:VALIDATE_MODULE_CLIENT_IDS -TenantId $env:VALIDATE_TENANT_ID `
               -RandomSeed ([int](([long]$env:GITHUB_RUN_ID + [long]$env:GITHUB_RUN_ATTEMPT) % [int]::MaxValue)) `
               -DisplaySubscriptionNames:($env:TEST_SUBSCRIPTION_IDS -ne '') -SkipModuleVersionCheck)
+          foreach ($testCase in $matrix) {
+            $isRequired = -not $env:MODULE_PATH.StartsWith('avm/utl/', [StringComparison]::Ordinal) -and
+              $testCase.Name -cin @('defaults', 'waf-aligned')
+            $testCase | Add-Member -NotePropertyName IsRequired -NotePropertyValue $isRequired -Force
+          }
           $value = ConvertTo-Json -InputObject $matrix -Depth 20 -Compress
           "deploymentMatrix=$value" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
   e2e-test:
-    name: Run end-to-end tests
+    name: "Run ${{ matrix.testCase.IsRequired && 'Required' || 'Optional' }} E2E test: ${{ matrix.testCase.Name }}"
     needs: discover-examples
     if: |
       !cancelled() &&

@@ -316,7 +316,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             ($job | ConvertTo-Json -Depth 20) | Should -Not -Match '\bsecrets\b|AVM_CI_|azure/login|environment:'
         }
         $runtime.jobs.'pr-check'.steps[-1].run | Should -Match 'avm -SkipModuleVersionCheck pr-check --passthru'
-        $unitResult = @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Run unit tests')
+        $unitResult = @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Unit tests')
         $unitResult | Should -HaveCount 1
         $unitResult[0].id | Should -BeExactly 'unit-result'
         $unitResult[0].run | Should -Match 'Invoke-AvmTestUnit .* -SkipModuleVersionCheck -Recurse -IncludeCompliance'
@@ -330,7 +330,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $unitArtifact[0].with.path | Should -BeExactly '${{ steps.unit-result.outputs.resultPath }}'
         @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Report failed unit tests')[0].if |
             Should -BeExactly "steps.unit-result.outputs.failed == 'True'"
-        $unitRun = @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Run unit tests')[0].run
+        $unitRun = @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Unit tests')[0].run
         $unitRun | Should -Match 'Authored unit tests did not return a validated child identity receipt'
         $unitRun | Should -Match '\$document\.authoring = \[ordered\]@\{'
         foreach ($field in @(
@@ -368,20 +368,73 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $prCheck.jobs.check.with.workflowInput | Should -BeExactly '${{ needs.initialize.outputs.workflowInput }}'
         $prCheck.jobs.check.with.baseCommit | Should -BeExactly '${{ needs.initialize.outputs.baseCommit }}'
 
-        $runtime.jobs.'pr-check'.name | Should -BeExactly 'Run PR check'
-        $runtime.jobs.'unit-test'.name | Should -BeExactly 'Run unit tests'
-        $runtime.jobs.'discover-examples'.name | Should -BeExactly 'Discover end-to-end test examples'
-        $runtime.jobs.'e2e-test'.name | Should -BeExactly 'Run end-to-end tests'
+        $runtime.jobs.'pr-check'.name | Should -BeExactly 'PR check'
+        $runtime.jobs.'unit-test'.name | Should -BeExactly 'Unit tests'
+        $runtime.jobs.'discover-examples'.name | Should -BeExactly 'Select E2E tests and subscriptions'
+        $script:workflows['bicep-module-runtime-e2e'].jobs.'select-deployments'.name |
+            Should -BeExactly '${{ inputs.modulePath }}: Select E2E tests and subscriptions'
         foreach ($jobName in @('pr-check', 'unit-test', 'discover-examples')) {
             @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Check out module repository'
             @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Download AVM tools from build job'
         }
-        @($runtime.jobs.'pr-check'.steps | ForEach-Object name) | Should -Contain 'Run PR check'
-        @($runtime.jobs.'unit-test'.steps | ForEach-Object name) | Should -Contain 'Run unit tests'
-        @($runtime.jobs.'discover-examples'.steps | ForEach-Object name) | Should -Contain 'Select tests and subscriptions'
+        @($runtime.jobs.'pr-check'.steps | ForEach-Object name) | Should -Contain 'PR check'
+        @($runtime.jobs.'unit-test'.steps | ForEach-Object name) | Should -Contain 'Unit tests'
+        @($runtime.jobs.'discover-examples'.steps | ForEach-Object name) | Should -Contain 'Select E2E tests and subscriptions'
         $runtime.jobs.'e2e-test'.needs | Should -BeExactly 'discover-examples'
         $runtime.jobs.'e2e-test'.strategy.'fail-fast' | Should -BeFalse
+        $runtime.jobs.'e2e-test'.Contains('continue-on-error') | Should -BeFalse
         $runtime.jobs.'e2e-test'.uses | Should -BeExactly './.github/workflows/bicep-module-runtime-deployment.yml'
+    }
+
+    It 'names both E2E matrix callers and the visible child by classification and scenario' {
+        $runtime = $script:workflows['bicep-module-runtime'].jobs.'e2e-test'
+        $alternate = $script:workflows['bicep-module-runtime-e2e'].jobs.deploy
+        $deployment = $script:workflows['bicep-module-runtime-deployment']
+
+        $runtime.strategy.matrix.testCase | Should -BeExactly '${{ fromJSON(needs.discover-examples.outputs.deploymentMatrix) }}'
+        $alternate.strategy.matrix.testCase | Should -BeExactly '${{ fromJSON(needs.select-deployments.outputs.deploymentMatrix) }}'
+        foreach ($job in @($runtime, $alternate)) {
+            $job.name | Should -BeExactly "Run `${{ matrix.testCase.IsRequired && 'Required' || 'Optional' }} E2E test: `${{ matrix.testCase.Name }}"
+            $job.with.testCase | Should -BeExactly '${{ toJSON(matrix.testCase) }}'
+        }
+        $deployment.jobs.deploy.name | Should -BeExactly "E2E test (`${{ fromJSON(inputs.testCase).IsRequired && 'required' || 'optional' }}): `${{ fromJSON(inputs.testCase).Name }} - `${{ fromJSON(inputs.testCase).SubscriptionName }}"
+    }
+
+    It 'classifies exact scenario names case-sensitively for <ModulePath> in <Workflow>' -ForEach @(
+        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/res/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/res/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/utl/example/widget'; Expected = @($false, $false, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/utl/example/widget'; Expected = @($false, $false, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'AVM/utl/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'AVM/utl/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
+    ) {
+        $step = $script:workflows[$Workflow].jobs[$Job].steps | Where-Object { $_['id'] -ceq 'select' }
+        $tokens = $null
+        $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseInput($step.run, [ref]$tokens, [ref]$errors)
+        $errors | Should -BeNullOrEmpty
+        $loops = @($ast.FindAll({
+                    param($node)
+                    $node -is [Management.Automation.Language.ForEachStatementAst] -and
+                    $node.Extent.Text.StartsWith('foreach ($testCase in $matrix)')
+                }, $true))
+        $loops | Should -HaveCount 1
+        $matrix = @('defaults', 'waf-aligned', 'max', 'child-defaults', 'Defaults', 'WAF-aligned' | ForEach-Object {
+                [pscustomobject]@{ Name = $_; SubscriptionName = 'Configured subscription 1'; E2eIgnore = $false; ConcurrencyGroup = 'fixture-lock' }
+            })
+        $savedModulePath = $env:MODULE_PATH
+        try {
+            $env:MODULE_PATH = $ModulePath
+            & ([scriptblock]::Create($loops[0].Extent.Text))
+        }
+        finally {
+            $env:MODULE_PATH = $savedModulePath
+        }
+        $decoded = @(ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $matrix -Depth 20 -Compress))
+        $decoded.IsRequired | Should -Be $Expected
+        @($decoded | Where-Object { $_.IsRequired -isnot [bool] }) | Should -BeNullOrEmpty
+        @($decoded | Where-Object { $_.SubscriptionName -cne 'Configured subscription 1' -or
+                $_.ConcurrencyGroup -cne 'fixture-lock' -or $_.E2eIgnore }) | Should -BeNullOrEmpty
     }
 
     It 'makes each prepared runtime package discoverable by its exact module name without a fallback' {
@@ -406,7 +459,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             $selector.run | Should -Match 'Prepared Avm\.Authoring discovery package does not match'
             $selector.run | Should -Not -Match 'Install-Module|Install-PSResource'
         }
-        @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Run unit tests')[0].run |
+        @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Unit tests')[0].run |
             Should -Match 'Authored unit setup did not retain the exact admitted Avm\.Authoring package'
     }
 
@@ -502,13 +555,17 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             Should -Be @('authoringRef', 'authoringSource', 'deploymentValidation', 'modulePaths')
         $initializer.inputs.deploymentValidation.default | Should -BeExactly 'true'
         @($initializer.outputs.Keys | Sort-Object) |
-            Should -Be @('admitted', 'authoringArtifact', 'baseCommit', 'hasModules', 'moduleMatrix', 'targetCommit', 'workflowInput')
+            Should -Be @('admitted', 'authoringArtifact', 'baseCommit', 'hasModules', 'hasOptionalModules', 'hasRequiredModules', 'moduleMatrix', 'optionalRequested', 'requiredErrors', 'requiredRequested', 'targetCommit', 'workflowInput')
+        $initialize = $initializer.runs.steps | Where-Object { $_['id'] -eq 'initialize' }
+        $initialize.env.REQUIRED | Should -BeExactly '${{ steps.gate.outputs.required }}'
+        $initialize.env.OPTIONAL | Should -BeExactly '${{ steps.gate.outputs.optional }}'
         $text = Get-Content -LiteralPath (Join-Path $script:root '.github' 'actions' 'bicep-pr-check-initializer' 'action.yml') -Raw
         $text | Should -Match 'Initialize-AvmBicepWorkflowMatrix'
         $text | Should -Match 'BicepWorkflowOrchestration'
         $text | Should -Match 'actions/upload-artifact@[0-9a-f]{40}'
         $text | Should -Match 'deploymentValidation must be exactly true or false'
-        $text | Should -Match '\$deployment = if \(\$manual\)'
+        $text | Should -Match '\$required = if \(\$manual\)'
+        $text | Should -Match '\$optional = if \(\$manual\)'
         $text | Should -Match '\$env:DEPLOYMENT_VALIDATION -ceq ''true'''
         $text | Should -Match "labels -ccontains 'PR: Run E2E Tests'"
         $text | Should -Not -Match 'utilities[/\\]|Get-TestSubscriptionTag|avm\.template\.module\.preview'

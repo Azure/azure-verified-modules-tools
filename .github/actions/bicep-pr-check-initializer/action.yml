@@ -20,11 +20,26 @@ outputs:
     description: Whether the calling event is an admitted Bicep check event.
     value: ${{ steps.initialize.outputs.admitted }}
   moduleMatrix:
-    description: JSON module matrix for one caller-owned runtime group per module.
+    description: JSON matrix with one runtime group per module and only the requested E2E tests.
     value: ${{ steps.initialize.outputs.moduleMatrix }}
   hasModules:
     description: Whether moduleMatrix contains runnable modules.
     value: ${{ steps.initialize.outputs.hasModules }}
+  hasRequiredModules:
+    description: Whether any non-utility module has existing required E2E tests, regardless of request.
+    value: ${{ steps.initialize.outputs.hasRequiredModules }}
+  hasOptionalModules:
+    description: Whether optional E2E tests exist, regardless of request.
+    value: ${{ steps.initialize.outputs.hasOptionalModules }}
+  requiredRequested:
+    description: Whether required E2E tests were requested, including by the optional E2E label.
+    value: ${{ steps.gate.outputs.required }}
+  optionalRequested:
+    description: Whether optional E2E tests were requested.
+    value: ${{ steps.gate.outputs.optional }}
+  requiredErrors:
+    description: JSON array of ignored required scenarios in non-utility modules, regardless of request.
+    value: ${{ steps.initialize.outputs.requiredErrors }}
   baseCommit:
     description: Validated matrix comparison base.
     value: ${{ steps.initialize.outputs.baseCommit }}
@@ -48,7 +63,6 @@ runs:
         REPOSITORY: ${{ github.repository }}
         HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
         EVENT_ACTION: ${{ github.event.action }}
-        EVENT_LABEL: ${{ github.event.label.name }}
         PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         DEPLOYMENT_VALIDATION: ${{ inputs.deploymentValidation }}
       run: |
@@ -62,20 +76,31 @@ runs:
         }
         $automatic = $env:REPOSITORY -ceq 'Azure/bicep-registry-modules' -and
           $env:EVENT_NAME -ceq 'pull_request' -and (
-            $env:EVENT_ACTION -cin @('opened', 'reopened', 'synchronize') -or
-            ($env:EVENT_ACTION -ceq 'labeled' -and $env:EVENT_LABEL -ceq 'PR: Run E2E Tests')
+            $env:EVENT_ACTION -cin @('opened', 'reopened', 'synchronize', 'edited', 'labeled', 'unlabeled')
           )
         $manual = $env:EVENT_NAME -ceq 'workflow_dispatch'
         $admitted = $automatic -or $manual
         $fork = $env:EVENT_NAME -ceq 'pull_request' -and $env:HEAD_REPOSITORY -cne $env:REPOSITORY
-        $deployment = if ($manual) {
+        $required = if ($manual) {
           $env:DEPLOYMENT_VALIDATION -ceq 'true'
         }
         else {
-          -not $fork -and $labels -ccontains 'PR: Run E2E Tests'
+          -not $fork -and (
+            $labels -ccontains 'PR: Run E2E Tests' -or
+            $labels -ccontains 'PR: Run Optional E2E Tests'
+          )
         }
+        $optional = if ($manual) {
+          $env:DEPLOYMENT_VALIDATION -ceq 'true'
+        }
+        else {
+          -not $fork -and $labels -ccontains 'PR: Run Optional E2E Tests'
+        }
+        $deployment = $required -or $optional
         "admitted=$($admitted.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
         "fork=$($fork.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+        "required=$($required.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+        "optional=$($optional.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
         "deployment=$($deployment.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
     - name: Check out caller
       if: steps.gate.outputs.admitted == 'true'
@@ -240,6 +265,8 @@ runs:
         ADMITTED: ${{ steps.gate.outputs.admitted }}
         FORK: ${{ steps.gate.outputs.fork }}
         DEPLOYMENT: ${{ steps.gate.outputs.deployment }}
+        REQUIRED: ${{ steps.gate.outputs.required }}
+        OPTIONAL: ${{ steps.gate.outputs.optional }}
         TARGET_COMMIT: ${{ github.sha }}
         EVENT_NAME: ${{ github.event_name }}
         PULL_REQUEST_HEAD_COMMIT: ${{ github.event.pull_request.head.sha }}
@@ -255,6 +282,9 @@ runs:
             'targetCommit='
             'workflowInput={}'
             'moduleMatrix={"include":[]}'
+            'hasRequiredModules=false'
+            'hasOptionalModules=false'
+            'requiredErrors=[]'
             'authoringArtifact='
           ) | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           return
@@ -278,13 +308,46 @@ runs:
         }
         $outputs = Initialize-AvmBicepWorkflowMatrix @parameters
         $modules = [Collections.Generic.List[object]]::new()
+        $hasRequiredModules = $false
+        $hasOptionalModules = $false
+        $requiredErrors = [Collections.Generic.List[string]]::new()
         foreach ($entry in $outputs.ModuleMatrix.Include) {
+          $tests = @($entry.TestFiles)
+          $requiredTests = @($tests | Where-Object { $_.name -cin @('defaults', 'waf-aligned') })
+          $optionalTests = @($tests | Where-Object { $_.name -cnotin @('defaults', 'waf-aligned') })
+          $selectedTests = @()
+          if ($env:FORK -cne 'true' -and $outputs.WorkflowInput.deploymentValidation -ceq 'true') {
+            $selectedTests = @($tests | Where-Object {
+                ($env:REQUIRED -ceq 'true' -and $_.name -cin @('defaults', 'waf-aligned')) -or
+                ($env:OPTIONAL -ceq 'true' -and $_.name -cnotin @('defaults', 'waf-aligned'))
+              })
+          }
           $modules.Add([pscustomobject]@{
               modulePath = [string]$entry.ModulePath
-              moduleTestFilePaths = ConvertTo-Json -InputObject @($entry.TestFiles) -Depth 20 -Compress
+              moduleTestFilePaths = ConvertTo-Json -InputObject $selectedTests -Depth 20 -Compress
               psRuleModuleTestFilePaths = ConvertTo-Json -InputObject @($entry.PolicyTestFiles) -Depth 20 -Compress
-              e2eRoute = if ($env:FORK -ceq 'true' -or $outputs.WorkflowInput.deploymentValidation -cne 'true') { 'none' } else { 'native' }
+              e2eRoute = if ($selectedTests.Count -gt 0) { 'native' } else { 'none' }
             })
+          if (-not ([string]$entry.ModulePath).StartsWith('avm/utl/', [StringComparison]::Ordinal)) {
+            foreach ($scenario in @('defaults', 'waf-aligned')) {
+              $expectedPath = "tests/e2e/$scenario/main.test.bicep"
+              $matching = @($requiredTests | Where-Object { $_.path -ceq $expectedPath })
+              if ($matching.Count -eq 0) {
+                $message = "$($entry.ModulePath): $scenario E2E scenario is missing."
+                $message = $message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+                Write-Information "::warning::$message" -InformationAction Continue
+              }
+            }
+            foreach ($ignored in @($requiredTests | Where-Object e2eIgnore)) {
+              $requiredErrors.Add("$($entry.ModulePath): ignored required scenario $($ignored.path)")
+            }
+            if ($requiredTests.Count -gt 0) {
+              $hasRequiredModules = $true
+            }
+          }
+          if ($optionalTests.Count -gt 0) {
+            $hasOptionalModules = $true
+          }
         }
         $values = [ordered]@{
           admitted = 'true'
@@ -293,6 +356,9 @@ runs:
           workflowInput = ConvertTo-Json -InputObject $outputs.WorkflowInput -Depth 20 -Compress
           moduleMatrix = ConvertTo-Json -InputObject @{ include = @($modules) } -Depth 20 -Compress
           hasModules = ($modules.Count -gt 0).ToString().ToLowerInvariant()
+          hasRequiredModules = $hasRequiredModules.ToString().ToLowerInvariant()
+          hasOptionalModules = $hasOptionalModules.ToString().ToLowerInvariant()
+          requiredErrors = ConvertTo-Json -InputObject @($requiredErrors) -Compress
           authoringArtifact = $env:ARTIFACT
         }
         foreach ($entry in $values.GetEnumerator()) {
