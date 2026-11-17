@@ -417,7 +417,7 @@ jobs:
           "deploymentMatrix=$value" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
   e2e-test:
-    name: Run end-to-end tests
+    name: Run end-to-end test [${{ matrix.testCase.Name }}]
     needs: discover-examples
     if: |
       !cancelled() &&

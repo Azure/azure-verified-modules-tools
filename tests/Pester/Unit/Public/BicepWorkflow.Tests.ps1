@@ -172,6 +172,7 @@ Describe 'Public: Bicep workflow package APIs' -Tag Unit {
                 -TenantId $tenant -SkipModuleVersionCheck)
 
         $matrix | Should -HaveCount 2
+        $matrix.Name | Should -Be @('defaults', 'waf-aligned')
         $matrix.E2eIgnore | Should -Be @($false, $true)
         $matrix.Path | Should -Be @(
             'tests/e2e/defaults/main.test.bicep',

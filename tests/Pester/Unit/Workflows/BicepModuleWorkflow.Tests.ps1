@@ -371,7 +371,6 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $runtime.jobs.'pr-check'.name | Should -BeExactly 'Run PR check'
         $runtime.jobs.'unit-test'.name | Should -BeExactly 'Run unit tests'
         $runtime.jobs.'discover-examples'.name | Should -BeExactly 'Discover end-to-end test examples'
-        $runtime.jobs.'e2e-test'.name | Should -BeExactly 'Run end-to-end tests'
         foreach ($jobName in @('pr-check', 'unit-test', 'discover-examples')) {
             @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Check out module repository'
             @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Download AVM tools from build job'
@@ -383,6 +382,17 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $runtime.jobs.'e2e-test'.strategy.'fail-fast' | Should -BeFalse
         $runtime.jobs.'e2e-test'.Contains('continue-on-error') | Should -BeFalse
         $runtime.jobs.'e2e-test'.uses | Should -BeExactly './.github/workflows/bicep-module-runtime-deployment.yml'
+    }
+
+    It 'names the E2E matrix by scenario while retaining the child subscription name' {
+        $runtime = $script:workflows['bicep-module-runtime']
+        $deployment = $script:workflows['bicep-module-runtime-deployment']
+        $job = $runtime.jobs.'e2e-test'
+
+        $job.strategy.matrix.testCase | Should -BeExactly '${{ fromJSON(needs.discover-examples.outputs.deploymentMatrix) }}'
+        $job.name | Should -BeExactly 'Run end-to-end test [${{ matrix.testCase.Name }}]'
+        $job.with.testCase | Should -BeExactly '${{ toJSON(matrix.testCase) }}'
+        $deployment.jobs.deploy.name | Should -BeExactly 'Run E2E test [${{ fromJSON(inputs.testCase).Name }}] on [${{ fromJSON(inputs.testCase).SubscriptionName }}]'
     }
 
     It 'makes each prepared runtime package discoverable by its exact module name without a fallback' {
