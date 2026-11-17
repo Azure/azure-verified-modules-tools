@@ -42,11 +42,7 @@ resource "github_repository_ruleset" "main" {
         strict_required_status_checks_policy = true
         do_not_enforce_on_create              = false
         required_check {
-          context        = "run managed workflow / Terraform validation gate"
-          integration_id = 15368
-        }
-        required_check {
-          context        = "run managed workflow / Terraform required E2E gate"
+          context        = "run managed workflow / Report check status"
           integration_id = 15368
         }
       }

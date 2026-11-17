@@ -22,7 +22,7 @@ Describe 'terraform-module reusable workflow' {
     It 'passes only shuffled indices between jobs so GitHub cannot suppress the secret pool' {
         $script:workflow | Should -Match 'subscriptionOrder:\s*\$\{\{ steps\.pick\.outputs\.subscriptionOrder \}\}'
         $script:workflow | Should -Not -Match 'needs\.subscriptions\.outputs\.subscription(?:Id|Ids|Name)\b'
-        ([regex]::Matches($script:workflow, 'run: \*select-test-subscription')).Count | Should -Be 3
+        ([regex]::Matches($script:workflow, 'run: \*select-test-subscription')).Count | Should -Be 4
     }
 
     It 'discovers e2e examples with the machine-readable list surface' {
@@ -33,13 +33,13 @@ Describe 'terraform-module reusable workflow' {
 
     It 'fans e2e out across a per-example matrix that does not fail fast' {
         $script:workflow | Should -Match 'fail-fast:\s*false'
-        $script:workflow | Should -Match 'example:\s*\$\{\{ fromJson\(needs\.discover-examples\.outputs\.requiredExamples\) \}\}'
-        $script:workflow | Should -Match 'name:\s*Required E2E tests \(\$\{\{ matrix\.example \}\}\)'
+        $script:workflow | Should -Match 'testCase:\s*\$\{\{ fromJson\(needs\.select-e2e-tests\.outputs\.deploymentMatrix\) \}\}'
+        $script:workflow | Should -Match "E2E test \(\$\{\{ matrix\.testCase\.IsRequired && 'required' \|\| 'optional' \}\}\): \$\{\{ matrix\.testCase\.Name \}\} - \$\{\{ matrix\.testCase\.SubscriptionName \}\}"
         $script:workflow | Should -Match 'avm -SkipModuleVersionCheck test e2e --example'
     }
 
     It 'skips the e2e matrix when no runnable examples were discovered' {
-        $script:e2eJob | Should -Match "needs\.discover-examples\.outputs\.requiredExamples != '\[\]'"
+        $script:e2eJob | Should -Match "needs\.select-e2e-tests\.outputs\.deploymentMatrix != '\[\]'"
     }
 
     It 'keeps e2e execution on a static environment separate from unprivileged discovery' {
@@ -48,7 +48,7 @@ Describe 'terraform-module reusable workflow' {
     }
 
     It 'keeps the whole e2e matrix dependent on successful discovery' {
-        $script:e2eJob | Should -Match 'needs:\s*\[bootstrap, subscriptions, discover-examples\]'
+        $script:e2eJob | Should -Match 'needs:\s*\[bootstrap, subscriptions, discover-examples, select-e2e-tests\]'
         $script:e2eJob | Should -Not -Match 'always\(\)|cancelled\(\)|failure\(\)|continue-on-error:'
         $script:discoveryJob | Should -Not -Match 'continue-on-error:'
     }
@@ -57,8 +57,8 @@ Describe 'terraform-module reusable workflow' {
         $script:discoveryJob | Should -Not -Match '(?m)^    environment:|strategy:|id-token:'
     }
 
-    It 'round-robins the subscription across matrix legs using strategy.job-index' {
-        $script:workflow | Should -Match 'JOB_INDEX:\s*\$\{\{ strategy\.job-index \}\}'
+    It 'executes the subscription index assigned before matrix fan-out' {
+        $script:e2eJob | Should -Match 'JOB_INDEX:\s*\$\{\{ matrix\.testCase\.SubscriptionIndex \}\}'
         $script:workflow | Should -Match '\$subs\[\$jobIndex % \$subs\.Count\]'
     }
 
@@ -79,14 +79,17 @@ Describe 'Terraform E2E label routing and merge gates' {
         $null = & $module { Import-AvmPowerShellModule -Name powershell-yaml -Global }
         $script:gatesWorkflow = ConvertFrom-Yaml (Get-Content -LiteralPath (Join-Path $root '.github' 'workflows' 'terraform-module.yml') -Raw)
         $script:listScript = [scriptblock]::Create($script:gatesWorkflow.jobs['discover-examples'].steps[-1].run)
-        $script:validationGateScript = [scriptblock]::Create($script:gatesWorkflow.jobs['validation-gate'].steps[0].run)
-        $script:e2eGateScript = [scriptblock]::Create($script:gatesWorkflow.jobs['required-e2e-gate'].steps[0].run)
+        $script:gateScript = [scriptblock]::Create($script:gatesWorkflow.jobs['module-gate'].steps[0].run)
+        $script:matrixScript = [scriptblock]::Create($script:gatesWorkflow.jobs['select-e2e-tests'].steps[-1].run)
         $script:exampleScript = [scriptblock]::Create($script:gatesWorkflow.jobs['e2e-test'].steps[-1].run)
     }
 
     BeforeEach {
         $script:gateEnvironment = @{}
-        foreach ($name in @('EVENT_NAME', 'PR_LABELS', 'IS_FORK', 'RUNNER_TEMP', 'GITHUB_OUTPUT', 'RESULTS', 'REPOSITORY_NAME', 'E2E_EXAMPLE')) {
+        foreach ($name in @(
+            'EVENT_NAME', 'PR_LABELS', 'IS_FORK', 'RUNNER_TEMP', 'GITHUB_OUTPUT', 'RESULTS', 'REPOSITORY_NAME',
+            'E2E_EXAMPLE', 'SUBSCRIPTIONS', 'SUBSCRIPTION_OVERRIDE', 'REQUIRED_EXAMPLES', 'OPTIONAL_EXAMPLES', 'RUN_OPTIONAL'
+        )) {
             $script:gateEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
         }
         $env:EVENT_NAME = 'pull_request'
@@ -98,6 +101,11 @@ Describe 'Terraform E2E label routing and merge gates' {
         $env:GITHUB_OUTPUT = Join-Path $fixture 'gate-output'
         $env:REPOSITORY_NAME = 'terraform-azurerm-avm-res-mock'
         $env:E2E_EXAMPLE = 'default'
+        $env:SUBSCRIPTIONS = '[{"id":"10000000-0000-4000-8000-000000000001","name":"sub-one"},{"id":"10000000-0000-4000-8000-000000000002","name":"sub-two"}]'
+        $env:SUBSCRIPTION_OVERRIDE = ''
+        $env:REQUIRED_EXAMPLES = '["default","waf-aligned"]'
+        $env:OPTIONAL_EXAMPLES = '["private"]'
+        $env:RUN_OPTIONAL = 'false'
         $script:examplesJson = '["default","waf-aligned","private"]'
         $script:exampleResult = [pscustomobject]@{ Status = 'pass'; FilesProcessed = 1 }
         $script:gateResults = @{
@@ -108,8 +116,12 @@ Describe 'Terraform E2E label routing and merge gates' {
             'integration-test' = @{ result = 'success' }
             'discover-examples' = @{
                 result = 'success'
-                outputs = @{ requiredExamples = '["default","waf-aligned"]'; runRequired = 'true' }
+                outputs = @{
+                    requiredExamples = '["default","waf-aligned"]'; runRequired = 'true'
+                    optionalExamples = '["private"]'; runOptional = 'false'
+                }
             }
+            'select-e2e-tests' = @{ result = 'success'; outputs = @{ deploymentMatrix = '[{"Name":"default"}]' } }
             'e2e-test' = @{ result = 'success' }
         }
         Mock Import-Module {}
@@ -129,10 +141,10 @@ Describe 'Terraform E2E label routing and merge gates' {
         }
     }
 
-    It 'routes each label independently: <Labels>' -ForEach @(
+    It 'routes labels like Bicep with optional implying required: <Labels>' -ForEach @(
         @{ Labels = '[]'; Required = 'false'; Optional = 'false' }
         @{ Labels = '["PR: Run E2E Tests"]'; Required = 'true'; Optional = 'false' }
-        @{ Labels = '["PR: Run Optional E2E Tests"]'; Required = 'false'; Optional = 'true' }
+        @{ Labels = '["PR: Run Optional E2E Tests"]'; Required = 'true'; Optional = 'true' }
         @{ Labels = '["PR: Run E2E Tests","PR: Run Optional E2E Tests"]'; Required = 'true'; Optional = 'true' }
     ) {
         $env:PR_LABELS = $Labels
@@ -162,7 +174,7 @@ Describe 'Terraform E2E label routing and merge gates' {
         $outputs.runOptional | Should -BeExactly 'true'
     }
 
-    It 'refuses merge-group deployment authorization and fails both merge gates' {
+    It 'refuses merge-group deployment authorization and fails the merge gate' {
         $env:EVENT_NAME = 'merge_group'
         $env:PR_LABELS = '["PR: Run E2E Tests","PR: Run Optional E2E Tests"]'
         & $script:listScript
@@ -170,8 +182,7 @@ Describe 'Terraform E2E label routing and merge gates' {
         $outputs.runRequired | Should -BeExactly 'false'
         $outputs.runOptional | Should -BeExactly 'false'
         $env:RESULTS = ConvertTo-Json -InputObject $script:gateResults -Depth 5
-        { & $script:validationGateScript } | Should -Throw '*merge queues are not supported*'
-        { & $script:e2eGateScript } | Should -Throw '*merge queues are not supported*'
+        { & $script:gateScript } | Should -Throw '*merge queues are not supported*'
         foreach ($name in @('subscriptions', 'pr-check', 'integration-test')) {
             $script:gatesWorkflow.jobs[$name]['if'] | Should -BeExactly "github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)"
         }
@@ -205,12 +216,30 @@ Describe 'Terraform E2E label routing and merge gates' {
         { & $script:listScript } | Should -Throw '*exists but is not runnable*'
     }
 
-    It 'keeps optional failures outside both stable gates' {
-        $script:gateResults['optional-e2e-test'] = @{ result = 'failure' }
+    It 'does not require unselected optional tests to run' {
         $env:RESULTS = ConvertTo-Json -InputObject $script:gateResults -Depth 5
-        { & $script:validationGateScript; & $script:e2eGateScript } | Should -Not -Throw
-        $script:gatesWorkflow.jobs['required-e2e-gate'].needs | Should -Not -Contain 'optional-e2e-test'
-        $script:gatesWorkflow.jobs['validation-gate'].needs | Should -Not -Contain 'optional-e2e-test'
+        { & $script:gateScript } | Should -Not -Throw
+    }
+
+    It 'allows an explicitly empty selected matrix without requiring a deployment job' {
+        $script:gateResults['discover-examples'].outputs.requiredExamples = '[]'
+        $script:gateResults['select-e2e-tests'].outputs.deploymentMatrix = '[]'
+        $script:gateResults['e2e-test'].result = 'skipped'
+        $env:RESULTS = ConvertTo-Json -InputObject $script:gateResults -Depth 5
+        { & $script:gateScript } | Should -Not -Throw
+    }
+
+    It 'gates selected optional tests just like required tests: <Result>' -ForEach @(
+        @{ Result = 'success'; Passes = $true }
+        @{ Result = 'failure'; Passes = $false }
+        @{ Result = 'cancelled'; Passes = $false }
+        @{ Result = 'skipped'; Passes = $false }
+    ) {
+        $script:gateResults['discover-examples'].outputs.runOptional = 'true'
+        $script:gateResults['e2e-test'].result = $Result
+        $env:RESULTS = ConvertTo-Json -InputObject $script:gateResults -Depth 5
+        if ($Passes) { { & $script:gateScript } | Should -Not -Throw }
+        else { { & $script:gateScript } | Should -Throw '*Selected E2E tests did not pass*' }
     }
 
     It 'rejects failed, cancelled or skipped required validation: <Job>/<Result>' -ForEach @(
@@ -222,27 +251,29 @@ Describe 'Terraform E2E label routing and merge gates' {
     ) {
         $script:gateResults[$Job].result = $Result
         $env:RESULTS = ConvertTo-Json -InputObject $script:gateResults -Depth 5
-        { & $script:validationGateScript } | Should -Throw '*did not pass*'
+        { & $script:gateScript } | Should -Throw '*did not pass*'
     }
 
     It 'blocks merging until existing required examples are authorized' {
         $script:gateResults['discover-examples'].outputs.runRequired = 'false'
         $script:gateResults['e2e-test'].result = 'skipped'
         $env:RESULTS = ConvertTo-Json -InputObject $script:gateResults -Depth 5
-        { & $script:e2eGateScript } | Should -Throw '*Add PR: Run E2E Tests*'
+        { & $script:gateScript } | Should -Throw '*Add PR: Run E2E Tests or PR: Run Optional E2E Tests*'
     }
 
     It 'does not interpret failed, cancelled or skipped E2E dependencies as passing: <Job>/<Result>' -ForEach @(
         @{ Job = 'bootstrap'; Result = 'failure' }
         @{ Job = 'discover-examples'; Result = 'failure' }
         @{ Job = 'discover-examples'; Result = 'skipped' }
+        @{ Job = 'select-e2e-tests'; Result = 'failure' }
+        @{ Job = 'select-e2e-tests'; Result = 'skipped' }
         @{ Job = 'e2e-test'; Result = 'failure' }
         @{ Job = 'e2e-test'; Result = 'cancelled' }
         @{ Job = 'e2e-test'; Result = 'skipped' }
     ) {
         $script:gateResults[$Job].result = $Result
         $env:RESULTS = ConvertTo-Json -InputObject $script:gateResults -Depth 5
-        { & $script:e2eGateScript } | Should -Throw
+        { & $script:gateScript } | Should -Throw
     }
 
     It 'explicitly permits absent required scenarios without requiring a label' {
@@ -250,7 +281,85 @@ Describe 'Terraform E2E label routing and merge gates' {
         $script:gateResults['discover-examples'].outputs.runRequired = 'false'
         $script:gateResults['e2e-test'].result = 'skipped'
         $env:RESULTS = ConvertTo-Json -InputObject $script:gateResults -Depth 5
-        { & $script:e2eGateScript } | Should -Not -Throw
+        $script:gateResults['select-e2e-tests'].result = 'skipped'
+        { & $script:gateScript } | Should -Not -Throw
+    }
+
+    It 'assigns named round-robin subscriptions and classifications before fan-out without publishing IDs' {
+        $env:OPTIONAL_EXAMPLES = '["private","public","private-endpoint"]'
+        $env:RUN_OPTIONAL = 'true'
+        & $script:matrixScript
+        $output = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw
+        $output | Should -Not -Match '10000000-'
+        $matrix = ConvertFrom-Json -InputObject ($output | ConvertFrom-StringData).deploymentMatrix
+        $matrix.Name | Should -Be @('default', 'waf-aligned', 'private', 'public', 'private-endpoint')
+        $matrix.SubscriptionName | Should -Be @('sub-one', 'sub-two', 'sub-one', 'sub-two', 'sub-one')
+        $matrix.SubscriptionIndex | Should -Be @(0, 1, 2, 3, 4)
+        $matrix.IsRequired | Should -Be @($true, $true, $false, $false, $false)
+    }
+
+    It 'excludes optional scenarios from the matrix unless selected' {
+        & $script:matrixScript
+        $output = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
+        (ConvertFrom-Json -InputObject $output.deploymentMatrix).Name | Should -Be @('default', 'waf-aligned')
+    }
+
+    It 'keeps an empty selection as an explicit empty matrix' {
+        $env:REQUIRED_EXAMPLES = '[]'
+        & $script:matrixScript
+        $output = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
+        $output.deploymentMatrix | Should -BeExactly '[]'
+    }
+
+    It 'runs optional-only scenarios when required examples are absent' {
+        $env:REQUIRED_EXAMPLES = '[]'
+        $env:RUN_OPTIONAL = 'true'
+        & $script:matrixScript
+        $output = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
+        $matrix = ConvertFrom-Json -InputObject $output.deploymentMatrix -NoEnumerate
+        $matrix.Count | Should -Be 1
+        $matrix[0].Name | Should -BeExactly 'private'
+        $matrix[0].IsRequired | Should -BeFalse
+    }
+
+    It 'keeps subscription selection on the validated pool without granting deployment permissions' {
+        $selection = $script:gatesWorkflow.jobs['select-e2e-tests']
+        $selection.steps[0].run | Should -BeExactly $script:gatesWorkflow.jobs.subscriptions.steps[0].run
+        $selection.permissions.Count | Should -Be 0
+        $selection.steps.run | Should -Not -Match 'azure/login|az login|Connect-AzAccount'
+    }
+
+    It 'uses the override display name without altering the pool index: <Override>' -ForEach @(
+        @{ Override = '10000000-0000-4000-8000-000000000002'; Display = 'sub-two' }
+        @{ Override = '20000000-0000-4000-8000-000000000001'; Display = 'subscription override' }
+    ) {
+        $env:SUBSCRIPTION_OVERRIDE = $Override
+        & $script:matrixScript
+        $output = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
+        $matrix = ConvertFrom-Json -InputObject $output.deploymentMatrix
+        $matrix.SubscriptionName | Should -Be @($Display, $Display)
+        $matrix.SubscriptionIndex | Should -Be @(0, 1)
+    }
+
+    It 'keeps unnamed fallback subscription IDs out of the matrix' {
+        $env:SUBSCRIPTIONS = '[{"id":"10000000-0000-4000-8000-000000000001","name":"10000000-0000-4000-8000-000000000001"}]'
+        $env:OPTIONAL_EXAMPLES = '[]'
+        & $script:matrixScript
+        $output = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw
+        $output | Should -Not -Match '10000000-'
+        $matrix = ConvertFrom-Json -InputObject ($output | ConvertFrom-StringData).deploymentMatrix
+        $matrix.SubscriptionName | Should -Be @('subscription', 'subscription')
+    }
+
+    It 'rejects invalid E2E selection inputs: <Pool>/<Override>/<Examples>' -ForEach @(
+        @{ Pool = '[]'; Override = ''; Examples = '[]' }
+        @{ Pool = '[{"id":"10000000-0000-4000-8000-000000000001","name":"sub-one"}]'; Override = 'not-a-guid'; Examples = '[]' }
+        @{ Pool = '[{"id":"10000000-0000-4000-8000-000000000001","name":"sub-one"}]'; Override = ''; Examples = '{}' }
+    ) {
+        $env:SUBSCRIPTIONS = $Pool
+        $env:SUBSCRIPTION_OVERRIDE = $Override
+        $env:REQUIRED_EXAMPLES = $Examples
+        { & $script:matrixScript } | Should -Throw
     }
 
     It 'requires each selected example to execute rather than return a skipped envelope' {
@@ -729,7 +838,7 @@ Describe 'terraform-module automatic checks and fork isolation' {
         }
         $unitRun = [regex]::Match(
             $script:jobs['unit-test'],
-            '(?m)^      - name: Run unit tests\r?\n        shell: pwsh\r?\n        run: \|\r?\n(?<code>(?:^          .*\r?\n|^\r?\n)*)')
+            '(?m)^      - name: Unit tests\r?\n        shell: pwsh\r?\n        run: \|\r?\n(?<code>(?:^          .*\r?\n|^\r?\n)*)')
         if (-not $unitRun.Success -or [string]::IsNullOrWhiteSpace($unitRun.Groups['code'].Value)) {
             throw 'Could not isolate the unit-test script.'
         }
@@ -976,7 +1085,7 @@ Describe 'terraform-module required Azure feature registration' {
     }
 
     It 'installs the module, checks the per-job selection, logs in, registers, then tests in <Job>' -ForEach @(
-        @{ Job = 'integration-test'; Test = 'Run integration tests' }
+        @{ Job = 'integration-test'; Test = 'Integration tests' }
         @{ Job = 'e2e-test'; Test = 'Run end-to-end tests' }
     ) {
         $block = $script:jobs[$Job]

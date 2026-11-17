@@ -165,7 +165,7 @@ run "custom_names_preserve_the_same_approval_split" {
   }
 }
 
-run "label_gate_rollout_removes_approvals_and_requires_both_checks" {
+run "label_gate_rollout_removes_approvals_and_requires_status_check" {
   command = plan
 
   module {
@@ -189,12 +189,11 @@ run "label_gate_rollout_removes_approvals_and_requires_both_checks" {
       length(github_repository_ruleset.main[0].rules[0].required_status_checks) == 1 &&
       github_repository_ruleset.main[0].rules[0].required_status_checks[0].strict_required_status_checks_policy &&
       toset([for check in github_repository_ruleset.main[0].rules[0].required_status_checks[0].required_check : check.context]) == toset([
-        "run managed workflow / Terraform validation gate",
-        "run managed workflow / Terraform required E2E gate"
+        "run managed workflow / Report check status"
       ]) &&
       alltrue([for check in github_repository_ruleset.main[0].rules[0].required_status_checks[0].required_check : check.integration_id == 15368])
     )
-    error_message = "Only the stable validation and required E2E checks from GitHub Actions may gate merging."
+    error_message = "Only the stable check status report from GitHub Actions may gate merging."
   }
 }
 

@@ -265,36 +265,44 @@ the retired credential is not retained for compatibility.
 
 The reusable Terraform workflow runs PR checks, unit tests and integration
 tests automatically. `PR: Run E2E Tests` authorizes existing `examples/default`
-and `examples/waf-aligned` scenarios. `PR: Run Optional E2E Tests` independently
-authorizes other runnable examples. Optional failures do not block the two
-stable merge checks. Both labels select both sets. Missing required scenarios
+and `examples/waf-aligned` scenarios. `PR: Run Optional E2E Tests` authorizes
+both required and optional runnable examples, matching Bicep. Every selected
+test must pass the single `Report check status` merge gate, including optional
+tests when requested. Missing required scenarios
 are reported without requiring modules to add them yet; an existing required
 scenario cannot bypass validation with `.e2eignore`.
 
 The caller must handle `opened`, `reopened`, `synchronize`, `labeled` and
 `unlabeled` pull-request events, including removal of either E2E label. Labels
 persist across commits, but results must be produced for the new revision.
-Removing the required label makes a new run fail its required E2E gate when
+Removing both E2E labels makes a new run fail its merge gate when
 required examples exist; it does not stop cloud work already authorized.
 Manual dispatch retains both E2E tiers. Merge queues are not supported: callers
 must omit `merge_group`, and legacy merge-group invocations cannot access cloud
-credentials and fail both gates explicitly. Disable any requirement to use a
+credentials and fail the gate explicitly. Disable any requirement to use a
 merge queue before enabling this rollout.
 Forks receive unprivileged checks only and need a same-repository release-branch
 handoff before authenticated validation can satisfy the merge checks.
 
 Roll out the updated, immutable workflow pin and caller events first. Keep
-the caller display name `run managed workflow`, then verify these check names:
+the caller display name `run managed workflow`, then verify this check name:
 
-- `run managed workflow / Terraform validation gate`
-- `run managed workflow / Terraform required E2E gate`
+- `run managed workflow / Report check status`
+
+E2E selection assigns subscriptions before creating the matrix, with job names
+`E2E test (required|optional): <example> - <subscription>`, matching Bicep.
+Only General-pool indices and display names cross job boundaries. Execution
+resolves the selected index against the same shuffled pool and retains
+environment-specific subscription overrides. An override outside that pool is
+displayed as `subscription override`; a fallback without a name is displayed as
+`subscription`, without exposing a subscription ID in the matrix.
 
 Only after pilot verification and approval, set
 `terraformPrTestGatesEnabled: true` on the selected matching group in
 `repository-config/config.json`. It is a Boolean, defaults to false and follows
 the existing group ordering. Repository sync passes it to Terraform as
 `terraform_pr_test_gates_enabled`. Enabling it removes test-environment reviewer
-gates and requires both stable GitHub Actions checks on the default branch.
+gates and requires the stable GitHub Actions status check on the default branch.
 Environment names, resource addresses and federation remain unchanged.
 No repositories are opted in by default. Keep the rollout setting committed
 so later scheduled syncs retain the same policy.

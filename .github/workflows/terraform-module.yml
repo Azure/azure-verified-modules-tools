@@ -193,7 +193,7 @@ jobs:
               throw "Selected subscription entry has no 'id' property."
           }
 
-          # Only indices cross job boundaries; GitHub can suppress the secret JSON pool.
+          # Keep IDs within each job; GitHub can suppress the secret JSON pool.
           $ordered = '[{0}]' -f (($subs | ForEach-Object {
                   ConvertTo-Json -Compress -InputObject ([pscustomobject]@{ id = [string]$_.id; name = [string]$_.name })
               }) -join ',')
@@ -236,7 +236,7 @@ jobs:
           name: ${{ needs.bootstrap.outputs.artifact }}
           path: ${{ runner.temp }}/avm-authoring
 
-      - name: Run unit tests
+      - name: Unit tests
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -399,7 +399,7 @@ jobs:
           name: ${{ needs.bootstrap.outputs.artifact }}
           path: ${{ runner.temp }}/avm-authoring
 
-      - name: Run pr-check
+      - name: PR check
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -515,7 +515,7 @@ jobs:
           Import-Module (Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1') -ErrorAction Stop
           avm -SkipModuleVersionCheck register-features --subscription-id $env:SELECTED_SUBSCRIPTION_ID
 
-      - name: Run integration tests
+      - name: Integration tests
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -523,7 +523,7 @@ jobs:
           avm -SkipModuleVersionCheck test integration
 
   discover-examples:
-    name: Discover e2e examples
+    name: Discover E2E tests
     if: github.event.repository.name != 'terraform-azurerm-avm-template'
     needs: bootstrap
     runs-on: ubuntu-latest
@@ -581,7 +581,8 @@ jobs:
               $env:EVENT_NAME -eq 'pull_request' -and $env:IS_FORK -eq 'false'
           )
           $runRequired = $trusted -and (
-              $env:EVENT_NAME -eq 'workflow_dispatch' -or $labels -ccontains 'PR: Run E2E Tests'
+              $env:EVENT_NAME -eq 'workflow_dispatch' -or
+              $labels -ccontains 'PR: Run E2E Tests' -or $labels -ccontains 'PR: Run Optional E2E Tests'
           )
           $runOptional = $trusted -and (
               $env:EVENT_NAME -eq 'workflow_dispatch' -or $labels -ccontains 'PR: Run Optional E2E Tests'
@@ -599,13 +600,79 @@ jobs:
               if ($required -cnotcontains $name) { Write-Host "Required E2E example '$name' is absent; existence is not yet enforced." }
           }
 
+  select-e2e-tests:
+    name: Select E2E tests and subscriptions
+    if: needs.discover-examples.outputs.runRequired == 'true' || needs.discover-examples.outputs.runOptional == 'true'
+    needs: [subscriptions, discover-examples]
+    runs-on: ubuntu-latest
+    environment: examples-test-execution
+    permissions: {}
+    outputs:
+      deploymentMatrix: ${{ steps.matrix.outputs.deploymentMatrix }}
+    steps:
+      - name: Select E2E subscriptions
+        id: pool
+        shell: pwsh
+        env:
+          TEST_SUBSCRIPTION_IDS: ${{ vars.TEST_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS }}
+          FALLBACK_SUBSCRIPTION_ID_SECRET: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          FALLBACK_SUBSCRIPTION_ID_VAR: ${{ vars.ARM_SUBSCRIPTION_ID }}
+          SUBSCRIPTION_ORDER: ${{ needs.subscriptions.outputs.subscriptionOrder }}
+          JOB_INDEX: '0'
+        run: *select-test-subscription
+
+      - name: Build E2E matrix
+        id: matrix
+        shell: pwsh
+        env:
+          SUBSCRIPTIONS: ${{ steps.pool.outputs.subscriptionIds }}
+          SUBSCRIPTION_OVERRIDE: ${{ secrets.ARM_SUBSCRIPTION_ID_OVERRIDE || vars.ARM_SUBSCRIPTION_ID_OVERRIDE }}
+          REQUIRED_EXAMPLES: ${{ needs.discover-examples.outputs.requiredExamples }}
+          OPTIONAL_EXAMPLES: ${{ needs.discover-examples.outputs.optionalExamples }}
+          RUN_OPTIONAL: ${{ needs.discover-examples.outputs.runOptional }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $subscriptions = @(ConvertFrom-Json -InputObject $env:SUBSCRIPTIONS)
+          if ($subscriptions.Count -eq 0) {
+              throw [System.InvalidOperationException]::new('E2E selection requires a nonempty General subscription pool.')
+          }
+          $overrideName = ''
+          if (-not [string]::IsNullOrWhiteSpace($env:SUBSCRIPTION_OVERRIDE)) {
+              $identifier = [guid]::Empty
+              if (-not [guid]::TryParseExact($env:SUBSCRIPTION_OVERRIDE, 'D', [ref]$identifier) -or $identifier -eq [guid]::Empty) {
+                  throw [System.ArgumentException]::new('ARM_SUBSCRIPTION_ID_OVERRIDE must be a nonempty subscription GUID.')
+              }
+              $override = @($subscriptions | Where-Object { $_.id -eq $env:SUBSCRIPTION_OVERRIDE })
+              $overrideName = if ($override.Count -eq 1 -and $override[0].name -ne $override[0].id) { $override[0].name } else { 'subscription override' }
+          }
+          $required = ConvertFrom-Json -InputObject $env:REQUIRED_EXAMPLES -NoEnumerate
+          $optional = ConvertFrom-Json -InputObject $env:OPTIONAL_EXAMPLES -NoEnumerate
+          if ($required -isnot [array] -or $optional -isnot [array] -or $env:RUN_OPTIONAL -cnotin @('true', 'false')) {
+              throw [System.IO.InvalidDataException]::new('E2E matrix selection requires example arrays and a Boolean optional selection.')
+          }
+          $examples = @($required)
+          if ($env:RUN_OPTIONAL -ceq 'true') { $examples += $optional }
+          $matrix = @(
+              for ($index = 0; $index -lt $examples.Count; $index++) {
+                  $subscription = $subscriptions[$index % $subscriptions.Count]
+                  $name = if ($overrideName) { $overrideName } elseif ($subscription.name -ne $subscription.id) { $subscription.name } else { 'subscription' }
+                  [pscustomobject]@{
+                      Name = $examples[$index]
+                      SubscriptionIndex = $index
+                      SubscriptionName = $name
+                      IsRequired = $required -ccontains $examples[$index]
+                  }
+              }
+          )
+          "deploymentMatrix=$(ConvertTo-Json -InputObject $matrix -Compress)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
   e2e-test:
-    name: Required E2E tests (${{ matrix.example }})
+    name: "E2E test (${{ matrix.testCase.IsRequired && 'required' || 'optional' }}): ${{ matrix.testCase.Name }} - ${{ matrix.testCase.SubscriptionName }}"
     if: >-
       github.event.repository.name != 'terraform-azurerm-avm-template' &&
       needs.discover-examples.outputs.runRequired == 'true' &&
-      needs.discover-examples.outputs.requiredExamples != '[]'
-    needs: [bootstrap, subscriptions, discover-examples]
+      needs.select-e2e-tests.outputs.deploymentMatrix != '[]'
+    needs: [bootstrap, subscriptions, discover-examples, select-e2e-tests]
     runs-on: ubuntu-latest
     environment: examples-test-execution
     permissions:
@@ -616,8 +683,8 @@ jobs:
       # be destroyed - not just the first one to fail.
       fail-fast: false
       matrix:
-        example: ${{ fromJson(needs.discover-examples.outputs.requiredExamples) }}
-    steps: &e2e-steps
+        testCase: ${{ fromJson(needs.select-e2e-tests.outputs.deploymentMatrix) }}
+    steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -641,7 +708,7 @@ jobs:
           FALLBACK_SUBSCRIPTION_ID_SECRET: ${{ secrets.ARM_SUBSCRIPTION_ID }}
           FALLBACK_SUBSCRIPTION_ID_VAR: ${{ vars.ARM_SUBSCRIPTION_ID }}
           SUBSCRIPTION_ORDER: ${{ needs.subscriptions.outputs.subscriptionOrder }}
-          JOB_INDEX: ${{ strategy.job-index }}
+          JOB_INDEX: ${{ matrix.testCase.SubscriptionIndex }}
         run: *select-test-subscription
 
       - name: Prepare test environment
@@ -763,7 +830,7 @@ jobs:
       - name: Run end-to-end tests
         shell: pwsh
         env:
-          E2E_EXAMPLE: ${{ matrix.example }}
+          E2E_EXAMPLE: ${{ matrix.testCase.Name }}
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module (Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1') -ErrorAction Stop
@@ -772,36 +839,19 @@ jobs:
               throw [System.InvalidOperationException]::new("E2E example '$env:E2E_EXAMPLE' did not execute successfully.")
           }
 
-  optional-e2e-test:
-    name: Optional E2E tests (${{ matrix.example }})
-    if: >-
-      github.event.repository.name != 'terraform-azurerm-avm-template' &&
-      needs.discover-examples.outputs.runOptional == 'true' &&
-      needs.discover-examples.outputs.optionalExamples != '[]'
-    needs: [bootstrap, subscriptions, discover-examples]
-    runs-on: ubuntu-latest
-    environment: examples-test-execution
-    permissions:
-      id-token: write
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        example: ${{ fromJson(needs.discover-examples.outputs.optionalExamples) }}
-    steps: *e2e-steps
-
-  validation-gate:
-    name: Terraform validation gate
+  module-gate:
+    name: Report check status
     if: always()
-    needs: [bootstrap, subscriptions, unit-test, pr-check, pr-check-fork, integration-test]
+    needs: [bootstrap, subscriptions, unit-test, pr-check, pr-check-fork, integration-test, discover-examples, select-e2e-tests, e2e-test]
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - name: Require successful validation
+      - name: Evaluate and report check status
         shell: pwsh
         env:
           RESULTS: ${{ toJSON(needs) }}
           EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY_NAME: ${{ github.event.repository.name }}
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:EVENT_NAME -notin @('pull_request', 'workflow_dispatch')) {
@@ -814,28 +864,6 @@ jobs:
               }
           }
 
-  required-e2e-gate:
-    name: Terraform required E2E gate
-    if: always()
-    needs: [bootstrap, discover-examples, e2e-test]
-    runs-on: ubuntu-latest
-    permissions: {}
-    steps:
-      - name: Require successful required E2E tests
-        shell: pwsh
-        env:
-          RESULTS: ${{ toJSON(needs) }}
-          REPOSITORY_NAME: ${{ github.event.repository.name }}
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ($env:EVENT_NAME -notin @('pull_request', 'workflow_dispatch')) {
-              throw [System.InvalidOperationException]::new('Terraform merge gates support pull_request and workflow_dispatch only; merge queues are not supported.')
-          }
-          $results = ConvertFrom-Json -InputObject $env:RESULTS -AsHashtable
-          if ($results.bootstrap.result -ne 'success') {
-              throw [System.InvalidOperationException]::new('The authoring runtime did not prepare successfully.')
-          }
           if ($env:REPOSITORY_NAME -ceq 'terraform-azurerm-avm-template') {
               Write-Host 'E2E execution is not applicable to the template repository.'
               return
@@ -844,13 +872,14 @@ jobs:
           if ($discovery.result -ne 'success') {
               throw [System.InvalidOperationException]::new('E2E example discovery did not pass.')
           }
-          if ($discovery.outputs.requiredExamples -ceq '[]') {
-              Write-Host 'No required E2E examples exist; their existence is not yet enforced.'
-              return
+          if ($discovery.outputs.requiredExamples -cne '[]' -and $discovery.outputs.runRequired -cne 'true') {
+              throw [System.InvalidOperationException]::new('Existing required E2E tests must pass before merging. Add PR: Run E2E Tests or PR: Run Optional E2E Tests on a same-repository pull request.')
           }
-          if ($discovery.outputs.runRequired -cne 'true') {
-              throw [System.InvalidOperationException]::new('Existing required E2E tests must pass before merging. Add PR: Run E2E Tests on a same-repository pull request.')
-          }
-          if ($results['e2e-test'].result -ne 'success') {
-              throw [System.InvalidOperationException]::new("Required E2E tests did not pass ($($results['e2e-test'].result)).")
+          if ($discovery.outputs.runRequired -ceq 'true') {
+              if ($results['select-e2e-tests'].result -ne 'success') {
+                  throw [System.InvalidOperationException]::new('E2E test and subscription selection did not pass.')
+              }
+              if ($results['select-e2e-tests'].outputs.deploymentMatrix -cne '[]' -and $results['e2e-test'].result -ne 'success') {
+                  throw [System.InvalidOperationException]::new("Selected E2E tests did not pass ($($results['e2e-test'].result)).")
+              }
           }
