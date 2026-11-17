@@ -896,6 +896,18 @@ Describe 'Test-AvmTerraformTransientError' {
         Test-Json -Json $json -Schema $schema -ErrorAction SilentlyContinue | Should -BeFalse
     }
 
+    It 'allows in-place rules only outside integration retries' -ForEach @(
+        @{ Integration = $false; Expected = $true }
+        @{ Integration = $true; Expected = $false }
+    ) {
+        $root = Join-Path $script:moduleRoot 'Resources' 'terraform'
+        $policy = Get-Content -LiteralPath (Join-Path $root 'retry-policy.json') -Raw | ConvertFrom-Json -AsHashtable
+        $policy['inPlace'] = @(@{ id = 'test'; integration = $Integration; anyOf = @('temporary test failure') })
+        $json = ConvertTo-Json -InputObject $policy -Depth 10
+        $schema = Get-Content -LiteralPath (Join-Path $root 'retry-policy.schema.json') -Raw
+        Test-Json -Json $json -Schema $schema -ErrorAction SilentlyContinue | Should -Be $Expected
+    }
+
     It 'recognizes request and quota in either order within one E2E error block' {
         $wrapped = $script:sqlQuotaOutput -replace 'number of vCores', "number of`nvCores" -replace 'which exceeds', "which`nexceeds"
         $outputs = @($script:sqlQuotaOutput, $wrapped, 'Error: quota exceeded for the request.', "REQUEST failed`nquota exceeded")
