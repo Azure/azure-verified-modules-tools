@@ -129,6 +129,7 @@ Describe 'Public: Bicep workflow package APIs' -Tag Unit {
             $matrix = @(Get-AvmBicepE2eDeploymentMatrix -Root $script:root -ModulePath $script:modulePath `
                     -TestFiles @([pscustomobject]@{ path = 'tests/e2e/defaults/main.test.bicep'; name = 'defaults'; e2eIgnore = $false }) `
                     -FallbackSubscriptionId $subscription -ModuleClientIds $mapping -TenantId $tenant -SkipModuleVersionCheck)
+            $matrix[0] | Add-Member -NotePropertyName IsRequired -NotePropertyValue $true
             $context = Get-AvmBicepE2eTestContext -Root $script:root -ModulePath $script:modulePath -TestCase $matrix[0] `
                 -FallbackSubscriptionId $subscription -ModuleClientIds $mapping -TenantId $tenant -SkipModuleVersionCheck
 

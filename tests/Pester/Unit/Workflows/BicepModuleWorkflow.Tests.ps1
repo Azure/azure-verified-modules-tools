@@ -370,7 +370,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
 
         $runtime.jobs.'pr-check'.name | Should -BeExactly 'Run PR check'
         $runtime.jobs.'unit-test'.name | Should -BeExactly 'Run unit tests'
-        $runtime.jobs.'discover-examples'.name | Should -BeExactly 'Discover end-to-end test examples'
+        $runtime.jobs.'discover-examples'.name | Should -BeExactly 'Discover E2E test examples'
         foreach ($jobName in @('pr-check', 'unit-test', 'discover-examples')) {
             @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Check out module repository'
             @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Download AVM tools from build job'
@@ -384,15 +384,55 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $runtime.jobs.'e2e-test'.uses | Should -BeExactly './.github/workflows/bicep-module-runtime-deployment.yml'
     }
 
-    It 'names the E2E matrix by scenario while retaining the child subscription name' {
-        $runtime = $script:workflows['bicep-module-runtime']
+    It 'names both E2E matrix callers by classification and scenario, and the child by subscription' {
+        $runtime = $script:workflows['bicep-module-runtime'].jobs.'e2e-test'
+        $alternate = $script:workflows['bicep-module-runtime-e2e'].jobs.deploy
         $deployment = $script:workflows['bicep-module-runtime-deployment']
-        $job = $runtime.jobs.'e2e-test'
 
-        $job.strategy.matrix.testCase | Should -BeExactly '${{ fromJSON(needs.discover-examples.outputs.deploymentMatrix) }}'
-        $job.name | Should -BeExactly 'Run end-to-end test [${{ matrix.testCase.Name }}]'
-        $job.with.testCase | Should -BeExactly '${{ toJSON(matrix.testCase) }}'
-        $deployment.jobs.deploy.name | Should -BeExactly 'Run E2E test [${{ fromJSON(inputs.testCase).Name }}] on [${{ fromJSON(inputs.testCase).SubscriptionName }}]'
+        $runtime.strategy.matrix.testCase | Should -BeExactly '${{ fromJSON(needs.discover-examples.outputs.deploymentMatrix) }}'
+        $alternate.strategy.matrix.testCase | Should -BeExactly '${{ fromJSON(needs.select-deployments.outputs.deploymentMatrix) }}'
+        foreach ($job in @($runtime, $alternate)) {
+            $job.name | Should -BeExactly "Run `${{ matrix.testCase.IsRequired && 'Required' || 'Optional' }} E2E test: `${{ matrix.testCase.Name }}"
+            $job.with.testCase | Should -BeExactly '${{ toJSON(matrix.testCase) }}'
+        }
+        $deployment.jobs.deploy.name | Should -BeExactly 'E2E deployment: ${{ fromJSON(inputs.testCase).SubscriptionName }}'
+    }
+
+    It 'classifies exact scenario names case-sensitively for <ModulePath> in <Workflow>' -ForEach @(
+        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/res/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/res/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/utl/example/widget'; Expected = @($false, $false, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/utl/example/widget'; Expected = @($false, $false, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'AVM/utl/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'AVM/utl/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
+    ) {
+        $step = $script:workflows[$Workflow].jobs[$Job].steps | Where-Object { $_['id'] -ceq 'select' }
+        $tokens = $null
+        $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseInput($step.run, [ref]$tokens, [ref]$errors)
+        $errors | Should -BeNullOrEmpty
+        $loops = @($ast.FindAll({
+                    param($node)
+                    $node -is [Management.Automation.Language.ForEachStatementAst] -and
+                    $node.Extent.Text.StartsWith('foreach ($testCase in $matrix)')
+                }, $true))
+        $loops | Should -HaveCount 1
+        $matrix = @('defaults', 'waf-aligned', 'max', 'child-defaults', 'Defaults', 'WAF-aligned' | ForEach-Object {
+                [pscustomobject]@{ Name = $_; SubscriptionName = 'Configured subscription 1'; E2eIgnore = $false; ConcurrencyGroup = 'fixture-lock' }
+            })
+        $savedModulePath = $env:MODULE_PATH
+        try {
+            $env:MODULE_PATH = $ModulePath
+            & ([scriptblock]::Create($loops[0].Extent.Text))
+        }
+        finally {
+            $env:MODULE_PATH = $savedModulePath
+        }
+        $decoded = @(ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $matrix -Depth 20 -Compress))
+        $decoded.IsRequired | Should -Be $Expected
+        @($decoded | Where-Object { $_.IsRequired -isnot [bool] }) | Should -BeNullOrEmpty
+        @($decoded | Where-Object { $_.SubscriptionName -cne 'Configured subscription 1' -or
+                $_.ConcurrencyGroup -cne 'fixture-lock' -or $_.E2eIgnore }) | Should -BeNullOrEmpty
     }
 
     It 'makes each prepared runtime package discoverable by its exact module name without a fallback' {

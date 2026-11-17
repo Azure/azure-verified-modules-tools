@@ -328,7 +328,7 @@ jobs:
         run: throw 'Bicep unit tests failed. Inspect the uploaded machine-readable unit result artifact.'
 
   discover-examples:
-    name: Discover end-to-end test examples
+    name: Discover E2E test examples
     if: |
       inputs.e2eRoute == 'native' &&
       fromJSON(inputs.workflowInput).deploymentValidation == 'true' &&
@@ -413,11 +413,16 @@ jobs:
               -ModuleClientIds $env:VALIDATE_MODULE_CLIENT_IDS -TenantId $env:VALIDATE_TENANT_ID `
               -RandomSeed ([int](([long]$env:GITHUB_RUN_ID + [long]$env:GITHUB_RUN_ATTEMPT) % [int]::MaxValue)) `
               -DisplaySubscriptionNames:($env:TEST_SUBSCRIPTION_IDS -ne '') -SkipModuleVersionCheck)
+          foreach ($testCase in $matrix) {
+            $isRequired = -not $env:MODULE_PATH.StartsWith('avm/utl/', [StringComparison]::Ordinal) -and
+              $testCase.Name -cin @('defaults', 'waf-aligned')
+            $testCase | Add-Member -NotePropertyName IsRequired -NotePropertyValue $isRequired -Force
+          }
           $value = ConvertTo-Json -InputObject $matrix -Depth 20 -Compress
           "deploymentMatrix=$value" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
   e2e-test:
-    name: Run end-to-end test [${{ matrix.testCase.Name }}]
+    name: "Run ${{ matrix.testCase.IsRequired && 'Required' || 'Optional' }} E2E test: ${{ matrix.testCase.Name }}"
     needs: discover-examples
     if: |
       !cancelled() &&
