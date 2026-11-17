@@ -23,7 +23,7 @@ permissions: {}
 
 jobs:
   select-deployments:
-    name: '${{ inputs.modulePath }}: Select E2E test subscriptions'
+    name: '${{ inputs.modulePath }}: Select E2E tests and subscriptions'
     environment: avm-validation
     runs-on: ubuntu-latest
     permissions:

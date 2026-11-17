@@ -34,7 +34,7 @@ permissions: {}
 
 jobs:
   pr-check:
-    name: Run PR check
+    name: Run static checks
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -98,7 +98,7 @@ jobs:
           if ($capabilities.BicepWorkflowOrchestration -isnot [int] -or $capabilities.BicepWorkflowOrchestration -ne 1) {
             throw 'The installed Avm.Authoring package does not provide BicepWorkflowOrchestration = 1.'
           }
-      - name: Run PR check
+      - name: Run static checks
         shell: pwsh
         working-directory: ${{ inputs.modulePath }}
         run: |
@@ -328,7 +328,7 @@ jobs:
         run: throw 'Bicep unit tests failed. Inspect the uploaded machine-readable unit result artifact.'
 
   discover-examples:
-    name: Discover E2E test examples
+    name: Select E2E tests and subscriptions
     if: |
       inputs.e2eRoute == 'native' &&
       fromJSON(inputs.workflowInput).deploymentValidation == 'true' &&
@@ -390,7 +390,7 @@ jobs:
       - name: Install AVM tools
         if: env.AVM_AUTHORING_MODULE == 'Avm.Authoring'
         uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
-      - name: Select tests and subscriptions
+      - name: Select E2E tests and subscriptions
         id: select
         shell: pwsh
         env:
