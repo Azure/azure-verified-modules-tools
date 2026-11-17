@@ -868,6 +868,32 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.Issues.Code | Should -Contain 'avm.bicep.output-resource-group'
     }
 
+    It 'accepts compiler-qualified imported variables without allowing invalid authored names' {
+        $source = Join-Path $script:modulePath 'main.bicep'
+        [System.IO.File]::AppendAllText($source, "`nvar bad_name = 'invalid'`n")
+        $template = [System.IO.File]::ReadAllText(
+            (Join-Path $script:modulePath 'main.json')) | ConvertFrom-Json -AsHashtable
+        $template['variables'] = @{
+            '_1._2' = 1
+            '_12.validName' = 2
+            'validName' = 3
+            'bad_name' = 4
+            '_1.Bad_name' = 5
+            '_1._2_extra' = 6
+        }
+        $scope = InModuleScope 'Avm.Authoring' -Parameters @{ Path = $script:modulePath } {
+            param($Path)
+            Get-AvmBicepConventionScope -Path $Path
+        }
+        $issues = @(Invoke-CompiledTelemetryFixture -Template $template -Scope $scope `
+                -SourcePath $source -Root $script:workingRoot -AllDiagnostics |
+                Where-Object Code -eq 'avm.bicep.variable-name')
+        $issues.Count | Should -Be 3
+        ($issues.Message -join "`n") | Should -Match 'bad_name'
+        ($issues.Message -join "`n") | Should -Match '_1\.Bad_name'
+        ($issues.Message -join "`n") | Should -Match '_1\._2_extra'
+    }
+
     It 'checks compiled parameter and UDT violations in a child module' {
         $childJson = Join-Path $script:modulePath 'child' 'main.json'
         $template = [System.IO.File]::ReadAllText($childJson) | ConvertFrom-Json -AsHashtable
