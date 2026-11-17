@@ -1144,7 +1144,7 @@ Describe 'Terraform effective contract and state wiring' {
         $variables | Should -Match 'value\s*=\s*jsonencode\(var.test_subscription_ids\)'
         $variables | Should -Not -Match 'ARM_CLIENT_SECRET|TOKEN|PASSWORD|OVERRIDE|TF_VAR_'
         $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'terraform-module.yml')
-        ([regex]::Matches($workflow, 'TEST_SUBSCRIPTION_IDS: \$\{\{ vars.TEST_SUBSCRIPTION_IDS \|\| secrets.TEST_SUBSCRIPTION_IDS \}\}')).Count | Should -Be 4
+        ([regex]::Matches($workflow, 'TEST_SUBSCRIPTION_IDS: \$\{\{ vars.TEST_SUBSCRIPTION_IDS \|\| secrets.TEST_SUBSCRIPTION_IDS \}\}')).Count | Should -Be 5
     }
 
     It 'forgets only the three legacy Actions settings without deleting values needed by older caller pins' {
