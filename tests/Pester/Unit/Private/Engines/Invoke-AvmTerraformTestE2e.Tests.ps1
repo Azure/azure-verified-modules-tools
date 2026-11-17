@@ -661,6 +661,69 @@ Describe 'Invoke-AvmTerraformTestE2e' {
             ) -join ',')
     }
 
+    It 'retries an in-place rule without destroying between applies' {
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
+        $state = @{ Apply = 0; Labels = [System.Collections.Generic.List[string]]::new() }
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context; S = $state } {
+            param($C, $S)
+            Mock Get-AvmTerraformRetryPolicy {
+                @{ fresh = @(); inPlace = @(@{ id = 'test'; integration = $false; anyOf = @('temporary test failure') }) }
+            }
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'terraform'; Version = 'test'; Source = 'cache'; Path = '/fake/terraform' }
+            }
+            Mock Invoke-AvmProcess {
+                param($ArgumentList, $Label)
+                $S.Labels.Add($Label)
+                if ($ArgumentList[0] -eq 'apply' -and ++$S.Apply -eq 1) {
+                    return [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'temporary test failure' }
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            Get-AvmTerraformRetryMode -Output 'temporary test failure' -BuiltInOnly | Should -BeNullOrEmpty
+            Invoke-AvmTerraformTestE2e -Context $C
+        }
+        $result.Status | Should -Be 'pass'
+        $result.Issues | Should -HaveCount 1
+        $result.Issues[0].Message | Should -Match 'retrying in place'
+        ($state.Labels -join ',') | Should -Be (@(
+                'examples/default: terraform init'
+                'examples/default: terraform apply'
+                'examples/default: terraform apply'
+                'examples/default: terraform plan (idempotency)'
+                'examples/default: terraform destroy'
+            ) -join ',')
+    }
+
+    It 'still performs final cleanup after in-place retries are exhausted' {
+        New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = $script:context } {
+            param($C)
+            Mock Get-AvmTerraformRetryPolicy {
+                @{ fresh = @(); inPlace = @(@{ id = 'test'; integration = $false; anyOf = @('temporary test failure') }) }
+            }
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{ Name = 'terraform'; Version = 'test'; Source = 'cache'; Path = '/fake/terraform' }
+            }
+            Mock Invoke-AvmProcess {
+                param($ArgumentList)
+                if ($ArgumentList[0] -eq 'apply') {
+                    return [pscustomobject]@{ ExitCode = 1; StdOut = ''; StdErr = 'temporary test failure' }
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            $result = Invoke-AvmTerraformTestE2e -Context $C -MaxRetry 1
+            Should -Invoke Invoke-AvmProcess -Exactly 2 -ParameterFilter { $ArgumentList[0] -eq 'apply' }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'destroy' }
+            Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -eq 'plan' }
+            $result
+        }
+        $result.Status | Should -Be 'fail'
+        ($result.Issues | Where-Object Severity -eq 'error').Message | Should -Match 'after 1 retries'
+    }
+
     It 'does not retry an apply failure that is not a transient capacity error' {
         New-Item -ItemType Directory -Path (Join-Path $script:moduleDir 'examples' 'default') -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $script:moduleDir 'examples' 'default' 'main.tf') -Value '# example' -Encoding utf8
@@ -821,12 +884,13 @@ Describe 'Test-AvmTerraformTransientError' {
     }
 
     It 'requires both criteria in each all-match policy' -ForEach @(
-        @{ Property = 'locationIneligiblePatterns' }
-        @{ Property = 'e2eAllMessagePatterns' }
+        @{ Id = 'location-ineligible' }
+        @{ Id = 'quota-request' }
     ) {
         $root = Join-Path $script:moduleRoot 'Resources' 'terraform'
         $policy = Get-Content -LiteralPath (Join-Path $root 'retry-policy.json') -Raw | ConvertFrom-Json -AsHashtable
-        $policy[$Property] = @($policy[$Property][0])
+        $rule = $policy['fresh'] | Where-Object { $_['id'] -eq $Id }
+        $rule['allOf'] = @($rule['allOf'][0])
         $json = ConvertTo-Json -InputObject $policy -Depth 10
         $schema = Get-Content -LiteralPath (Join-Path $root 'retry-policy.schema.json') -Raw
         Test-Json -Json $json -Schema $schema -ErrorAction SilentlyContinue | Should -BeFalse

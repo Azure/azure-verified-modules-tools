@@ -19,8 +19,7 @@ function Test-AvmTerraformLocationIneligibleError {
         [string] $Output
     )
 
-    foreach ($pattern in (Get-AvmTerraformRetryPolicy)['locationIneligiblePatterns']) {
-        if ($Output -notmatch $pattern) { return $false }
-    }
-    return $true
+    if ([string]::IsNullOrWhiteSpace($Output)) { return $false }
+    $rule = @((Get-AvmTerraformRetryPolicy)['fresh'] | Where-Object { $_['id'] -ceq 'location-ineligible' })[0]
+    return Test-AvmTerraformRetryRule -Output $Output -Rule $rule
 }

@@ -1,21 +1,30 @@
 {
   "schemaVersion": 1,
-  "sharedMessagePatterns": [
-    "SkuNotAvailable",
-    "Capacity Restrictions",
-    "is currently not available in location",
-    "sku_selector found no deployable VM size",
-    "Allocation ?Failed",
-    "results in exceeding approved",
-    "LocationNotAvailableForResourceGroup",
-    "currently experiencing high demand in .*? region"
+  "fresh": [
+    {
+      "id": "capacity",
+      "integration": true,
+      "anyOf": [
+        "SkuNotAvailable",
+        "Capacity Restrictions",
+        "is currently not available in location",
+        "sku_selector found no deployable VM size",
+        "Allocation ?Failed",
+        "results in exceeding approved",
+        "LocationNotAvailableForResourceGroup",
+        "currently experiencing high demand in .*? region"
+      ]
+    },
+    {
+      "id": "location-ineligible",
+      "integration": true,
+      "allOf": ["\\bRequestDisallowedByAzure\\b", "\\baka\\.ms/locationineligible\\b"]
+    },
+    {
+      "id": "quota-request",
+      "integration": false,
+      "allOf": ["\\brequest\\b", "\\bquota\\b"]
+    }
   ],
-  "locationIneligiblePatterns": [
-    "\\bRequestDisallowedByAzure\\b",
-    "\\baka\\.ms/locationineligible\\b"
-  ],
-  "e2eAllMessagePatterns": [
-    "\\brequest\\b",
-    "\\bquota\\b"
-  ]
+  "inPlace": []
 }

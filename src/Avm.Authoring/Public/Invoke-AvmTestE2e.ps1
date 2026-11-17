@@ -72,7 +72,8 @@ function Invoke-AvmTestE2e {
         Terraform runs init, apply, idempotency plan and destroy for runnable
         examples/. MaxRetry controls Terraform transient apply retries, including
         errors containing both "request" and "quota" in one error block.
-        Retries destroy the example first; fixed locations are not changed.
+        Fresh retries destroy the example first; fixed locations are not changed.
+        Configured in-place retries reuse the existing state without a destroy.
         After pre.ps1 and .env loading, the shared Terraform authentication
         preflight checks ARM_* inputs or an enabled Azure CLI subscription.
         It passes CLI subscription/tenant IDs only to child processes and never

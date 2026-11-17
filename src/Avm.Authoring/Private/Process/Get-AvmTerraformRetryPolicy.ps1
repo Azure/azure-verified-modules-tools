@@ -12,8 +12,18 @@ function Get-AvmTerraformRetryPolicy {
         }
         try {
             $policy = ConvertFrom-AvmStrictJson -Json $json -RejectCaseInsensitiveDuplicates
-            foreach ($pattern in @($policy['sharedMessagePatterns']) + @($policy['locationIneligiblePatterns']) + @($policy['e2eAllMessagePatterns'])) {
-                $null = [regex]::new($pattern)
+            $ids = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            foreach ($rule in @($policy['fresh']) + @($policy['inPlace'])) {
+                if (-not $ids.Add($rule['id'])) {
+                    throw [System.ArgumentException]::new("Duplicate Terraform retry rule '$($rule['id'])'.")
+                }
+                foreach ($pattern in @($rule['anyOf']) + @($rule['allOf'])) {
+                    if ($null -ne $pattern) { $null = [regex]::new($pattern) }
+                }
+            }
+            $locationRules = @($policy['fresh'] | Where-Object { $_['id'] -ceq 'location-ineligible' -and $_['integration'] -and $_.Contains('allOf') })
+            if ($locationRules.Count -ne 1) {
+                throw [System.ArgumentException]::new('The location-ineligible rule must be a shared fresh all-match rule.')
             }
         }
         catch [System.ArgumentException] {

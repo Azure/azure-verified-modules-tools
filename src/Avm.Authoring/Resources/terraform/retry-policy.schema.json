@@ -2,14 +2,36 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "sharedMessagePatterns", "locationIneligiblePatterns", "e2eAllMessagePatterns"],
+  "required": ["schemaVersion", "fresh", "inPlace"],
   "properties": {
     "schemaVersion": { "const": 1 },
-    "sharedMessagePatterns": { "$ref": "#/definitions/patterns" },
-    "locationIneligiblePatterns": { "allOf": [{ "$ref": "#/definitions/patterns" }], "minItems": 2 },
-    "e2eAllMessagePatterns": { "allOf": [{ "$ref": "#/definitions/patterns" }], "minItems": 2 }
+    "fresh": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/rule" } },
+    "inPlace": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          { "$ref": "#/definitions/rule" },
+          { "properties": { "integration": { "const": false } } }
+        ]
+      }
+    }
   },
   "definitions": {
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "integration"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "integration": { "type": "boolean" },
+        "anyOf": { "$ref": "#/definitions/patterns" },
+        "allOf": { "allOf": [{ "$ref": "#/definitions/patterns" }], "minItems": 2 }
+      },
+      "oneOf": [
+        { "required": ["anyOf"] },
+        { "required": ["allOf"] }
+      ]
+    },
     "patterns": {
       "type": "array",
       "minItems": 1,

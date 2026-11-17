@@ -25,35 +25,5 @@ function Test-AvmTerraformTransientError {
         [switch] $BuiltInOnly
     )
 
-    if ([string]::IsNullOrWhiteSpace($Output)) {
-        return $false
-    }
-
-    if (Test-AvmTerraformLocationIneligibleError -Output $Output) {
-        return $true
-    }
-
-    $policy = Get-AvmTerraformRetryPolicy
-    $patterns = @($policy['sharedMessagePatterns'])
-
-    if (-not $BuiltInOnly) {
-        foreach ($block in ($Output -split '\r?\n[ \t]*\r?\n')) {
-            $allMatch = $true
-            foreach ($pattern in $policy['e2eAllMessagePatterns']) {
-                if ($block -notmatch $pattern) {
-                    $allMatch = $false
-                    break
-                }
-            }
-            if ($allMatch) { return $true }
-        }
-        if (-not [string]::IsNullOrWhiteSpace($env:AVM_E2E_RETRY_PATTERN)) {
-            $patterns += $env:AVM_E2E_RETRY_PATTERN
-        }
-    }
-
-    return [regex]::IsMatch(
-        $Output,
-        ($patterns -join '|'),
-        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    return -not [string]::IsNullOrEmpty((Get-AvmTerraformRetryMode -Output $Output -BuiltInOnly:$BuiltInOnly))
 }
