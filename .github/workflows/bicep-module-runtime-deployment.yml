@@ -23,7 +23,7 @@ permissions: {}
 
 jobs:
   deploy:
-    name: 'E2E deployment: ${{ fromJSON(inputs.testCase).SubscriptionName }}'
+    name: "E2E test (${{ fromJSON(inputs.testCase).IsRequired && 'required' || 'optional' }}): ${{ fromJSON(inputs.testCase).Name }} - ${{ fromJSON(inputs.testCase).SubscriptionName }}"
     environment: avm-validation
     runs-on: ubuntu-latest
     permissions:

@@ -84,7 +84,7 @@ Describe 'Component: Bicep Pester unit tier' -Tag 'Component' {
         Import-Module -FullyQualifiedName @{ ModuleName = 'powershell-yaml'; RequiredVersion = '0.4.12' }
         $workflow = ConvertFrom-Yaml (Get-Content -LiteralPath (
                 Join-Path $script:repoRoot '.github' 'workflows' 'bicep-module-runtime.yml') -Raw)
-        $unitRun = @($workflow.jobs.'unit-test'.steps | Where-Object name -EQ 'Run unit tests')[0].run
+        $unitRun = @($workflow.jobs.'unit-test'.steps | Where-Object name -EQ 'Unit tests')[0].run
         $saved = @{}
         foreach ($name in @('RUNNER_TEMP', 'GITHUB_OUTPUT', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT',
                 'MODULE_PATH', 'AVM_AUTHORING_MODULE', 'AVM_AUTHORING_ARTIFACT_MANIFEST_SHA256')) {
@@ -185,7 +185,7 @@ Describe 'Component: Bicep Pester unit tier' -Tag 'Component' {
         Import-Module -FullyQualifiedName @{ ModuleName = 'powershell-yaml'; RequiredVersion = '0.4.12' }
         $workflow = ConvertFrom-Yaml (Get-Content -LiteralPath (
                 Join-Path $script:repoRoot '.github' 'workflows' 'bicep-module-runtime.yml') -Raw)
-        $prRun = @($workflow.jobs.'pr-check'.steps | Where-Object name -EQ 'Run static checks')[0].run
+        $prRun = @($workflow.jobs.'pr-check'.steps | Where-Object name -EQ 'Static checks')[0].run
         $savedModule = [Environment]::GetEnvironmentVariable('AVM_AUTHORING_MODULE', 'Process')
         try {
             $env:AVM_AUTHORING_MODULE = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Avm.Authoring.psd1'

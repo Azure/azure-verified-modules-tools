@@ -316,7 +316,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             ($job | ConvertTo-Json -Depth 20) | Should -Not -Match '\bsecrets\b|AVM_CI_|azure/login|environment:'
         }
         $runtime.jobs.'pr-check'.steps[-1].run | Should -Match 'avm -SkipModuleVersionCheck pr-check --passthru'
-        $unitResult = @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Run unit tests')
+        $unitResult = @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Unit tests')
         $unitResult | Should -HaveCount 1
         $unitResult[0].id | Should -BeExactly 'unit-result'
         $unitResult[0].run | Should -Match 'Invoke-AvmTestUnit .* -SkipModuleVersionCheck -Recurse -IncludeCompliance'
@@ -330,7 +330,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $unitArtifact[0].with.path | Should -BeExactly '${{ steps.unit-result.outputs.resultPath }}'
         @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Report failed unit tests')[0].if |
             Should -BeExactly "steps.unit-result.outputs.failed == 'True'"
-        $unitRun = @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Run unit tests')[0].run
+        $unitRun = @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Unit tests')[0].run
         $unitRun | Should -Match 'Authored unit tests did not return a validated child identity receipt'
         $unitRun | Should -Match '\$document\.authoring = \[ordered\]@\{'
         foreach ($field in @(
@@ -368,8 +368,8 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $prCheck.jobs.check.with.workflowInput | Should -BeExactly '${{ needs.initialize.outputs.workflowInput }}'
         $prCheck.jobs.check.with.baseCommit | Should -BeExactly '${{ needs.initialize.outputs.baseCommit }}'
 
-        $runtime.jobs.'pr-check'.name | Should -BeExactly 'Run static checks'
-        $runtime.jobs.'unit-test'.name | Should -BeExactly 'Run unit tests'
+        $runtime.jobs.'pr-check'.name | Should -BeExactly 'Static checks'
+        $runtime.jobs.'unit-test'.name | Should -BeExactly 'Unit tests'
         $runtime.jobs.'discover-examples'.name | Should -BeExactly 'Select E2E tests and subscriptions'
         $script:workflows['bicep-module-runtime-e2e'].jobs.'select-deployments'.name |
             Should -BeExactly '${{ inputs.modulePath }}: Select E2E tests and subscriptions'
@@ -377,8 +377,8 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Check out module repository'
             @($runtime.jobs[$jobName].steps | ForEach-Object name) | Should -Contain 'Download AVM tools from build job'
         }
-        @($runtime.jobs.'pr-check'.steps | ForEach-Object name) | Should -Contain 'Run static checks'
-        @($runtime.jobs.'unit-test'.steps | ForEach-Object name) | Should -Contain 'Run unit tests'
+        @($runtime.jobs.'pr-check'.steps | ForEach-Object name) | Should -Contain 'Static checks'
+        @($runtime.jobs.'unit-test'.steps | ForEach-Object name) | Should -Contain 'Unit tests'
         @($runtime.jobs.'discover-examples'.steps | ForEach-Object name) | Should -Contain 'Select E2E tests and subscriptions'
         $runtime.jobs.'e2e-test'.needs | Should -BeExactly 'discover-examples'
         $runtime.jobs.'e2e-test'.strategy.'fail-fast' | Should -BeFalse
@@ -386,7 +386,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $runtime.jobs.'e2e-test'.uses | Should -BeExactly './.github/workflows/bicep-module-runtime-deployment.yml'
     }
 
-    It 'names both E2E matrix callers by classification and scenario, and the child by subscription' {
+    It 'names both E2E matrix callers and the visible child by classification and scenario' {
         $runtime = $script:workflows['bicep-module-runtime'].jobs.'e2e-test'
         $alternate = $script:workflows['bicep-module-runtime-e2e'].jobs.deploy
         $deployment = $script:workflows['bicep-module-runtime-deployment']
@@ -397,7 +397,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             $job.name | Should -BeExactly "Run `${{ matrix.testCase.IsRequired && 'Required' || 'Optional' }} E2E test: `${{ matrix.testCase.Name }}"
             $job.with.testCase | Should -BeExactly '${{ toJSON(matrix.testCase) }}'
         }
-        $deployment.jobs.deploy.name | Should -BeExactly 'E2E deployment: ${{ fromJSON(inputs.testCase).SubscriptionName }}'
+        $deployment.jobs.deploy.name | Should -BeExactly "E2E test (`${{ fromJSON(inputs.testCase).IsRequired && 'required' || 'optional' }}): `${{ fromJSON(inputs.testCase).Name }} - `${{ fromJSON(inputs.testCase).SubscriptionName }}"
     }
 
     It 'classifies exact scenario names case-sensitively for <ModulePath> in <Workflow>' -ForEach @(
@@ -459,7 +459,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             $selector.run | Should -Match 'Prepared Avm\.Authoring discovery package does not match'
             $selector.run | Should -Not -Match 'Install-Module|Install-PSResource'
         }
-        @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Run unit tests')[0].run |
+        @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Unit tests')[0].run |
             Should -Match 'Authored unit setup did not retain the exact admitted Avm\.Authoring package'
     }
 
