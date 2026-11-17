@@ -203,9 +203,9 @@ function Merge-AvmTflintConfig {
             }
         ).Count -gt 0
         $currentPlugin = [regex]::Matches($body, '(?m)^\s*(?:version|source|enabled)\s*=').Count -eq 3 -and
-            $knownPluginVersion -and
-            $body -cmatch '(?m)^\s*source\s*=\s*"github\.com/Azure/tflint-ruleset-avm"\s*$' -and
-            $body -cmatch '(?m)^\s*enabled\s*=\s*true\s*$'
+        $knownPluginVersion -and
+        $body -cmatch '(?m)^\s*source\s*=\s*"github\.com/Azure/tflint-ruleset-avm"\s*$' -and
+        $body -cmatch '(?m)^\s*enabled\s*=\s*true\s*$'
     }
     if ($currentPlugin) {
         $legacyRules = [ordered]@{
