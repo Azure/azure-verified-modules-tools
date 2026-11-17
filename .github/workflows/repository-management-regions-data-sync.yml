@@ -29,7 +29,7 @@ jobs:
       vars.REGIONS_DATA_SYNC_ENABLED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    environment: regions-update-data
+    environment: avm
     outputs:
       changed: ${{ steps.compare.outputs.changed }}
     steps:
@@ -51,18 +51,30 @@ jobs:
       - name: Sign in to Azure
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ vars.ARM_BACKEND_CLIENT_ID }}
+          tenant-id: ${{ vars.ARM_BACKEND_TENANT_ID }}
+          subscription-id: ${{ vars.ARM_BACKEND_SUBSCRIPTION_ID }}
 
       - name: Regenerate locations data
         working-directory: regions
+        env:
+          ARM_BACKEND_SUBSCRIPTION_ID: ${{ vars.ARM_BACKEND_SUBSCRIPTION_ID }}
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $subscriptionId = [guid]::Empty
+          if (-not [guid]::TryParse($env:ARM_BACKEND_SUBSCRIPTION_ID, [ref]$subscriptionId) -or $subscriptionId -eq [guid]::Empty) {
+            throw 'The repo-sync source subscription is missing or invalid.'
+          }
+
           $cachePath = Join-Path $PWD 'modules' 'cached-data' 'locations.tf.json'
           Copy-Item -LiteralPath $cachePath -Destination "$cachePath.original"
-          $locations = az rest --method GET --uri "/subscriptions/$env:AZURE_SUBSCRIPTION_ID/locations?api-version=2023-07-01" |
+          $locations = az rest --method GET --uri "/subscriptions/$env:ARM_BACKEND_SUBSCRIPTION_ID/locations?api-version=2023-07-01" |
             ConvertFrom-Json
+          if ($locations.value -isnot [array] -or $locations.value.Count -eq 0) {
+            throw 'Azure did not return a nonempty locations collection.'
+          }
+
           $data = [ordered]@{
             locals = [ordered]@{
               locations_cached = [ordered]@{
@@ -89,6 +101,7 @@ jobs:
           }
 
           'changed=true' >> $env:GITHUB_OUTPUT
+          $global:LASTEXITCODE = 0
 
       - name: Upload generated regions data
         if: steps.compare.outputs.changed == 'true'
@@ -148,6 +161,9 @@ jobs:
           name: regions-locations-data
           path: ${{ runner.temp }}/regions-locations-data
 
+      - name: Install AVM authoring for generated-data validation
+        run: Install-PSResource -Name Avm.Authoring -Repository PSGallery -TrustRepository
+
       - name: Validate and publish regions data
         working-directory: regions
         env:
@@ -157,8 +173,19 @@ jobs:
           BASE_BRANCH: ${{ steps.target.outputs.default-branch }}
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           if ($env:AVM_APP_SLUG -cne 'azure-verified-modules') {
             throw 'The configured GitHub App is not azure-verified-modules.'
+          }
+
+          $openPullRequests = @(gh pr list `
+            --repo Azure/terraform-azurerm-avm-utl-regions `
+            --state open `
+            --base $env:BASE_BRANCH `
+            --json headRefName | ConvertFrom-Json)
+          if (@($openPullRequests | Where-Object { $_.headRefName -cmatch '^update[0-9]+$' }).Count -gt 0) {
+            Write-Information 'An existing regions data update is awaiting review; leaving it unchanged.' -InformationAction Continue
+            return
           }
 
           $generatedPath = Join-Path $env:RUNNER_TEMP 'regions-locations-data' 'locations.tf.json'
@@ -177,7 +204,8 @@ jobs:
             throw 'Generated regions data changed an unexpected path.'
           }
 
-          ./avm pre-commit
+          Import-Module Avm.Authoring -Force -ErrorAction Stop
+          avm pre-commit
           $changedPaths = @(git diff --name-only)
           if ($changedPaths.Count -ne 1 -or $changedPaths[0] -cne 'modules/cached-data/locations.tf.json') {
             throw 'Pre-commit changed an unexpected path.'
@@ -206,17 +234,4 @@ jobs:
           $pullRequestNumber = gh pr view $pullRequestUrl --json number --jq '.number'
           if ($pullRequestNumber -notmatch '^[1-9][0-9]*$') {
             throw 'GitHub did not return a valid pull request number.'
-          }
-
-          $openPullRequests = @(gh pr list `
-            --repo Azure/terraform-azurerm-avm-utl-regions `
-            --search 'is:open "feat: update data from Azure" in:title' `
-            --json number,headRefName | ConvertFrom-Json)
-          foreach ($pullRequest in $openPullRequests) {
-            if ($pullRequest.number -ne [int]$pullRequestNumber -and $pullRequest.headRefName -match '^update[0-9]+$') {
-              gh pr close $pullRequest.number `
-                --repo Azure/terraform-azurerm-avm-utl-regions `
-                --delete-branch `
-                --comment "Superseded by #$pullRequestNumber"
-            }
           }
