@@ -1434,6 +1434,17 @@ run "enabled_null" {
 }
 
 It 'keeps business location dependencies required: <Usage>' -ForEach @(
+    @{
+        Usage = 'legacy Interfaces call'
+        Source = @'
+module "interfaces" {
+  source           = "Azure/avm-utl-interfaces/azure"
+  version          = "0.9.0"
+  enable_telemetry = var.enable_telemetry
+  location         = var.location
+}
+'@
+    }
     @{ Usage = 'resource'; Source = "resource `"terraform_data`" `"business`" {`n  input = var.location`n}" }
     @{ Usage = 'local'; Source = 'locals { business_region = var.location }' }
     @{ Usage = 'telemetry local alias'; Source = "resource `"terraform_data`" `"business`" {`n  input = local.main_location`n}" }
@@ -1595,16 +1606,19 @@ variable "subnet_endpoints" {
         }) -Expected $first
 }
 
-It 'preserves nullable location through the published Interfaces call and a local child' {
-    $root = Join-Path $TestDrive 'interface-registry-location'
+It 'preserves nullable location through Interfaces <InterfacesVersion> and a local child' -ForEach @(
+    @{ InterfacesVersion = '0.10.0' }
+    @{ InterfacesVersion = '0.10.1' }
+) {
+    $root = Join-Path $TestDrive "interface-registry-location-$InterfacesVersion"
     $child = Join-Path $root 'modules' 'record'
     New-TelemetryModule -Root $root
     New-TelemetryModule -Root $child -Child
     Set-Content -LiteralPath (Join-Path $child 'main.tf') -Value 'locals { fixture = true }' -Encoding utf8NoBOM
-    Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @'
+    Set-Content -LiteralPath (Join-Path $root 'main.tf') -Encoding utf8NoBOM -Value @"
 module "interfaces" {
   source           = "Azure/avm-utl-interfaces/azure"
-  version          = "0.10.0"
+  version          = "$InterfacesVersion"
   enable_telemetry = var.enable_telemetry
   location         = var.location
 }
@@ -1612,7 +1626,7 @@ module "interfaces" {
 module "record" {
   source = "./modules/record"
 }
-'@
+"@
     Set-Content -LiteralPath (Join-Path $root 'variables.tf') -Encoding utf8NoBOM -Value @'
 variable "location" {
   type    = string

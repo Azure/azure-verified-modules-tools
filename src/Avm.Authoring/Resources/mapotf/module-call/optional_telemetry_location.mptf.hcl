@@ -26,7 +26,7 @@ locals {
     [
       for name, call in data.module.local_calls.result : name
       if try(trimprefix(lower(call.source), "registry.terraform.io/") == "azure/avm-utl-interfaces/azure", false) &&
-      try(trimspace(trimprefix(call.version, "=")) == "0.10.0", false) &&
+      try(contains(["0.10.0", "0.10.1"], trimspace(trimprefix(call.version, "="))), false) &&
       try(trimspace(call.enable_telemetry) == "var.enable_telemetry", false)
     ]
   ))
