@@ -381,6 +381,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         @($runtime.jobs.'discover-examples'.steps | ForEach-Object name) | Should -Contain 'Select tests and subscriptions'
         $runtime.jobs.'e2e-test'.needs | Should -BeExactly 'discover-examples'
         $runtime.jobs.'e2e-test'.strategy.'fail-fast' | Should -BeFalse
+        $runtime.jobs.'e2e-test'.Contains('continue-on-error') | Should -BeFalse
         $runtime.jobs.'e2e-test'.uses | Should -BeExactly './.github/workflows/bicep-module-runtime-deployment.yml'
     }
 
@@ -502,7 +503,10 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             Should -Be @('authoringRef', 'authoringSource', 'deploymentValidation', 'modulePaths')
         $initializer.inputs.deploymentValidation.default | Should -BeExactly 'true'
         @($initializer.outputs.Keys | Sort-Object) |
-            Should -Be @('admitted', 'authoringArtifact', 'baseCommit', 'hasModules', 'hasOptionalModules', 'hasRequiredModules', 'moduleMatrix', 'optionalMatrix', 'optionalRequested', 'requiredErrors', 'requiredMatrix', 'requiredRequested', 'targetCommit', 'workflowInput')
+            Should -Be @('admitted', 'authoringArtifact', 'baseCommit', 'hasModules', 'hasOptionalModules', 'hasRequiredModules', 'moduleMatrix', 'optionalRequested', 'requiredErrors', 'requiredRequested', 'targetCommit', 'workflowInput')
+        $initialize = $initializer.runs.steps | Where-Object { $_['id'] -eq 'initialize' }
+        $initialize.env.REQUIRED | Should -BeExactly '${{ steps.gate.outputs.required }}'
+        $initialize.env.OPTIONAL | Should -BeExactly '${{ steps.gate.outputs.optional }}'
         $text = Get-Content -LiteralPath (Join-Path $script:root '.github' 'actions' 'bicep-pr-check-initializer' 'action.yml') -Raw
         $text | Should -Match 'Initialize-AvmBicepWorkflowMatrix'
         $text | Should -Match 'BicepWorkflowOrchestration'

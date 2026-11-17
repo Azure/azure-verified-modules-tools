@@ -13,14 +13,24 @@ BeforeAll {
     if ($start -lt 0 -or $end -le $start) { throw 'Scenario selection could not be located.' }
     $selection = [scriptblock]::Create(
         $initialize.Substring($start, $end - $start) +
-        "`n[pscustomobject]@{ required = @(`$requiredModules); optional = @(`$optionalModules); errors = @(`$requiredErrors) }")
+        "`n[pscustomobject]@{ modules = @(`$modules); hasRequired = `$hasRequiredModules; hasOptional = `$hasOptionalModules; errors = @(`$requiredErrors) }")
+    $emit = [scriptblock]::Create($initialize.Substring($start))
 }
 
 Describe 'Bicep PR scenario selection' {
     BeforeEach {
-        $savedFork = [Environment]::GetEnvironmentVariable('FORK')
+        $saved = @{}
+        foreach ($name in @('FORK', 'REQUIRED', 'OPTIONAL', 'ARTIFACT', 'GITHUB_OUTPUT')) {
+            $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+        }
         $env:FORK = 'false'
+        $env:REQUIRED = 'true'
+        $env:OPTIONAL = 'true'
+        $env:ARTIFACT = 'fixture-artifact'
+        $env:GITHUB_OUTPUT = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $outputs = [pscustomobject]@{
+            BaseCommit = 'fixture-base'
+            TargetCommit = 'fixture-target'
             WorkflowInput = @{ deploymentValidation = 'true' }
             ModuleMatrix = @{ Include = @(
                     [pscustomobject]@{
@@ -30,7 +40,7 @@ Describe 'Bicep PR scenario selection' {
                             @{ path = 'tests/e2e/waf-aligned/main.test.bicep'; name = 'waf-aligned'; e2eIgnore = $false }
                             @{ path = 'tests/e2e/max/main.test.bicep'; name = 'max'; e2eIgnore = $false }
                         )
-                        PolicyTestFiles = @()
+                        PolicyTestFiles = @(@{ path = 'tests/e2e/defaults/main.test.bicep'; name = 'defaults' })
                     },
                     [pscustomobject]@{
                         ModulePath = 'avm/utl/example/widget'
@@ -42,18 +52,38 @@ Describe 'Bicep PR scenario selection' {
     }
 
     AfterEach {
-        [Environment]::SetEnvironmentVariable('FORK', $savedFork)
+        foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
     }
 
-    It 'separates required and optional tests and exempts utility modules' {
+    It 'selects <Description> into one shared module entry' -ForEach @(
+        @{ Description = 'no tests'; Required = 'false'; Optional = 'false'; Expected = @(); Route = 'none' }
+        @{ Description = 'required tests'; Required = 'true'; Optional = 'false'; Expected = @('defaults', 'waf-aligned'); Route = 'native' }
+        @{ Description = 'optional tests'; Required = 'false'; Optional = 'true'; Expected = @('max'); Route = 'native' }
+        @{ Description = 'the union'; Required = 'true'; Optional = 'true'; Expected = @('defaults', 'waf-aligned', 'max'); Route = 'native' }
+    ) {
+        $env:REQUIRED = $Required
+        $env:OPTIONAL = $Optional
         $result = & $selection
         $result.errors | Should -BeNullOrEmpty
-        $result.required | Should -HaveCount 1
-        $result.optional | Should -HaveCount 1
-        @($result.required[0].moduleTestFilePaths | ConvertFrom-Json | ForEach-Object name) |
-            Should -Be @('defaults', 'waf-aligned')
-        @($result.optional[0].moduleTestFilePaths | ConvertFrom-Json | ForEach-Object name) |
-            Should -Be @('max')
+        $result.modules | Should -HaveCount 2
+        $result.hasRequired | Should -BeTrue
+        $result.hasOptional | Should -BeTrue
+        $result.modules[0].e2eRoute | Should -BeExactly $Route
+        $result.modules[1].e2eRoute | Should -BeExactly 'none'
+        @($result.modules[0].moduleTestFilePaths | ConvertFrom-Json | ForEach-Object name) | Should -Be $Expected
+        @($result.modules[0].psRuleModuleTestFilePaths | ConvertFrom-Json | ForEach-Object name) | Should -Be @('defaults')
+    }
+
+    It 'disables test selection for forks or deployment-disabled workflow input' -ForEach @(
+        @{ Fork = 'true'; Deployment = 'true' }
+        @{ Fork = 'false'; Deployment = 'false' }
+    ) {
+        $env:FORK = $Fork
+        $outputs.WorkflowInput.deploymentValidation = $Deployment
+        $result = & $selection
+        $result.hasRequired | Should -BeTrue
+        $result.modules[0].e2eRoute | Should -BeExactly 'none'
+        $result.modules[0].moduleTestFilePaths | Should -BeExactly '[]'
     }
 
     It 'warns about a missing scenario while requiring the existing one' {
@@ -65,9 +95,9 @@ Describe 'Bicep PR scenario selection' {
         $warning | Should -HaveCount 1
         $warning[0].MessageData | Should -Match '^::warning::.*waf-aligned.*missing'
         $result.errors | Should -BeNullOrEmpty
-        $result.required | Should -HaveCount 1
-        @($result.required[0].moduleTestFilePaths | ConvertFrom-Json | ForEach-Object name) |
-            Should -Be @('defaults')
+        $result.hasRequired | Should -BeTrue
+        @($result.modules[0].moduleTestFilePaths | ConvertFrom-Json | ForEach-Object name) |
+            Should -Be @('defaults', 'max')
     }
 
     It 'warns and does not require E2E when both scenarios are missing' {
@@ -77,8 +107,10 @@ Describe 'Bicep PR scenario selection' {
         @($records | Where-Object { $_ -is [System.Management.Automation.InformationRecord] }) | Should -HaveCount 2
         $result = $records[-1]
         $result.errors | Should -BeNullOrEmpty
-        $result.required | Should -BeNullOrEmpty
-        $result.optional | Should -HaveCount 1
+        $result.hasRequired | Should -BeFalse
+        $result.hasOptional | Should -BeTrue
+        $result.modules[0].e2eRoute | Should -BeExactly 'native'
+        @($result.modules[0].moduleTestFilePaths | ConvertFrom-Json | ForEach-Object name) | Should -Be @('max')
     }
 
     It 'reports existing ignored required scenarios as errors' {
@@ -86,7 +118,7 @@ Describe 'Bicep PR scenario selection' {
         $result = & $selection
         $result.errors | Should -Not -BeNullOrEmpty
         ($result.errors -join ' ') | Should -Match 'ignored.*waf-aligned'
-        $result.required | Should -HaveCount 1
+        $result.hasRequired | Should -BeTrue
     }
 
     It 'warns for a missing parent scenario even when a child scenario exists' {
@@ -96,8 +128,70 @@ Describe 'Bicep PR scenario selection' {
             Should -Match 'waf-aligned.*missing'
         $result = $records[-1]
         $result.errors | Should -BeNullOrEmpty
-        @($result.required[0].moduleTestFilePaths | ConvertFrom-Json | ForEach-Object name) |
-            Should -Be @('defaults', 'waf-aligned')
+        @($result.modules[0].moduleTestFilePaths | ConvertFrom-Json | ForEach-Object name) |
+            Should -Be @('defaults', 'waf-aligned', 'max')
+    }
+
+    It 'exempts utility modules from required checks but selects any matching tests' {
+        $outputs.ModuleMatrix.Include = @($outputs.ModuleMatrix.Include[1])
+        $outputs.ModuleMatrix.Include[0].TestFiles = @(
+            @{ path = 'tests/e2e/defaults/main.test.bicep'; name = 'defaults'; e2eIgnore = $true }
+        )
+        $env:OPTIONAL = 'false'
+        $records = @(& $selection 6>&1)
+        @($records | Where-Object { $_ -is [System.Management.Automation.InformationRecord] }) | Should -BeNullOrEmpty
+        $result = $records[-1]
+        $result.errors | Should -BeNullOrEmpty
+        $result.hasRequired | Should -BeFalse
+        $result.modules[0].e2eRoute | Should -BeExactly 'native'
+        @($result.modules[0].moduleTestFilePaths | ConvertFrom-Json | ForEach-Object name) | Should -Be @('defaults')
+    }
+
+    It 'retains optional ignored records for the runtime to skip' {
+        $outputs.ModuleMatrix.Include[0].TestFiles[2].e2eIgnore = $true
+        $env:REQUIRED = 'false'
+        $result = & $selection
+        $selected = @($result.modules[0].moduleTestFilePaths | ConvertFrom-Json)
+        $selected | Should -HaveCount 1
+        $selected[0].name | Should -BeExactly 'max'
+        $selected[0].e2eIgnore | Should -BeTrue
+    }
+
+    It 'emits a single selected module matrix and preserves gate outputs' {
+        $env:REQUIRED = 'false'
+        & $emit
+        $result = @{}
+        foreach ($line in Get-Content -LiteralPath $env:GITHUB_OUTPUT) {
+            $parts = $line -split '=', 2
+            $result[$parts[0]] = $parts[1]
+        }
+        $result.hasModules | Should -BeExactly 'true'
+        $result.hasRequiredModules | Should -BeExactly 'true'
+        $result.hasOptionalModules | Should -BeExactly 'true'
+        $result.requiredErrors | Should -BeExactly '[]'
+        $result.authoringArtifact | Should -BeExactly 'fixture-artifact'
+        $result.baseCommit | Should -BeExactly 'fixture-base'
+        $result.targetCommit | Should -BeExactly 'fixture-target'
+        $result.ContainsKey('requiredMatrix') | Should -BeFalse
+        $result.ContainsKey('optionalMatrix') | Should -BeFalse
+        $matrix = $result.moduleMatrix | ConvertFrom-Json
+        $matrix.include | Should -HaveCount 2
+        $matrix.include[0].e2eRoute | Should -BeExactly 'native'
+        @($matrix.include[0].moduleTestFilePaths | ConvertFrom-Json | ForEach-Object name) | Should -Be @('max')
+    }
+
+    It 'emits an empty matrix and false gate flags when no modules exist' {
+        $outputs.ModuleMatrix.Include = @()
+        & $emit
+        $result = @{}
+        foreach ($line in Get-Content -LiteralPath $env:GITHUB_OUTPUT) {
+            $parts = $line -split '=', 2
+            $result[$parts[0]] = $parts[1]
+        }
+        $result.hasModules | Should -BeExactly 'false'
+        $result.hasRequiredModules | Should -BeExactly 'false'
+        $result.hasOptionalModules | Should -BeExactly 'false'
+        @((ConvertFrom-Json $result.moduleMatrix).include) | Should -BeNullOrEmpty
     }
 }
 
@@ -144,19 +238,25 @@ Describe 'Bicep PR label admission' {
         $result.optional | Should -BeExactly 'false'
     }
 
-    It 'supports label removal and the manual deployment override' {
+    It 'supports label removal' {
         $env:EVENT_ACTION = 'unlabeled'
         $env:PR_LABELS = '[]'
         & ([scriptblock]::Create($gate))
         $result = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
         $result.admitted | Should -BeExactly 'true'
         $result.required | Should -BeExactly 'false'
+    }
+
+    It 'uses the manual deployment override to select both sets or neither' -ForEach @(
+        @{ Deployment = 'true'; Expected = 'true' }
+        @{ Deployment = 'false'; Expected = 'false' }
+    ) {
         $env:EVENT_NAME = 'workflow_dispatch'
-        $env:DEPLOYMENT_VALIDATION = 'true'
-        $env:GITHUB_OUTPUT = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $env:DEPLOYMENT_VALIDATION = $Deployment
         & ([scriptblock]::Create($gate))
         $result = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
-        $result.required | Should -BeExactly 'true'
-        $result.optional | Should -BeExactly 'true'
+        $result.required | Should -BeExactly $Expected
+        $result.optional | Should -BeExactly $Expected
+        $result.deployment | Should -BeExactly $Expected
     }
 }

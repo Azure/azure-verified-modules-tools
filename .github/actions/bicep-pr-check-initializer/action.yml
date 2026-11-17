@@ -20,22 +20,16 @@ outputs:
     description: Whether the calling event is an admitted Bicep check event.
     value: ${{ steps.initialize.outputs.admitted }}
   moduleMatrix:
-    description: JSON module matrix for one caller-owned runtime group per module.
+    description: JSON matrix with one runtime group per module and only the requested E2E tests.
     value: ${{ steps.initialize.outputs.moduleMatrix }}
   hasModules:
     description: Whether moduleMatrix contains runnable modules.
     value: ${{ steps.initialize.outputs.hasModules }}
-  requiredMatrix:
-    description: Module matrix for required E2E tests.
-    value: ${{ steps.initialize.outputs.requiredMatrix }}
-  optionalMatrix:
-    description: Module matrix for optional E2E tests.
-    value: ${{ steps.initialize.outputs.optionalMatrix }}
   hasRequiredModules:
-    description: Whether required E2E tests apply.
+    description: Whether any non-utility module has existing required E2E tests, regardless of request.
     value: ${{ steps.initialize.outputs.hasRequiredModules }}
   hasOptionalModules:
-    description: Whether optional E2E tests exist.
+    description: Whether optional E2E tests exist, regardless of request.
     value: ${{ steps.initialize.outputs.hasOptionalModules }}
   requiredRequested:
     description: Whether required E2E tests were requested.
@@ -44,7 +38,7 @@ outputs:
     description: Whether optional E2E tests were requested.
     value: ${{ steps.gate.outputs.optional }}
   requiredErrors:
-    description: Required scenarios that are ignored.
+    description: JSON array of ignored required scenarios in non-utility modules, regardless of request.
     value: ${{ steps.initialize.outputs.requiredErrors }}
   baseCommit:
     description: Validated matrix comparison base.
@@ -268,6 +262,8 @@ runs:
         ADMITTED: ${{ steps.gate.outputs.admitted }}
         FORK: ${{ steps.gate.outputs.fork }}
         DEPLOYMENT: ${{ steps.gate.outputs.deployment }}
+        REQUIRED: ${{ steps.gate.outputs.required }}
+        OPTIONAL: ${{ steps.gate.outputs.optional }}
         TARGET_COMMIT: ${{ github.sha }}
         EVENT_NAME: ${{ github.event_name }}
         PULL_REQUEST_HEAD_COMMIT: ${{ github.event.pull_request.head.sha }}
@@ -283,8 +279,6 @@ runs:
             'targetCommit='
             'workflowInput={}'
             'moduleMatrix={"include":[]}'
-            'requiredMatrix={"include":[]}'
-            'optionalMatrix={"include":[]}'
             'hasRequiredModules=false'
             'hasOptionalModules=false'
             'requiredErrors=[]'
@@ -311,19 +305,26 @@ runs:
         }
         $outputs = Initialize-AvmBicepWorkflowMatrix @parameters
         $modules = [Collections.Generic.List[object]]::new()
-        $requiredModules = [Collections.Generic.List[object]]::new()
-        $optionalModules = [Collections.Generic.List[object]]::new()
+        $hasRequiredModules = $false
+        $hasOptionalModules = $false
         $requiredErrors = [Collections.Generic.List[string]]::new()
         foreach ($entry in $outputs.ModuleMatrix.Include) {
-          $modules.Add([pscustomobject]@{
-              modulePath = [string]$entry.ModulePath
-              moduleTestFilePaths = ConvertTo-Json -InputObject @($entry.TestFiles) -Depth 20 -Compress
-              psRuleModuleTestFilePaths = ConvertTo-Json -InputObject @($entry.PolicyTestFiles) -Depth 20 -Compress
-              e2eRoute = if ($env:FORK -ceq 'true' -or $outputs.WorkflowInput.deploymentValidation -cne 'true') { 'none' } else { 'native' }
-            })
           $tests = @($entry.TestFiles)
           $requiredTests = @($tests | Where-Object { $_.name -cin @('defaults', 'waf-aligned') })
           $optionalTests = @($tests | Where-Object { $_.name -cnotin @('defaults', 'waf-aligned') })
+          $selectedTests = @()
+          if ($env:FORK -cne 'true' -and $outputs.WorkflowInput.deploymentValidation -ceq 'true') {
+            $selectedTests = @($tests | Where-Object {
+                ($env:REQUIRED -ceq 'true' -and $_.name -cin @('defaults', 'waf-aligned')) -or
+                ($env:OPTIONAL -ceq 'true' -and $_.name -cnotin @('defaults', 'waf-aligned'))
+              })
+          }
+          $modules.Add([pscustomobject]@{
+              modulePath = [string]$entry.ModulePath
+              moduleTestFilePaths = ConvertTo-Json -InputObject $selectedTests -Depth 20 -Compress
+              psRuleModuleTestFilePaths = ConvertTo-Json -InputObject @($entry.PolicyTestFiles) -Depth 20 -Compress
+              e2eRoute = if ($selectedTests.Count -gt 0) { 'native' } else { 'none' }
+            })
           if (-not ([string]$entry.ModulePath).StartsWith('avm/utl/', [StringComparison]::Ordinal)) {
             foreach ($scenario in @('defaults', 'waf-aligned')) {
               $expectedPath = "tests/e2e/$scenario/main.test.bicep"
@@ -338,17 +339,11 @@ runs:
               $requiredErrors.Add("$($entry.ModulePath): ignored required scenario $($ignored.path)")
             }
             if ($requiredTests.Count -gt 0) {
-              $requiredModules.Add([pscustomobject]@{
-                  modulePath = [string]$entry.ModulePath
-                  moduleTestFilePaths = ConvertTo-Json -InputObject $requiredTests -Depth 20 -Compress
-                })
+              $hasRequiredModules = $true
             }
           }
           if ($optionalTests.Count -gt 0) {
-            $optionalModules.Add([pscustomobject]@{
-                modulePath = [string]$entry.ModulePath
-                moduleTestFilePaths = ConvertTo-Json -InputObject $optionalTests -Depth 20 -Compress
-              })
+            $hasOptionalModules = $true
           }
         }
         $values = [ordered]@{
@@ -358,10 +353,8 @@ runs:
           workflowInput = ConvertTo-Json -InputObject $outputs.WorkflowInput -Depth 20 -Compress
           moduleMatrix = ConvertTo-Json -InputObject @{ include = @($modules) } -Depth 20 -Compress
           hasModules = ($modules.Count -gt 0).ToString().ToLowerInvariant()
-          requiredMatrix = ConvertTo-Json -InputObject @{ include = @($requiredModules) } -Depth 20 -Compress
-          optionalMatrix = ConvertTo-Json -InputObject @{ include = @($optionalModules) } -Depth 20 -Compress
-          hasRequiredModules = ($requiredModules.Count -gt 0).ToString().ToLowerInvariant()
-          hasOptionalModules = ($optionalModules.Count -gt 0).ToString().ToLowerInvariant()
+          hasRequiredModules = $hasRequiredModules.ToString().ToLowerInvariant()
+          hasOptionalModules = $hasOptionalModules.ToString().ToLowerInvariant()
           requiredErrors = ConvertTo-Json -InputObject @($requiredErrors) -Compress
           authoringArtifact = $env:ARTIFACT
         }
