@@ -23,6 +23,7 @@ public class AvmCatalogStubHandler : HttpMessageHandler
     public List<string> Requested = new List<string>();
     public Dictionary<string, int> AttemptsByUri = new Dictionary<string, int>();
     public Dictionary<string, int> TransientByUri = new Dictionary<string, int>();
+    public Dictionary<string, int> InvalidByUri = new Dictionary<string, int>();
     public Dictionary<string, int> StatusByUri = new Dictionary<string, int>();
     public HashSet<string> FaultUris = new HashSet<string>();
 
@@ -52,7 +53,15 @@ public class AvmCatalogStubHandler : HttpMessageHandler
             status = 200;
         }
         var response = new HttpResponseMessage((HttpStatusCode)status);
-        response.Content = new StringContent("{\"uri\":\"" + uri + "\"}");
+        if (InvalidByUri.TryGetValue(uri, out remaining) && remaining > 0)
+        {
+            InvalidByUri[uri] = remaining - 1;
+            response.Content = new StringContent("{\"temporary\":true}");
+        }
+        else
+        {
+            response.Content = new StringContent("{\"uri\":\"" + uri + "\",\"valid\":true}");
+        }
         return Task.FromResult(response);
     }
 }
@@ -226,6 +235,31 @@ Describe 'Component: module catalog HTTP boundary' -Tag Component {
             $results[1].StatusCode | Should -Be 200
             $handler.AttemptsByUri[$flaky] | Should -Be 3
             $handler.AttemptsByUri['https://mcr.microsoft.com/v2/bicep/avm/res/test/stable/tags/list'] | Should -Be 1
+        }
+    }
+
+    It 'retries and identifies an unexpected successful response contract' {
+        Use-CatalogStubHandler {
+            param($handler)
+            $flaky = 'https://registry.terraform.io/v1/modules/Azure/test/azurerm'
+            $handler.InvalidByUri[$flaky] = 1
+            $requests = @(
+                New-AvmCatalogRequest -Uri $flaky -ResponseValidator {
+                    param($Response)
+                    $document = Get-AvmCatalogResponseJson -Response $Response
+                    if (-not $document.Contains('valid')) {
+                        throw [System.IO.InvalidDataException]::new("Unexpected response contract for $flaky.")
+                    }
+                }
+            )
+            $result = Invoke-AvmCatalogRequestSet -Requests $requests
+            $result.StatusCode | Should -Be 200
+            ($result.Content | ConvertFrom-Json).valid | Should -BeTrue
+            $handler.AttemptsByUri[$flaky] | Should -Be 2
+
+            $handler.InvalidByUri[$flaky] = 2
+            { Invoke-AvmCatalogRequestSet -Requests $requests -MaxAttempt 2 } |
+                Should -Throw "*Unexpected response contract for $flaky.*"
         }
     }
 
