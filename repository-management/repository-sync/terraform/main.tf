@@ -35,7 +35,6 @@ module "github" {
   source = "./modules/github"
 
   repository_creation_mode_enabled                           = var.repository_creation_mode_enabled
-  terraform_pr_test_gates_enabled                            = var.terraform_pr_test_gates_enabled
   github_repository_owner                                    = var.github_repository_owner
   github_repository_name                                     = var.github_repository_name
   github_repository_pr_check_environment_name                = var.github_repository_pr_check_environment_name

@@ -7,27 +7,6 @@ override_data {
   }
 }
 
-override_data {
-  target = data.github_team.this["approvers"]
-  values = {
-    id = "501"
-  }
-}
-
-override_data {
-  target = data.github_team.this["additional-approvers"]
-  values = {
-    id = "502"
-  }
-}
-
-override_data {
-  target = data.github_team.this["readers"]
-  values = {
-    id = "503"
-  }
-}
-
 override_resource {
   target = github_repository.this
   values = {
@@ -58,26 +37,10 @@ variables {
   github_avm_app_id                                          = "1049636"
   copilot_agent_firewall_allow_list_variable_name            = "COPILOT_AGENT_FIREWALL_ALLOW_LIST_ADDITIONS"
   copilot_agent_firewall_allow_list                          = []
-  github_teams = {
-    approvers = {
-      slug                         = "avm-approvers"
-      repository_access_permission = "push"
-      environment_approval         = true
-    }
-    additional-approvers = {
-      slug                         = "avm-additional-approvers"
-      repository_access_permission = "push"
-      environment_approval         = true
-    }
-    readers = {
-      slug                         = "avm-readers"
-      repository_access_permission = "triage"
-      environment_approval         = false
-    }
-  }
+  github_teams                                               = {}
 }
 
-run "pr_check_retains_its_environment_without_reviewers" {
+run "label_gates_preserve_environments_without_reviewers" {
   command = plan
 
   module {
@@ -92,30 +55,12 @@ run "pr_check_retains_its_environment_without_reviewers" {
   assert {
     condition = (
       github_repository_environment.approval["pr_check"].environment == "pr-check" &&
-      length(github_repository_environment.approval["pr_check"].reviewers) == 0
-    )
-    error_message = "PR check must retain its OIDC environment without a reviewer gate."
-  }
-
-  assert {
-    condition = alltrue([
-      for key in ["integration_test", "examples_test"] : (
-        length(github_repository_environment.approval[key].reviewers) == 1 &&
-        toset(one(github_repository_environment.approval[key].reviewers).teams) == toset([501, 502]) &&
-        github_repository_environment.approval[key].can_admins_bypass &&
-        !github_repository_environment.approval[key].prevent_self_review
-      )
-    ])
-    error_message = "Integration and e2e discovery must retain exactly the configured approval teams and existing bypass/self-review settings."
-  }
-
-  assert {
-    condition = (
+      github_repository_environment.approval["integration_test"].environment == "integration-test" &&
       github_repository_environment.approval["examples_test"].environment == "examples-test" &&
       github_repository_environment.approval["examples_test_execution"].environment == "examples-test-execution" &&
-      length(github_repository_environment.approval["examples_test_execution"].reviewers) == 0
+      alltrue([for environment in github_repository_environment.approval : length(environment.reviewers) == 0])
     )
-    error_message = "E2e execution must use a separate environment without reviewers, leaving discovery and legacy callers protected."
+    error_message = "Test environments must keep their names and have no reviewer gates."
   }
 
   assert {
@@ -132,9 +77,21 @@ run "pr_check_retains_its_environment_without_reviewers" {
     ])
     error_message = "The OIDC subject contract must retain its immutable repository, environment, and reusable-workflow binding."
   }
+
+  assert {
+    condition = (
+      length(github_repository_ruleset.main[0].rules[0].required_status_checks) == 1 &&
+      github_repository_ruleset.main[0].rules[0].required_status_checks[0].strict_required_status_checks_policy &&
+      toset([for check in github_repository_ruleset.main[0].rules[0].required_status_checks[0].required_check : check.context]) == toset([
+        "run managed workflow / Report check status"
+      ]) &&
+      alltrue([for check in github_repository_ruleset.main[0].rules[0].required_status_checks[0].required_check : check.integration_id == 15368])
+    )
+    error_message = "Only the stable check status report from GitHub Actions may gate merging."
+  }
 }
 
-run "custom_names_preserve_the_same_approval_split" {
+run "custom_names_preserve_reviewer_free_environments" {
   command = plan
 
   module {
@@ -151,49 +108,12 @@ run "custom_names_preserve_the_same_approval_split" {
   assert {
     condition = (
       github_repository_environment.approval["pr_check"].environment == "custom-pr-check" &&
-      length(github_repository_environment.approval["pr_check"].reviewers) == 0 &&
       github_repository_environment.approval["integration_test"].environment == "custom-integration" &&
       github_repository_environment.approval["examples_test"].environment == "custom-e2e" &&
       github_repository_environment.approval["examples_test_execution"].environment == "custom-e2e-execution" &&
-      length(github_repository_environment.approval["examples_test_execution"].reviewers) == 0 &&
-      alltrue([
-        for key in ["integration_test", "examples_test"] :
-        toset(one(github_repository_environment.approval[key].reviewers).teams) == toset([501, 502])
-      ])
-    )
-    error_message = "Approval must follow each job's role, not a hard-coded environment name."
-  }
-}
-
-run "label_gate_rollout_removes_approvals_and_requires_status_check" {
-  command = plan
-
-  module {
-    source = "./modules/github"
-  }
-
-  variables {
-    terraform_pr_test_gates_enabled = true
-  }
-
-  assert {
-    condition = (
-      length(github_repository_environment.approval) == 4 &&
       alltrue([for environment in github_repository_environment.approval : length(environment.reviewers) == 0])
     )
-    error_message = "The label-gate rollout must remove reviewers without changing environment addresses."
-  }
-
-  assert {
-    condition = (
-      length(github_repository_ruleset.main[0].rules[0].required_status_checks) == 1 &&
-      github_repository_ruleset.main[0].rules[0].required_status_checks[0].strict_required_status_checks_policy &&
-      toset([for check in github_repository_ruleset.main[0].rules[0].required_status_checks[0].required_check : check.context]) == toset([
-        "run managed workflow / Report check status"
-      ]) &&
-      alltrue([for check in github_repository_ruleset.main[0].rules[0].required_status_checks[0].required_check : check.integration_id == 15368])
-    )
-    error_message = "Only the stable check status report from GitHub Actions may gate merging."
+    error_message = "Custom test environment names must remain distinct and have no reviewer gates."
   }
 }
 
@@ -239,6 +159,7 @@ run "creation_mode_still_omits_test_environments" {
   assert {
     condition = (
       length(github_repository_environment.approval) == 0 &&
+      length(github_repository_ruleset.main) == 0 &&
       length(github_actions_repository_oidc_subject_claim_customization_template.this) == 0 &&
       github_repository_environment.no_approval.environment == "no-approval" &&
       length(github_repository_environment.no_approval.reviewers) == 0

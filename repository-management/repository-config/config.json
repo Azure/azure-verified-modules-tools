@@ -31,26 +31,22 @@
         {
           "name": "azure-verified-modules-module-contributors",
           "description": "Azure Verified Modules Module Contributors.",
-          "repositoryPermission": "push",
-          "environmentApproval": true
+          "repositoryPermission": "push"
         },
         {
           "name": "azure-verified-modules-module-readers",
           "description": "Azure Verified Modules Module Readers.",
-          "repositoryPermission": "triage",
-          "environmentApproval": false
+          "repositoryPermission": "triage"
         },
         {
           "name": "azure-verified-modules-module-owners",
           "description": "AVM module owners. Can approve module metadata changes.",
-          "repositoryPermission": "push",
-          "environmentApproval": false
+          "repositoryPermission": "push"
         },
         {
           "name": "azure-verified-modules-engineering-owners",
           "description": "AVM engineering owners. Required reviewers for CODEOWNERS changes on all repositories and for all changes on tier 1 modules.",
-          "repositoryPermission": "push",
-          "environmentApproval": false
+          "repositoryPermission": "push"
         }
       ]
     },
@@ -73,7 +69,6 @@
       "managedFiles": [
         "canary-ring-0"
       ],
-      "terraformPrTestGatesEnabled": true,
       "repositories": [
         "avm-ptn-example-repo"
       ]
@@ -150,14 +145,12 @@
         {
           "name": "azure-landing-zone-contributors",
           "description": "Contributors of Azure Landing Zone modules.",
-          "repositoryPermission": "push",
-          "environmentApproval": true
+          "repositoryPermission": "push"
         },
         {
           "name": "azure-landing-zone-readers",
           "description": "Readers of Azure Landing Zone modules.",
-          "repositoryPermission": "triage",
-          "environmentApproval": false
+          "repositoryPermission": "triage"
         }
       ]
     },
@@ -185,8 +178,7 @@
         {
           "name": "avm-owners-azure-migrate",
           "description": "Contributors to the Azure Verified Module Azure Migrate Terraform repositories.",
-          "repositoryPermission": "push",
-          "environmentApproval": true
+          "repositoryPermission": "push"
         }
       ]
     }

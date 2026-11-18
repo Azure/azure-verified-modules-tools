@@ -1236,7 +1236,7 @@ Describe 'Terraform effective contract and state wiring' {
         $ordinary | Should -Match 'github_job_workflow_path\s*=\s*var.github_job_workflow_path'
     }
 
-    It 'keeps environment identities stable and removes approvals only with the explicit gate rollout' {
+    It 'keeps environment identities stable for repository federation' {
         $ordinary = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'main.tf')
         $environments = [regex]::Match($ordinary, 'github_repository_environment_names\s*=\s*\[([^\]]+)\]').Groups[1].Value
         [regex]::Matches($environments, 'var\.github_repository_[a-z_]+_environment_name').Value | Should -Be @(
@@ -1247,8 +1247,6 @@ Describe 'Terraform effective contract and state wiring' {
         $ordinary | Should -Match 'github_repository_examples_test_environment_name\s*=\s*var\.github_repository_examples_test_environment_name'
         $github = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'github' 'github.repository.environment.tf')
         $github | Should -Match 'examples_test\s*=\s*var\.github_repository_examples_test_environment_name'
-        $github | Should -Match 'var\.terraform_pr_test_gates_enabled \|\| contains\(\["pr_check", "examples_test_execution"\], each\.key\) \? \[\] : \[local\.environment_approval_team_ids\]'
-        $ordinary | Should -Match 'terraform_pr_test_gates_enabled\s*=\s*var\.terraform_pr_test_gates_enabled'
     }
 
     It 'exposes only the verified BAMI test settings to plan-only consumers' {

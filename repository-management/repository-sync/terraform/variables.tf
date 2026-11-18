@@ -141,13 +141,6 @@ variable "module_name" {
   description = "Description of the AVM (e.g. Azure Landing Zones Management Resources)"
 }
 
-variable "terraform_pr_test_gates_enabled" {
-  type        = bool
-  description = "Enable label-authorized Terraform E2E tests and required merge checks only after the repository caller has been updated and verified."
-  default     = false
-  nullable    = false
-}
-
 variable "github_repository_pr_check_environment_name" {
   type        = string
   description = "Name of the environment used by the PR check job for OIDC, without required reviewers."
@@ -183,14 +176,12 @@ variable "github_teams" {
     slug                         = string
     description                  = optional(string, "")
     repository_access_permission = optional(string, "none")
-    environment_approval         = optional(bool, false)
   }))
   description = <<DESCRIPTION
 Map of GitHub teams to be created or managed.
 
 - `slug`: The slug of the team.
 - `repository_access_level`: The access level for the team on the repository, can be `push` or `maintain` (default is "none").
-- `environment_approval`: Whether the team is an approver for the environment (default is false)
 DESCRIPTION
 }
 
