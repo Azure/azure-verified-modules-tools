@@ -1342,8 +1342,8 @@ Describe 'Release workflow' {
         $script:release = Get-Content -LiteralPath $releasePath -Raw
     }
 
-    It 'runs on ADO promotion and has a required manual release-tag fallback' {
-        $script:release | Should -Match '(?m)^\s+types: \[released\]\r?$'
+    It 'runs on a schedule and has a required manual release-tag fallback' {
+        $script:release | Should -Match '(?m)^  schedule:\r?$'
         $script:release | Should -Match '(?m)^  workflow_dispatch:\r?$'
         $script:release | Should -Match '(?ms)^      release_tag:\r?\n' +
             '        description: .+\r?\n' +
@@ -1351,36 +1351,20 @@ Describe 'Release workflow' {
             '        type: string\r?$'
     }
 
-    It 'converges both triggers on one selected release tag' {
-        $selector = [regex]::Escape(
-            '${{ github.event_name == ''release'' && github.event.release.tag_name || inputs.release_tag }}'
-        )
-        ([regex]::Matches($script:release, $selector)).Count | Should -Be 3
-        ([regex]::Matches($script:release, '(?m)^\s+RELEASE_TAG:')).Count | Should -Be 1
-    }
-
-    It 'accepts only an existing published full release with the exact selected tag' {
-        $script:release | Should -Match '--json tagName,isDraft,isPrerelease,publishedAt,databaseId'
-        $script:release | Should -Match '\$release\.tagName -cne \$env:RELEASE_TAG'
-        $script:release | Should -Match '\$release\.isDraft -or'
-        $script:release | Should -Match '\$release\.isPrerelease -or'
-        $script:release | Should -Match '\$release\.publishedAt'
-    }
-
     It 'checks out trusted default-branch publisher code' {
         $script:release | Should -Match 'ref: \$\{\{ github\.event\.repository\.default_branch \}\}'
     }
 
-    It 'downloads release assets and delegates publication to the validated script' {
-        $script:release | Should -Match '\./scripts/Save-AvmAuthoringReleaseAssets\.ps1'
-        $script:release | Should -Match '-ReleaseId \$release\.databaseId'
+    It 'downloads the exact MCR version and delegates publication to the validated script' {
+        $script:release | Should -Match '\./scripts/Get-AvmAuthoringGalleryPlan\.ps1'
+        $script:release | Should -Match 'Save-PSResource -Name Avm\.Authoring -Version \$version -Repository AvmMcr'
         $script:release | Should -Not -Match 'gh release download'
         $script:release | Should -Match '\./scripts/Publish-AvmAuthoring\.ps1'
     }
 
-    It 'preserves environment approval and per-release concurrency' {
+    It 'preserves environment protection and serializes Gallery runs' {
         $script:release | Should -Match '(?m)^\s+environment: psgallery\r?$'
-        $script:release | Should -Match '(?m)^\s+group: psgallery-\$\{\{'
+        $script:release | Should -Match '(?m)^\s+group: psgallery\r?$'
         $script:release | Should -Match '(?m)^\s+cancel-in-progress: false\r?$'
     }
 
