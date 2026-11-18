@@ -311,15 +311,17 @@ runs:
         $hasRequiredModules = $false
         $hasOptionalModules = $false
         $requiredErrors = [Collections.Generic.List[string]]::new()
+        $requiredScenarioNames = @('default', 'defaults', 'waf-aligned')
+        $defaultScenarioPaths = @('tests/e2e/default/main.test.bicep', 'tests/e2e/defaults/main.test.bicep')
         foreach ($entry in $outputs.ModuleMatrix.Include) {
           $tests = @($entry.TestFiles)
-          $requiredTests = @($tests | Where-Object { $_.name -cin @('defaults', 'waf-aligned') })
-          $optionalTests = @($tests | Where-Object { $_.name -cnotin @('defaults', 'waf-aligned') })
+          $requiredTests = @($tests | Where-Object { $_.name -cin $requiredScenarioNames })
+          $optionalTests = @($tests | Where-Object { $_.name -cnotin $requiredScenarioNames })
           $selectedTests = @()
           if ($env:FORK -cne 'true' -and $outputs.WorkflowInput.deploymentValidation -ceq 'true') {
             $selectedTests = @($tests | Where-Object {
-                ($env:REQUIRED -ceq 'true' -and $_.name -cin @('defaults', 'waf-aligned')) -or
-                ($env:OPTIONAL -ceq 'true' -and $_.name -cnotin @('defaults', 'waf-aligned'))
+                ($env:REQUIRED -ceq 'true' -and $_.name -cin $requiredScenarioNames) -or
+                ($env:OPTIONAL -ceq 'true' -and $_.name -cnotin $requiredScenarioNames)
               })
           }
           $modules.Add([pscustomobject]@{
@@ -328,14 +330,17 @@ runs:
               psRuleModuleTestFilePaths = ConvertTo-Json -InputObject @($entry.PolicyTestFiles) -Depth 20 -Compress
               e2eRoute = if ($selectedTests.Count -gt 0) { 'native' } else { 'none' }
             })
-          foreach ($scenario in @('defaults', 'waf-aligned')) {
-            $expectedPath = "tests/e2e/$scenario/main.test.bicep"
-            $matching = @($requiredTests | Where-Object { $_.path -ceq $expectedPath })
-            if ($matching.Count -eq 0) {
-              $message = "$($entry.ModulePath): $scenario E2E scenario is missing."
-              $message = $message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-              Write-Information "::warning::$message" -InformationAction Continue
-            }
+          $defaultScenarios = @($requiredTests | Where-Object { $_.path -cin $defaultScenarioPaths })
+          if ($defaultScenarios.Count -eq 0) {
+            $message = "$($entry.ModulePath): default/defaults E2E scenario is missing."
+            $message = $message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Information "::warning::$message" -InformationAction Continue
+          }
+          $wafAlignedScenarios = @($requiredTests | Where-Object { $_.path -ceq 'tests/e2e/waf-aligned/main.test.bicep' })
+          if ($wafAlignedScenarios.Count -eq 0) {
+            $message = "$($entry.ModulePath): waf-aligned E2E scenario is missing."
+            $message = $message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Information "::warning::$message" -InformationAction Continue
           }
           foreach ($ignored in @($requiredTests | Where-Object e2eIgnore)) {
             $requiredErrors.Add("$($entry.ModulePath): ignored required scenario $($ignored.path)")

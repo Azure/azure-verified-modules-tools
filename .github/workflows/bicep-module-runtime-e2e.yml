@@ -103,7 +103,7 @@ jobs:
               -RandomSeed ([int](([long]$env:GITHUB_RUN_ID + [long]$env:GITHUB_RUN_ATTEMPT) % [int]::MaxValue)) `
               -DisplaySubscriptionNames:($env:TEST_SUBSCRIPTION_IDS -ne '') -SkipModuleVersionCheck)
           foreach ($testCase in $matrix) {
-            $isRequired = $testCase.Name -cin @('defaults', 'waf-aligned')
+            $isRequired = $testCase.Name -cin @('default', 'defaults', 'waf-aligned')
             $testCase | Add-Member -NotePropertyName IsRequired -NotePropertyValue $isRequired -Force
           }
           Write-Host "Selected $($matrix.Count) E2E test case(s)."
