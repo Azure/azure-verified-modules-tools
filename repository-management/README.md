@@ -54,9 +54,8 @@ GitHub's 100-character limit.
 
 ## Workflow failure alerts
 
-`Repos: Maintenance Alerts` monitors the eight scheduled Tools maintenance
-workflows: catalog, Terraform, Bicep, module-list and label synchronization,
-issue and reviewer routing, and the failure monitor itself. Main-branch
+`Repos: Maintenance Alerts` monitors Tools maintenance workflows and the
+`Authoring: Release` workflow that publishes to PowerShell Gallery. Main-branch
 completions trigger checks; the daily sweep is a fallback. Pull-request runs
 are excluded. Three consecutive completed failures open an incident;
 cancelled and skipped runs neither count nor reset the streak.

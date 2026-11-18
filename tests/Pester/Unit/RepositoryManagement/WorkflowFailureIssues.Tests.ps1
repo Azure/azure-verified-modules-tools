@@ -666,11 +666,15 @@ Describe 'Workflow failure issue management workflow safety' {
             $script:alertTriggers = [regex]::Match($script:alertWorkflow, '(?ms)^on:\n(.*?)(?=^\S)').Groups[1].Value
         }
 
-        It 'monitors all eight maintenance workflows, including the old monitor but not itself' {
+        It 'monitors all nine workflows, including the release and the old monitor but not itself' {
             $json = [regex]::Match($script:alertWorkflow, '(?ms)MONITORED_WORKFLOWS: >-\n(.*?)\n        run:').Groups[1].Value
             $names = @($json | ConvertFrom-Json)
-            $names | Should -HaveCount 8
+            $names | Should -HaveCount 9
             $names | Should -Contain 'Repos: Workflow Failures'
+            $releaseWorkflow = Get-Content -Raw (Join-Path $root '.github' 'workflows' 'release.yml')
+            $releaseName = [regex]::Match($releaseWorkflow, "(?m)^name: '([^']+)'\r?$").Groups[1].Value
+            $releaseName | Should -Not -BeNullOrEmpty
+            $names | Should -Contain $releaseName
             foreach ($name in $names) {
                 $script:alertTriggers | Should -Match ([regex]::Escape("- '$name'"))
             }
