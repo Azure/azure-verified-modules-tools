@@ -73,6 +73,7 @@
       "managedFiles": [
         "canary-ring-0"
       ],
+      "terraformPrTestGatesEnabled": true,
       "repositories": [
         "avm-ptn-example-repo"
       ]
