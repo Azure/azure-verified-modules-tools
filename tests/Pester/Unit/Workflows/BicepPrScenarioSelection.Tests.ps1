@@ -74,6 +74,28 @@ Describe 'Bicep PR scenario selection' {
         @($result.modules[0].psRuleModuleTestFilePaths | ConvertFrom-Json | ForEach-Object name) | Should -Be @('defaults')
     }
 
+    It 'treats default and defaults as aliases for required Bicep baseline scenarios: <Names>' -ForEach @(
+        @{ Names = @('default'); Expected = @('default', 'waf-aligned', 'max') }
+        @{ Names = @('defaults'); Expected = @('defaults', 'waf-aligned', 'max') }
+        @{ Names = @('default', 'defaults'); Expected = @('default', 'defaults', 'waf-aligned', 'max') }
+    ) {
+        $outputs.ModuleMatrix.Include = @($outputs.ModuleMatrix.Include[0])
+        $baselineTests = @($Names | ForEach-Object {
+                @{ path = "tests/e2e/$_/main.test.bicep"; name = $_; e2eIgnore = $false }
+            })
+        $baselineTests += @{ path = 'tests/e2e/waf-aligned/main.test.bicep'; name = 'waf-aligned'; e2eIgnore = $false }
+        $baselineTests += @{ path = 'tests/e2e/max/main.test.bicep'; name = 'max'; e2eIgnore = $false }
+        $outputs.ModuleMatrix.Include[0].TestFiles = $baselineTests
+
+        $records = @(& $selection 6>&1)
+        $warnings = @($records | Where-Object { $_ -is [System.Management.Automation.InformationRecord] })
+        $result = $records[-1]
+        $warnings | Should -BeNullOrEmpty
+        $result.errors | Should -BeNullOrEmpty
+        $result.hasRequired | Should -BeTrue
+        @($result.modules[0].moduleTestFilePaths | ConvertFrom-Json | ForEach-Object name) | Should -Be $Expected
+    }
+
     It 'disables test selection for forks or deployment-disabled workflow input' -ForEach @(
         @{ Fork = 'true'; Deployment = 'true' }
         @{ Fork = 'false'; Deployment = 'false' }

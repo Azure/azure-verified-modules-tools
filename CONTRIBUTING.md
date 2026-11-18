@@ -147,8 +147,12 @@ has drifted from `Avm.Authoring` / `Avm.Authoring.psd1` /
 
 ## 6. Build, test, lint
 
-Bicep `.e2eignore` files may exclude any scenario, including `defaults` and
-`waf-aligned`, but must contain a nonempty UTF-8 explanation.
+The required Bicep baseline accepts `tests/e2e/default` or
+`tests/e2e/defaults`; both run as required if present, and a missing-baseline
+warning is emitted only when neither exists. `tests/e2e/waf-aligned` remains
+separately required when present. Optional Bicep scenarios may be excluded
+with `.e2eignore` entries that contain a nonempty UTF-8 explanation; required
+scenarios cannot be excluded.
 
 The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it through the `./build.ps1 <task>` forwarder from the repo root. Run the checks needed to validate your change locally; the pull-request workflows provide the broader validation.
 

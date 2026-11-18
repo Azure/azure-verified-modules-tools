@@ -108,6 +108,7 @@ Describe 'Terraform E2E label routing and merge gates' {
         $env:OPTIONAL_EXAMPLES = '["private"]'
         $env:RUN_OPTIONAL = 'false'
         $script:examplesJson = '["default","waf-aligned","private"]'
+        $script:writeHostMessages = [Collections.Generic.List[string]]::new()
         $script:exampleResult = [pscustomobject]@{ Status = 'pass'; FilesProcessed = 1 }
         $script:gateResults = @{
             bootstrap = @{ result = 'success' }
@@ -130,7 +131,7 @@ Describe 'Terraform E2E label routing and merge gates' {
             if ($args -contains '--list') { return $script:examplesJson }
             return $script:exampleResult
         }
-        Mock Write-Host {}
+        Mock Write-Host { $script:writeHostMessages.Add([string]$Object) }
         Push-Location $fixture
     }
 
@@ -192,12 +193,27 @@ Describe 'Terraform E2E label routing and merge gates' {
     It 'reports only existing required scenarios without inventing missing tests: <Examples>' -ForEach @(
         @{ Examples = '[]'; Expected = '[]' }
         @{ Examples = '["waf-aligned"]'; Expected = '["waf-aligned"]' }
-        @{ Examples = '["default","defaults"]'; Expected = '["default"]' }
+        @{ Examples = '["default"]'; Expected = '["default"]' }
+        @{ Examples = '["defaults"]'; Expected = '["defaults"]' }
+        @{ Examples = '["default","defaults"]'; Expected = '["default","defaults"]' }
     ) {
         $script:examplesJson = $Examples
         & $script:listScript
         $outputs = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
         $outputs.requiredExamples | Should -BeExactly $Expected
+    }
+
+    It 'warns about the default baseline only when neither spelling is runnable: <Examples>' -ForEach @(
+        @{ Examples = '["default"]'; MissingBaselineWarnings = 0 }
+        @{ Examples = '["defaults"]'; MissingBaselineWarnings = 0 }
+        @{ Examples = '["default","defaults"]'; MissingBaselineWarnings = 0 }
+        @{ Examples = '["waf-aligned"]'; MissingBaselineWarnings = 1 }
+        @{ Examples = '[]'; MissingBaselineWarnings = 1 }
+    ) {
+        $script:examplesJson = $Examples
+        & $script:listScript
+        @($script:writeHostMessages | Where-Object { $_ -like "*default*defaults*absent*" }) |
+            Should -HaveCount $MissingBaselineWarnings
     }
 
     It 'rejects empty or malformed discovery rather than reporting no required tests: <Json>' -ForEach @(
@@ -211,8 +227,11 @@ Describe 'Terraform E2E label routing and merge gates' {
         { & $script:listScript } | Should -Throw
     }
 
-    It 'rejects an existing required example omitted from runnable discovery' {
-        $null = New-Item -ItemType Directory -Path (Join-Path $PWD.Path 'examples' 'default') -Force
+    It 'rejects an existing required example omitted from runnable discovery: <ExampleName>' -ForEach @(
+        @{ ExampleName = 'default' }
+        @{ ExampleName = 'defaults' }
+    ) {
+        $null = New-Item -ItemType Directory -Path (Join-Path $PWD.Path 'examples' $ExampleName) -Force
         $script:examplesJson = '["private"]'
         { & $script:listScript } | Should -Throw '*exists but is not runnable*'
     }
