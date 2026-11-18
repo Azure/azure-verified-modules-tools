@@ -88,7 +88,7 @@ Describe 'Invoke-AvmReleaseBranch' {
             $writes[2].Body.merge_method | Should -BeExactly 'squash'
             $writes[3].Body.head | Should -BeExactly $result.ReleaseBranch
             $writes[3].Body.base | Should -BeExactly 'main'
-            $writes[4].Body.labels | Should -Contain 'PR: Run E2E Tests'
+            $writes[4].Body.labels | Should -Contain 'PR: Run Required E2E Tests'
         }
     }
 

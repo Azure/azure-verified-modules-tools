@@ -403,10 +403,10 @@ Describe 'Bicep reusable workflow ownership and syntax' {
     It 'classifies exact scenario names case-sensitively for <ModulePath> in <Workflow>' -ForEach @(
         @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/res/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
         @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/res/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
-        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/utl/example/widget'; Expected = @($false, $false, $false, $false, $false, $false) }
-        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/utl/example/widget'; Expected = @($false, $false, $false, $false, $false, $false) }
-        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'AVM/utl/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
-        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'AVM/utl/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/utl/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/utl/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/ptn/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/ptn/example/widget'; Expected = @($true, $true, $false, $false, $false, $false) }
     ) {
         $step = $script:workflows[$Workflow].jobs[$Job].steps | Where-Object { $_['id'] -ceq 'select' }
         $tokens = $null
@@ -567,7 +567,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $text | Should -Match '\$required = if \(\$manual\)'
         $text | Should -Match '\$optional = if \(\$manual\)'
         $text | Should -Match '\$env:DEPLOYMENT_VALIDATION -ceq ''true'''
-        $text | Should -Match "labels -ccontains 'PR: Run E2E Tests'"
+        $text | Should -Match "labels -ccontains 'PR: Run Required E2E Tests'"
         $text | Should -Not -Match 'utilities[/\\]|Get-TestSubscriptionTag|avm\.template\.module\.preview'
         foreach ($step in $initializer.runs.steps | Where-Object { $_['uses'] }) {
             $step.uses | Should -Match '@[0-9a-f]{40}$'

@@ -108,8 +108,15 @@ function Resolve-RepositorySettings {
         jobWorkflowPath = "github_job_workflow_path"
     }
     $workloadIdentityFederationSubjectClaimOverrides = @{}
+    $terraformPrTestGatesEnabled = $false
     foreach ($entry in @(Get-AvmOrderedGroup -Groups $repositoryConfig.repositoryGroups -SelectorProperty 'repositories' -Item $repoId)) {
         $repositoryGroup = $entry.Group
+        if ($repositoryGroup.Contains('terraformPrTestGatesEnabled')) {
+            if ($repositoryGroup['terraformPrTestGatesEnabled'] -isnot [bool]) {
+                throw [System.ArgumentException]::new("Repository group '$($repositoryGroup.name)' terraformPrTestGatesEnabled must be a Boolean.")
+            }
+            $terraformPrTestGatesEnabled = $repositoryGroup['terraformPrTestGatesEnabled']
+        }
         if (-not $repositoryGroup['workloadIdentityFederationSubjectClaimOverrides']) {
             continue
         }
@@ -134,6 +141,7 @@ function Resolve-RepositorySettings {
         RepositoryGroupNames                            = $repositoryGroupNames
         Teams                                           = $teams
         PullRequestBypassTeams                          = $pullRequestBypassTeams
+        TerraformPrTestGatesEnabled                     = $terraformPrTestGatesEnabled
         CodeOwnersDefaultTeams                          = $codeOwnersDefaultTeams
         CodeOwnersFileProtectionTeams                   = $codeOwnersFileProtectionTeams
         Topics                                          = $repositoryTopics

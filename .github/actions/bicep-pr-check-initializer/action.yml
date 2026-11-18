@@ -26,7 +26,7 @@ outputs:
     description: Whether moduleMatrix contains runnable modules.
     value: ${{ steps.initialize.outputs.hasModules }}
   hasRequiredModules:
-    description: Whether any non-utility module has existing required E2E tests, regardless of request.
+    description: Whether any module has existing required E2E tests, regardless of request.
     value: ${{ steps.initialize.outputs.hasRequiredModules }}
   hasOptionalModules:
     description: Whether optional E2E tests exist, regardless of request.
@@ -38,7 +38,7 @@ outputs:
     description: Whether optional E2E tests were requested.
     value: ${{ steps.gate.outputs.optional }}
   requiredErrors:
-    description: JSON array of ignored required scenarios in non-utility modules, regardless of request.
+    description: JSON array of ignored required scenarios, regardless of module type or request.
     value: ${{ steps.initialize.outputs.requiredErrors }}
   baseCommit:
     description: Validated matrix comparison base.
@@ -86,15 +86,15 @@ runs:
         }
         else {
           -not $fork -and (
-            $labels -ccontains 'PR: Run E2E Tests' -or
-            $labels -ccontains 'PR: Run Optional E2E Tests'
+            $labels -ccontains 'PR: Run Required E2E Tests' -or
+            $labels -ccontains 'PR: Run All E2E Tests'
           )
         }
         $optional = if ($manual) {
           $env:DEPLOYMENT_VALIDATION -ceq 'true'
         }
         else {
-          -not $fork -and $labels -ccontains 'PR: Run Optional E2E Tests'
+          -not $fork -and $labels -ccontains 'PR: Run All E2E Tests'
         }
         $deployment = $required -or $optional
         "admitted=$($admitted.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -328,22 +328,20 @@ runs:
               psRuleModuleTestFilePaths = ConvertTo-Json -InputObject @($entry.PolicyTestFiles) -Depth 20 -Compress
               e2eRoute = if ($selectedTests.Count -gt 0) { 'native' } else { 'none' }
             })
-          if (-not ([string]$entry.ModulePath).StartsWith('avm/utl/', [StringComparison]::Ordinal)) {
-            foreach ($scenario in @('defaults', 'waf-aligned')) {
-              $expectedPath = "tests/e2e/$scenario/main.test.bicep"
-              $matching = @($requiredTests | Where-Object { $_.path -ceq $expectedPath })
-              if ($matching.Count -eq 0) {
-                $message = "$($entry.ModulePath): $scenario E2E scenario is missing."
-                $message = $message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-                Write-Information "::warning::$message" -InformationAction Continue
-              }
+          foreach ($scenario in @('defaults', 'waf-aligned')) {
+            $expectedPath = "tests/e2e/$scenario/main.test.bicep"
+            $matching = @($requiredTests | Where-Object { $_.path -ceq $expectedPath })
+            if ($matching.Count -eq 0) {
+              $message = "$($entry.ModulePath): $scenario E2E scenario is missing."
+              $message = $message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Information "::warning::$message" -InformationAction Continue
             }
-            foreach ($ignored in @($requiredTests | Where-Object e2eIgnore)) {
-              $requiredErrors.Add("$($entry.ModulePath): ignored required scenario $($ignored.path)")
-            }
-            if ($requiredTests.Count -gt 0) {
-              $hasRequiredModules = $true
-            }
+          }
+          foreach ($ignored in @($requiredTests | Where-Object e2eIgnore)) {
+            $requiredErrors.Add("$($entry.ModulePath): ignored required scenario $($ignored.path)")
+          }
+          if ($requiredTests.Count -gt 0) {
+            $hasRequiredModules = $true
           }
           if ($optionalTests.Count -gt 0) {
             $hasOptionalModules = $true

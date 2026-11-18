@@ -14,7 +14,7 @@ function Invoke-AvmReleaseBranch {
         this command creates a release branch from upstream main, retargets the
         fork pull request, merges the captured head, and opens a follow-up
         pull request to main. For Azure/bicep-registry-modules, it adds the
-        PR: Run E2E Tests label to the follow-up. It does not approve reviews
+        PR: Run Required E2E Tests label to the follow-up. It does not approve reviews
         or bypass protections. Ordinary checks do not require this handoff.
 
         A failure can leave a branch or retargeted or merged pull request behind.
@@ -170,7 +170,7 @@ function Invoke-AvmReleaseBranch {
             }
             $stage = "adding the E2E label to $followUpUrl"
             $null = Invoke-AvmGitHubApi -Endpoint "repos/$Repository/issues/$number/labels" -Method POST `
-                -Body @{ labels = @('PR: Run E2E Tests') }
+                -Body @{ labels = @('PR: Run Required E2E Tests') }
         }
         return [pscustomobject]@{
             Repository             = $Repository

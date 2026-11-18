@@ -145,6 +145,7 @@ $terraformVariables = @{
     is_protected_repo = $true
     github_teams = $githubTeams
     pull_request_bypass_teams = $settings.PullRequestBypassTeams
+    terraform_pr_test_gates_enabled = $settings.TerraformPrTestGatesEnabled
     topics = $settings.Topics
 }
 

@@ -86,7 +86,13 @@ Describe 'Bicep PR scenario selection' {
         $result.modules[0].moduleTestFilePaths | Should -BeExactly '[]'
     }
 
-    It 'warns about a missing scenario while requiring the existing one' {
+    It 'warns about a missing scenario while requiring the existing one for <ModuleType>' -ForEach @(
+        @{ ModuleType = 'res' }
+        @{ ModuleType = 'ptn' }
+        @{ ModuleType = 'utl' }
+    ) {
+        $outputs.ModuleMatrix.Include = @($outputs.ModuleMatrix.Include[0])
+        $outputs.ModuleMatrix.Include[0].ModulePath = "avm/$ModuleType/example/widget"
         $outputs.ModuleMatrix.Include[0].TestFiles = @($outputs.ModuleMatrix.Include[0].TestFiles |
                 Where-Object name -NE 'waf-aligned')
         $records = @(& $selection 6>&1)
@@ -100,7 +106,13 @@ Describe 'Bicep PR scenario selection' {
             Should -Be @('defaults', 'max')
     }
 
-    It 'warns and does not require E2E when both scenarios are missing' {
+    It 'warns and does not require E2E when both scenarios are missing for <ModuleType>' -ForEach @(
+        @{ ModuleType = 'res' }
+        @{ ModuleType = 'ptn' }
+        @{ ModuleType = 'utl' }
+    ) {
+        $outputs.ModuleMatrix.Include = @($outputs.ModuleMatrix.Include[0])
+        $outputs.ModuleMatrix.Include[0].ModulePath = "avm/$ModuleType/example/widget"
         $outputs.ModuleMatrix.Include[0].TestFiles = @($outputs.ModuleMatrix.Include[0].TestFiles |
                 Where-Object name -EQ 'max')
         $records = @(& $selection 6>&1)
@@ -113,7 +125,13 @@ Describe 'Bicep PR scenario selection' {
         @($result.modules[0].moduleTestFilePaths | ConvertFrom-Json | ForEach-Object name) | Should -Be @('max')
     }
 
-    It 'reports existing ignored required scenarios as errors' {
+    It 'reports existing ignored required scenarios as errors for <ModuleType>' -ForEach @(
+        @{ ModuleType = 'res' }
+        @{ ModuleType = 'ptn' }
+        @{ ModuleType = 'utl' }
+    ) {
+        $outputs.ModuleMatrix.Include = @($outputs.ModuleMatrix.Include[0])
+        $outputs.ModuleMatrix.Include[0].ModulePath = "avm/$ModuleType/example/widget"
         $outputs.ModuleMatrix.Include[0].TestFiles[1].e2eIgnore = $true
         $result = & $selection
         $result.errors | Should -Not -BeNullOrEmpty
@@ -122,6 +140,7 @@ Describe 'Bicep PR scenario selection' {
     }
 
     It 'warns for a missing parent scenario even when a child scenario exists' {
+        $outputs.ModuleMatrix.Include = @($outputs.ModuleMatrix.Include[0])
         $outputs.ModuleMatrix.Include[0].TestFiles[1].path = 'child/tests/e2e/waf-aligned/main.test.bicep'
         $records = @(& $selection 6>&1)
         @($records | Where-Object { $_ -is [System.Management.Automation.InformationRecord] })[0].MessageData |
@@ -132,19 +151,19 @@ Describe 'Bicep PR scenario selection' {
             Should -Be @('defaults', 'waf-aligned', 'max')
     }
 
-    It 'exempts utility modules from required checks but selects any matching tests' {
+    It 'warns without errors when a utility module has no tests' {
         $outputs.ModuleMatrix.Include = @($outputs.ModuleMatrix.Include[1])
-        $outputs.ModuleMatrix.Include[0].TestFiles = @(
-            @{ path = 'tests/e2e/defaults/main.test.bicep'; name = 'defaults'; e2eIgnore = $true }
-        )
         $env:OPTIONAL = 'false'
         $records = @(& $selection 6>&1)
-        @($records | Where-Object { $_ -is [System.Management.Automation.InformationRecord] }) | Should -BeNullOrEmpty
+        $warnings = @($records | Where-Object { $_ -is [System.Management.Automation.InformationRecord] })
+        $warnings | Should -HaveCount 2
+        $warnings[0].MessageData | Should -Match '^::warning::.*defaults.*missing'
+        $warnings[1].MessageData | Should -Match '^::warning::.*waf-aligned.*missing'
         $result = $records[-1]
         $result.errors | Should -BeNullOrEmpty
         $result.hasRequired | Should -BeFalse
-        $result.modules[0].e2eRoute | Should -BeExactly 'native'
-        @($result.modules[0].moduleTestFilePaths | ConvertFrom-Json | ForEach-Object name) | Should -Be @('defaults')
+        $result.modules[0].e2eRoute | Should -BeExactly 'none'
+        $result.modules[0].moduleTestFilePaths | Should -BeExactly '[]'
     }
 
     It 'retains optional ignored records for the runtime to skip' {
@@ -206,7 +225,7 @@ Describe 'Bicep PR label admission' {
         $env:REPOSITORY = 'Azure/bicep-registry-modules'
         $env:HEAD_REPOSITORY = $env:REPOSITORY
         $env:EVENT_ACTION = 'labeled'
-        $env:EVENT_LABEL = 'PR: Run Optional E2E Tests'
+        $env:EVENT_LABEL = 'PR: Run All E2E Tests'
         $env:DEPLOYMENT_VALIDATION = 'false'
         $env:GITHUB_OUTPUT = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
     }
@@ -217,9 +236,9 @@ Describe 'Bicep PR label admission' {
 
     It 'selects the correct tests for <Labels>' -ForEach @(
         @{ Labels = '[]'; Required = 'false'; Optional = 'false'; Expected = @(); Route = 'none' }
-        @{ Labels = '["PR: Run E2E Tests"]'; Required = 'true'; Optional = 'false'; Expected = @('defaults', 'waf-aligned'); Route = 'native' }
-        @{ Labels = '["PR: Run Optional E2E Tests"]'; Required = 'true'; Optional = 'true'; Expected = @('defaults', 'waf-aligned', 'max'); Route = 'native' }
-        @{ Labels = '["PR: Run E2E Tests","PR: Run Optional E2E Tests"]'; Required = 'true'; Optional = 'true'; Expected = @('defaults', 'waf-aligned', 'max'); Route = 'native' }
+        @{ Labels = '["PR: Run Required E2E Tests"]'; Required = 'true'; Optional = 'false'; Expected = @('defaults', 'waf-aligned'); Route = 'native' }
+        @{ Labels = '["PR: Run All E2E Tests"]'; Required = 'true'; Optional = 'true'; Expected = @('defaults', 'waf-aligned', 'max'); Route = 'native' }
+        @{ Labels = '["PR: Run Required E2E Tests","PR: Run All E2E Tests"]'; Required = 'true'; Optional = 'true'; Expected = @('defaults', 'waf-aligned', 'max'); Route = 'native' }
     ) {
         $env:PR_LABELS = $Labels
         & ([scriptblock]::Create($gate))
@@ -251,8 +270,8 @@ Describe 'Bicep PR label admission' {
     }
 
     It 'does not deploy from forks for <Labels>' -ForEach @(
-        @{ Labels = '["PR: Run Optional E2E Tests"]' }
-        @{ Labels = '["PR: Run E2E Tests","PR: Run Optional E2E Tests"]' }
+        @{ Labels = '["PR: Run All E2E Tests"]' }
+        @{ Labels = '["PR: Run Required E2E Tests","PR: Run All E2E Tests"]' }
     ) {
         $env:HEAD_REPOSITORY = 'fork/repo'
         $env:PR_LABELS = $Labels
@@ -274,7 +293,7 @@ Describe 'Bicep PR label admission' {
 
     It 'keeps required tests requested if the required label is removed but the optional label remains' {
         $env:EVENT_ACTION = 'unlabeled'
-        $env:PR_LABELS = '["PR: Run Optional E2E Tests"]'
+        $env:PR_LABELS = '["PR: Run All E2E Tests"]'
         & ([scriptblock]::Create($gate))
         $result = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
         $result.required | Should -BeExactly 'true'

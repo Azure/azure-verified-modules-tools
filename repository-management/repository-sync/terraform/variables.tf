@@ -141,6 +141,13 @@ variable "module_name" {
   description = "Description of the AVM (e.g. Azure Landing Zones Management Resources)"
 }
 
+variable "terraform_pr_test_gates_enabled" {
+  type        = bool
+  description = "Enable label-authorized Terraform E2E tests and required merge checks only after the repository caller has been updated and verified."
+  default     = false
+  nullable    = false
+}
+
 variable "github_repository_pr_check_environment_name" {
   type        = string
   description = "Name of the environment used by the PR check job for OIDC, without required reviewers."

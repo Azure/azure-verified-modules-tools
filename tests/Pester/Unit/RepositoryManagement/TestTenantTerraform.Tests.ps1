@@ -1144,7 +1144,7 @@ Describe 'Terraform effective contract and state wiring' {
         $variables | Should -Match 'value\s*=\s*jsonencode\(var.test_subscription_ids\)'
         $variables | Should -Not -Match 'ARM_CLIENT_SECRET|TOKEN|PASSWORD|OVERRIDE|TF_VAR_'
         $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'terraform-module.yml')
-        ([regex]::Matches($workflow, 'TEST_SUBSCRIPTION_IDS: \$\{\{ vars.TEST_SUBSCRIPTION_IDS \|\| secrets.TEST_SUBSCRIPTION_IDS \}\}')).Count | Should -Be 4
+        ([regex]::Matches($workflow, 'TEST_SUBSCRIPTION_IDS: \$\{\{ vars.TEST_SUBSCRIPTION_IDS \|\| secrets.TEST_SUBSCRIPTION_IDS \}\}')).Count | Should -Be 5
     }
 
     It 'forgets only the three legacy Actions settings without deleting values needed by older caller pins' {
@@ -1236,7 +1236,7 @@ Describe 'Terraform effective contract and state wiring' {
         $ordinary | Should -Match 'github_job_workflow_path\s*=\s*var.github_job_workflow_path'
     }
 
-    It 'keeps examples-test approval while provisioning federation only for execution environments' {
+    It 'keeps environment identities stable and removes approvals only with the explicit gate rollout' {
         $ordinary = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'main.tf')
         $environments = [regex]::Match($ordinary, 'github_repository_environment_names\s*=\s*\[([^\]]+)\]').Groups[1].Value
         [regex]::Matches($environments, 'var\.github_repository_[a-z_]+_environment_name').Value | Should -Be @(
@@ -1247,7 +1247,8 @@ Describe 'Terraform effective contract and state wiring' {
         $ordinary | Should -Match 'github_repository_examples_test_environment_name\s*=\s*var\.github_repository_examples_test_environment_name'
         $github = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'github' 'github.repository.environment.tf')
         $github | Should -Match 'examples_test\s*=\s*var\.github_repository_examples_test_environment_name'
-        $github | Should -Match 'contains\(\["pr_check", "examples_test_execution"\], each\.key\) \? \[\] : \[local\.environment_approval_team_ids\]'
+        $github | Should -Match 'var\.terraform_pr_test_gates_enabled \|\| contains\(\["pr_check", "examples_test_execution"\], each\.key\) \? \[\] : \[local\.environment_approval_team_ids\]'
+        $ordinary | Should -Match 'terraform_pr_test_gates_enabled\s*=\s*var\.terraform_pr_test_gates_enabled'
     }
 
     It 'exposes only the verified BAMI test settings to plan-only consumers' {
