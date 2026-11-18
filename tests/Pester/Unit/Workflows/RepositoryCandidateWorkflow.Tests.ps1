@@ -87,6 +87,14 @@ Describe 'Repository sync candidate workflow' {
                 "(github.event_name != 'workflow_dispatch' || inputs.sync_project_items)"))
     }
 
+    It 'installs Gallery authoring for example branch-apply candidate checks' {
+        $step = [regex]::Match($script:prepare,
+            '(?ms)^      - name: Install Avm\.Authoring\r?\n(?<body>.*?)(?=^      - name:|\z)')
+        $step.Success | Should -BeTrue
+        $step.Groups['body'].Value | Should -Match ([regex]::Escape(
+                "if: env.USE_WORKFLOW_AUTHORING_SOURCE != 'true' || (github.event_name == 'workflow_dispatch' && inputs.allow_example_repository_branch_apply)"))
+    }
+
     It 'shares the guarded source selection with bootstrap and optional project synchronization' {
         $script:prepare | Should -Match ([regex]::Escape(
                 'USE_WORKFLOW_AUTHORING_SOURCE: ${{ github.event_name == ''workflow_dispatch'' && (inputs.allow_example_repository_branch_apply || (inputs.plan_only && inputs.use_workflow_authoring_source)) }}'))
