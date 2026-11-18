@@ -61,6 +61,7 @@ function New-AvmCatalogRequest {
         [string] $Accept = 'application/json',
         [ValidateSet('GET', 'POST')][string] $Method = 'GET',
         [string] $Body,
+        [scriptblock] $ResponseValidator,
         [switch] $AllowNotFound,
         [switch] $AllowEmptyRepository
     )
@@ -70,6 +71,7 @@ function New-AvmCatalogRequest {
         Accept = $Accept
         Method = $Method
         Body = $Body
+        ResponseValidator = $ResponseValidator
         AllowNotFound = [bool]$AllowNotFound
         AllowEmptyRepository = [bool]$AllowEmptyRepository
     }
@@ -160,6 +162,7 @@ function Invoke-AvmCatalogRequestSet {
                 Accept = if ($request.Contains('Accept') -and $request['Accept']) { [string]$request['Accept'] } else { 'application/json' }
                 Method = if ($request.Contains('Method') -and $request['Method']) { [string]$request['Method'] } else { 'GET' }
                 Body = if ($request.Contains('Body')) { $request['Body'] } else { $null }
+                ResponseValidator = if ($request.Contains('ResponseValidator')) { $request['ResponseValidator'] } else { $null }
                 AllowNotFound = [bool]$request['AllowNotFound']
                 AllowEmptyRepository = [bool]$request['AllowEmptyRepository']
             })
@@ -231,6 +234,19 @@ function Invoke-AvmCatalogRequestSet {
                             StatusCode = $status
                             Content = [System.Text.UTF8Encoding]::new($false, $true).GetString($bytes)
                             Bytes = $bytes
+                        }
+                        try {
+                            if ($null -ne $entry.ResponseValidator) {
+                                & $entry.ResponseValidator $results[$index]
+                            }
+                        }
+                        catch [System.IO.InvalidDataException] {
+                            $lastError = $_.Exception
+                            if ($attempt -lt $MaxAttempt) {
+                                $retry.Add($index)
+                                continue
+                            }
+                            throw
                         }
                         $completed++
                     }
@@ -618,7 +634,13 @@ function Get-AvmCatalogTerraformRegistrySet {
         }
     }
     $rootResponses = Invoke-AvmCatalogRequestSet -Activity 'Terraform registry modules' -Requests @(foreach ($root in $roots) {
-            New-AvmCatalogRequest -Uri $root.Base -AllowNotFound
+            $identity = $root.Identity
+            New-AvmCatalogRequest -Uri $root.Base -AllowNotFound -ResponseValidator (
+                {
+                    param([object] $Response)
+                    Assert-AvmCatalogTerraformRegistryModuleResponse -Response $Response -Identity $identity
+                }.GetNewClosure()
+            )
         })
     $results = @{}
     $releaseRequests = [System.Collections.Generic.List[hashtable]]::new()
@@ -706,6 +728,38 @@ function Get-AvmCatalogTerraformRegistrySet {
         }
     }
     return $results
+}
+
+function Assert-AvmCatalogTerraformRegistryModuleResponse {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object] $Response,
+        [Parameter(Mandatory)][object] $Identity
+    )
+
+    if ($Response.StatusCode -eq 404) {
+        return
+    }
+    try {
+        $latest = Get-AvmCatalogResponseJson -Response $Response
+    }
+    catch [System.Text.Json.JsonException] {
+        throw [System.IO.InvalidDataException]::new(
+            "Terraform Registry returned invalid JSON for $($Identity.Repository).",
+            $_.Exception
+        )
+    }
+    $required = @('namespace', 'name', 'provider', 'version', 'versions')
+    if ($latest -isnot [System.Collections.IDictionary] -or
+        @($required | Where-Object { -not $latest.Contains($_) }).Count -gt 0 -or
+        $latest['namespace'] -cne 'Azure' -or $latest['name'] -cne $Identity.RepositoryId -or $latest['provider'] -cne $Identity.Provider -or
+        $latest['versions'] -isnot [array] -or $latest['versions'].Count -eq 0 -or
+        [string]::IsNullOrWhiteSpace([string]$latest['version'])) {
+        throw [System.IO.InvalidDataException]::new(
+            "Terraform Registry returned an unexpected module contract for $($Identity.Repository): " +
+            "expected Azure/$($Identity.RepositoryId)/$($Identity.Provider), a current version, and a non-empty versions array."
+        )
+    }
 }
 
 function Get-AvmCatalogTerraformRegistry {
