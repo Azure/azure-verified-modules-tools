@@ -8,7 +8,8 @@ BeforeAll {
     function script:NewValidLock {
         @{
             schemaVersion = 1
-            tools         = @(
+            tflintPlugins = @{ avm = '1.5.0' }
+            tools = @(
                 @{
                     name        = 'terraform'
                     version     = '1.9.5'
@@ -48,6 +49,7 @@ Describe 'Test-AvmPins' {
                 Test-AvmPins -Pins $L | Should -BeTrue
             }
         }
+
     }
 
     Context 'schema enforcement' {

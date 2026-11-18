@@ -182,67 +182,6 @@ function Merge-AvmTflintConfig {
     $baseText = [System.IO.File]::ReadAllText($BasePath)
     $overrideBlocks = @(Get-AvmTflintOverrideBlock -Path $OverridePath)
     $merged = Merge-AvmTflintBlock -Text $baseText -Blocks $overrideBlocks
-    $plugins = [regex]::Matches($merged, '(?ms)^[ \t]*plugin[ \t]+"avm"[ \t]*\{(?<body>[^{}]*)\}')
-    $currentPlugin = $false
-    if ($plugins.Count -eq 1) {
-        $body = $plugins[0].Groups['body'].Value
-        $pinnedVersion = [string](Read-AvmPins).tflintPlugins.avm
-        $versionPattern = '(?m)^\s*version\s*=\s*"' + [regex]::Escape($pinnedVersion) + '"\s*$'
-        $currentPlugin = [regex]::Matches($body, '(?m)^\s*(?:version|source|enabled)\s*=').Count -eq 3 -and
-        ($body -cmatch $versionPattern -or $body -cmatch '(?m)^\s*version\s*=\s*"(?:1\.0\.0|1\.2\.0|1\.3\.0|1\.4\.0)"\s*$') -and
-        $body -cmatch '(?m)^\s*source\s*=\s*"github\.com/Azure/tflint-ruleset-avm"\s*$' -and
-        $body -cmatch '(?m)^\s*enabled\s*=\s*true\s*$'
-    }
-    if ($currentPlugin) {
-        $legacyRules = [ordered]@{
-            required_output_rmfr7     = 'avm_output_resource_id_required'
-            terraform_output_separate = $null
-        }
-        foreach ($legacyName in $legacyRules.Keys) {
-            $legacyPattern = '(?ms)^[ \t]*rule[ \t]+"' + [regex]::Escape($legacyName) + '"[ \t]*\{(?<body>[^{}]*)\}'
-            $legacy = @($overrideBlocks | Where-Object { $_.Type -ceq 'rule' -and $_.Label -ceq $legacyName })
-            if ([regex]::IsMatch($baseText, $legacyPattern) -or $legacy.Count -ne 1 -or $legacy[0].Attributes.Count -ne 1) {
-                continue
-            }
-            $attribute = $legacy[0].Attributes[0]
-            $disabled = $attribute.Name -ceq 'enabled' -and $attribute.Value.StartsWith('false', [System.StringComparison]::Ordinal) -and
-            (Test-AvmHclTrivia -Text $attribute.Value.Substring(5))
-            if (-not $disabled) {
-                continue
-            }
-
-            $replacementName = $legacyRules[$legacyName]
-            if ($replacementName) {
-                $replacementPattern = '(?ms)^[ \t]*rule[ \t]+"' + [regex]::Escape($replacementName) + '"[ \t]*\{(?<body>[^{}]*)\}'
-                $replacementMatches = [regex]::Matches($merged, $replacementPattern)
-                $replacementOverrides = @($overrideBlocks | Where-Object { $_.Type -ceq 'rule' -and $_.Label -ceq $replacementName })
-                if ($replacementMatches.Count -gt 1 -or $replacementOverrides.Count -gt 1) {
-                    continue
-                }
-                if ($replacementOverrides.Count -eq 1) {
-                    $enabled = @($replacementOverrides[0].Attributes | Where-Object { $_.Name -ceq 'enabled' })
-                    if ($enabled.Count -ne 1 -or -not $enabled[0].Value.StartsWith('false', [System.StringComparison]::Ordinal) -or
-                        -not (Test-AvmHclTrivia -Text $enabled[0].Value.Substring(5))) {
-                        continue
-                    }
-                }
-                $replacement = [pscustomobject]@{
-                    Type       = 'rule'
-                    Label      = $replacementName
-                    Attributes = $legacy[0].Attributes
-                    Text       = $legacy[0].Text.Replace('"' + $legacyName + '"', '"' + $replacementName + '"')
-                }
-                $merged = Merge-AvmTflintBlock -Text $merged -Blocks @($replacement)
-                $message = "tflint: migrated disabled rule '$legacyName' to '$replacementName' from '$OverridePath'; rename the authored override for AVM ruleset $pinnedVersion."
-            }
-            else {
-                $message = "tflint: omitted obsolete disabled rule '$legacyName' from '$OverridePath'; AVM ruleset $pinnedVersion removed it without a replacement. Remove that override."
-            }
-            $merged = [regex]::Replace($merged, $legacyPattern, '')
-            Write-AvmLog $message -Level Warning | Out-Null
-        }
-    }
-
     if (-not $PSCmdlet.ShouldProcess($DestinationPath, 'Write merged TFLint config')) {
         throw [System.OperationCanceledException]::new('TFLint config staging was not approved.')
     }
@@ -329,16 +268,6 @@ function Test-AvmTflintRootClassConfiguration {
             "TFLint module_class in '$Path' does not match repository class '$ModuleClass'; remove the class override and let repository identity select it.")
     }
 
-    $plugin = [regex]::Match($text, '(?ms)^[ \t]*plugin[ \t]+"avm"[ \t]*\{(?<body>[^{}]*)\}')
-    $versionValue = [regex]::Match($plugin.Groups['body'].Value, '(?m)^[ \t]*version[ \t]*=[ \t]*"(?<version>[^"]+)"')
-    if ($versionValue.Success) {
-        $version = $null
-        if (-not [version]::TryParse($versionValue.Groups['version'].Value, [ref]$version) -or
-            $version -lt [version]'1.2.0') {
-            throw [AvmConfigurationException]::new(
-                "TFLint module_class requires AVM ruleset 1.2.0 or later; update your custom AVM plugin pin or use the packaged configuration. Effective configuration: '$Path'.")
-        }
-    }
     return $true
 }
 

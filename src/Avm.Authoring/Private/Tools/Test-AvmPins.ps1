@@ -11,8 +11,8 @@ function Test-AvmPins {
         Schema rules are documented at the head of Resources/avm.pins.jsonc.
 
         The 'tools' array is required. The 'policyLibrary', 'tflintPlugins' and
-        'powerShellModules' sections are optional so fixture manifests can pin tools alone, but are
-        fully validated whenever present.
+        'powerShellModules' sections are optional so fixture manifests can pin
+        tools alone, but are fully validated whenever present.
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '',

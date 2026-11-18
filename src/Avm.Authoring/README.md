@@ -446,7 +446,7 @@ not reached by an example. Registry/Git copies and test-only helper modules do
 not count. Coverage gaps are non-failing; no examples returns `skipped`.
 
 The Terraform lint bundle pins TFLint 0.66.0, the Terraform ruleset 0.17.0,
-and `tflint-ruleset-avm` 1.4.1.
+and `tflint-ruleset-avm` 1.5.0.
 All three packaged configurations require GitHub Artifact Attestation; there is
 no PGP signing-key fallback. AzureRM remains optional, but its version constraint
 must exclude 5.0.0 and later.
@@ -476,11 +476,15 @@ hard-coded demotion list or rewrites plugin severities. See
 [Azure/azure-verified-modules-tools#80](https://github.com/Azure/azure-verified-modules-tools/issues/80)
 for the enforcement burn-down.
 
+The `avm_provider_modtm_disallowed` rule is enabled with native
+`severity = "notice"` in root, submodule, and example configurations as a
+non-failing rollout before enforcement.
+
 For `azapi_resource`, omit `replace_triggers_refs` when no immutable body
 property requires replacement. When it is declared, it must be a static,
 non-empty list of unique, nonblank JMESPath expressions that resolve against the
 resource body; do not include the redundant `name` or `location` paths. The
-1.4.1 ruleset is configured to use GitHub Artifact Attestation.
+1.5.0 ruleset is configured to use GitHub Artifact Attestation.
 
 ### Terraform TFLint overrides
 

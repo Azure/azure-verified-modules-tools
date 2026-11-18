@@ -6,7 +6,7 @@ plugin "terraform" {
 
 plugin "avm" {
   enabled   = true
-  version   = "1.4.1"
+  version   = "1.5.0"
   source    = "github.com/Azure/tflint-ruleset-avm"
   signature = "attestation"
 }
@@ -205,6 +205,11 @@ rule "avm_interface_timeouts" {
 
 rule "avm_provider_modtm_version_constraint" {
   enabled = false
+}
+
+rule "avm_provider_modtm_disallowed" {
+  enabled  = true
+  severity = "notice"
 }
 
 rule "avm_provider_azurerm_disallowed" {
