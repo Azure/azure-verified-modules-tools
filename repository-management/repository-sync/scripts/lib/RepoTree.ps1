@@ -68,8 +68,8 @@ function Get-RepositoryFilesAtCommit {
     $root = Join-Path $parent 'repository'
     $null = New-Item -ItemType Directory -Path $parent
     try {
-        $null = Invoke-RepositoryGit -Arguments @('clone', '--quiet', '--filter=blob:none', '--no-checkout', "https://github.com/$Repository.git", $root) -WorkingDirectory $parent -MaxRetries 5
-        $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('fetch', '--quiet', '--depth', '1', 'origin', $Sha) -MaxRetries 5
+        $null = Invoke-RepositoryGit -Arguments @('clone', '--quiet', '--filter=blob:none', '--no-checkout', "https://github.com/$Repository.git", $root) -WorkingDirectory $parent -MaxRetries 5 -ReadOnly
+        $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('fetch', '--quiet', '--depth', '1', 'origin', $Sha) -MaxRetries 5 -ReadOnly
         $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments (@('sparse-checkout', 'set', '--no-cone', '--') + $Paths)
         $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('checkout', '--quiet', $Sha)
         foreach ($path in $Paths) {
@@ -127,6 +127,7 @@ function Get-RepositoryDefaultBranchTree {
             }
 
         ) `
+        -retryOn (Get-GitHubTransientRetryPatterns -ReadOnly) `
         -returnOutputParsedFromJson
 
     if (!$repoInfo -or !$repoInfo.success -or !$repoInfo.output.default_branch) {
@@ -149,6 +150,7 @@ function Get-RepositoryDefaultBranchTree {
                 OutputLog = "repo-tree.json"
             }
         ) `
+        -retryOn (Get-GitHubTransientRetryPatterns -ReadOnly) `
         -returnOutputParsedFromJson
 
     if (!$treeResult -or !$treeResult.success -or !$treeResult.output.tree) {

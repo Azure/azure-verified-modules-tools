@@ -81,6 +81,7 @@ function Remove-UnmanagedRulesets {
             -errorLog "gh-rulesets-list.error.log" `
             -maxRetries 5 `
             -retryDelayIncremental 5 `
+            -retryOn (Get-GitHubTransientRetryPatterns -ReadOnly) `
             -returnOutput
 
         if (!$listResult.success) {

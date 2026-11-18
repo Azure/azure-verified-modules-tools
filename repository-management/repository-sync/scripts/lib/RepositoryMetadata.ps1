@@ -19,22 +19,25 @@ function Get-RepositoryModuleMetadata {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
     $reference = [uri]::EscapeDataString($DefaultBranch)
-    $response = Invoke-RepositorySyncProcess -Command gh -Arguments @(
-        'api', '--hostname', 'github.com', '--method', 'GET',
-        '--header', 'Accept: application/vnd.github+json',
-        '--header', 'X-GitHub-Api-Version: 2022-11-28',
-        "repos/$Repository/contents/metadata.json?ref=$reference"
-    )
-    if ($response.ExitCode -ne 0) {
-        if ($response.StdErr -match '\(HTTP 404\)') {
+    $response = Invoke-GitHubCliWithRetry -commands @(@{
+        Arguments = @(
+            'api', '--hostname', 'github.com', '--method', 'GET',
+            '--header', 'Accept: application/vnd.github+json',
+            '--header', 'X-GitHub-Api-Version: 2022-11-28',
+            "repos/$Repository/contents/metadata.json?ref=$reference"
+        )
+    }) -maxRetries 5 -retryDelayIncremental 5 `
+        -retryOn (Get-GitHubTransientRetryPatterns -ReadOnly) -literalArguments -returnOutput
+    if (-not $response.success) {
+        if ($response.error -match '\(HTTP 404\)') {
             return [pscustomobject]@{ Status = 'missing'; Metadata = $null }
         }
         throw [System.InvalidOperationException]::new(
-            "Cannot read $Repository/metadata.json on '$DefaultBranch': $($response.StdErr)"
+            "Cannot read $Repository/metadata.json on '$DefaultBranch': $($response.error)"
         )
     }
 
-    $file = $response.StdOut | ConvertFrom-Json -AsHashtable -Depth 64
+    $file = $response.output | ConvertFrom-Json -AsHashtable -Depth 64
     if ($file -isnot [System.Collections.IDictionary] -or
         $file.type -cne 'file' -or $file.path -cne 'metadata.json' -or
         $file.encoding -cne 'base64' -or $file.sha -cnotmatch '^[0-9a-f]{40}$' -or

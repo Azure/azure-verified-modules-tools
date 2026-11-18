@@ -28,22 +28,25 @@ function Get-AvmRepositoryFileAtRef {
 
     $encodedRef = [uri]::EscapeDataString($Ref)
     $resource = "repos/$Repository/contents/$Path`?ref=$encodedRef"
-    $response = Invoke-RepositorySyncProcess -Command gh -Arguments @(
-        'api', '--hostname', 'github.com', '--method', 'GET',
-        '--header', 'Accept: application/vnd.github+json',
-        '--header', 'X-GitHub-Api-Version: 2022-11-28',
-        $resource
-    )
-    if ($response.ExitCode -ne 0) {
-        if ($AllowMissing -and $response.StdErr -match '\(HTTP 404\)') {
+    $response = Invoke-GitHubCliWithRetry -commands @(@{
+        Arguments = @(
+            'api', '--hostname', 'github.com', '--method', 'GET',
+            '--header', 'Accept: application/vnd.github+json',
+            '--header', 'X-GitHub-Api-Version: 2022-11-28',
+            $resource
+        )
+    }) -maxRetries 5 -retryDelayIncremental 5 `
+        -retryOn (Get-GitHubTransientRetryPatterns -ReadOnly) -literalArguments -returnOutput
+    if (-not $response.success) {
+        if ($AllowMissing -and $response.error -match '\(HTTP 404\)') {
             return $null
         }
         throw [System.InvalidOperationException]::new(
-            "Cannot read $Repository/$Path at '$Ref': $($response.StdErr)"
+            "Cannot read $Repository/$Path at '$Ref': $($response.error)"
         )
     }
 
-    $file = $response.StdOut | ConvertFrom-Json -AsHashtable -Depth 64
+    $file = $response.output | ConvertFrom-Json -AsHashtable -Depth 64
     if ($file -isnot [System.Collections.IDictionary] -or
         $file.type -cne 'file' -or $file.path -cne $Path -or
         $file.sha -cnotmatch '^[0-9a-f]{40}$' -or $file.size -lt 0 -or
@@ -54,18 +57,21 @@ function Get-AvmRepositoryFileAtRef {
     if ($file.encoding -ceq 'base64') {
         $bytes = [System.Convert]::FromBase64String($file.content)
     } else {
-        $rawResponse = Invoke-RepositorySyncProcess -Command gh -Arguments @(
-            'api', '--hostname', 'github.com', '--method', 'GET',
-            '--header', 'Accept: application/vnd.github.raw+json',
-            '--header', 'X-GitHub-Api-Version: 2022-11-28',
-            $resource
-        )
-        if ($rawResponse.ExitCode -ne 0) {
+        $rawResponse = Invoke-GitHubCliWithRetry -commands @(@{
+            Arguments = @(
+                'api', '--hostname', 'github.com', '--method', 'GET',
+                '--header', 'Accept: application/vnd.github.raw+json',
+                '--header', 'X-GitHub-Api-Version: 2022-11-28',
+                $resource
+            )
+        }) -maxRetries 5 -retryDelayIncremental 5 `
+            -retryOn (Get-GitHubTransientRetryPatterns -ReadOnly) -literalArguments -returnOutputUntrimmed
+        if (-not $rawResponse.success) {
             throw [System.InvalidOperationException]::new(
-                "Cannot read raw content for $Repository/$Path at '$Ref': $($rawResponse.StdErr)"
+                "Cannot read raw content for $Repository/$Path at '$Ref': $($rawResponse.error)"
             )
         }
-        $bytes = [System.Text.UTF8Encoding]::new($false, $true).GetBytes($rawResponse.StdOut)
+        $bytes = [System.Text.UTF8Encoding]::new($false, $true).GetBytes($rawResponse.output)
     }
 
     if ($bytes.Length -ne $file.size -or (Get-RepositoryGitBlobSha -Bytes $bytes) -cne $file.sha) {
