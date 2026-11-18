@@ -223,9 +223,7 @@ Invoke-Pester -Path ./tests/Pester/Component -Tag Component -Output Detailed
 
 ## 8. Cut a release (maintainers only)
 
-Release signing and GitHub publication run from the **Azure DevOps** pipeline `release-avm-authoring.yml` in `github-private/azure/Azure-Verified-Modules`. PSGallery publication runs from this repository's GitHub Actions release workflow after ADO promotes the release.
-
-Every `.ps1`, `.psm1` and `.psd1` this module ships has to carry a Microsoft Authenticode signature, and ESRP signing has no GitHub Actions equivalent. ADO builds and signs the module, packages `Avm.Authoring-X.Y.Z.zip` with `SHA256SUMS`, uploads both assets, then promotes the release. Promotion triggers GitHub Actions to validate and publish that exact signed archive without rebuilding or stamping it.
+The **Publish Avm.Authoring to MAR** pipeline in `github-private/azure/Azure-Verified-Modules` ESRP-signs the module and publishes it through EV2. The GitHub workflow publishes the same signed files from MCR, the public MAR mirror, to PowerShell Gallery. It does not change the GitHub release or add assets.
 
 Releases are driven by the git tag, not by the manifest. The committed
 `ModuleVersion` is always `0.0.0` to identify source builds. You do **not** need
@@ -233,16 +231,11 @@ to bump it before tagging: the pipeline stamps the tag version into the staged
 manifest at build time.
 
 1. *(Optional but preferred)* add a `## [X.Y.Z] - YYYY-MM-DD` section to `CHANGELOG.md`. When present it becomes the PSGallery release notes stamped into the manifest.
-2. Create a GitHub Release in this repo against the tag `vX.Y.Z`, with the title and release notes you want. Tick *Set as a pre-release* and **publish** it. Attach nothing — the pipeline uploads the assets.
-3. Queue **Release Avm.Authoring** in ADO with that tag as the `version` parameter. Leave `dryRun` unticked for a real release; tick it to build, sign, verify and package without writing anything to GitHub.
+1. Publish a **full GitHub release** against the stable tag `vX.Y.Z`, with the title and release notes you want. No assets are needed.
+1. Queue **Publish Avm.Authoring to MAR** with that exact tag and approve the rollout. Leave `dryRun` unticked for a real release.
+1. The hourly **Authoring: Release** workflow publishes every full release whose exact version is available in MCR but not yet on PowerShell Gallery. To retry one version, dispatch the workflow with its tag after it reaches MCR.
 
-Publish the release rather than saving it as a draft: **a draft release does not create its tag**, and the pipeline checks the tag out. Publishing it as a pre-release creates the tag as a side effect, so there is no separate tag push. Prerelease *versions* such as `v0.1.0-preview.1` are still unsupported — the tag has to match `vMAJOR.MINOR.PATCH`.
-
-The ADO pipeline never creates a release and never writes a release body, so a missing release fails the run. It forces the existing release back to a pre-release, replaces the signed assets, then promotes it to a full release. That promotion triggers `.github/workflows/release.yml`.
-
-ADO owns staging, release-note stamping, signing, signature verification and packaging scripts. This repo owns only `scripts/Publish-AvmAuthoring.ps1`: GitHub checks it out from the default branch rather than the release tag before exposing `POWERSHELL_GALLERY_API_KEY`. The script verifies the checksum, archive shape, exact module casing, manifest version and signature blocks, and `-SkipIfAlreadyPublished` makes a re-run safe.
-
-If the promotion event is missed or the GitHub job needs a safe retry, manually run **Authoring: Release** with the exact `vX.Y.Z` tag. The fallback accepts only an existing published, non-draft, non-prerelease release and then uses the same environment approval, signed-asset validation and publication path as the promotion event.
+A draft does not create its tag. For a MAR-only version, push a stable tag without publishing a full GitHub release. The Gallery workflow checks out the trusted default branch and validates the package version and signature blocks before publishing. It does not rebuild or re-sign the module.
 
 To preview locally what the pipeline will stage:
 
