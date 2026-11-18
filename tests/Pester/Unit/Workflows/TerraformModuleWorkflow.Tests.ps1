@@ -144,9 +144,9 @@ Describe 'Terraform E2E label routing and merge gates' {
 
     It 'routes labels like Bicep with optional implying required: <Labels>' -ForEach @(
         @{ Labels = '[]'; Required = 'false'; Optional = 'false' }
-        @{ Labels = '["PR: Run E2E Tests"]'; Required = 'true'; Optional = 'false' }
-        @{ Labels = '["PR: Run Optional E2E Tests"]'; Required = 'true'; Optional = 'true' }
-        @{ Labels = '["PR: Run E2E Tests","PR: Run Optional E2E Tests"]'; Required = 'true'; Optional = 'true' }
+        @{ Labels = '["PR: Run Required E2E Tests"]'; Required = 'true'; Optional = 'false' }
+        @{ Labels = '["PR: Run All E2E Tests"]'; Required = 'true'; Optional = 'true' }
+        @{ Labels = '["PR: Run Required E2E Tests","PR: Run All E2E Tests"]'; Required = 'true'; Optional = 'true' }
     ) {
         $env:PR_LABELS = $Labels
         & $script:listScript
@@ -159,7 +159,7 @@ Describe 'Terraform E2E label routing and merge gates' {
 
     It 'does not authorize fork deployments even with both labels' {
         $env:IS_FORK = 'true'
-        $env:PR_LABELS = '["PR: Run E2E Tests","PR: Run Optional E2E Tests"]'
+        $env:PR_LABELS = '["PR: Run Required E2E Tests","PR: Run All E2E Tests"]'
         & $script:listScript
         $outputs = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
         $outputs.runRequired | Should -BeExactly 'false'
@@ -177,7 +177,7 @@ Describe 'Terraform E2E label routing and merge gates' {
 
     It 'refuses merge-group deployment authorization and fails the merge gate' {
         $env:EVENT_NAME = 'merge_group'
-        $env:PR_LABELS = '["PR: Run E2E Tests","PR: Run Optional E2E Tests"]'
+        $env:PR_LABELS = '["PR: Run Required E2E Tests","PR: Run All E2E Tests"]'
         & $script:listScript
         $outputs = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
         $outputs.runRequired | Should -BeExactly 'false'
@@ -267,7 +267,7 @@ Describe 'Terraform E2E label routing and merge gates' {
         } $path
         $result.ExitCode | Should -Be 1
         $result.StdOut | Should -Match '::error title=E2E authorization label required::'
-        $result.StdOut | Should -Match '"PR: Run E2E Tests".*"PR: Run Optional E2E Tests"'
+        $result.StdOut | Should -Match '"PR: Run Required E2E Tests".*"PR: Run All E2E Tests"'
         $result.StdErr | Should -Not -Match 'Exception|throw'
     }
 
@@ -308,7 +308,7 @@ const context = {
   payload: { pull_request: { number: 42, head: { sha: 'current', repo: { full_name: scenario.fork ? 'fork/module' : 'Azure/module' } } } },
   serverUrl: 'https://github.com', runId: 123
 };
-const label = scenario.optional ? 'PR: Run Optional E2E Tests' : 'PR: Run E2E Tests';
+const label = scenario.optional ? 'PR: Run All E2E Tests' : 'PR: Run Required E2E Tests';
 const authorized = scenario.newlyAuthorized || (!scenario.missing && !scenario.newlyRemoved);
 process.env.RESULTS = JSON.stringify({ 'discover-examples': {
   result: scenario.failed ? 'failure' : 'success',
@@ -355,8 +355,8 @@ new AsyncFunction('github', 'context', 'core', source)(github, context, core)
             $result.mutations.Count | Should -Be 1
             $result.mutations[0].operation | Should -BeExactly $Expected
             if ($Missing) {
-                $result.mutations[0].body | Should -Match '`PR: Run E2E Tests`'
-                $result.mutations[0].body | Should -Match '`PR: Run Optional E2E Tests`'
+                $result.mutations[0].body | Should -Match '`PR: Run Required E2E Tests`'
+                $result.mutations[0].body | Should -Match '`PR: Run All E2E Tests`'
                 $result.mutations[0].body | Should -Match 'required \*\*and\*\* optional'
                 $result.mutations[0].body | Should -Match 'Labels on a fork do not authorize'
             }

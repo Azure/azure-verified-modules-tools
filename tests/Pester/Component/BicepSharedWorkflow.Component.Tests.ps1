@@ -219,10 +219,13 @@ function Invoke-AvmWorkflowGitRead {
         Should -Invoke Initialize-AvmBicepWorkflowMatrix -Exactly 1 -ParameterFilter { $SkipModuleVersionCheck }
     }
 
-    It 'assigns each module E2E route inside the one per-module check matrix' {
+    It 'routes module E2E checks when <Label> is added' -ForEach @(
+        @{ Label = 'PR: Run Required E2E Tests' }
+        @{ Label = 'PR: Run All E2E Tests' }
+    ) {
         $script:eventAction = 'labeled'
-        $script:eventLabel = 'PR: Run E2E Tests'
-        $env:PR_LABELS = '["PR: Run E2E Tests"]'
+        $script:eventLabel = $Label
+        $env:PR_LABELS = ConvertTo-Json -InputObject @($Label) -Compress
         $output = Invoke-AvmPrEntrypointFixture
         $output.routes | Should -Be @('check')
         ($output.workflowInput | ConvertFrom-Json).deploymentValidation | Should -BeExactly 'true'
@@ -237,7 +240,7 @@ function Invoke-AvmWorkflowGitRead {
     ) {
         $script:eventAction = 'labeled'
         $script:eventLabel = $Label
-        $env:PR_LABELS = '["PR: Run E2E Tests"]'
+        $env:PR_LABELS = '["PR: Run Required E2E Tests"]'
         (Invoke-AvmPrEntrypointFixture).routes | Should -HaveCount 0
         $script:entrypointBootstraps | Should -Be 0
         Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
@@ -245,7 +248,7 @@ function Invoke-AvmWorkflowGitRead {
 
     It 'routes forks only to the public secret-free PR check with <Labels>' -ForEach @(
         @{ Labels = '[]' }
-        @{ Labels = '["PR: Run E2E Tests"]' }
+        @{ Labels = '["PR: Run Required E2E Tests"]' }
     ) {
         $env:HEAD_REPOSITORY = 'fork/bicep-registry-modules'
         $env:PR_LABELS = $Labels

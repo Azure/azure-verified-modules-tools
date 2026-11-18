@@ -11,8 +11,8 @@ BeforeAll {
 Describe 'Standard GitHub label catalog' {
     It 'preserves existing labels and adds both E2E authorization labels' {
         $script:labels | Should -HaveCount 47
-        $script:labels.Name | Should -Contain 'PR: Run E2E Tests'
-        $script:labels.Name | Should -Contain 'PR: Run Optional E2E Tests'
+        $script:labels.Name | Should -Contain 'PR: Run Required E2E Tests'
+        $script:labels.Name | Should -Contain 'PR: Run All E2E Tests'
         $owner = @($script:labels | Where-Object Name -eq 'Needs: Module Owner :mega:')
         $owner | Should -HaveCount 1
         $owner[0].Description | Should -Match 'In the BRM repository:'

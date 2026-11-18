@@ -129,7 +129,7 @@ avm release-branch `
 
 Remove `--whatif` to create the release branch, retarget and merge the fork PR,
 and open a follow-up PR to main. The command does not approve reviews or bypass
-branch protections. For the Bicep registry, it adds `PR: Run E2E Tests` to the
+branch protections. For the Bicep registry, it adds `PR: Run Required E2E Tests` to the
 follow-up PR. If it stops, inspect the branch and PR before manual recovery.
 Normal PR checks do not require this process. The follow-up PR remains subject
 to the protections configured for main.

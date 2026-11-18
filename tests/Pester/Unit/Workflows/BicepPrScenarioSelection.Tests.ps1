@@ -225,7 +225,7 @@ Describe 'Bicep PR label admission' {
         $env:REPOSITORY = 'Azure/bicep-registry-modules'
         $env:HEAD_REPOSITORY = $env:REPOSITORY
         $env:EVENT_ACTION = 'labeled'
-        $env:EVENT_LABEL = 'PR: Run Optional E2E Tests'
+        $env:EVENT_LABEL = 'PR: Run All E2E Tests'
         $env:DEPLOYMENT_VALIDATION = 'false'
         $env:GITHUB_OUTPUT = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
     }
@@ -236,9 +236,9 @@ Describe 'Bicep PR label admission' {
 
     It 'selects the correct tests for <Labels>' -ForEach @(
         @{ Labels = '[]'; Required = 'false'; Optional = 'false'; Expected = @(); Route = 'none' }
-        @{ Labels = '["PR: Run E2E Tests"]'; Required = 'true'; Optional = 'false'; Expected = @('defaults', 'waf-aligned'); Route = 'native' }
-        @{ Labels = '["PR: Run Optional E2E Tests"]'; Required = 'true'; Optional = 'true'; Expected = @('defaults', 'waf-aligned', 'max'); Route = 'native' }
-        @{ Labels = '["PR: Run E2E Tests","PR: Run Optional E2E Tests"]'; Required = 'true'; Optional = 'true'; Expected = @('defaults', 'waf-aligned', 'max'); Route = 'native' }
+        @{ Labels = '["PR: Run Required E2E Tests"]'; Required = 'true'; Optional = 'false'; Expected = @('defaults', 'waf-aligned'); Route = 'native' }
+        @{ Labels = '["PR: Run All E2E Tests"]'; Required = 'true'; Optional = 'true'; Expected = @('defaults', 'waf-aligned', 'max'); Route = 'native' }
+        @{ Labels = '["PR: Run Required E2E Tests","PR: Run All E2E Tests"]'; Required = 'true'; Optional = 'true'; Expected = @('defaults', 'waf-aligned', 'max'); Route = 'native' }
     ) {
         $env:PR_LABELS = $Labels
         & ([scriptblock]::Create($gate))
@@ -270,8 +270,8 @@ Describe 'Bicep PR label admission' {
     }
 
     It 'does not deploy from forks for <Labels>' -ForEach @(
-        @{ Labels = '["PR: Run Optional E2E Tests"]' }
-        @{ Labels = '["PR: Run E2E Tests","PR: Run Optional E2E Tests"]' }
+        @{ Labels = '["PR: Run All E2E Tests"]' }
+        @{ Labels = '["PR: Run Required E2E Tests","PR: Run All E2E Tests"]' }
     ) {
         $env:HEAD_REPOSITORY = 'fork/repo'
         $env:PR_LABELS = $Labels
@@ -293,7 +293,7 @@ Describe 'Bicep PR label admission' {
 
     It 'keeps required tests requested if the required label is removed but the optional label remains' {
         $env:EVENT_ACTION = 'unlabeled'
-        $env:PR_LABELS = '["PR: Run Optional E2E Tests"]'
+        $env:PR_LABELS = '["PR: Run All E2E Tests"]'
         & ([scriptblock]::Create($gate))
         $result = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
         $result.required | Should -BeExactly 'true'

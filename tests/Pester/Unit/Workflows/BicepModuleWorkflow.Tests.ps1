@@ -567,7 +567,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $text | Should -Match '\$required = if \(\$manual\)'
         $text | Should -Match '\$optional = if \(\$manual\)'
         $text | Should -Match '\$env:DEPLOYMENT_VALIDATION -ceq ''true'''
-        $text | Should -Match "labels -ccontains 'PR: Run E2E Tests'"
+        $text | Should -Match "labels -ccontains 'PR: Run Required E2E Tests'"
         $text | Should -Not -Match 'utilities[/\\]|Get-TestSubscriptionTag|avm\.template\.module\.preview'
         foreach ($step in $initializer.runs.steps | Where-Object { $_['uses'] }) {
             $step.uses | Should -Match '@[0-9a-f]{40}$'

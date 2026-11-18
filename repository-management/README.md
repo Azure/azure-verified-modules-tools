@@ -264,11 +264,14 @@ the retired credential is not retained for compatibility.
 ### Terraform PR test gates
 
 The reusable Terraform workflow runs PR checks, unit tests and integration
-tests automatically. `PR: Run E2E Tests` authorizes existing `examples/default`
-and `examples/waf-aligned` scenarios. `PR: Run Optional E2E Tests` authorizes
-both required and optional runnable examples, matching Bicep. Every selected
-test must pass the single `Report check status` merge gate, including optional
-tests when requested. Missing required scenarios
+tests automatically. The E2E labels let contributors open a PR early, run the
+fast checks while iterating, then start deployment tests only when ready,
+reducing unnecessary cloud cost and runtime.
+`PR: Run Required E2E Tests` authorizes existing `examples/default` and
+`examples/waf-aligned` scenarios. `PR: Run All E2E Tests` authorizes both
+required and optional runnable examples, matching Bicep. Every selected test
+must pass the single `Report check status` merge gate, including optional tests
+when requested. Missing required scenarios
 are reported without requiring modules to add them yet; an existing required
 scenario cannot bypass validation with `.e2eignore`.
 

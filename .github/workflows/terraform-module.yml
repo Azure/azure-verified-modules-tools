@@ -583,10 +583,10 @@ jobs:
           )
           $runRequired = $trusted -and (
               $env:EVENT_NAME -eq 'workflow_dispatch' -or
-              $labels -ccontains 'PR: Run E2E Tests' -or $labels -ccontains 'PR: Run Optional E2E Tests'
+              $labels -ccontains 'PR: Run Required E2E Tests' -or $labels -ccontains 'PR: Run All E2E Tests'
           )
           $runOptional = $trusted -and (
-              $env:EVENT_NAME -eq 'workflow_dispatch' -or $labels -ccontains 'PR: Run Optional E2E Tests'
+              $env:EVENT_NAME -eq 'workflow_dispatch' -or $labels -ccontains 'PR: Run All E2E Tests'
           )
           $hasExamples = if ($parsed.Count -gt 0) { 'true' } else { 'false' }
 
@@ -862,9 +862,9 @@ jobs:
             const missing = required && discovery.outputs.runRequired !== 'true';
             const pr = context.payload.pull_request;
             const fork = pr.head.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`;
-            const labels = ['PR: Run E2E Tests', 'PR: Run Optional E2E Tests'];
+            const labels = ['PR: Run Required E2E Tests', 'PR: Run All E2E Tests'];
             const marker = '<!-- avm-terraform-e2e-label -->';
-            const message = 'Required E2E tests have not been authorized. Ask a maintainer to add "PR: Run E2E Tests" or "PR: Run Optional E2E Tests" to the same-repository PR.';
+            const message = 'Required E2E tests have not been authorized. Ask a maintainer to add "PR: Run Required E2E Tests" or "PR: Run All E2E Tests" to the same-repository PR.';
             const instructions = [
               '## Action required: authorize E2E tests',
               '',
@@ -872,8 +872,10 @@ jobs:
               '',
               'Ask a maintainer to add **one** of these labels to the same-repository PR:',
               '',
-              '- `PR: Run E2E Tests`: runs required E2E tests.',
-              '- `PR: Run Optional E2E Tests`: runs required **and** optional E2E tests.',
+              '- `PR: Run Required E2E Tests`: runs required E2E tests.',
+              '- `PR: Run All E2E Tests`: runs required **and** optional E2E tests.',
+              '',
+              'These labels let you open a PR early and run deployment tests only when they are ready, reducing unnecessary cloud cost and runtime.',
               '',
               'Adding a label starts a new PR-check run. Every selected E2E test must pass.',
               '',
@@ -931,7 +933,7 @@ jobs:
               throw [System.InvalidOperationException]::new('E2E example discovery did not pass.')
           }
           if ($discovery.outputs.requiredExamples -cne '[]' -and $discovery.outputs.runRequired -cne 'true') {
-              Write-Host '::error title=E2E authorization label required::Required E2E tests must run and pass before merging. Ask a maintainer to add "PR: Run E2E Tests" (required tests) or "PR: Run Optional E2E Tests" (required and optional tests) to the same-repository PR. Forks require a maintainer-operated release-branch handoff first. See the run summary.'
+              Write-Host '::error title=E2E authorization label required::Required E2E tests must run and pass before merging. Ask a maintainer to add "PR: Run Required E2E Tests" (required tests) or "PR: Run All E2E Tests" (required and optional tests) to the same-repository PR. Forks require a maintainer-operated release-branch handoff first. See the run summary.'
               exit 1
           }
           if ($discovery.outputs.runRequired -ceq 'true') {

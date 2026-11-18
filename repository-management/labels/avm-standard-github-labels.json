@@ -1,13 +1,13 @@
 {
   "labels": [
     {
-      "name": "PR: Run E2E Tests",
-      "description": "Authorize required end-to-end tests for this pull request.",
+      "name": "PR: Run Required E2E Tests",
+      "description": "Run required end-to-end tests for this pull request.",
       "color": "0E8A16"
     },
     {
-      "name": "PR: Run Optional E2E Tests",
-      "description": "Authorize optional end-to-end tests for this pull request.",
+      "name": "PR: Run All E2E Tests",
+      "description": "Run required and optional end-to-end tests for this pull request.",
       "color": "0E8A16"
     },
     {
