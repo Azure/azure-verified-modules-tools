@@ -12,6 +12,7 @@ on:
       - 'Repos: Issue Routing'
       - 'Repos: PR Routing'
       - 'Repos: Workflow Failures'
+      - 'Authoring: Release'
     branches: [main]
     types: [completed]
   schedule:
@@ -79,7 +80,7 @@ jobs:
           MONITORED_WORKFLOWS: >-
             ["Repos: Catalog Sync", "Repos: Terraform Sync", "Repos: Bicep Sync",
              "Repos: Module List Sync", "Repos: Label Sync", "Repos: Issue Routing",
-             "Repos: PR Routing", "Repos: Workflow Failures"]
+             "Repos: PR Routing", "Repos: Workflow Failures", "Authoring: Release"]
         run: |
           Import-Module (Join-Path $env:GITHUB_WORKSPACE 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force -ErrorAction Stop
           $workflowNames = @($env:MONITORED_WORKFLOWS | ConvertFrom-Json)
