@@ -12,14 +12,17 @@ function Get-RepositoryInstalledRepositories {
     $expectedCount = $null
     $page = 1
     do {
-        $result = Invoke-RepositorySyncProcess -Command gh -Arguments @(
-            'api', '--hostname', 'github.com', '--method', 'GET',
-            "/installation/repositories?per_page=100&page=$page"
-        )
-        if ($result.ExitCode -ne 0) {
-            throw [System.InvalidOperationException]::new("Cannot list the app's repositories: $($result.StdErr)")
+        $result = Invoke-GitHubCliWithRetry -commands @(@{
+            Arguments = @(
+                'api', '--hostname', 'github.com', '--method', 'GET',
+                "/installation/repositories?per_page=100&page=$page"
+            )
+        }) -maxRetries 5 -retryDelayIncremental 5 `
+            -retryOn (Get-GitHubTransientRetryPatterns -ReadOnly) -literalArguments -returnOutput
+        if (-not $result.success) {
+            throw [System.InvalidOperationException]::new("Cannot list the app's repositories: $($result.error)")
         }
-        $response = $result.StdOut | ConvertFrom-Json
+        $response = $result.output | ConvertFrom-Json
         if (-not $response.PSObject.Properties['repositories'] -or
             -not $response.PSObject.Properties['total_count'] -or $response.total_count -lt 0) {
             throw [System.IO.InvalidDataException]::new('GitHub returned an invalid app repository list.')

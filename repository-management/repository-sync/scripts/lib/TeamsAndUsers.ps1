@@ -91,6 +91,7 @@ function Remove-DirectCollaborators {
                 OutputLog = "repo-users.json"
             }
         ) `
+        -retryOn (Get-GitHubTransientRetryPatterns -ReadOnly) `
         -returnOutputParsedFromJson
 
     if (!$repoUsers.success) {
@@ -107,7 +108,7 @@ function Remove-DirectCollaborators {
                     Arguments = @('api', "orgs/$($teamParts[0])/teams/$($teamParts[1])/members?per_page=100", '--paginate', '--slurp')
                     OutputLog = "owner-team-$($teamParts[0])-$($teamParts[1]).json"
                 }
-            ) -returnOutputParsedFromJson
+            ) -retryOn (Get-GitHubTransientRetryPatterns -ReadOnly) -returnOutputParsedFromJson
             if (-not $members.success) {
                 $message = "Skipping direct collaborator cleanup for $orgAndRepoName because owners in $ownerTeam could not be resolved."
                 Write-Warning $message
@@ -187,6 +188,7 @@ function Remove-UnmanagedRepositoryTeams {
                 OutputLog = "repo-teams.json"
             }
         ) `
+        -retryOn (Get-GitHubTransientRetryPatterns -ReadOnly) `
         -returnOutputParsedFromJson
 
     if (!$repoTeams.success) {

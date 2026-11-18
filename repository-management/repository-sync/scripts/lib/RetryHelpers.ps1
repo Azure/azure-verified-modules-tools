@@ -19,7 +19,14 @@ function Get-GitHubTransientRetryPatterns {
     )
 
     if ($ReadOnly) {
-        $patterns += @("HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504", "unexpected end of JSON input")
+        $patterns += @(
+            "HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504",
+            "The requested URL returned error: 500",
+            "The requested URL returned error: 502",
+            "The requested URL returned error: 503",
+            "The requested URL returned error: 504",
+            "unexpected end of JSON input"
+        )
     }
 
     return $patterns
@@ -297,6 +304,7 @@ function Invoke-GitHubCliWithRetry {
         [switch]$printOutput,
         [switch]$printOutputOnError,
         [switch]$returnOutput,
+        [switch]$returnOutputUntrimmed,
         [switch]$returnOutputParsedFromJson,
         [switch]$literalArguments,
         [string]$workingDirectory
@@ -313,6 +321,7 @@ function Invoke-GitHubCliWithRetry {
         -printOutput:$printOutput.IsPresent `
         -printOutputOnError:$printOutputOnError.IsPresent `
         -returnOutput:$returnOutput.IsPresent `
+        -returnOutputUntrimmed:$returnOutputUntrimmed.IsPresent `
         -returnOutputParsedFromJson:$returnOutputParsedFromJson.IsPresent `
         -literalArguments:$literalArguments.IsPresent `
         -workingDirectory $workingDirectory
@@ -384,7 +393,7 @@ function Invoke-RepositoryGitHubApi {
         'api', '--hostname', 'github.com', '--method', 'GET',
         '--header', 'Accept: application/vnd.github+json',
         '--header', 'X-GitHub-Api-Version: 2022-11-28', $Endpoint
-    )
+    ) -ReadOnly
 }
 
 function Invoke-RepositoryGit {
@@ -392,13 +401,14 @@ function Invoke-RepositoryGit {
     param(
         [Parameter(Mandatory)] [string[]] $Arguments,
         [string] $WorkingDirectory,
-        [int] $MaxRetries = 0
+        [int] $MaxRetries = 0,
+        [switch] $ReadOnly
     )
 
     $arguments = @('-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential') + $Arguments
     $result = Invoke-CommandWithRetry -parentCommand git -commands @(@{ Arguments = $arguments }) `
         -literalArguments -workingDirectory $WorkingDirectory -maxRetries $MaxRetries `
-        -retryOn (Get-GitHubTransientRetryPatterns) -retryDelayIncremental 5 -returnOutput
+        -retryOn (Get-GitHubTransientRetryPatterns -ReadOnly:$ReadOnly.IsPresent) -retryDelayIncremental 5 -returnOutput
     if (-not $result.success) {
         $detail = if ($result.ContainsKey('error')) { $result.error } else { 'command failed' }
         throw [System.InvalidOperationException]::new("Git operation failed: $detail")
@@ -468,6 +478,7 @@ function Invoke-CommandWithRetry {
         [switch]$printOutput,
         [switch]$printOutputOnError,
         [switch]$returnOutput,
+        [switch]$returnOutputUntrimmed,
         [switch]$returnOutputParsedFromJson,
         [switch]$literalArguments,
         [string]$workingDirectory
@@ -613,6 +624,11 @@ function Invoke-CommandWithRetry {
                     $returnOutputs += @{
                         success = $true
                         output  = $parsedOutput
+                    }
+                } elseif ($returnOutputUntrimmed) {
+                    $returnOutputs += @{
+                        success = $true
+                        output  = $standardOutput
                     }
                 } elseif ($returnOutput) {
                     $returnOutputs += @{

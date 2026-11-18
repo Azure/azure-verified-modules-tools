@@ -50,7 +50,8 @@ function Remove-LegacyBranchProtection {
             ) `
             -errorLog "gh-branch-protection-get.error.log" `
             -maxRetries 5 `
-            -retryDelayIncremental 5
+            -retryDelayIncremental 5 `
+            -retryOn (Get-GitHubTransientRetryPatterns -ReadOnly)
 
         if ($getResult.success) {
             # 200 OK -> a classic branch-protection rule exists.

@@ -209,7 +209,7 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
             throw [System.InvalidOperationException]::new('Repository synchronization requires an explicit app installation token.')
         }
         $installation = Invoke-RepositoryGitHubApi -Endpoint 'installation/repositories?per_page=100'
-        $viewer = Invoke-RepositoryGitHub -AsJson -Arguments @('api', 'graphql', '--raw-field', 'query={ viewer { login databaseId } }')
+        $viewer = Invoke-RepositoryGitHub -AsJson -ReadOnly -Arguments @('api', 'graphql', '--raw-field', 'query={ viewer { login databaseId } }')
         if ($installation.total_count -ne 1 -or @($installation.repositories).Count -ne 1 -or
             $installation.repositories[0].full_name -cne $Repository -or
             $viewer.data.viewer.login -cne $ExpectedActor.login -or $viewer.data.viewer.databaseId -ne $ExpectedActor.id) {
@@ -233,7 +233,7 @@ This PR is opened and merged by the AVM bot. ``[skip ci]`` is set on the commit 
         $clone = @('clone', '--quiet', '--depth', '1', '--branch', $DefaultBranch)
         $sparseCheckout = $AllowedPaths.Count -gt 0 -and -not $FullCheckout
         if ($sparseCheckout) { $clone += @('--filter=blob:none', '--no-checkout') }
-        $null = Invoke-RepositoryGit -Arguments ($clone + @("https://github.com/$Repository.git", $root)) -WorkingDirectory $parent -MaxRetries 5
+        $null = Invoke-RepositoryGit -Arguments ($clone + @("https://github.com/$Repository.git", $root)) -WorkingDirectory $parent -MaxRetries 5 -ReadOnly
         if ($sparseCheckout) {
             $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments (@('sparse-checkout', 'set', '--no-cone', '--') + $AllowedPaths)
             $null = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('checkout', '--quiet', $DefaultBranch)

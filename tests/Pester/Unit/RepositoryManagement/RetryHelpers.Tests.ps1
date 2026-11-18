@@ -404,6 +404,27 @@ Describe 'Invoke-RepositoryGitHub retry policy' {
             $retryOn -notcontains 'HTTP 504' -and $retryOn -notcontains 'unexpected end of JSON input'
         }
     }
+
+    It 'enables transient response retries for the GitHub API read helper' {
+        Invoke-RepositoryGitHubApi -Endpoint 'repos/Azure/example' | Out-Null
+        Should -Invoke Invoke-GitHubCliWithRetry -Times 1 -ParameterFilter {
+            $retryOn -contains 'HTTP 502' -and $commands[0].Arguments -contains 'repos/Azure/example'
+        }
+    }
+
+    It 'enables transient response retries only for read-only Git operations' {
+        Mock Invoke-CommandWithRetry { @{ success = $true; output = '' } }
+
+        Invoke-RepositoryGit -Arguments @('fetch', 'origin', 'main') -MaxRetries 2 -ReadOnly | Out-Null
+        Should -Invoke Invoke-CommandWithRetry -Times 1 -ParameterFilter {
+            $retryOn -contains 'HTTP 502' -and $maxRetries -eq 2
+        }
+
+        Invoke-RepositoryGit -Arguments @('push', 'origin', 'main') -MaxRetries 2 | Out-Null
+        Should -Invoke Invoke-CommandWithRetry -Times 1 -ParameterFilter {
+            $retryOn -notcontains 'HTTP 502' -and $maxRetries -eq 2
+        }
+    }
 }
 
 Describe 'Existing retry transport literal-argv mode' {
@@ -431,6 +452,36 @@ Describe 'Existing retry transport literal-argv mode' {
             -literalArguments -maxRetries 1 -retryDelayIncremental 0 -returnOutputParsedFromJson
         $result.output.ok | Should -BeTrue
         Should -Invoke Invoke-RepositorySyncProcess -Exactly 2
+    }
+
+    It 'preserves trailing bytes when returning untrimmed output' {
+        Mock Invoke-RepositorySyncProcess {
+            [pscustomobject]@{ ExitCode = 0; StdOut = "raw content`n"; StdErr = '' }
+        }
+
+        $result = Invoke-GitHubCliWithRetry -commands @(@{ Arguments = @('api', 'repos/Azure/example') }) `
+            -literalArguments -returnOutputUntrimmed
+
+        $result.output | Should -BeExactly "raw content`n"
+    }
+
+    It 'retries Git server failures only for marked read operations' {
+        $script:gitReadAttempts = 0
+        Mock Invoke-RepositorySyncProcess {
+            $script:gitReadAttempts++
+            if ($script:gitReadAttempts -eq 1) {
+                return [pscustomobject]@{
+                    ExitCode = 1
+                    StdOut = ''
+                    StdErr = 'fatal: unable to access URL: The requested URL returned error: 502'
+                }
+            }
+            [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+        }
+
+        Invoke-RepositoryGit -Arguments @('fetch', 'origin', 'main') -MaxRetries 1 -ReadOnly | Out-Null
+
+        $script:gitReadAttempts | Should -Be 2
     }
 
     It 'preserves explicit empty JSON lists without accepting null or empty API responses' {

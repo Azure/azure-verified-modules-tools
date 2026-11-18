@@ -34,7 +34,8 @@ Describe 'Get-AvmRepositoryFileAtRef' {
     }
 
     It 'falls back to a raw-media-type request for a file over the 1 MB inline limit' {
-        $fixture = New-FileFixture -Content 'large catalog content'
+        $rawContent = "large catalog content`n"
+        $fixture = New-FileFixture -Content $rawContent
         $metadata = @{
             type = 'file'; path = 'docs/static/module-indexes/v1/modules.json'; sha = $fixture.Sha
             size = $fixture.Bytes.Length; encoding = 'none'; content = ''
@@ -42,13 +43,13 @@ Describe 'Get-AvmRepositoryFileAtRef' {
         Mock Invoke-RepositorySyncProcess {
             param($Command, $Arguments)
             if ($Arguments -contains 'Accept: application/vnd.github.raw+json') {
-                return @{ ExitCode = 0; StdOut = 'large catalog content'; StdErr = '' }
+                return @{ ExitCode = 0; StdOut = $rawContent; StdErr = '' }
             }
             return @{ ExitCode = 0; StdOut = $metadata; StdErr = '' }
         }
 
         $result = Get-AvmRepositoryFileAtRef -Repository 'Azure/Azure-Verified-Modules' -Path 'docs/static/module-indexes/v1/modules.json' -Ref 'main'
-        $result.Content | Should -Be 'large catalog content'
+        $result.Content | Should -BeExactly $rawContent
         $result.Sha | Should -Be $fixture.Sha
         Should -Invoke Invoke-RepositorySyncProcess -Exactly 2
     }

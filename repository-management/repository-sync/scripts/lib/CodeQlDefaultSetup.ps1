@@ -58,6 +58,7 @@ function Disable-CodeQlDefaultSetup {
             -errorLog "gh-codeql-default-setup-get.error.log" `
             -maxRetries 5 `
             -retryDelayIncremental 5 `
+            -retryOn (Get-GitHubTransientRetryPatterns -ReadOnly) `
             -returnOutput
 
         if ($getResult.success) {
