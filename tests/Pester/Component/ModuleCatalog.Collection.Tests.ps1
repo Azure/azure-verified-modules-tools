@@ -419,6 +419,41 @@ Describe 'Component: module catalog registry collection' -Tag Component {
         Should -Invoke Invoke-AvmCatalogRequestSet -Times 2 -Exactly
     }
 
+    It 'validates Terraform Registry responses inside the batched callback closure' {
+        $identities = @(
+            (New-AvmCatalogIdentity -Ecosystem terraform -Repository 'Azure/terraform-azurerm-avm-res-test-first' -ModulePath '.'),
+            (New-AvmCatalogIdentity -Ecosystem terraform -Repository 'Azure/terraform-azapi-avm-res-test-second' -ModulePath '.')
+        )
+        Mock Invoke-AvmCatalogRequestSet {
+            foreach ($request in $Requests) {
+                if ($Activity -ne 'Terraform registry modules') {
+                    continue
+                }
+                $segments = ([uri]$request.Uri).AbsolutePath.Trim('/').Split('/')
+                $response = [pscustomobject]@{
+                    StatusCode = 200
+                    Content = ConvertTo-AvmCatalogJson -Value @{
+                        namespace = 'Azure'
+                        name = $segments[3]
+                        provider = $segments[4]
+                        version = '1.0.0'
+                        versions = @('1.0.0')
+                        published_at = '2024-01-01T00:00:00Z'
+                        submodules = @()
+                    }
+                }
+                & $request.ResponseValidator $response
+                $response
+            }
+        }
+
+        $results = Get-AvmCatalogTerraformRegistrySet -Identities $identities
+
+        foreach ($identity in $identities) {
+            $results[$identity.Repository].Root.currentVersion | Should -BeExactly '1.0.0'
+        }
+    }
+
     It 'represents a Terraform Registry module 404 explicitly as not-published' {
         $identity = New-AvmCatalogIdentity -Ecosystem terraform -Repository 'Azure/terraform-azapi-avm-utl-test-module' -ModulePath '.'
         Mock Invoke-AvmCatalogRequestSet { foreach ($request in $Requests) { [pscustomobject]@{ StatusCode = 404; Content = '{}' } } }

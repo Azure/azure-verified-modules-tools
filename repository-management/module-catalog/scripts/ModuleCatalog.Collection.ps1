@@ -633,12 +633,13 @@ function Get-AvmCatalogTerraformRegistrySet {
                 })
         }
     }
+    $responseValidator = (Get-Command -Name Assert-AvmCatalogTerraformRegistryModuleResponse -CommandType Function).ScriptBlock
     $rootResponses = Invoke-AvmCatalogRequestSet -Activity 'Terraform registry modules' -Requests @(foreach ($root in $roots) {
             $identity = $root.Identity
             New-AvmCatalogRequest -Uri $root.Base -AllowNotFound -ResponseValidator (
                 {
                     param([object] $Response)
-                    Assert-AvmCatalogTerraformRegistryModuleResponse -Response $Response -Identity $identity
+                    & $responseValidator -Response $Response -Identity $identity
                 }.GetNewClosure()
             )
         })
