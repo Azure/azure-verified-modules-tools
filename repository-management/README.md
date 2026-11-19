@@ -293,6 +293,12 @@ absence is not yet a merge failure. They explain that the Required label selects
 no tests and the All label is needed for optional examples; the feedback does not
 claim that selected tests passed.
 
+Both ecosystems delegate gate reporting, summaries and sticky PR feedback to
+the Tools `report-check-status` action. Its trusted PowerShell implementation
+owns comment pagination, bot ownership, current-head/label guards and permission
+failures; callers supply job results and ecosystem-specific enforcement inputs.
+The reporting job does not check out or execute PR code.
+
 Repository sync requires `run managed workflow / Report check status` from
 GitHub Actions on the default branch. The managed caller must retain the
 display name `run managed workflow` and the label-triggered events.

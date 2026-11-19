@@ -1,0 +1,35 @@
+name: Report AVM check status
+description: Evaluate ecosystem check results and publish shared E2E authorization feedback without checking out PR code.
+inputs:
+  ecosystem:
+    description: The bicep or terraform check policy.
+    required: true
+  results:
+    description: JSON needs context containing the ecosystem's completed check jobs.
+    required: true
+  require-e2e:
+    description: Whether Bicep must enforce E2E selection; manual static-only runs use false.
+    default: 'true'
+  token:
+    description: GitHub token with pull-requests write permission; forks never attempt comment API calls.
+    default: ${{ github.token }}
+runs:
+  using: composite
+  steps:
+    - name: Evaluate and report check status
+      shell: pwsh
+      env:
+        REPORT_ECOSYSTEM: ${{ inputs.ecosystem }}
+        REPORT_RESULTS: ${{ inputs.results }}
+        REPORT_REQUIRE_E2E: ${{ inputs.require-e2e }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $root = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_ACTION_PATH '..' '..' '..'))
+        $module = Import-Module (Join-Path $root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -PassThru
+        $report = & $module {
+          param($Root)
+          . (Join-Path $Root 'scripts' 'workflow-reporting' 'Invoke-AvmWorkflowReport.ps1')
+          Invoke-AvmWorkflowReport -Ecosystem $env:REPORT_ECOSYSTEM -ResultsJson $env:REPORT_RESULTS -RequireE2e $env:REPORT_REQUIRE_E2E
+        } $root
+        if (-not $report.Passed) { exit 1 }
