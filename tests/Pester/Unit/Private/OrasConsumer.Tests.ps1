@@ -88,8 +88,10 @@ Describe 'Install-AvmTflintPluginArchive' {
             Archive = $archive; Checksums = $checksums; Cache = $cache
         } {
             param($Archive, $Checksums, $Cache)
-            Mock Get-AuthenticodeSignature {
-                [pscustomobject]@{ Status = [System.Management.Automation.SignatureStatus]::Valid }
+            if ($IsWindows) {
+                Mock Get-AuthenticodeSignature {
+                    [pscustomobject]@{ Status = [System.Management.Automation.SignatureStatus]::Valid }
+                }
             }
             Install-AvmTflintPluginArchive `
                 -ArchivePath $Archive `
@@ -106,8 +108,10 @@ Describe 'Install-AvmTflintPluginArchive' {
             Archive = $archive; Checksums = $checksums; Cache = $cache
         } {
             param($Archive, $Checksums, $Cache)
-            Mock Get-AuthenticodeSignature {
-                [pscustomobject]@{ Status = [System.Management.Automation.SignatureStatus]::Valid }
+            if ($IsWindows) {
+                Mock Get-AuthenticodeSignature {
+                    [pscustomobject]@{ Status = [System.Management.Automation.SignatureStatus]::Valid }
+                }
             }
             Install-AvmTflintPluginArchive `
                 -ArchivePath $Archive `
