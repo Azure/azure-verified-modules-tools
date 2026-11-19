@@ -20,7 +20,6 @@
 
 $script:AvmPrReviewerRoutingFallbackTeam = 'Azure/azure-verified-modules-module-owners'
 $script:AvmPrReviewerRoutingNeedsCoreTeamLabel = 'Needs: Core Team :genie:'
-$script:AvmPrReviewerRoutingNeedsModuleOwnerLabel = 'Needs: Module Owner :mega:'
 $script:AvmPrReviewerRoutingOrphanedLabel = 'Status: Module Orphaned :yellow_circle:'
 $script:AvmPrReviewerRoutingFields = 'author,number,url,isDraft,reviewRequests,reviews,headRefOid,labels,state'
 
@@ -234,7 +233,10 @@ function Resolve-AvmPrReviewerRouting {
     $newReviewers.Sort([System.StringComparer]::OrdinalIgnoreCase)
 
     $hasOrphanedModule = $orphanedModules.Count -gt 0
-    $desiredLabels = @(if ($coreTeamPaths.Count -gt 0 -or $hasOrphanedModule) { $script:AvmPrReviewerRoutingNeedsCoreTeamLabel } else { $script:AvmPrReviewerRoutingNeedsModuleOwnerLabel })
+    $desiredLabels = @()
+    if ($coreTeamPaths.Count -gt 0 -or $hasOrphanedModule) {
+        $desiredLabels += $script:AvmPrReviewerRoutingNeedsCoreTeamLabel
+    }
     if ($hasOrphanedModule) {
         $desiredLabels += $script:AvmPrReviewerRoutingOrphanedLabel
     }

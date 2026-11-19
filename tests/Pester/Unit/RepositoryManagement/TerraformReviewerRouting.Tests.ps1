@@ -205,7 +205,7 @@ Describe 'Terraform reviewer routing decisions' {
             -Repository $script:terraformRoutingRepository -CatalogIndex $script:terraformRoutingIndex `
             -ChangedFilePaths @($ChangedPath) -Ecosystem terraform
         $routing.NewReviewers | Should -Be @('root-owner')
-        $routing.NewLabels | Should -Be @('Needs: Module Owner :mega:')
+        $routing.NewLabels | Should -BeNullOrEmpty
         $routing.Modules.ModulePath | Should -Be @('.')
         $routing.Modules.Source | Should -Be @('catalog')
         Should -Invoke Get-AvmRepositoryFileAtRef -Exactly 0
@@ -272,7 +272,6 @@ Describe 'Terraform reviewer routing decisions' {
         Should -Invoke Invoke-RepositoryGitHub -Exactly 0
 
         $script:terraformRoutingPr.reviewRequests = @([pscustomobject]@{ login = 'root-owner' })
-        $script:terraformRoutingPr.labels = @([pscustomobject]@{ name = 'Needs: Module Owner :mega:' })
         $outcome = Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:terraformRoutingPr `
             -Repository $script:terraformRoutingRepository -CatalogIndex $script:terraformRoutingIndex -Ecosystem terraform
         $outcome.Status | Should -Be 'AlreadyRouted'
@@ -593,7 +592,7 @@ Describe 'Terraform reviewer routing missing-label fleet warnings' {
                 modules = @{
                     'Microsoft.Storage/storageAccounts' = @{
                         terraform = @(
-                            @{ repository = $script:terraformRoutingRepository; modulePath = '.'; owners = @(@{ handle = 'root-owner'; type = 'user' }) }
+                            @{ repository = $script:terraformRoutingRepository; modulePath = '.'; owners = @() }
                             @{ repository = $script:secondTerraformRoutingRepository; modulePath = '.'; owners = @(@{ handle = 'root-owner'; type = 'user' }) }
                         )
                     }
@@ -611,7 +610,7 @@ Describe 'Terraform reviewer routing missing-label fleet warnings' {
         Mock Write-AvmRunSummary { }
         Mock Invoke-RepositoryGitHub {
             if ($Arguments[2] -eq $script:terraformMissingLabelPr.url) {
-                throw [System.InvalidOperationException]::new("GitHub operation failed: 'Needs: Module Owner :mega:' not found")
+                throw [System.InvalidOperationException]::new("GitHub operation failed: 'Needs: Core Team :genie:' not found")
             }
         }
     }
@@ -631,7 +630,7 @@ Describe 'Terraform reviewer routing missing-label fleet warnings' {
     It 'preserves a real GraphQL failure alongside a missing-label warning' {
         Mock Invoke-RepositoryGitHub {
             if ($Arguments[2] -eq $script:terraformMissingLabelPr.url) {
-                throw [System.InvalidOperationException]::new("GitHub operation failed: 'Needs: Module Owner :mega:' not found")
+                throw [System.InvalidOperationException]::new("GitHub operation failed: 'Needs: Core Team :genie:' not found")
             }
             throw [System.InvalidOperationException]::new('GitHub operation failed: GraphQL: Something went wrong while executing your query')
         }
