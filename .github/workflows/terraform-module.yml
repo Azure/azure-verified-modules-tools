@@ -862,6 +862,8 @@ jobs:
             if (discovery.result !== 'success') return;
             const required = discovery.outputs.requiredExamples !== '[]';
             const missing = required && discovery.outputs.runRequired !== 'true';
+            const optional = JSON.parse(discovery.outputs.optionalExamples);
+            const noRequired = !required;
             const pr = context.payload.pull_request;
             const fork = pr.head.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`;
             const labels = ['PR: Run Required E2E Tests', 'PR: Run All E2E Tests'];
@@ -883,12 +885,33 @@ jobs:
               '',
               '**Fork contributions:** a maintainer must first use the same-repository release-branch handoff. Labels on a fork do not authorize cloud tests.'
             ].join('\n');
+            const absence = [
+              '## Warning: no required E2E examples found',
+              '',
+              'This repository has no runnable `default`/`defaults` or `waf-aligned` examples. Their absence does not currently block merging.',
+              '',
+              optional.length ? 'All discovered E2E examples are optional.' : 'No runnable E2E examples were discovered. Labels cannot run examples that do not exist.',
+              !optional.length ? 'No E2E deployment tests can run until runnable examples are added.' : discovery.outputs.runOptional === 'true'
+                ? 'Optional E2E tests were selected. Check their job results; selection does not mean validation passed.'
+                : 'No E2E deployment tests were selected. `PR: Run Required E2E Tests` selects no tests here; add `PR: Run All E2E Tests` to run any optional examples.',
+              '',
+              '- `PR: Run Required E2E Tests`: runs only existing required `default`/`defaults` and `waf-aligned` examples.',
+              '- `PR: Run All E2E Tests`: runs required **and** optional E2E examples.',
+              '',
+              'Open PRs early and add a deployment label when ready to avoid unnecessary cloud cost and runtime.',
+              '',
+              '**Fork contributions:** labels on a fork do not authorize cloud tests. Ask a maintainer for a same-repository release-branch handoff.'
+            ].join('\n');
+            if (noRequired) {
+              await core.summary.addRaw(absence).write();
+              core.warning('No required E2E examples found; optional examples need "PR: Run All E2E Tests".');
+            }
             if (missing) {
               await core.summary.addRaw(instructions).write();
               core.error(message, { title: 'E2E authorization label required' });
             }
             if (fork) {
-              if (missing) core.warning('Cannot comment with a read-only fork token. Follow the release-branch handoff instructions in the run summary.');
+              if (missing || noRequired) core.warning('Cannot comment with a read-only fork token. Follow the release-branch handoff instructions in the run summary.');
               return;
             }
             try {
@@ -896,13 +919,15 @@ jobs:
               if (current.head.sha !== pr.head.sha) return;
               const labelMissingNow = !current.labels.some(label => labels.includes(label.name));
               if (required && missing !== labelMissingNow) return;
+              if (noRequired && (current.labels.some(label => label.name === labels[1]) !== (discovery.outputs.runOptional === 'true') ||
+                !labelMissingNow !== (discovery.outputs.runRequired === 'true'))) return;
               const comments = await github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number: pr.number, per_page: 100 });
               const previous = comments.find(comment => comment.user?.login === 'github-actions[bot]' && comment.body?.startsWith(marker));
               const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-              const body = `${marker}\n${missing ? instructions : '## E2E label requirement satisfied\n\nE2E authorization is present, or no required E2E tests exist. This does not mean validation has passed.'}\n\n[View PR-check run](${run})`;
+              const body = `${marker}\n${noRequired ? absence : missing ? instructions : '## E2E label requirement satisfied\n\nE2E authorization is present. This does not mean validation has passed.'}\n\n[View PR-check run](${run})`;
               if (previous) {
                 if (previous.body !== body) await github.rest.issues.updateComment({ ...context.repo, comment_id: previous.id, body });
-              } else if (missing) {
+              } else if (missing || noRequired) {
                 await github.rest.issues.createComment({ ...context.repo, issue_number: pr.number, body });
               }
             } catch (error) {

@@ -296,7 +296,14 @@ Describe 'Terraform E2E label routing and merge gates' {
         @{ Case = 'human cannot spoof owned comment'; Missing = $true; Human = $true; Expected = 'create'; Summary = $true }
         @{ Case = 'required label resolves comment'; Existing = $true; Expected = 'update' }
         @{ Case = 'optional label resolves comment'; Existing = $true; Optional = $true; Expected = 'update' }
-        @{ Case = 'absent required scenarios resolve comment'; Existing = $true; Empty = $true; Expected = 'update' }
+        @{ Case = 'optional-only examples explain missing label'; Empty = $true; Missing = $true; Expected = 'create'; Summary = $true; Warning = $true }
+        @{ Case = 'required label selects no optional examples'; Empty = $true; Expected = 'create'; Summary = $true; Warning = $true }
+        @{ Case = 'all label selects optional-only examples'; Empty = $true; Optional = $true; Expected = 'create'; Summary = $true; Warning = $true }
+        @{ Case = 'absent required scenarios update comment'; Existing = $true; Empty = $true; Expected = 'update'; Summary = $true; Warning = $true }
+        @{ Case = 'absent runnable examples explain labels cannot create tests'; Empty = $true; NoOptional = $true; Expected = 'create'; Summary = $true; Warning = $true }
+        @{ Case = 'all label cannot select nonexistent examples'; Empty = $true; NoOptional = $true; Optional = $true; Expected = 'create'; Summary = $true; Warning = $true }
+        @{ Case = 'optional-only fork gets summary without API calls'; Empty = $true; Missing = $true; Fork = $true; Summary = $true; Warning = $true; Expected = '' }
+        @{ Case = 'optional-only stale label cannot post'; Empty = $true; Missing = $true; NewlyAuthorized = $true; Summary = $true; Warning = $true; Expected = '' }
         @{ Case = 'no unnecessary success comment'; Expected = '' }
         @{ Case = 'fork receives summary without API calls'; Missing = $true; Fork = $true; Summary = $true; Warning = $true; Expected = '' }
         @{ Case = 'denied comment permission remains visible'; Missing = $true; Denied = $true; Summary = $true; Warning = $true; Expected = '' }
@@ -306,14 +313,14 @@ Describe 'Terraform E2E label routing and merge gates' {
         @{ Case = 'failed discovery cannot resolve comment'; Failed = $true; Existing = $true; Expected = '' }
         @{ Case = 'template remains exempt'; Template = $true; Missing = $true; Expected = '' }
     ) {
-        param($Missing, $Existing, $Human, $Optional, $Empty, $Fork, $Denied, $Stale, $NewlyAuthorized, $NewlyRemoved, $Failed, $Template, $Expected, $Summary, $Warning)
+        param($Missing, $Existing, $Human, $Optional, $Empty, $NoOptional, $Fork, $Denied, $Stale, $NewlyAuthorized, $NewlyRemoved, $Failed, $Template, $Expected, $Summary, $Warning)
         $reporter = $script:gatesWorkflow.jobs['module-gate'].steps[0]
         $reporter.uses | Should -BeExactly 'actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd'
         $reporter['if'] | Should -BeExactly "always() && github.event_name == 'pull_request'"
         $script:gatesWorkflow.jobs['module-gate'].permissions['pull-requests'] | Should -BeExactly 'write'
         $scenario = @{
             missing = [bool]$Missing; existing = [bool]$Existing; human = [bool]$Human; optional = [bool]$Optional
-            empty = [bool]$Empty; fork = [bool]$Fork; denied = [bool]$Denied; stale = [bool]$Stale
+            empty = [bool]$Empty; noOptional = [bool]$NoOptional; fork = [bool]$Fork; denied = [bool]$Denied; stale = [bool]$Stale
             newlyAuthorized = [bool]$NewlyAuthorized; newlyRemoved = [bool]$NewlyRemoved
             failed = [bool]$Failed; template = [bool]$Template
         } | ConvertTo-Json -Compress
@@ -331,7 +338,12 @@ const label = scenario.optional ? 'PR: Run All E2E Tests' : 'PR: Run Required E2
 const authorized = scenario.newlyAuthorized || (!scenario.missing && !scenario.newlyRemoved);
 process.env.RESULTS = JSON.stringify({ 'discover-examples': {
   result: scenario.failed ? 'failure' : 'success',
-  outputs: { requiredExamples: scenario.empty ? '[]' : '["default"]', runRequired: scenario.missing ? 'false' : 'true' }
+  outputs: {
+    requiredExamples: scenario.empty ? '[]' : '["default"]',
+    optionalExamples: scenario.noOptional ? '[]' : '["private"]',
+    runRequired: scenario.missing ? 'false' : 'true',
+    runOptional: scenario.optional ? 'true' : 'false'
+  }
 } });
 const core = {
   error: message => result.errors.push(message),
@@ -373,7 +385,17 @@ new AsyncFunction('github', 'context', 'core', source)(github, context, core)
         if ($Expected) {
             $result.mutations.Count | Should -Be 1
             $result.mutations[0].operation | Should -BeExactly $Expected
-            if ($Missing) {
+            if ($Empty) {
+                $result.mutations[0].body | Should -Match 'no required E2E examples found'
+                $result.mutations[0].body | Should -Match 'does not currently block merging'
+                $result.mutations[0].body | Should -Match '`PR: Run Required E2E Tests`'
+                $result.mutations[0].body | Should -Match '`PR: Run All E2E Tests`'
+                if ($NoOptional) { $result.mutations[0].body | Should -Match 'No E2E deployment tests can run' }
+                elseif ($Optional) { $result.mutations[0].body | Should -Match 'Optional E2E tests were selected' }
+                else { $result.mutations[0].body | Should -Match 'No E2E deployment tests were selected' }
+                if ($NoOptional) { $result.mutations[0].body | Should -Match 'No runnable E2E examples were discovered' }
+            }
+            elseif ($Missing) {
                 $result.mutations[0].body | Should -Match '`PR: Run Required E2E Tests`'
                 $result.mutations[0].body | Should -Match '`PR: Run All E2E Tests`'
                 $result.mutations[0].body | Should -Match 'required \*\*and\*\* optional'
@@ -386,8 +408,8 @@ new AsyncFunction('github', 'context', 'core', source)(github, context, core)
         }
         else { $result.mutations.Count | Should -Be 0 }
         $result.summaries.Count | Should -Be ([int][bool]$Summary)
-        $result.errors.Count | Should -Be ([int][bool]$Summary)
-        $result.warnings.Count | Should -Be ([int][bool]$Warning)
+        $result.errors.Count | Should -Be ([int]([bool]$Summary -and -not $Empty))
+        $result.warnings.Count | Should -Be ([int][bool]$Warning + [int]([bool]$Empty -and [bool]$Fork))
         if ($Summary) { $result.summaries[0] | Should -Match 'release-branch handoff' }
         if ($Fork -or $Failed -or $Template) { $result.api.Count | Should -Be 0 }
     }
