@@ -5,7 +5,7 @@
     Author               = 'Azure Verified Modules'
     CompanyName          = 'Microsoft'
     Copyright            = '(c) Microsoft Corporation. All rights reserved.'
-    Description          = 'Cross-platform PowerShell 7 CLI that consolidates the authoring and CI tooling for Azure Verified Modules (https://aka.ms/avm). A single avm command (alias: avm) works across both ecosystems and ships: environment diagnostics (avm version, avm doctor); a checksum-pinned managed-tool resolver (avm tool list/which/install) that downloads and verifies the exact terraform, terraform-docs, tflint, conftest and mapotf binaries a module needs; and a fully wired Terraform authoring chain - avm pre-commit fixes and checks a module locally (convention checks, HCL transforms via mapotf, terraform fmt and terraform-docs) while avm pr-check adds tflint, APRL/AVMSEC policy checks and terraform validate. No Docker, make or porch required. The Bicep facade is in active development. Requires PowerShell 7.4+ (Core). See https://github.com/Azure/azure-verified-modules-tools for status and docs.'
+    Description          = 'Cross-platform PowerShell CLI for Azure Verified Modules authors. Check and fix Terraform modules locally, then validate changes before opening a pull request. Includes formatting, linting, policy checks, and Terraform validation.'
     PowerShellVersion    = '7.4'
     CompatiblePSEditions = @('Core')
     FunctionsToExport    = @(
