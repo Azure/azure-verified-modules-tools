@@ -30,7 +30,6 @@ BeforeAll {
             state = 'OPEN'
         }
     }
-
     function New-TerraformRoutingSearchItem {
         param(
             [int] $Number = 1,
@@ -42,7 +41,6 @@ BeforeAll {
             pull_request = [pscustomobject]@{}
         }
     }
-
     function New-InstalledRoutingRepository {
         param([int] $Number)
         [pscustomobject]@{
@@ -205,7 +203,6 @@ Describe 'Terraform reviewer routing decisions' {
             -Repository $script:terraformRoutingRepository -CatalogIndex $script:terraformRoutingIndex `
             -ChangedFilePaths @($ChangedPath) -Ecosystem terraform
         $routing.NewReviewers | Should -Be @('root-owner')
-        $routing.NewLabels | Should -Be @('Needs: Module Owner :mega:')
         $routing.Modules.ModulePath | Should -Be @('.')
         $routing.Modules.Source | Should -Be @('catalog')
         Should -Invoke Get-AvmRepositoryFileAtRef -Exactly 0
@@ -223,14 +220,12 @@ Describe 'Terraform reviewer routing decisions' {
         }
     }
 
-    It 'uses the shared orphan team and labels for an explicitly unowned root' {
+    It 'uses the shared orphan team for an explicitly unowned root' {
         $script:terraformRoutingIndex['.'].owners = @()
         $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:terraformRoutingPr `
             -Repository $script:terraformRoutingRepository -CatalogIndex $script:terraformRoutingIndex `
             -ChangedFilePaths @('main.tf') -Ecosystem terraform
         $routing.NewReviewers | Should -Be @('Azure/azure-verified-modules-module-owners')
-        $routing.NewLabels | Should -Contain 'Needs: Core Team :genie:'
-        $routing.NewLabels | Should -Contain 'Status: Module Orphaned :yellow_circle:'
         $routing.OrphanedModules | Should -Be @('.')
     }
 
@@ -239,7 +234,6 @@ Describe 'Terraform reviewer routing decisions' {
             -Repository $script:terraformRoutingRepository -CatalogIndex $script:terraformRoutingIndex `
             -ChangedFilePaths @('tests/e2e/.e2eignore') -Ecosystem terraform
         $routing.NewReviewers | Should -Be @('root-owner')
-        $routing.NewLabels | Should -Contain 'Needs: Core Team :genie:'
         $routing.CoreTeamPaths | Should -Be @('tests/e2e/.e2eignore')
     }
 
@@ -261,7 +255,6 @@ Describe 'Terraform reviewer routing decisions' {
         $routing.NewReviewers | Should -HaveCount 0
         $routing.SkippedReviewers | Should -HaveCount 4
         $routing.OrphanedModules | Should -HaveCount 0
-        $routing.NewLabels | Should -Not -Contain 'Status: Module Orphaned :yellow_circle:'
     }
 
     It 'plans writes under WhatIf and is a no-op once routing is present' {
@@ -272,11 +265,19 @@ Describe 'Terraform reviewer routing decisions' {
         Should -Invoke Invoke-RepositoryGitHub -Exactly 0
 
         $script:terraformRoutingPr.reviewRequests = @([pscustomobject]@{ login = 'root-owner' })
-        $script:terraformRoutingPr.labels = @([pscustomobject]@{ name = 'Needs: Module Owner :mega:' })
         $outcome = Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:terraformRoutingPr `
             -Repository $script:terraformRoutingRepository -CatalogIndex $script:terraformRoutingIndex -Ecosystem terraform
         $outcome.Status | Should -Be 'AlreadyRouted'
         Should -Invoke Invoke-RepositoryGitHub -Exactly 0
+    }
+
+    It 'requests the root owner without adding labels' {
+        $outcome = Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:terraformRoutingPr `
+            -Repository $script:terraformRoutingRepository -CatalogIndex $script:terraformRoutingIndex -Ecosystem terraform
+        $outcome.Status | Should -Be 'Updated'
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter {
+            $Arguments -contains '--add-reviewer' -and $Arguments -contains 'root-owner' -and $Arguments -notcontains '--add-label'
+        }
     }
 
     It 'does not read files or write reviewers for drafts or requests closed after discovery' -ForEach @(
@@ -301,7 +302,6 @@ Describe 'Terraform reviewer routing decisions' {
         $outcome = Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:terraformRoutingPr `
             -Repository $script:terraformRoutingRepository -CatalogIndex $script:terraformRoutingIndex -Ecosystem terraform -WhatIf
         $outcome.NewReviewers | Should -Be @('Azure/azure-verified-modules-module-owners')
-        $outcome.NewLabels | Should -Contain 'Status: Module Orphaned :yellow_circle:'
         Should -Invoke Get-AvmRepositoryFileAtRef -Exactly 1 -ParameterFilter { $Path -eq 'metadata.json' }
     }
 }
@@ -578,77 +578,5 @@ Describe 'Terraform reviewer routing candidate hydration' {
         Should -Invoke Get-AvmPrReviewerRoutingCandidates -Exactly 2
         Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter { $Arguments -contains 'edit' }
         Should -Invoke Write-AvmPrReviewerRoutingSummary -Exactly 1 -ParameterFilter { $Failures.Count -eq 1 -and $Outcomes.Count -eq 1 }
-    }
-}
-
-Describe 'Terraform reviewer routing missing-label fleet warnings' {
-    BeforeEach {
-        Mock Get-AvmPrReviewerRoutingEligibility { @{ Eligible = $true; Reason = $null } }
-        Mock Assert-AvmPrReviewerRoutingApplied { }
-        $script:terraformMissingLabelPr = New-TerraformRoutingPullRequest
-        $script:terraformReadyPr = New-TerraformRoutingPullRequest -Number 2
-        $script:terraformReadyPr.url = "https://github.com/$script:secondTerraformRoutingRepository/pull/2"
-        Mock Get-AvmReviewerRoutingCatalog {
-            @{
-                modules = @{
-                    'Microsoft.Storage/storageAccounts' = @{
-                        terraform = @(
-                            @{ repository = $script:terraformRoutingRepository; modulePath = '.'; owners = @(@{ handle = 'root-owner'; type = 'user' }) }
-                            @{ repository = $script:secondTerraformRoutingRepository; modulePath = '.'; owners = @(@{ handle = 'root-owner'; type = 'user' }) }
-                        )
-                    }
-                }
-            }
-        }
-        Mock Get-AvmPrReviewerRoutingCandidates {
-            param($Repository)
-            if ($Repository -eq $script:terraformRoutingRepository) {
-                return @($script:terraformMissingLabelPr)
-            }
-            return @($script:terraformReadyPr)
-        }
-        Mock Get-AvmPrReviewerRoutingChangedFiles { @('main.tf') }
-        Mock Write-AvmRunSummary { }
-        Mock Invoke-RepositoryGitHub {
-            if ($Arguments[2] -eq $script:terraformMissingLabelPr.url) {
-                throw [System.InvalidOperationException]::new("GitHub operation failed: 'Needs: Module Owner :mega:' not found")
-            }
-        }
-    }
-
-    It 'does not fail the fleet for a missing label and still routes the other repository' {
-        Invoke-AvmPrReviewerRoutingSweep `
-            -Repository @($script:terraformRoutingRepository, $script:secondTerraformRoutingRepository) 3>$null 6>$null
-        Should -Invoke Invoke-RepositoryGitHub -Exactly 2 -ParameterFilter { $Arguments -contains 'edit' }
-        Should -Invoke Write-AvmRunSummary -Exactly 1 -ParameterFilter {
-            $Title -eq 'Reviewer routing fleet' -and $Failures.Count -eq 0
-        }
-        Should -Invoke Write-AvmRunSummary -Exactly 1 -ParameterFilter {
-            $Title -eq 'Pull request reviewer routing' -and $Warnings.Count -eq 1 -and $Failures.Count -eq 0
-        }
-    }
-
-    It 'preserves a real GraphQL failure alongside a missing-label warning' {
-        Mock Invoke-RepositoryGitHub {
-            if ($Arguments[2] -eq $script:terraformMissingLabelPr.url) {
-                throw [System.InvalidOperationException]::new("GitHub operation failed: 'Needs: Module Owner :mega:' not found")
-            }
-            throw [System.InvalidOperationException]::new('GitHub operation failed: GraphQL: Something went wrong while executing your query')
-        }
-        { Invoke-AvmPrReviewerRoutingSweep `
-            -Repository @($script:terraformRoutingRepository, $script:secondTerraformRoutingRepository) 3>$null 6>$null } |
-            Should -Throw '*GraphQL*'
-        Should -Invoke Write-AvmRunSummary -Exactly 1 -ParameterFilter {
-            $Title -eq 'Reviewer routing fleet' -and $Failures.Count -eq 1 -and $Failures[0] -notlike '*not found*'
-        }
-    }
-
-    It 'preserves WhatIf without attempting a missing-label edit or creating labels' {
-        Invoke-AvmPrReviewerRoutingSweep `
-            -Repository @($script:terraformRoutingRepository, $script:secondTerraformRoutingRepository) -WhatIf 6>$null
-        Should -Invoke Invoke-RepositoryGitHub -Exactly 0
-        Should -Invoke Write-AvmRunSummary -Exactly 1 -ParameterFilter {
-            $Title -eq 'Reviewer routing fleet' -and $DryRun -and $Failures.Count -eq 0
-        }
     }
 }

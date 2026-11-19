@@ -140,12 +140,9 @@ function Assert-AvmPrReviewerRoutingApplied {
                 -not $state.RequestedUsers.Contains($_) -and -not $state.ReviewedUsers.Contains($_)
             }
         })
-    $currentLabels = @($current[0].labels | ForEach-Object { $_.name })
-    $missingLabels = @($Routing.NewLabels | Where-Object { $currentLabels -notcontains $_ })
-    if ($missingReviewers.Count -gt 0 -or $missingLabels.Count -gt 0) {
+    if ($missingReviewers.Count -gt 0) {
         throw [System.InvalidOperationException]::new(
             "GitHub did not apply routing on pull request [$($PullRequest.url)]. " +
-            "Missing reviewers: [$(Format-AvmRunSummaryList -Values $missingReviewers)]. " +
-            "Missing labels: [$(Format-AvmRunSummaryList -Values $missingLabels)].")
+            "Missing reviewers: [$(Format-AvmRunSummaryList -Values $missingReviewers)].")
     }
 }

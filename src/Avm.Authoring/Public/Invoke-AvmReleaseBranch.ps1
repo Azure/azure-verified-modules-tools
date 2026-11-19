@@ -12,10 +12,12 @@ function Invoke-AvmReleaseBranch {
         Restrict write access to the release branch and review any later changes.
         Using the installed GitHub CLI and its existing github.com authentication,
         this command creates a release branch from upstream main, retargets the
-        fork pull request, merges the captured head, and opens a follow-up
-        pull request to main. For Azure/bicep-registry-modules, it adds the
-        PR: Run Required E2E Tests label to the follow-up. It does not approve reviews
-        or bypass protections. Ordinary checks do not require this handoff.
+        fork pull request, merges the captured head, and opens a follow-up pull
+        request to main. The follow-up links to the original pull request, thanks
+        its author, and preserves its description. For Azure/bicep-registry-modules,
+        it adds the PR: Run Required E2E Tests label to the follow-up. It does not
+        approve reviews or bypass protections. Ordinary checks do not require
+        this handoff.
 
         A failure can leave a branch or retargeted or merged pull request behind.
         Inspect their state before recovering manually; do not blindly rerun.
@@ -97,6 +99,15 @@ function Invoke-AvmReleaseBranch {
     if ($headCommit -notmatch '^[a-fA-F0-9]{40}$') {
         throw [System.InvalidOperationException]::new('GitHub did not return a valid pull request head commit.')
     }
+    $originalPullRequestUrl = [string]$pr['html_url']
+    $expectedPullRequestUrl = "https://github.com/$Repository/pull/$PullRequest"
+    if ($originalPullRequestUrl -ine $expectedPullRequestUrl) {
+        throw [System.InvalidOperationException]::new('GitHub did not return the expected pull request URL.')
+    }
+    $originalAuthor = [string]$pr['user']['login']
+    if ($originalAuthor -cnotmatch '^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?(?:\[bot\])?$') {
+        throw [System.InvalidOperationException]::new('GitHub did not return a valid pull request author.')
+    }
 
     $main = Invoke-AvmGitHubApi -Endpoint "repos/$Repository/git/ref/heads/main"
     $mainSha = [string]$main['object']['sha']
@@ -129,7 +140,9 @@ function Invoke-AvmReleaseBranch {
             if ($current['mergeable_state'] -cne 'unknown') { break }
             if ($attempt -lt 9) { Start-Sleep -Seconds 2 }
         }
-        if ($current['mergeable'] -ne $true -or $current['mergeable_state'] -cne 'clean') {
+        # Unstable means mergeable with pending or failed statuses; the merge endpoint still enforces required protections.
+        if ($current['mergeable'] -ne $true -or
+            $current['mergeable_state'] -cnotin @('clean', 'unstable')) {
             throw [System.InvalidOperationException]::new(
                 "GitHub reports mergeable_state '$($current['mergeable_state'])'. Resolve required checks, reviews, or conflicts without bypassing protections.")
         }
@@ -153,11 +166,20 @@ function Invoke-AvmReleaseBranch {
             throw [System.InvalidOperationException]::new('The release branch no longer points to the reported merge commit.')
         }
         $stage = 'opening the follow-up pull request'
+        $followUpBody = @(
+            "Credentialed E2E follow-up for [$Repository#$PullRequest]($originalPullRequestUrl)"
+            "(fork commit ``$headCommit``)."
+        ) -join ' '
+        $followUpBody += "`n`nThank you @$originalAuthor for your contribution."
+        $originalBody = [string]$pr['body']
+        if (-not [string]::IsNullOrEmpty($originalBody)) {
+            $followUpBody += "`n`n$originalBody"
+        }
         $followUp = Invoke-AvmGitHubApi -Endpoint "repos/$Repository/pulls" -Method POST -Body @{
             title = "E2E: $($pr['title'])"
             head  = $branch
             base  = 'main'
-            body  = "Credentialed E2E follow-up for #$PullRequest (fork commit ``$headCommit``)."
+            body  = $followUpBody
         }
         if ([string]::IsNullOrWhiteSpace([string]$followUp['html_url'])) {
             throw [System.InvalidOperationException]::new('GitHub did not return the follow-up pull request URL.')

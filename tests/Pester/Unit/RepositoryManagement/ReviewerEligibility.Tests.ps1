@@ -205,7 +205,6 @@ Describe 'Reviewer eligibility fallback decisions' {
         $routing.NewReviewers | Should -Be @($script:ownersGroup)
         $routing.ReviewerModules[$script:ownersGroup] | Should -Be @($ModulePath)
         $routing.ReviewerTypes[$script:ownersGroup] | Should -Be 'team'
-        $routing.NewLabels | Should -Be @('Needs: Module Owner :mega:')
         $routing.OrphanedModules | Should -HaveCount 0
         $routing.Warnings | Should -HaveCount 1
         $routing.SkippedReviewers[0].Reason | Should -Match 'ineligible'
@@ -298,7 +297,6 @@ Describe 'Reviewer eligibility fallback decisions' {
                 name = 'azure-verified-modules-module-owners'
                 slug = $TeamSlug
             })
-        $script:eligibilityPr.labels = @([pscustomobject]@{ name = 'Needs: Module Owner :mega:' })
         $outcome = Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:eligibilityPr `
             -Repository $script:eligibilityRepository -CatalogIndex $script:eligibilityIndex -Ecosystem terraform 3>$null 6>$null
         $outcome.Status | Should -Be 'AlreadyRouted'
@@ -412,7 +410,6 @@ Describe 'Reviewer eligibility workflow warnings' {
             Number = 1
             Status = 'AlreadyRouted'
             NewReviewers = @()
-            NewLabels = @()
             ReviewerModules = @{}
             Warnings = @($warning)
         }
@@ -429,17 +426,15 @@ Describe 'Assert-AvmPrReviewerRoutingApplied' {
     BeforeEach {
         $script:verificationBefore = New-EligibilityPullRequest
         $script:verificationAfter = New-EligibilityPullRequest
-        $script:verificationAfter.labels = @([pscustomobject]@{ name = 'Needs: Module Owner :mega:' })
         $script:verificationAfter.reviewRequests = @([pscustomobject]@{ login = 'owner' })
         $script:verificationRouting = @{
             NewReviewers = @('owner')
-            NewLabels = @('Needs: Module Owner :mega:')
             ReviewerTypes = @{ owner = 'user' }
         }
         Mock Get-AvmPrReviewerRoutingCandidates { @($script:verificationAfter) }
     }
 
-    It 'accepts a user request that is actually present and labels that were persisted' {
+    It 'accepts a user request that is actually present' {
         Assert-AvmPrReviewerRoutingApplied -PullRequest $script:verificationBefore `
             -Repository $script:eligibilityRepository -Routing $script:verificationRouting
         Should -Invoke Get-AvmPrReviewerRoutingCandidates -Exactly 1 -ParameterFilter { $PullRequestUrl -eq $script:verificationBefore.url }
@@ -488,12 +483,6 @@ Describe 'Assert-AvmPrReviewerRoutingApplied' {
             -Repository $script:eligibilityRepository -Routing $script:verificationRouting } | Should -Throw '*Missing reviewers*module-owners*'
     }
 
-    It 'fails if a label edit did not persist' {
-        $script:verificationAfter.labels = @()
-        { Assert-AvmPrReviewerRoutingApplied -PullRequest $script:verificationBefore `
-            -Repository $script:eligibilityRepository -Routing $script:verificationRouting } | Should -Throw '*Missing labels*Needs: Module Owner*'
-    }
-
     It 'propagates a failed verification read instead of claiming the write succeeded' {
         Mock Get-AvmPrReviewerRoutingCandidates { throw [System.InvalidOperationException]::new('verification read failed') }
         { Assert-AvmPrReviewerRoutingApplied -PullRequest $script:verificationBefore `
@@ -531,7 +520,6 @@ Describe 'Reviewer eligibility routing API round trip' {
                             slug = 'Azure/azure-verified-modules-module-owners'
                         })
                 }
-                $script:roundTripPr.labels = @([pscustomobject]@{ name = 'Needs: Module Owner :mega:' })
                 return $script:roundTripPr.url
             }
             if ($Arguments[1] -eq 'view') {
@@ -552,7 +540,9 @@ Describe 'Reviewer eligibility routing API round trip' {
         $second = Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:roundTripPr.PSObject.Copy() `
             -Repository $script:eligibilityRepository -CatalogIndex $script:roundTripIndex -Ecosystem terraform -EligibilityCache $cache 3>$null 6>$null
         $second.Status | Should -Be 'AlreadyRouted'
-        Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter { $Arguments -contains 'edit' -and $Arguments -contains $script:ownersGroup }
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter {
+            $Arguments -contains 'edit' -and $Arguments -contains $script:ownersGroup -and $Arguments -notcontains '--add-label'
+        }
         Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter { $Arguments -contains 'view' }
         Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter { $Arguments[-1] -like '*/collaborators/owner/permission' }
         @($script:roundTripRequests | Where-Object { $_ -contains 'PUT' -or $_ -contains 'DELETE' }) | Should -HaveCount 0
