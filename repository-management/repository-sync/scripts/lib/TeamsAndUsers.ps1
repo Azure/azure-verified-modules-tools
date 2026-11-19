@@ -47,7 +47,6 @@ function Resolve-GitHubTeams {
                 slug                         = $teamName
                 description                  = $teamDescription
                 repository_access_permission = $team.repositoryPermission
-                environment_approval         = $team.environmentApproval
                 members_are_team_maintainers = $team.membersAreTeamMaintainers
             }
         }

@@ -70,7 +70,7 @@ Describe 'Central test tenant group resolution' {
             repositoryGroups = @(
                 [pscustomobject]@{
                     name = 'default'; order = -1; repositories = @('*'); testTenant = 'legacy'
-                    teams = @([pscustomobject]@{ name = 'maintainers'; repositoryPermission = 'push'; environmentApproval = $true })
+                    teams = @([pscustomobject]@{ name = 'maintainers'; repositoryPermission = 'push' })
                     topics = @('shared')
                     codeOwnersFileProtectionTeams = @('maintainers')
                 }
@@ -115,37 +115,6 @@ Describe 'Central test tenant group resolution' {
         } $config
         $before | Should -Be @('root', 'overlay')
         $after | Should -Be $before
-    }
-}
-
-Describe 'Terraform PR gate rollout configuration' {
-    It 'keeps unlisted repositories and the checked-in fleet opted out' {
-        (Resolve-RepositorySettings -repositoryConfig $script:config -repoId 'unlisted').TerraformPrTestGatesEnabled |
-            Should -BeFalse
-    }
-
-    It 'persists a selected repository opt-in with higher-order overrides' {
-        $config = [pscustomobject]@{
-            repositoryGroups = @(
-                [pscustomobject]@{ name = 'default'; order = -1; repositories = @('*'); terraformPrTestGatesEnabled = $false }
-                [pscustomobject]@{ name = 'pilot'; order = 10; repositories = @('example'); terraformPrTestGatesEnabled = $true }
-            )
-        }
-        (Resolve-RepositorySettings -repositoryConfig $config -repoId 'example').TerraformPrTestGatesEnabled | Should -BeTrue
-        (Resolve-RepositorySettings -repositoryConfig $config -repoId 'other').TerraformPrTestGatesEnabled | Should -BeFalse
-        $config.repositoryGroups += [pscustomobject]@{
-            name = 'rollback'; order = 20; repositories = @('example'); terraformPrTestGatesEnabled = $false
-        }
-        (Resolve-RepositorySettings -repositoryConfig $config -repoId 'example').TerraformPrTestGatesEnabled | Should -BeFalse
-    }
-
-    It 'rejects a string that could accidentally enable the rollout' {
-        $config = [pscustomobject]@{
-            repositoryGroups = @([pscustomobject]@{
-                name = 'invalid'; repositories = @('*'); terraformPrTestGatesEnabled = 'false'
-            })
-        }
-        { Resolve-RepositorySettings -repositoryConfig $config -repoId 'example' } | Should -Throw '*must be a Boolean*'
     }
 }
 

@@ -283,8 +283,8 @@ Removing both E2E labels makes a new run fail its merge gate when
 required examples exist; it does not stop cloud work already authorized.
 Manual dispatch retains both E2E tiers. Merge queues are not supported: callers
 must omit `merge_group`, and legacy merge-group invocations cannot access cloud
-credentials and fail the gate explicitly. Disable any requirement to use a
-merge queue before enabling this rollout.
+credentials and fail the gate explicitly. Do not require a merge queue for
+these repositories.
 Forks receive unprivileged checks only and need a same-repository release-branch
 handoff before authenticated validation can satisfy the merge checks.
 
@@ -295,10 +295,12 @@ not claim the tests passed. Forks receive the summary and handoff guidance witho
 attempting a write with their read-only token. Callers must grant
 `pull-requests: write`; only the reporting job uses that permission.
 
-Roll out the updated, immutable workflow pin and caller events first. Keep
-the caller display name `run managed workflow`, then verify this check name:
+Repository sync requires `run managed workflow / Report check status` from
+GitHub Actions on the default branch. The managed caller must retain the
+display name `run managed workflow` and the label-triggered events.
 
-- `run managed workflow / Report check status`
+Terraform test environments do not require reviewers. Environment names,
+resource addresses, OIDC federation and pull-request review rules are unchanged.
 
 E2E selection assigns subscriptions before creating the matrix, with job names
 `E2E test (required|optional): <example> - <subscription>`, matching Bicep.
@@ -307,16 +309,6 @@ resolves the selected index against the same shuffled pool and retains
 environment-specific subscription overrides. An override outside that pool is
 displayed as `subscription override`; a fallback without a name is displayed as
 `subscription`, without exposing a subscription ID in the matrix.
-
-Only after pilot verification and approval, set
-`terraformPrTestGatesEnabled: true` on the selected matching group in
-`repository-config/config.json`. It is a Boolean, defaults to false and follows
-the existing group ordering. Repository sync passes it to Terraform as
-`terraform_pr_test_gates_enabled`. Enabling it removes test-environment reviewer
-gates and requires the stable GitHub Actions status check on the default branch.
-Environment names, resource addresses and federation remain unchanged.
-No repositories are opted in by default. Keep the rollout setting committed
-so later scheduled syncs retain the same policy.
 
 Bicep variable sync retains its existing eight-field source and five-field
 execution projection. It also publishes a separate, generated module client-ID

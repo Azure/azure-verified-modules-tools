@@ -91,8 +91,6 @@ Describe 'Existing metadata review enforcement prerequisites' {
         $moduleOwners = @($default.teams | Where-Object name -EQ 'azure-verified-modules-module-owners')
         $moduleOwners | Should -HaveCount 1
         $moduleOwners[0].repositoryPermission | Should -BeExactly 'push'
-        $moduleOwners[0].environmentApproval | Should -BeFalse
-        $engineering[0].environmentApproval | Should -BeFalse
         @($default.codeOwnersFileProtectionTeams) | Should -Be @('azure-verified-modules-engineering-owners')
     }
 

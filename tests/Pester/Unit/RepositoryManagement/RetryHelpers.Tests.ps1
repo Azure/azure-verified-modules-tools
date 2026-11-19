@@ -288,7 +288,6 @@ Describe 'GitHub read-only discovery retries' {
         $team = @{
             name = 'azure-verified-modules-module-readers'
             repositoryPermission = 'triage'
-            environmentApproval = $false
             membersAreTeamMaintainers = $false
         }
 
