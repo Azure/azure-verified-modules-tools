@@ -18,6 +18,9 @@ Describe 'Invoke-AvmReleaseBranch' {
                 }
                 Pr = @{
                     state = 'open'; draft = $false; title = 'Example'
+                    html_url = 'https://github.com/Azure/bicep-registry-modules/pull/123'
+                    user = @{ login = 'contributor' }
+                    body = 'Original description.'
                     base = @{ ref = 'main'; repo = @{ full_name = 'Azure/bicep-registry-modules' } }
                     head = @{
                         sha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
@@ -95,6 +98,7 @@ Describe 'Invoke-AvmReleaseBranch' {
     It 'creates a Terraform handoff without applying the Bicep-specific label' {
         InModuleScope Avm.Authoring {
             $script:scenario.Pr.base.repo.full_name = 'Azure/terraform-azurerm-avm-res-example'
+            $script:scenario.Pr.html_url = 'https://github.com/Azure/terraform-azurerm-avm-res-example/pull/123'
             $null = Invoke-AvmReleaseBranch -Repository 'Azure/terraform-azurerm-avm-res-example' `
                 -PullRequest 123
             @($script:scenario.Calls | Where-Object Endpoint -Match '/labels$').Count | Should -Be 0
@@ -173,6 +177,8 @@ Describe 'Invoke-AvmReleaseBranch' {
         @{ Case = 'no write permission' }
         @{ Case = 'no merge method' }
         @{ Case = 'invalid head' }
+        @{ Case = 'wrong pull request URL' }
+        @{ Case = 'invalid author' }
     ) {
         InModuleScope Avm.Authoring -Parameters @{ Case = $Case } {
             param($Case)
@@ -185,6 +191,10 @@ Describe 'Invoke-AvmReleaseBranch' {
                 'no write permission' { $script:scenario.Repo.permissions.push = $false }
                 'no merge method' { $script:scenario.Repo.allow_squash_merge = $false }
                 'invalid head' { $script:scenario.Pr.head.sha = 'not-a-commit' }
+                'wrong pull request URL' {
+                    $script:scenario.Pr.html_url = 'https://github.com/Azure/other/pull/123'
+                }
+                'invalid author' { $script:scenario.Pr.user.login = 'invalid login' }
             }
             { Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
                     -PullRequest 123 } | Should -Throw
@@ -212,8 +222,33 @@ Describe 'Invoke-AvmReleaseBranch' {
         }
     }
 
-    It 'does not open a follow-up when GitHub rejects the merge' {
+    It 'merges when GitHub reports mergeable with unstable checks' {
         InModuleScope Avm.Authoring {
+            $script:scenario.Pr.mergeable_state = 'unstable'
+            $result = Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
+                -PullRequest 123
+            @($script:scenario.Calls | Where-Object Method -EQ 'PUT').Count | Should -Be 1
+            $result.FollowUpPullRequestUrl | Should -BeExactly 'https://github.com/Azure/example/pull/456'
+        }
+    }
+
+    It 'preserves the original pull request link, author, and description' {
+        InModuleScope Avm.Authoring {
+            $null = Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
+                -PullRequest 123
+            $write = @($script:scenario.Calls |
+                    Where-Object { $_.Method -eq 'POST' -and $_.Endpoint -match '/pulls$' })[0]
+            $write.Body.body | Should -BeExactly (
+                'Credentialed E2E follow-up for ' +
+                '[Azure/bicep-registry-modules#123](https://github.com/Azure/bicep-registry-modules/pull/123) ' +
+                '(fork commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`).' +
+                "`n`nThank you @contributor for your contribution.`n`nOriginal description.")
+        }
+    }
+
+    It 'does not open a follow-up when GitHub rejects an unstable merge' {
+        InModuleScope Avm.Authoring {
+            $script:scenario.Pr.mergeable_state = 'unstable'
             $script:scenario.Failure = 'PUT repos/Azure/bicep-registry-modules/pulls/123/merge'
             { Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
                     -PullRequest 123 } |
