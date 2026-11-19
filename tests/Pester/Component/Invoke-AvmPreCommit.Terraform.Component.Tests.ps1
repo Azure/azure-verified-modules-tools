@@ -489,16 +489,18 @@ Describe 'Component: Invoke-AvmPreCommit + Invoke-AvmPrCheck (terraform engine e
             $engineResult.PSObject.Properties['Engine'].Value | Should -Be 'terraform'
         }
 
-        # check convention is pure-PowerShell, so it reports ToolSource='builtin'
-        # rather than 'path'. The fixture writes all the files required by the
-        # built-in rules in BeforeAll, so every rule passes with zero issues
-        # end-to-end.
+        # The strict convention pass reports TFNFR42 rollout gaps as warnings.
+        # Fixable-only pre-commit remains limited to deterministic repairs.
         $byName['check convention'].PSObject.Properties['Status'].Value | Should -Be 'pass'
         $ccResult = $byName['check convention'].PSObject.Properties['Result'].Value
         $ccResult.PSObject.Properties['Engine'].Value     | Should -Be 'terraform'
         $ccResult.PSObject.Properties['Tool'].Value       | Should -Match '^avm-rules/'
         $ccResult.PSObject.Properties['ToolSource'].Value | Should -Be 'builtin'
-        @($ccResult.PSObject.Properties['Issues'].Value).Count | Should -Be 0
+        $conventionIssues = @($ccResult.PSObject.Properties['Issues'].Value)
+        $conventionIssues | Should -HaveCount 2
+        @($conventionIssues | Where-Object Severity -ne 'warning') | Should -HaveCount 0
+        $conventionIssues.Code | Should -Contain 'avm.tf.tfnfr42-required-examples.missing-defaults'
+        $conventionIssues.Code | Should -Contain 'avm.tf.tfnfr42-required-examples.missing-waf-aligned'
 
         # F59: policy evaluation now plans each example and evaluates the JSON
         # plan independently against APRL and AVMSEC.

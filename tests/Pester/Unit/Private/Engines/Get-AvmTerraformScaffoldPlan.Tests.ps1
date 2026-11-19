@@ -21,7 +21,7 @@ Describe 'Get-AvmTerraformScaffoldPlan' {
 
         $relative = @($plans | ForEach-Object { [System.IO.Path]::GetRelativePath($root, $_.Path).Replace('\', '/') })
         $relative | Should -Be @(
-            '_header.md', 'examples/default/_header.md', 'examples/default/main.tf', 'examples/default/variables.tf',
+            '_header.md', 'examples/defaults/_header.md', 'examples/defaults/main.tf', 'examples/defaults/variables.tf',
             'main.tf', 'outputs.tf', 'terraform.tf', 'variables.tf', 'tests/.gitkeep'
         )
         ($plans | Where-Object { $_.Path -like '*_header.md' -and $_.Path -notlike '*examples*' }).Content |
@@ -32,12 +32,12 @@ Describe 'Get-AvmTerraformScaffoldPlan' {
             $plan.Content.Contains("`r") | Should -BeFalse
         }
         ($plans | Where-Object { $_.Path -like '*terraform.tf' }).Content | Should -Match '"Azure/azapi"'
-        $example = ($plans | Where-Object { $_.Path -eq (Join-Path $root 'examples' 'default' 'main.tf') }).Content
+        $example = ($plans | Where-Object { $_.Path -eq (Join-Path $root 'examples' 'defaults' 'main.tf') }).Content
         $example | Should -Match '(?s)module "regions" \{\s*source\s*=\s*"Azure/avm-utl-regions/azurerm"\s*version\s*=\s*"0\.13\.2"'
         $example | Should -Match 'location\s*=\s*var.location'
         $example | Should -Match '(?s)module "naming" \{\s*source\s*=\s*"Azure/avm-utl-naming/azure"\s*version\s*=\s*"0\.3\.0"'
         $example | Should -Not -Match 'legacy_mode'
-        ($plans | Where-Object { $_.Path -eq (Join-Path $root 'examples' 'default' 'variables.tf') }).Content |
+        ($plans | Where-Object { $_.Path -eq (Join-Path $root 'examples' 'defaults' 'variables.tf') }).Content |
             Should -Match '(?s)variable "location".*?default\s*=\s*"eastus"'
         Test-Path -LiteralPath $root | Should -BeFalse
     }

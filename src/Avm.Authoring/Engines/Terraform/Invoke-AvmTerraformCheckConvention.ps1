@@ -200,6 +200,9 @@ function Invoke-AvmRulePrimitive {
         'TerraformScopesMustBeDirectChildren' {
             Test-AvmRuleTerraformScopesMustBeDirectChildren -Rule $Rule -TargetRoot $TargetRoot -Fix:$Fix
         }
+        'TerraformRequiredExamples' {
+            Test-AvmRuleTerraformRequiredExample -Rule $Rule -TargetRoot $TargetRoot
+        }
         default {
             throw [AvmConfigurationException]::new(
                 "avm-rule '$($Rule.Id)': no primitive for Kind '$($Rule.Kind)'.")

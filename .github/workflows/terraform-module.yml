@@ -531,6 +531,7 @@ jobs:
     outputs:
       examples: ${{ steps.list.outputs.examples }}
       hasExamples: ${{ steps.list.outputs.hasExamples }}
+      moduleClass: ${{ steps.list.outputs.moduleClass }}
       requiredExamples: ${{ steps.list.outputs.requiredExamples }}
       optionalExamples: ${{ steps.list.outputs.optionalExamples }}
       runRequired: ${{ steps.list.outputs.runRequired }}
@@ -554,9 +555,25 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           IS_FORK: ${{ github.event.pull_request.head.repo.fork == true }}
+          REPOSITORY_NAME: ${{ github.event.repository.name }}
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module (Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1') -ErrorAction Stop
+          $identity = [regex]::Match(
+              $env:REPOSITORY_NAME,
+              '^terraform-(?:azurerm|azapi|azure)-avm-(?<kind>res|ptn|utl)-[a-z0-9-]+$')
+          if (-not $identity.Success) {
+              throw [System.InvalidOperationException]::new(
+                  "Terraform repository '$env:REPOSITORY_NAME' does not identify a resource, pattern, or utility module.")
+          }
+          $moduleClass = @{ res = 'resource'; ptn = 'pattern'; utl = 'utility' }[$identity.Groups['kind'].Value]
+          $metadata = Test-AvmModuleMetadata -Path $PWD.Path -Ecosystem terraform `
+              -ModuleType $moduleClass -SkipModuleVersionCheck
+          if ($metadata.Status -cne 'pass') {
+              $details = @($metadata.Issues | ForEach-Object { $_.Message }) -join '; '
+              throw [System.InvalidOperationException]::new(
+                  "Terraform repository metadata does not validate as a $moduleClass module: $details")
+          }
           $examples = (avm -SkipModuleVersionCheck test e2e --list | Out-String).Trim()
           if ([string]::IsNullOrWhiteSpace($examples)) {
               throw [System.IO.InvalidDataException]::new('E2E discovery returned no JSON array.')
@@ -567,7 +584,8 @@ jobs:
               throw [System.IO.InvalidDataException]::new('E2E discovery must return an array of nonempty example names.')
           }
           $defaultNames = @('default', 'defaults')
-          $requiredNames = @($defaultNames + 'waf-aligned')
+          $requiredNames = @($defaultNames)
+          if ($moduleClass -ceq 'resource') { $requiredNames += 'waf-aligned' }
           foreach ($name in $requiredNames) {
               if ((Test-Path -LiteralPath (Join-Path 'examples' $name) -PathType Container) -and $parsed -cnotcontains $name) {
                   throw [System.InvalidOperationException]::new("Required E2E example '$name' exists but is not runnable; remove its ignore marker or repair the example.")
@@ -593,15 +611,21 @@ jobs:
 
           "examples=$examples" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "hasExamples=$hasExamples" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "moduleClass=$moduleClass" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "requiredExamples=$(ConvertTo-Json -InputObject $required -Compress)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "optionalExamples=$(ConvertTo-Json -InputObject $optional -Compress)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "runRequired=$($runRequired.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "runOptional=$($runOptional.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "Required E2E examples: $($required -join ', '); optional E2E examples: $($optional -join ', ')."
           if (@($parsed | Where-Object { $_ -cin $defaultNames }).Count -eq 0) {
-              Write-Host "Required E2E examples 'default' or 'defaults' are absent; existence is not yet enforced."
+              Write-Host "::warning::TFNFR42: Required E2E examples 'default' or 'defaults' are absent; existence is not yet enforced."
           }
-          if ($parsed -cnotcontains 'waf-aligned') { Write-Host "Required E2E example 'waf-aligned' is absent; existence is not yet enforced." }
+          elseif ($parsed -ccontains 'default') {
+              Write-Host "::warning::TFNFR42: Runnable legacy example 'default' should be migrated to canonical 'defaults'."
+          }
+          if ($moduleClass -ceq 'resource' -and $parsed -cnotcontains 'waf-aligned') {
+              Write-Host "::warning::TFNFR42: Required resource E2E example 'waf-aligned' is absent; existence is not yet enforced."
+          }
 
   select-e2e-tests:
     name: Select E2E tests and subscriptions
@@ -861,6 +885,7 @@ jobs:
             const discovery = JSON.parse(process.env.RESULTS)['discover-examples'];
             if (discovery.result !== 'success') return;
             const required = discovery.outputs.requiredExamples !== '[]';
+            const moduleClass = discovery.outputs.moduleClass || 'unknown';
             const missing = required && discovery.outputs.runRequired !== 'true';
             const optional = JSON.parse(discovery.outputs.optionalExamples);
             const noRequired = !required;
@@ -888,14 +913,14 @@ jobs:
             const absence = [
               '## Warning: no required E2E examples found',
               '',
-              'This repository has no runnable `default`/`defaults` or `waf-aligned` examples. Their absence does not currently block merging.',
+              `This ${moduleClass} repository has no runnable required \`default\`/\`defaults\` example${moduleClass === 'resource' ? ' or `waf-aligned` example' : ''}. Their absence does not currently block merging.`,
               '',
               optional.length ? 'All discovered E2E examples are optional.' : 'No runnable E2E examples were discovered. Labels cannot run examples that do not exist.',
               !optional.length ? 'No E2E deployment tests can run until runnable examples are added.' : discovery.outputs.runOptional === 'true'
                 ? 'Optional E2E tests were selected. Check their job results; selection does not mean validation passed.'
                 : 'No E2E deployment tests were selected. `PR: Run Required E2E Tests` selects no tests here; add `PR: Run All E2E Tests` to run any optional examples.',
               '',
-              '- `PR: Run Required E2E Tests`: runs only existing required `default`/`defaults` and `waf-aligned` examples.',
+              `- \`PR: Run Required E2E Tests\`: runs existing required \`default\`/\`defaults\`${moduleClass === 'resource' ? ' and `waf-aligned`' : ''} examples.`,
               '- `PR: Run All E2E Tests`: runs required **and** optional E2E examples.',
               '',
               'Open PRs early and add a deployment label when ready to avoid unnecessary cloud cost and runtime.',

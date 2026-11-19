@@ -400,13 +400,13 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $deployment.jobs.deploy.name | Should -BeExactly "E2E test (`${{ fromJSON(inputs.testCase).IsRequired && 'required' || 'optional' }}): `${{ fromJSON(inputs.testCase).Name }} - `${{ fromJSON(inputs.testCase).SubscriptionName }}"
     }
 
-    It 'classifies exact scenario names case-sensitively for <ModulePath> in <Workflow>' -ForEach @(
-        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/res/example/widget'; Expected = @($true, $true, $true, $false, $false, $false, $false) }
-        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/res/example/widget'; Expected = @($true, $true, $true, $false, $false, $false, $false) }
-        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/utl/example/widget'; Expected = @($true, $true, $true, $false, $false, $false, $false) }
-        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/utl/example/widget'; Expected = @($true, $true, $true, $false, $false, $false, $false) }
-        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/ptn/example/widget'; Expected = @($true, $true, $true, $false, $false, $false, $false) }
-        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/ptn/example/widget'; Expected = @($true, $true, $true, $false, $false, $false, $false) }
+    It 'classifies scenario variants by validated module class for <ModulePath> in <Workflow>' -ForEach @(
+        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/res/example/widget'; Expected = @($true, $true, $true, $false, $false, $false, $false, $true, $true) }
+        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/res/example/widget'; Expected = @($true, $true, $true, $false, $false, $false, $false, $true, $true) }
+        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/utl/example/widget'; Expected = @($true, $true, $false, $false, $false, $false, $false, $true, $false) }
+        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/utl/example/widget'; Expected = @($true, $true, $false, $false, $false, $false, $false, $true, $false) }
+        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/ptn/example/widget'; Expected = @($true, $true, $false, $false, $false, $false, $false, $true, $false) }
+        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/ptn/example/widget'; Expected = @($true, $true, $false, $false, $false, $false, $false, $true, $false) }
     ) {
         $step = $script:workflows[$Workflow].jobs[$Job].steps | Where-Object { $_['id'] -ceq 'select' }
         $tokens = $null
@@ -419,7 +419,8 @@ Describe 'Bicep reusable workflow ownership and syntax' {
                     $node.Extent.Text.StartsWith('foreach ($testCase in $matrix)')
                 }, $true))
         $loops | Should -HaveCount 1
-        $matrix = @('default', 'defaults', 'waf-aligned', 'max', 'child-defaults', 'Defaults', 'WAF-aligned' | ForEach-Object {
+        $matrix = @('default', 'defaults', 'waf-aligned', 'max', 'child-defaults', 'Defaults', 'WAF-aligned',
+            'linux.defaults', 'windows.waf-aligned' | ForEach-Object {
                 [pscustomobject]@{ Name = $_; SubscriptionName = 'Configured subscription 1'; E2eIgnore = $false; ConcurrencyGroup = 'fixture-lock' }
             })
         $savedModulePath = $env:MODULE_PATH

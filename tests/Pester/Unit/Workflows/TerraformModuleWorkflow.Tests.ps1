@@ -127,6 +127,9 @@ Describe 'Terraform E2E label routing and merge gates' {
             'e2e-test' = @{ result = 'success' }
         }
         Mock Import-Module {}
+        Mock Test-AvmModuleMetadata {
+            [pscustomobject]@{ Status = 'pass'; Issues = @() }
+        }
         Mock avm {
             if ($args -contains '--list') { return $script:examplesJson }
             return $script:exampleResult
@@ -156,6 +159,30 @@ Describe 'Terraform E2E label routing and merge gates' {
         $outputs.runOptional | Should -BeExactly $Optional
         $outputs.requiredExamples | Should -BeExactly '["default","waf-aligned"]'
         $outputs.optionalExamples | Should -BeExactly '["private"]'
+    }
+
+    It 'requires WAF only for resource repositories: <ModuleType>' -ForEach @(
+        @{ ModuleType = 'res'; ExpectedRequired = '["default","waf-aligned"]'; ExpectedOptional = '["private"]' }
+        @{ ModuleType = 'ptn'; ExpectedRequired = '["default"]'; ExpectedOptional = '["waf-aligned","private"]' }
+        @{ ModuleType = 'utl'; ExpectedRequired = '["default"]'; ExpectedOptional = '["waf-aligned","private"]' }
+    ) {
+        $env:REPOSITORY_NAME = "terraform-azurerm-avm-$ModuleType-mock"
+        & $script:listScript
+        $outputs = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
+        $outputs.requiredExamples | Should -BeExactly $ExpectedRequired
+        $outputs.optionalExamples | Should -BeExactly $ExpectedOptional
+        @($script:writeHostMessages | Where-Object { $_ -like '*waf-aligned*absent*' }) |
+            Should -HaveCount 0
+    }
+
+    It 'fails closed on invalid repository metadata' {
+        Mock Test-AvmModuleMetadata {
+            [pscustomobject]@{
+                Status = 'fail'
+                Issues = @([pscustomobject]@{ Message = 'invalid module kind' })
+            }
+        }
+        { & $script:listScript } | Should -Throw '*does not validate as a resource module*invalid module kind*'
     }
 
     It 'does not authorize fork deployments even with both labels' {
@@ -216,6 +243,17 @@ Describe 'Terraform E2E label routing and merge gates' {
             Should -HaveCount $MissingBaselineWarnings
     }
 
+    It 'makes singular and dual default coverage visible as canonical migration work: <Examples>' -ForEach @(
+        @{ Examples = '["default","private"]'; Migrations = 1 }
+        @{ Examples = '["default","defaults","private"]'; Migrations = 1 }
+        @{ Examples = '["defaults","private"]'; Migrations = 0 }
+    ) {
+        $script:examplesJson = $Examples
+        & $script:listScript
+        @($script:writeHostMessages | Where-Object { $_ -like '*legacy*example*defaults*' }) |
+            Should -HaveCount $Migrations
+    }
+
     It 'rejects empty or malformed discovery rather than reporting no required tests: <Json>' -ForEach @(
         @{ Json = '' }
         @{ Json = '{}' }
@@ -234,6 +272,19 @@ Describe 'Terraform E2E label routing and merge gates' {
         $null = New-Item -ItemType Directory -Path (Join-Path $PWD.Path 'examples' $ExampleName) -Force
         $script:examplesJson = '["private"]'
         { & $script:listScript } | Should -Throw '*exists but is not runnable*'
+    }
+
+    It 'does not hard-fail an ignored WAF example for a <ModuleType> module' -ForEach @(
+        @{ ModuleType = 'ptn' }
+        @{ ModuleType = 'utl' }
+    ) {
+        $env:REPOSITORY_NAME = "terraform-azurerm-avm-$ModuleType-mock"
+        $null = New-Item -ItemType Directory -Path (Join-Path $PWD.Path 'examples' 'waf-aligned') -Force
+        $script:examplesJson = '["default","private"]'
+        { & $script:listScript } | Should -Not -Throw
+        $outputs = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
+        $outputs.requiredExamples | Should -BeExactly '["default"]'
+        $outputs.optionalExamples | Should -BeExactly '["private"]'
     }
 
     It 'does not require unselected optional tests to run' {
@@ -342,7 +393,8 @@ process.env.RESULTS = JSON.stringify({ 'discover-examples': {
     requiredExamples: scenario.empty ? '[]' : '["default"]',
     optionalExamples: scenario.noOptional ? '[]' : '["private"]',
     runRequired: scenario.missing ? 'false' : 'true',
-    runOptional: scenario.optional ? 'true' : 'false'
+    runOptional: scenario.optional ? 'true' : 'false',
+    moduleClass: 'resource'
   }
 } });
 const core = {
