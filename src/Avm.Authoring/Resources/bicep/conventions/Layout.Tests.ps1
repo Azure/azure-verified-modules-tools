@@ -45,6 +45,11 @@ if ($cases.Count -gt 0) {
             }
             if ($Case.Scope.IsTopLevel) {
                 $Convention.NativeLayoutExpected++
+                It 'validates the module class from exact metadata' -ForEach @(@{ IssuePath = Join-Path $Case.Scope.Path 'metadata.json' }) `
+                    -Tag 'avm.bicep.module-class-metadata' {
+                    $Case.ModuleClassIssue | Should -BeNullOrEmpty
+                }
+                $Convention.NativeLayoutExpected++
                 if ($Case.Scope.ScopeDirectories.Count -gt 0) {
                     It 'leaves versioning to the scope modules' -ForEach @(@{ IssuePath = Join-Path $Case.Scope.Path 'version.json' }) `
                         -Tag 'avm.bicep.multiscope-version' {
@@ -75,26 +80,77 @@ if ($cases.Count -gt 0) {
                     }
                     if ($Case.E2e.Count -eq 1 -and $Case.E2e[0].PSIsContainer -and $Case.E2e[0].Name -ceq 'e2e' -and
                         -not ($Case.E2e[0].Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
-                        if ($Case.Scope.ModuleType -ceq 'res') {
-                            if ($Case.Scope.ScopeDirectories.Count -eq 0) {
+                        $requiresWaf = $Case.ModuleClass -cnotin @('pattern', 'utility')
+                        if ($Case.Scope.ScopeDirectories.Count -eq 0) {
+                            $Convention.NativeLayoutExpected++
+                            $defaultFolders = @($Case.Folders | Where-Object {
+                                    $_.Folder.Name -cmatch '^(?:[^.]+\.)*defaults$' -and
+                                    @($_.Main).Count -eq 1 -and
+                                    -not $_.Main[0].PSIsContainer -and
+                                    $_.Main[0].Name -ceq 'main.test.bicep'
+                                })
+                            It 'has a defaults test folder' -ForEach @(@{ IssuePath = $Case.E2ePath; Folders = $defaultFolders }) `
+                                -Tag 'avm.bicep.defaults-test-missing', 'severity:warning' {
+                                $Folders | Should -Not -BeNullOrEmpty
+                            }
+                            if ($requiresWaf) {
                                 $Convention.NativeLayoutExpected++
-                                It 'has a waf-aligned test folder' -ForEach @(@{ IssuePath = $Case.E2ePath }) -Tag 'avm.bicep.waf-test-missing' {
-                                    @($Case.Folders | Where-Object { $_.Folder.Name -clike '*waf-aligned' }) | Should -Not -BeNullOrEmpty
-                                }
-                            }
-                            else {
-                                $scopeCases = @(foreach ($scopeName in $Case.Scope.ScopeDirectories) {
-                                        foreach ($kind in @('waf-aligned', 'defaults')) {
-                                            if ($kind -ceq 'defaults' -and
-                                                $Case.Scope.ModuleRelativePath -cin $Convention.LayoutExemptions['defaultsTestOptionalModules']) { continue }
-                                            @{ ScopeName = $scopeName; Kind = $kind; IssuePath = $Case.E2ePath }
-                                        }
+                                $wafFolders = @($Case.Folders | Where-Object {
+                                        $_.Folder.Name -cmatch '^(?:[^.]+\.)*waf-aligned$' -and
+                                        @($_.Main).Count -eq 1 -and
+                                        -not $_.Main[0].PSIsContainer -and
+                                        $_.Main[0].Name -ceq 'main.test.bicep'
                                     })
-                                $Convention.NativeLayoutExpected += $scopeCases.Count
-                                It 'has a <Kind> test for <ScopeName>' -ForEach $scopeCases -Tag 'avm.bicep.scope-test-missing' {
-                                    @($Case.Folders | Where-Object { $_.Folder.Name -clike "$ScopeName*.$Kind" }) | Should -Not -BeNullOrEmpty
+                                It 'has a waf-aligned test folder' -ForEach @(@{ IssuePath = $Case.E2ePath; Folders = $wafFolders }) `
+                                    -Tag 'avm.bicep.waf-test-missing' {
+                                    $Folders | Should -Not -BeNullOrEmpty
                                 }
                             }
+                        }
+                        else {
+                            $scopeCases = @(foreach ($scopeName in $Case.Scope.ScopeDirectories) {
+                                    $scopeKinds = @('defaults')
+                                    if ($requiresWaf) { $scopeKinds += 'waf-aligned' }
+                                    foreach ($kind in $scopeKinds) {
+                                        $exempt = $kind -ceq 'defaults' -and
+                                        $Case.Scope.ModuleRelativePath -cin $Convention.LayoutExemptions['defaultsTestOptionalModules']
+                                        $advisory = $exempt -or
+                                        ($kind -ceq 'defaults' -and $Case.ModuleClass -cne 'resource')
+                                        @{ ScopeName = $scopeName; Kind = $kind; IssuePath = $Case.E2ePath; Advisory = $advisory }
+                                    }
+                                })
+                            $requiredScopeCases = @($scopeCases | Where-Object { -not $_.Advisory })
+                            $advisoryScopeCases = @($scopeCases | Where-Object Advisory)
+                            $Convention.NativeLayoutExpected += $requiredScopeCases.Count + $advisoryScopeCases.Count
+                            It 'has a <Kind> test for <ScopeName>' -ForEach $requiredScopeCases -Tag 'avm.bicep.scope-test-missing' {
+                                $scopePattern = "^$([regex]::Escape($ScopeName))(?:\.[^.]+)*\.$([regex]::Escape($Kind))$"
+                                @($Case.Folders | Where-Object {
+                                        $_.Folder.Name -cmatch $scopePattern -and
+                                        @($_.Main).Count -eq 1 -and
+                                        -not $_.Main[0].PSIsContainer -and
+                                        $_.Main[0].Name -ceq 'main.test.bicep'
+                                    }) | Should -Not -BeNullOrEmpty
+                            }
+                            It 'has an advisory <Kind> test for <ScopeName>' -ForEach $advisoryScopeCases `
+                                -Tag 'avm.bicep.scope-test-missing', 'severity:warning' {
+                                $scopePattern = "^$([regex]::Escape($ScopeName))(?:\.[^.]+)*\.$([regex]::Escape($Kind))$"
+                                @($Case.Folders | Where-Object {
+                                        $_.Folder.Name -cmatch $scopePattern -and
+                                        @($_.Main).Count -eq 1 -and
+                                        -not $_.Main[0].PSIsContainer -and
+                                        $_.Main[0].Name -ceq 'main.test.bicep'
+                                    }) | Should -Not -BeNullOrEmpty
+                            }
+                        }
+                        $Convention.NativeLayoutExpected++
+                        It 'does not retain legacy singular default folders' -ForEach @(@{ IssuePath = $Case.E2ePath }) `
+                            -Tag 'avm.bicep.defaults-spelling', 'severity:warning' {
+                            @($Case.Folders | Where-Object {
+                                    $_.Folder.Name -cmatch '^(?:[^.]+\.)*default$' -and
+                                    @($_.Main).Count -eq 1 -and
+                                    -not $_.Main[0].PSIsContainer -and
+                                    $_.Main[0].Name -ceq 'main.test.bicep'
+                                }) | Should -BeNullOrEmpty
                         }
                         if ($Case.Folders.Count -gt 0) {
                             Context 'Test folder <Folder.Name>' -ForEach $Case.Folders {

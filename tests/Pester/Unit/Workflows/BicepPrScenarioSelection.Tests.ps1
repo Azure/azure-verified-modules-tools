@@ -74,9 +74,11 @@ Describe 'Bicep PR scenario selection' {
         @($result.modules[0].psRuleModuleTestFilePaths | ConvertFrom-Json | ForEach-Object name) | Should -Be @('defaults')
     }
 
-    It 'treats default and defaults as aliases for required Bicep baseline scenarios: <Names>' -ForEach @(
+    It 'treats default variants as required aliases: <Names>' -ForEach @(
         @{ Names = @('default'); Expected = @('default', 'waf-aligned', 'max') }
         @{ Names = @('defaults'); Expected = @('defaults', 'waf-aligned', 'max') }
+        @{ Names = @('linux.default'); Expected = @('linux.default', 'waf-aligned', 'max') }
+        @{ Names = @('linux.defaults'); Expected = @('linux.defaults', 'waf-aligned', 'max') }
         @{ Names = @('default', 'defaults'); Expected = @('default', 'defaults', 'waf-aligned', 'max') }
     ) {
         $outputs.ModuleMatrix.Include = @($outputs.ModuleMatrix.Include[0])
@@ -108,10 +110,10 @@ Describe 'Bicep PR scenario selection' {
         $result.modules[0].moduleTestFilePaths | Should -BeExactly '[]'
     }
 
-    It 'warns about a missing scenario while requiring the existing one for <ModuleType>' -ForEach @(
-        @{ ModuleType = 'res' }
-        @{ ModuleType = 'ptn' }
-        @{ ModuleType = 'utl' }
+    It 'warns about missing WAF only for resource modules: <ModuleType>' -ForEach @(
+        @{ ModuleType = 'res'; Warnings = 1 }
+        @{ ModuleType = 'ptn'; Warnings = 0 }
+        @{ ModuleType = 'utl'; Warnings = 0 }
     ) {
         $outputs.ModuleMatrix.Include = @($outputs.ModuleMatrix.Include[0])
         $outputs.ModuleMatrix.Include[0].ModulePath = "avm/$ModuleType/example/widget"
@@ -120,8 +122,10 @@ Describe 'Bicep PR scenario selection' {
         $records = @(& $selection 6>&1)
         $warning = @($records | Where-Object { $_ -is [System.Management.Automation.InformationRecord] })
         $result = $records[-1]
-        $warning | Should -HaveCount 1
-        $warning[0].MessageData | Should -Match '^::warning::.*waf-aligned.*missing'
+        $warning | Should -HaveCount $Warnings
+        if ($Warnings -gt 0) {
+            $warning[0].MessageData | Should -Match '^::warning::.*waf-aligned.*missing'
+        }
         $result.errors | Should -BeNullOrEmpty
         $result.hasRequired | Should -BeTrue
         @($result.modules[0].moduleTestFilePaths | ConvertFrom-Json | ForEach-Object name) |
@@ -129,16 +133,17 @@ Describe 'Bicep PR scenario selection' {
     }
 
     It 'warns and does not require E2E when both scenarios are missing for <ModuleType>' -ForEach @(
-        @{ ModuleType = 'res' }
-        @{ ModuleType = 'ptn' }
-        @{ ModuleType = 'utl' }
+        @{ ModuleType = 'res'; Warnings = 2 }
+        @{ ModuleType = 'ptn'; Warnings = 1 }
+        @{ ModuleType = 'utl'; Warnings = 1 }
     ) {
         $outputs.ModuleMatrix.Include = @($outputs.ModuleMatrix.Include[0])
         $outputs.ModuleMatrix.Include[0].ModulePath = "avm/$ModuleType/example/widget"
         $outputs.ModuleMatrix.Include[0].TestFiles = @($outputs.ModuleMatrix.Include[0].TestFiles |
                 Where-Object name -EQ 'max')
         $records = @(& $selection 6>&1)
-        @($records | Where-Object { $_ -is [System.Management.Automation.InformationRecord] }) | Should -HaveCount 2
+        @($records | Where-Object { $_ -is [System.Management.Automation.InformationRecord] }) |
+            Should -HaveCount $Warnings
         $result = $records[-1]
         $result.errors | Should -BeNullOrEmpty
         $result.hasRequired | Should -BeFalse
@@ -147,8 +152,17 @@ Describe 'Bicep PR scenario selection' {
         @($result.modules[0].moduleTestFilePaths | ConvertFrom-Json | ForEach-Object name) | Should -Be @('max')
     }
 
-    It 'reports existing ignored required scenarios as errors for <ModuleType>' -ForEach @(
-        @{ ModuleType = 'res' }
+    It 'reports an existing ignored resource WAF scenario as an error' {
+        $outputs.ModuleMatrix.Include = @($outputs.ModuleMatrix.Include[0])
+        $outputs.ModuleMatrix.Include[0].ModulePath = 'avm/res/example/widget'
+        $outputs.ModuleMatrix.Include[0].TestFiles[1].e2eIgnore = $true
+        $result = & $selection
+        $result.errors | Should -Not -BeNullOrEmpty
+        ($result.errors -join ' ') | Should -Match 'ignored.*waf-aligned'
+        $result.hasRequired | Should -BeTrue
+    }
+
+    It 'treats ignored WAF as optional for <ModuleType>' -ForEach @(
         @{ ModuleType = 'ptn' }
         @{ ModuleType = 'utl' }
     ) {
@@ -156,9 +170,9 @@ Describe 'Bicep PR scenario selection' {
         $outputs.ModuleMatrix.Include[0].ModulePath = "avm/$ModuleType/example/widget"
         $outputs.ModuleMatrix.Include[0].TestFiles[1].e2eIgnore = $true
         $result = & $selection
-        $result.errors | Should -Not -BeNullOrEmpty
-        ($result.errors -join ' ') | Should -Match 'ignored.*waf-aligned'
-        $result.hasRequired | Should -BeTrue
+        $result.errors | Should -BeNullOrEmpty
+        @($result.modules[0].moduleTestFilePaths | ConvertFrom-Json | Where-Object name -eq 'waf-aligned' |
+                ForEach-Object e2eIgnore) | Should -BeTrue
     }
 
     It 'warns for a missing parent scenario even when a child scenario exists' {
@@ -178,9 +192,8 @@ Describe 'Bicep PR scenario selection' {
         $env:OPTIONAL = 'false'
         $records = @(& $selection 6>&1)
         $warnings = @($records | Where-Object { $_ -is [System.Management.Automation.InformationRecord] })
-        $warnings | Should -HaveCount 2
+        $warnings | Should -HaveCount 1
         $warnings[0].MessageData | Should -Match '^::warning::.*defaults.*missing'
-        $warnings[1].MessageData | Should -Match '^::warning::.*waf-aligned.*missing'
         $result = $records[-1]
         $result.errors | Should -BeNullOrEmpty
         $result.hasRequired | Should -BeFalse

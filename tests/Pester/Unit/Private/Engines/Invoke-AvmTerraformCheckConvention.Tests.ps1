@@ -22,6 +22,51 @@ BeforeAll {
         return [pscustomobject]@{ Ecosystem = 'terraform'; Root = $Root }
     }
 
+    function script:NewClassifiedRoot {
+        param([string] $ModuleType)
+
+        $kind = @{ resource = 'res'; pattern = 'ptn'; utility = 'utl' }[$ModuleType]
+        $root = Join-Path $TestDrive "terraform-azurerm-avm-$kind-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+        New-Item -ItemType Directory -Path $root | Out-Null
+        $utf8 = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText((Join-Path $root 'terraform.tf'), '# stub', $utf8)
+        [System.IO.File]::WriteAllText((Join-Path $root '_header.md'), '# header', $utf8)
+        New-Item -ItemType Directory -Path (Join-Path $root 'tests') -Force | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $root 'tests/.gitkeep'), '', $utf8)
+        if ($ModuleType -ne 'resource') {
+            $metadata = [ordered]@{
+                '$schema'          = 'https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json'
+                moduleDisplayName  = 'Example fixture'
+                moduleDescription  = 'Tests required examples.'
+                canonicalType      = if ($ModuleType -eq 'pattern') { 'aiml-ai-gateway' } else { 'regions' }
+                owners             = @('module-owner')
+            }
+            if ($ModuleType -eq 'pattern') {
+                $metadata.telemetryIdPrefix = '46d3xtrf.ptn.a1b2c3d'
+            }
+            [System.IO.File]::WriteAllText((Join-Path $root 'metadata.json'),
+                (ConvertTo-Json -InputObject $metadata -Depth 5) + "`n", $utf8)
+        }
+        return $root
+    }
+
+    function script:AddRunnableExample {
+        param([string] $Root, [string] $Name, [switch] $Ignored, [switch] $Empty)
+
+        $path = Join-Path $Root 'examples' $Name
+        New-Item -ItemType Directory -Path $path -Force | Out-Null
+        if (-not $Empty) {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $path 'main.tf'), "terraform {}`n", [System.Text.UTF8Encoding]::new($false))
+        }
+        [System.IO.File]::WriteAllText(
+            (Join-Path $path '_header.md'), "# $Name`n", [System.Text.UTF8Encoding]::new($false))
+        if ($Ignored) {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $path '.e2eignore'), "Temporarily excluded.`n", [System.Text.UTF8Encoding]::new($false))
+        }
+    }
+
     # Pre-stages the minimum on-disk shape (files + dirs) that
     # satisfies every error-severity built-in rule shipped under
     # src/Avm.Authoring/Resources/Rules/. After calling this, no built-in
@@ -481,5 +526,98 @@ Describe 'Invoke-AvmTerraformCheckConvention engine' {
         $issue = $result.Issues | Where-Object Code -eq 'avm.examples.terraform-tf' | Select-Object -First 1
         $issue.File | Should -Be 'examples/default/terraform.tf'
         $issue.File | Should -Not -Match '\\'
+    }
+
+    Context 'TFNFR42 canonical examples' {
+        It 'requires defaults for <ModuleType> without requiring WAF for non-resource modules' -ForEach @(
+            @{ ModuleType = 'resource'; WafIssues = 0 }
+            @{ ModuleType = 'pattern'; WafIssues = 0 }
+            @{ ModuleType = 'utility'; WafIssues = 0 }
+        ) {
+            $root = script:NewClassifiedRoot $ModuleType
+            script:AddRunnableExample -Root $root -Name 'defaults'
+            if ($ModuleType -eq 'resource') {
+                script:AddRunnableExample -Root $root -Name 'waf-aligned'
+            }
+
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = (script:NewTerraformContext $root) } {
+                param($C) Invoke-AvmTerraformCheckConvention -Context $C
+            }
+
+            $result.Status | Should -Be 'pass'
+            @($result.Issues | Where-Object Code -like 'avm.tf.tfnfr42-required-examples*') |
+                Should -HaveCount $WafIssues
+        }
+
+        It 'warns for resource-only missing WAF coverage without failing status' {
+            $root = script:NewClassifiedRoot 'resource'
+            script:AddRunnableExample -Root $root -Name 'defaults'
+
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = (script:NewTerraformContext $root) } {
+                param($C) Invoke-AvmTerraformCheckConvention -Context $C
+            }
+            $issues = @($result.Issues | Where-Object Code -eq 'avm.tf.tfnfr42-required-examples.missing-waf-aligned')
+
+            $result.Status | Should -Be 'pass'
+            $issues | Should -HaveCount 1
+            $issues[0].Severity | Should -BeExactly 'warning'
+        }
+
+        It 'reports singular-only defaults as a runnable migration warning' {
+            $root = script:NewClassifiedRoot 'pattern'
+            script:AddRunnableExample -Root $root -Name 'default'
+
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = (script:NewTerraformContext $root) } {
+                param($C) Invoke-AvmTerraformCheckConvention -Context $C
+            }
+            $issue = @($result.Issues | Where-Object Code -eq 'avm.tf.tfnfr42-required-examples.missing-defaults')[0]
+
+            $issue.Severity | Should -BeExactly 'warning'
+            $issue.Message | Should -Match 'legacy spelling remains runnable'
+        }
+
+        It 'warns when both default spellings are present without failing status' {
+            $root = script:NewClassifiedRoot 'utility'
+            script:AddRunnableExample -Root $root -Name 'default'
+            script:AddRunnableExample -Root $root -Name 'defaults'
+
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = (script:NewTerraformContext $root) } {
+                param($C) Invoke-AvmTerraformCheckConvention -Context $C
+            }
+
+            $result.Status | Should -Be 'pass'
+            @($result.Issues | Where-Object Code -eq 'avm.tf.tfnfr42-required-examples.legacy-default') |
+                Should -HaveCount 1
+        }
+
+        It 'does not accept case variants, empty folders, or ignored folders as canonical examples: <Case>' -ForEach @(
+            @{ Case = 'case variant'; Name = 'Defaults' }
+            @{ Case = 'empty folder'; Name = 'defaults'; Empty = $true }
+            @{ Case = 'ignored folder'; Name = 'defaults'; Ignored = $true }
+        ) {
+            param($Case, $Name, $Empty = $false, $Ignored = $false)
+            $root = script:NewClassifiedRoot 'utility'
+            script:AddRunnableExample -Root $root -Name $Name -Empty:$Empty -Ignored:$Ignored
+
+            $result = InModuleScope 'Avm.Authoring' -Parameters @{ C = (script:NewTerraformContext $root) } {
+                param($C) Invoke-AvmTerraformCheckConvention -Context $C
+            }
+
+            @($result.Issues | Where-Object Code -eq 'avm.tf.tfnfr42-required-examples.missing-defaults') |
+                Should -HaveCount 1
+            $result.Status | Should -Be 'pass'
+        }
+
+        It 'fails closed when non-resource metadata cannot validate the classification' {
+            $root = script:NewClassifiedRoot 'pattern'
+            Set-Content -LiteralPath (Join-Path $root 'metadata.json') -Value '{"canonicalType":42}' -Encoding utf8NoBOM
+            script:AddRunnableExample -Root $root -Name 'defaults'
+
+            {
+                InModuleScope 'Avm.Authoring' -Parameters @{ C = (script:NewTerraformContext $root) } {
+                    param($C) Invoke-AvmTerraformCheckConvention -Context $C
+                }
+            } | Should -Throw
+        }
     }
 }

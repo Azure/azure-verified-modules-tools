@@ -136,6 +136,16 @@ Describe 'Built-in AVM convention rules (Slice D port of grept policies)' -Tag '
             (& $script:mod { param($Rule) Test-AvmRuleFixable -Rule $Rule } $r) | Should -BeFalse
         }
 
+        It 'ships TFNFR42 canonical examples as an advisory root rule' {
+            $r = $script:rulesById['avm.tf.tfnfr42-required-examples']
+            $r | Should -Not -BeNullOrEmpty
+            $r.Kind | Should -Be 'TerraformRequiredExamples'
+            $r.Severity | Should -Be 'warning'
+            $r.AppliesTo | Should -Be 'root'
+            @($r.Parameters.Keys) | Should -BeNullOrEmpty
+            (& $script:mod { param($Rule) Test-AvmRuleFixable -Rule $Rule } $r) | Should -BeFalse
+        }
+
     }
 
     Context 'Every shipped rule passes the schema validator' {

@@ -85,6 +85,29 @@ BeforeAll {
             }
         }
     }
+
+    function Set-ModuleClassMetadata {
+        param(
+            [string] $Path,
+            [ValidateSet('ptn', 'utl')] [string] $ModuleType,
+            [string] $CanonicalType
+        )
+
+        $metadata = [ordered]@{
+            '$schema'          = 'https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/avm-module-metadata.schema.json'
+            moduleDisplayName  = 'Class fixture'
+            moduleDescription  = 'Validates required example coverage by module class.'
+            canonicalType      = $CanonicalType
+            owners             = @('module-owner')
+        }
+        if ($ModuleType -eq 'ptn') {
+            $metadata.telemetryIdPrefix = '46d3xbcp.ptn.a1b2c3d'
+        }
+        [System.IO.File]::WriteAllText(
+            (Join-Path $Path 'metadata.json'),
+            (ConvertTo-Json -InputObject $metadata -Depth 10) + "`n",
+            [System.Text.UTF8Encoding]::new($false))
+    }
 }
 
 AfterAll {
@@ -263,11 +286,11 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
             }
             $result.ComplianceFile | Should -BeLike '*Resources*bicep*Compliance.Tests.ps1'
             if ($Variant -eq 'filtered') {
-                $result.RunsTotal | Should -Be 22
+                $result.RunsTotal | Should -Be 25
                 $result.RunsFiltered | Should -BeGreaterThan 0
             }
             elseif ($Variant -eq 'filtered-root') {
-                $result.RunsTotal | Should -Be 18
+                $result.RunsTotal | Should -Be 21
                 $result.RunsFiltered | Should -BeGreaterThan 0
             }
             elseif ($Variant -eq 'empty-filter') {
@@ -433,16 +456,16 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.Issues.Code | Should -Contain 'avm.bicep.test-source-read'
     }
 
-    It 'executes twenty-two independent native root and child layout requirements' {
+    It 'executes twenty-five independent native root and child layout requirements' {
         $scopes = InModuleScope 'Avm.Authoring' -Parameters @{ Path = $script:modulePath } {
             param($Path)
             Get-AvmBicepConventionScope -Path $Path
             Get-AvmBicepConventionScope -Path (Join-Path $Path 'child')
         }
         $run = Invoke-NativeLayoutFixture -Root $script:workingRoot -Scopes @($scopes)
-        $run.Expected | Should -Be 22
-        $run.Summary.Total | Should -Be 22
-        $run.Summary.Passed | Should -Be 22 -Because (@($run.Summary.Issues | ForEach-Object Message) -join '; ')
+        $run.Expected | Should -Be 25
+        $run.Summary.Total | Should -Be 25
+        $run.Summary.Passed | Should -Be 25 -Because (@($run.Summary.Issues | ForEach-Object Message) -join '; ')
         $run.Issues | Should -HaveCount 0
     }
 
@@ -1692,13 +1715,97 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
         $result.Issues.Code | Should -Contain 'avm.bicep.changelog-header'
     }
 
-    It 'requires a waf-aligned folder and a test source file in every e2e directory' {
+    It 'requires canonical defaults and resource WAF folders plus a source in every e2e directory' {
         Remove-Item -LiteralPath (Join-Path $script:modulePath 'tests' 'e2e' 'waf-aligned') -Recurse -Force
-        Remove-Item -LiteralPath (Join-Path $script:modulePath 'tests' 'e2e' 'defaults' 'main.test.bicep')
+        Remove-Item -LiteralPath (Join-Path $script:modulePath 'tests' 'e2e' 'defaults') -Recurse -Force
+        Remove-Item -LiteralPath (Join-Path $script:modulePath 'tests' 'e2e' 'max' 'main.test.bicep')
 
         $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+        $result.Issues.Code | Should -Contain 'avm.bicep.defaults-test-missing'
         $result.Issues.Code | Should -Contain 'avm.bicep.waf-test-missing'
         $result.Issues.Code | Should -Contain 'avm.bicep.test-file-missing'
+    }
+
+    It 'makes missing defaults advisory for <ModuleType>' -ForEach @(
+        @{ ModuleType = 'res'; Class = 'resource' }
+        @{ ModuleType = 'ptn'; Class = 'pattern' }
+        @{ ModuleType = 'utl'; Class = 'utility' }
+    ) {
+        $module = $script:modulePath
+        if ($ModuleType -ne 'res') {
+            $destinationParent = Join-Path $script:workingRoot 'avm' $ModuleType 'mock'
+            New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null
+            Move-Item -LiteralPath $module -Destination (Join-Path $destinationParent 'widget')
+            $module = Join-Path $destinationParent 'widget'
+            Set-ModuleClassMetadata -Path $module -ModuleType $ModuleType `
+                -CanonicalType $(if ($ModuleType -eq 'ptn') { 'aiml-ai-gateway' } else { 'regions' })
+        }
+        Remove-Item -LiteralPath (Join-Path $module 'tests' 'e2e' 'defaults') -Recurse -Force
+        $scope = InModuleScope 'Avm.Authoring' -Parameters @{ Path = $module } {
+            param($Path) Get-AvmBicepConventionScope -Path $Path
+        }
+
+        $run = Invoke-NativeLayoutFixture -Root $script:workingRoot -Scopes @($scope)
+        $issue = @($run.Issues | Where-Object Code -eq 'avm.bicep.defaults-test-missing')
+
+        $issue | Should -HaveCount 1
+        $issue[0].Severity | Should -BeExactly 'warning'
+    }
+
+    It 'does not require WAF coverage for validated <ModuleType> modules' -ForEach @(
+        @{ ModuleType = 'ptn'; CanonicalType = 'aiml-ai-gateway'; Prefix = '46d3xbcp.ptn.a1b2c3d' }
+        @{ ModuleType = 'utl'; CanonicalType = 'regions'; Prefix = $null }
+    ) {
+        $destinationParent = Join-Path $script:workingRoot 'avm' $ModuleType 'mock'
+        New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null
+        Move-Item -LiteralPath $script:modulePath -Destination (Join-Path $destinationParent 'widget')
+        $module = Join-Path $destinationParent 'widget'
+        Set-ModuleClassMetadata -Path $module -ModuleType $ModuleType -CanonicalType $CanonicalType
+        Remove-Item -LiteralPath (Join-Path $module 'tests' 'e2e' 'waf-aligned') -Recurse -Force
+        $scope = InModuleScope 'Avm.Authoring' -Parameters @{ Path = $module } {
+            param($Path) Get-AvmBicepConventionScope -Path $Path
+        }
+
+        $run = Invoke-NativeLayoutFixture -Root $script:workingRoot -Scopes @($scope)
+        @($run.Issues | Where-Object Code -eq 'avm.bicep.waf-test-missing') | Should -BeNullOrEmpty
+        @($run.Issues | Where-Object Code -eq 'avm.bicep.module-class-metadata') | Should -BeNullOrEmpty
+    }
+
+    It 'fails closed on invalid class metadata instead of exempting WAF coverage' {
+        $module = $script:modulePath
+        $destinationParent = Join-Path $script:workingRoot 'avm' 'ptn' 'mock'
+        New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null
+        Move-Item -LiteralPath $module -Destination (Join-Path $destinationParent 'widget')
+        $module = Join-Path $destinationParent 'widget'
+        Set-Content -LiteralPath (Join-Path $module 'metadata.json') -Value '{"canonicalType":42}' -Encoding utf8NoBOM
+        Remove-Item -LiteralPath (Join-Path $module 'tests' 'e2e' 'waf-aligned') -Recurse -Force
+        $scope = InModuleScope 'Avm.Authoring' -Parameters @{ Path = $module } {
+            param($Path) Get-AvmBicepConventionScope -Path $Path
+        }
+
+        $run = Invoke-NativeLayoutFixture -Root $script:workingRoot -Scopes @($scope)
+        $run.Issues.Code | Should -Contain 'avm.bicep.module-class-metadata'
+        $run.Issues.Code | Should -Contain 'avm.bicep.waf-test-missing'
+    }
+
+    It 'recognizes exact canonical variants and warns on singular variants' -ForEach @(
+        @{ SourceName = 'default'; ExpectedCode = 'avm.bicep.defaults-test-missing' }
+        @{ SourceName = 'Defaults'; ExpectedCode = 'avm.bicep.defaults-test-missing' }
+        @{ SourceName = 'linux.defaults'; ExpectedCode = $null }
+        @{ SourceName = 'linux.default'; ExpectedCode = 'avm.bicep.defaults-test-missing' }
+    ) {
+        $e2e = Join-Path $script:modulePath 'tests' 'e2e'
+        Rename-Item -LiteralPath (Join-Path $e2e 'defaults') -NewName $SourceName
+        $scope = InModuleScope 'Avm.Authoring' -Parameters @{ Path = $script:modulePath } {
+            param($Path) Get-AvmBicepConventionScope -Path $Path
+        }
+
+        $run = Invoke-NativeLayoutFixture -Root $script:workingRoot -Scopes @($scope)
+        $canonical = @($run.Issues | Where-Object Code -eq 'avm.bicep.defaults-test-missing')
+        $legacy = @($run.Issues | Where-Object Code -eq 'avm.bicep.defaults-spelling')
+        if ($ExpectedCode) { $canonical | Should -HaveCount 1 } else { $canonical | Should -BeNullOrEmpty }
+        if ($SourceName.EndsWith('default')) { $legacy | Should -HaveCount 1 }
+        else { $legacy | Should -BeNullOrEmpty }
     }
 
     It 'permits owner-reviewed exclusions with a reason for <Folder>' -TestCases @(

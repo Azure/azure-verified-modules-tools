@@ -130,9 +130,9 @@ function Test-AvmRule {
         Schema:
           - Id          : required, lowercase kebab/dot identifier
                           (^[a-z][a-z0-9.-]*$), unique within the loaded set.
-                          - Kind        : required, one of the four primitive kinds:
+                          - Kind        : required, one of the five primitive kinds:
                           FileMustNotExist, FileMustExist, DirectoryMustExist,
-                          TerraformScopesMustBeDirectChildren.
+                          TerraformScopesMustBeDirectChildren, TerraformRequiredExamples.
           - Description : required, non-empty string.
           - Severity    : optional, 'error' | 'warning' (default 'error').
           - AppliesTo   : optional, 'root' | 'examples' | 'modules' | 'all',
@@ -163,6 +163,7 @@ function Test-AvmRule {
             'FileMustExist'
             'DirectoryMustExist'
             'TerraformScopesMustBeDirectChildren'
+            'TerraformRequiredExamples'
         )
         $validSeverities = @('error', 'warning')
         $validAppliesTo = @('root', 'examples', 'modules', 'all')
@@ -296,6 +297,12 @@ function Test-AvmRule {
                         "avm-rule '$id': TerraformScopesMustBeDirectChildren ScopeDirectories must contain only modules and/or examples.")
                 }
             }
+            'TerraformRequiredExamples' {
+                if ($params.Count -gt 0) {
+                    throw [System.Data.DataException]::new(
+                        "avm-rule '$id': TerraformRequiredExamples does not accept parameters.")
+                }
+            }
         }
 
         return $true
@@ -328,6 +335,9 @@ function Test-AvmRuleFixable {
             return $Rule.Parameters.ContainsKey('FixCreateFile')
         }
         'TerraformScopesMustBeDirectChildren' {
+            return $false
+        }
+        'TerraformRequiredExamples' {
             return $false
         }
         default {
