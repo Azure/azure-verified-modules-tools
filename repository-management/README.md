@@ -294,6 +294,10 @@ comment. The comment is updated when the label requirement is satisfied; it does
 not claim the tests passed. Forks receive the summary and handoff guidance without
 attempting a write with their read-only token. Callers must grant
 `pull-requests: write`; only the reporting job uses that permission.
+When no required examples exist, the summary and sticky comment warn that their
+absence is not yet a merge failure. They explain that the Required label selects
+no tests and the All label is needed for optional examples; the feedback does not
+claim that selected tests passed.
 
 Repository sync requires `run managed workflow / Report check status` from
 GitHub Actions on the default branch. The managed caller must retain the
