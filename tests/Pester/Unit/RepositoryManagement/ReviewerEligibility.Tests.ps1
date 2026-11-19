@@ -205,7 +205,6 @@ Describe 'Reviewer eligibility fallback decisions' {
         $routing.NewReviewers | Should -Be @($script:ownersGroup)
         $routing.ReviewerModules[$script:ownersGroup] | Should -Be @($ModulePath)
         $routing.ReviewerTypes[$script:ownersGroup] | Should -Be 'team'
-        $routing.NewLabels | Should -BeNullOrEmpty
         $routing.OrphanedModules | Should -HaveCount 0
         $routing.Warnings | Should -HaveCount 1
         $routing.SkippedReviewers[0].Reason | Should -Match 'ineligible'
@@ -411,7 +410,6 @@ Describe 'Reviewer eligibility workflow warnings' {
             Number = 1
             Status = 'AlreadyRouted'
             NewReviewers = @()
-            NewLabels = @()
             ReviewerModules = @{}
             Warnings = @($warning)
         }
@@ -428,17 +426,15 @@ Describe 'Assert-AvmPrReviewerRoutingApplied' {
     BeforeEach {
         $script:verificationBefore = New-EligibilityPullRequest
         $script:verificationAfter = New-EligibilityPullRequest
-        $script:verificationAfter.labels = @([pscustomobject]@{ name = 'Needs: Core Team :genie:' })
         $script:verificationAfter.reviewRequests = @([pscustomobject]@{ login = 'owner' })
         $script:verificationRouting = @{
             NewReviewers = @('owner')
-            NewLabels = @('Needs: Core Team :genie:')
             ReviewerTypes = @{ owner = 'user' }
         }
         Mock Get-AvmPrReviewerRoutingCandidates { @($script:verificationAfter) }
     }
 
-    It 'accepts a user request that is actually present and labels that were persisted' {
+    It 'accepts a user request that is actually present' {
         Assert-AvmPrReviewerRoutingApplied -PullRequest $script:verificationBefore `
             -Repository $script:eligibilityRepository -Routing $script:verificationRouting
         Should -Invoke Get-AvmPrReviewerRoutingCandidates -Exactly 1 -ParameterFilter { $PullRequestUrl -eq $script:verificationBefore.url }
@@ -485,12 +481,6 @@ Describe 'Assert-AvmPrReviewerRoutingApplied' {
         $script:verificationRouting.ReviewerTypes = @{ $script:ownersGroup = 'team' }
         { Assert-AvmPrReviewerRoutingApplied -PullRequest $script:verificationBefore `
             -Repository $script:eligibilityRepository -Routing $script:verificationRouting } | Should -Throw '*Missing reviewers*module-owners*'
-    }
-
-    It 'fails if a label edit did not persist' {
-        $script:verificationAfter.labels = @()
-        { Assert-AvmPrReviewerRoutingApplied -PullRequest $script:verificationBefore `
-            -Repository $script:eligibilityRepository -Routing $script:verificationRouting } | Should -Throw '*Missing labels*Needs: Core Team*'
     }
 
     It 'propagates a failed verification read instead of claiming the write succeeded' {
@@ -546,7 +536,6 @@ Describe 'Reviewer eligibility routing API round trip' {
             -CatalogIndex $script:roundTripIndex -Ecosystem terraform -EligibilityCache $cache 3>$null 6>$null
         $first.Status | Should -Be 'Updated'
         $first.NewReviewers | Should -Be @($script:ownersGroup)
-        $first.NewLabels | Should -BeNullOrEmpty
         $first.Warnings | Should -HaveCount 1
         $second = Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:roundTripPr.PSObject.Copy() `
             -Repository $script:eligibilityRepository -CatalogIndex $script:roundTripIndex -Ecosystem terraform -EligibilityCache $cache 3>$null 6>$null

@@ -10,7 +10,7 @@
 #  - Scheduled only. Never wired to pull_request/pull_request_target: this
 #    reads pull request data with a privileged app token, and that token
 #    must never be exposed to a run triggered by untrusted fork content.
-#  - The gh pr edit write only happens when the desired labels/reviewers
+#  - The gh pr edit write only happens when the desired reviewers
 #    differ from the current ones. Any write bumps updatedAt, which would
 #    otherwise keep every routed pull request inside the scheduled lookback
 #    window forever (a self-sustaining feedback loop).
@@ -19,9 +19,7 @@
 #  - One failing pull request must not abort the sweep.
 
 $script:AvmPrReviewerRoutingFallbackTeam = 'Azure/azure-verified-modules-module-owners'
-$script:AvmPrReviewerRoutingNeedsCoreTeamLabel = 'Needs: Core Team :genie:'
-$script:AvmPrReviewerRoutingOrphanedLabel = 'Status: Module Orphaned :yellow_circle:'
-$script:AvmPrReviewerRoutingFields = 'author,number,url,isDraft,reviewRequests,reviews,headRefOid,labels,state'
+$script:AvmPrReviewerRoutingFields = 'author,number,url,isDraft,reviewRequests,reviews,headRefOid,state'
 
 function Get-AvmPrReviewerRoutingCandidates {
     <#
@@ -85,16 +83,16 @@ function Get-AvmPrReviewerRoutingChangedFiles {
 function Resolve-AvmPrReviewerRouting {
     <#
     .SYNOPSIS
-    Computes the desired labels and reviewer handles for one pull request,
+    Computes the desired reviewer handles for one pull request,
     without applying them. Kept side-effect free so it can be unit tested
     without mocking `gh pr edit`.
 
     .OUTPUTS
-    A hashtable with NewLabels and NewReviewers (what to add), plus the
-    reasoning for the log: Modules (each changed module with its owners and
-    owner source), OrphanedModules, CoreTeamPaths, ReviewerModules (owner
-    handle -> the changed modules they own) and SkippedReviewers (owners not
-    requested, with the reason).
+    A hashtable with NewReviewers (what to add), plus the reasoning for the
+    log: Modules (each changed module with its owners and owner source),
+    OrphanedModules, CoreTeamPaths, ReviewerModules (owner handle -> the
+    changed modules they own) and SkippedReviewers (owners not requested,
+    with the reason).
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -232,24 +230,12 @@ function Resolve-AvmPrReviewerRouting {
     }
     $newReviewers.Sort([System.StringComparer]::OrdinalIgnoreCase)
 
-    $hasOrphanedModule = $orphanedModules.Count -gt 0
-    $desiredLabels = @()
-    if ($coreTeamPaths.Count -gt 0 -or $hasOrphanedModule) {
-        $desiredLabels += $script:AvmPrReviewerRoutingNeedsCoreTeamLabel
-    }
-    if ($hasOrphanedModule) {
-        $desiredLabels += $script:AvmPrReviewerRoutingOrphanedLabel
-    }
-    $existingLabels = @($PullRequest.labels | Where-Object { $_.PSObject.Properties['name'] -and $_.name } | ForEach-Object { $_.name })
-    $newLabels = @($desiredLabels | Where-Object { $existingLabels -notcontains $_ })
-
     foreach ($handle in @($reviewerModules.Keys)) {
         $reviewerModules[$handle].Sort([System.StringComparer]::Ordinal)
         $reviewerModules[$handle] = @($reviewerModules[$handle])
     }
 
     return @{
-        NewLabels        = $newLabels
         NewReviewers     = @($newReviewers)
         Modules          = @($modules)
         OrphanedModules  = $orphanedModules
@@ -266,7 +252,7 @@ function Write-AvmPrReviewerRoutingPlan {
     <#
     .SYNOPSIS
     Logs which modules a pull request changes, who owns them, and the
-    reviewers and labels about to be added.
+    reviewers about to be requested.
     #>
     [CmdletBinding()]
     param(
@@ -304,9 +290,6 @@ function Write-AvmPrReviewerRoutingPlan {
         $skipped = @($Routing.SkippedReviewers | ForEach-Object { "$($_.Handle) ($($_.Reason))" })
         Write-Host "Not requesting: $($skipped -join ', ')"
     }
-    if ($Routing.NewLabels.Count -gt 0) {
-        Write-Host "Adding labels: $($Routing.NewLabels -join ', ')"
-    }
 }
 
 function Set-AvmPrReviewerRoutingForPullRequest {
@@ -316,8 +299,8 @@ function Set-AvmPrReviewerRoutingForPullRequest {
 
     .OUTPUTS
     An ordered dictionary with Url, Number, Status (Draft, Closed,
-    AlreadyRouted, MissingLabel, Updated or WouldUpdate), NewReviewers,
-    NewLabels, ReviewerModules and Warnings.
+    AlreadyRouted, Updated or WouldUpdate), NewReviewers, ReviewerModules
+    and Warnings.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([System.Collections.Specialized.OrderedDictionary])]
@@ -335,7 +318,6 @@ function Set-AvmPrReviewerRoutingForPullRequest {
         Number          = $pr.number
         Status          = $null
         NewReviewers    = @()
-        NewLabels       = @()
         ReviewerModules = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
         Warnings        = @()
     }
@@ -358,7 +340,7 @@ function Set-AvmPrReviewerRoutingForPullRequest {
     # Only write when something actually changes, so a reprocessed pull
     # request is not touched again. An unnecessary write would bump its
     # updatedAt and keep it permanently inside the scheduled lookback window.
-    if ($routing.NewLabels.Count -eq 0 -and $routing.NewReviewers.Count -eq 0) {
+    if ($routing.NewReviewers.Count -eq 0) {
         Write-Host "Pull request [$($pr.url)] is already routed. Nothing to change."
         $outcome.Status = 'AlreadyRouted'
         return $outcome
@@ -367,36 +349,17 @@ function Set-AvmPrReviewerRoutingForPullRequest {
     Write-AvmPrReviewerRoutingPlan -PullRequest $pr -Routing $routing
 
     $editArguments = @('pr', 'edit', $pr.url, '--repo', $Repository)
-    foreach ($newLabel in $routing.NewLabels) {
-        $editArguments += @('--add-label', $newLabel)
-    }
     if ($routing.NewReviewers.Count -gt 0) {
         $editArguments += @('--add-reviewer', ($routing.NewReviewers -join ','))
     }
     $outcome.Status = 'WouldUpdate'
-    if ($PSCmdlet.ShouldProcess("Labels [$($routing.NewLabels -join ', ')] and reviewers [$($routing.NewReviewers -join ', ')] on pull request [$($pr.url)]", 'Add')) {
-        try {
-            $null = Invoke-RepositoryGitHub -Arguments $editArguments
-        }
-        catch [System.InvalidOperationException] {
-            $message = $_.Exception.Message.Trim()
-            $missingLabels = @($routing.NewLabels | Where-Object { $message -ceq "GitHub operation failed: '$_' not found" })
-            if ($missingLabels.Count -ne 1) {
-                throw
-            }
-            $warning = "Routing deferred for pull request [$($pr.url)]: label [$($missingLabels[0])] does not exist in [$Repository]. " +
-                'Repository sync must provision the standard labels; a subsequent routing run will retry.'
-            Write-Warning $warning
-            $outcome.Status = 'MissingLabel'
-            $outcome.Warnings += $warning
-            return $outcome
-        }
+    if ($PSCmdlet.ShouldProcess("Reviewers [$($routing.NewReviewers -join ', ')] on pull request [$($pr.url)]", 'Add')) {
+        $null = Invoke-RepositoryGitHub -Arguments $editArguments
         Assert-AvmPrReviewerRoutingApplied -PullRequest $pr -Repository $Repository -Routing $routing
         $outcome.Status = 'Updated'
     }
 
     $outcome.NewReviewers = $routing.NewReviewers
-    $outcome.NewLabels = $routing.NewLabels
     foreach ($reviewer in $routing.NewReviewers) {
         $outcome.ReviewerModules[$reviewer] = $routing.ReviewerModules[$reviewer]
     }
@@ -428,10 +391,6 @@ function Write-AvmPrReviewerRoutingSummary {
     if ($closedCount -gt 0) {
         $overview += " $closedCount no longer open."
     }
-    $missingLabelOutcomes = @($Outcomes | Where-Object { $_.Status -ceq 'MissingLabel' })
-    if ($missingLabelOutcomes.Count -gt 0) {
-        $overview += " $($missingLabelOutcomes.Count) deferred with missing-label warnings."
-    }
     $warnings = @($Outcomes | ForEach-Object { $_.Warnings })
     if ($warnings.Count -gt 0) {
         $overview += " $($warnings.Count) warning(s)."
@@ -440,24 +399,21 @@ function Write-AvmPrReviewerRoutingSummary {
     $logLines = [System.Collections.Generic.List[string]]::new()
     $rows = [System.Collections.Generic.List[object]]::new()
     $reviewersLabel = if ($DryRun) { 'Reviewers to request' } else { 'Reviewers requested' }
-    $labelsLabel = if ($DryRun) { 'Labels to add' } else { 'Labels added' }
     foreach ($outcome in $changed) {
         $reviewers = @($outcome.NewReviewers | ForEach-Object { "$_ for $(Format-AvmRunSummaryList -Values $outcome.ReviewerModules[$_] -Limit 10)" })
         $logLines.Add($outcome.Url)
         $logLines.Add("  $($reviewersLabel): $(if ($reviewers.Count -gt 0) { $reviewers -join '; ' } else { 'none' })")
-        $logLines.Add("  $($labelsLabel): $(Format-AvmRunSummaryList -Values $outcome.NewLabels)")
         $reviewerCells = @($outcome.NewReviewers | ForEach-Object {
                 "$(Format-AvmRunSummaryList -Values @($_) -AsCode) for $(Format-AvmRunSummaryList -Values $outcome.ReviewerModules[$_] -Limit 10 -AsCode)"
             })
         $rows.Add([string[]]@(
                 "[#$($outcome.Number)]($($outcome.Url))",
-                $(if ($reviewerCells.Count -gt 0) { $reviewerCells -join '<br>' } else { 'none' }),
-                (Format-AvmRunSummaryList -Values $outcome.NewLabels -AsCode)
+                $(if ($reviewerCells.Count -gt 0) { $reviewerCells -join '<br>' } else { 'none' })
             ))
     }
 
     Write-AvmRunSummary -Title 'Pull request reviewer routing' -Overview $overview -LogLines $logLines `
-        -TableHeaders @('Pull request', $reviewersLabel, $labelsLabel) -TableRows $rows.ToArray() `
+        -TableHeaders @('Pull request', $reviewersLabel) -TableRows $rows.ToArray() `
         -Failures $Failures -Warnings $warnings -DryRun:$DryRun
 }
 

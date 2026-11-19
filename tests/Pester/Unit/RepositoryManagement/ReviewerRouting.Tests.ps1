@@ -215,23 +215,20 @@ Describe 'Resolve-AvmPrReviewerRouting' {
         $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
             -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/res/storage/storage-account/main.bicep')
         $routing.NewReviewers | Should -Contain 'storage-owner'
-        $routing.NewLabels | Should -BeNullOrEmpty
-        $routing.NewLabels | Should -Not -Contain 'Status: Module Orphaned :yellow_circle:'
     }
 
-    It 'falls back to the shared owners team and flags the module as orphaned' {
+    It 'falls back to the shared owners team and identifies the module as orphaned' {
         Mock Get-AvmBicepModuleMetadataOwners { @() }
         $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
             -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/res/network/virtual-network/main.bicep')
         $routing.NewReviewers | Should -Contain 'Azure/azure-verified-modules-module-owners'
-        $routing.NewLabels | Should -Contain 'Needs: Core Team :genie:'
-        $routing.NewLabels | Should -Contain 'Status: Module Orphaned :yellow_circle:'
+        $routing.OrphanedModules | Should -Be @('avm/res/network/virtual-network')
     }
 
     It 'routes to the core team when a changed file is outside any module folder' {
         $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
             -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/res/storage/storage-account/main.bicep', 'utilities/pipelines/e2e.ps1')
-        $routing.NewLabels | Should -Contain 'Needs: Core Team :genie:'
+        $routing.CoreTeamPaths | Should -Be @('utilities/pipelines/e2e.ps1')
     }
 
     It 'uses the owners group instead of requesting the sole owner as their own reviewer' {
@@ -247,7 +244,6 @@ Describe 'Resolve-AvmPrReviewerRouting' {
         $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
             -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/res/storage/storage-account/main.bicep')
         $routing.NewReviewers | Should -BeNullOrEmpty
-        $routing.NewLabels | Should -BeNullOrEmpty
     }
 
     It 'forces a metadata.json re-read when the pull request edits the module''s own metadata.json' {
@@ -286,7 +282,6 @@ Describe 'Resolve-AvmPrReviewerRouting' {
         $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
             -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/res/storage/storage-account/main.bicep')
         $routing.NewReviewers | Should -Be @('Azure/azure-verified-modules-module-owners')
-        $routing.NewLabels | Should -Not -Contain 'Status: Module Orphaned :yellow_circle:'
     }
 
     It 'is a no-op when every declared owner already has a pending review request' {
@@ -301,7 +296,6 @@ Describe 'Resolve-AvmPrReviewerRouting' {
         $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
             -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/res/storage/storage-account/main.bicep')
         $routing.NewReviewers | Should -BeNullOrEmpty
-        $routing.NewLabels | Should -Not -Contain 'Status: Module Orphaned :yellow_circle:'
     }
 
     It 'skips the non-ownable example/template scaffold entirely, without an orphan label or a metadata.json fetch' {
@@ -309,8 +303,7 @@ Describe 'Resolve-AvmPrReviewerRouting' {
         $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
             -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/ptn/example/module/main.bicep')
         $routing.NewReviewers | Should -BeNullOrEmpty
-        $routing.NewLabels | Should -Contain 'Needs: Core Team :genie:'
-        $routing.NewLabels | Should -Not -Contain 'Status: Module Orphaned :yellow_circle:'
+        $routing.CoreTeamPaths | Should -Be @('avm/ptn/example/module/main.bicep')
         Should -Invoke Get-AvmBicepModuleMetadataOwners -Exactly 0
     }
 
@@ -437,7 +430,6 @@ Describe 'Set-AvmPrReviewerRoutingForPullRequest' {
         $log | Should -Not -Match 'Adding labels:'
         $outcome.Status | Should -Be 'Updated'
         $outcome.NewReviewers | Should -Be @('storage-owner')
-        $outcome.NewLabels | Should -BeNullOrEmpty
         $outcome.ReviewerModules['storage-owner'] | Should -Be @('avm/res/storage/storage-account')
     }
 
@@ -459,42 +451,11 @@ Describe 'Set-AvmPrReviewerRoutingForPullRequest' {
             Should -Be 'AlreadyRouted'
     }
 
-    It 'warns without reporting a successful edit when the requested label is missing: <Label>' -TestCases @(
-        @{ Label = 'Needs: Core Team :genie:'; Orphaned = $true }
-        @{ Label = 'Status: Module Orphaned :yellow_circle:'; Orphaned = $true }
-    ) {
-        param($Label, $Orphaned)
-        if ($Orphaned) {
-            $script:catalogIndex['avm/res/storage/storage-account'].owners = @()
-        }
-        $script:missingLabelMessage = "GitHub operation failed: '$Label' not found`n"
-        Mock Invoke-RepositoryGitHub {
-            if ($Arguments[0] -eq 'api') {
-                return @([pscustomobject]@{ filename = 'avm/res/storage/storage-account/main.bicep' })
-            }
-            throw [System.InvalidOperationException]::new($script:missingLabelMessage)
-        }
-
-        $output = @(Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:pr `
-            -Repository 'Azure/bicep-registry-modules' -CatalogIndex $script:catalogIndex 3>&1 6>$null)
-        $warningRecords = @($output | Where-Object { $_ -is [System.Management.Automation.WarningRecord] })
-        $outcome = $output | Where-Object { $_ -is [System.Collections.Specialized.OrderedDictionary] }
-
-        $warningRecords -join "`n" | Should -Match ([regex]::Escape("label [$Label] does not exist"))
-        $outcome.Status | Should -Be 'MissingLabel'
-        $outcome.NewReviewers | Should -HaveCount 0
-        $outcome.NewLabels | Should -HaveCount 0
-        $outcome.Warnings | Should -HaveCount 1
-        $outcome.Warnings[0] | Should -Match 'Repository sync must provision'
-        Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter { $Arguments[0] -eq 'pr' }
-    }
-
     It 'does not downgrade other edit failures: <Failure>' -TestCases @(
         @{ Failure = "GitHub operation failed: 'storage-owner' not found" }
         @{ Failure = "GitHub operation failed: 'unrelated-label' not found" }
         @{ Failure = 'GitHub operation failed: GraphQL: Something went wrong while executing your query' }
         @{ Failure = 'GitHub operation failed: Resource not accessible by integration (HTTP 403)' }
-        @{ Failure = "GitHub operation failed: 'Needs: Core Team :genie:' not found`nGraphQL: another error" }
     ) {
         param($Failure)
         $script:routingEditFailure = $Failure
@@ -509,29 +470,6 @@ Describe 'Set-AvmPrReviewerRoutingForPullRequest' {
             Should -Throw
     }
 
-    It 'retries reviewer and orphan routing after labels are provisioned' {
-        $script:catalogIndex['avm/res/storage/storage-account'].owners = @()
-        $script:routingLabelProvisioned = $false
-        Mock Invoke-RepositoryGitHub {
-            if ($Arguments[0] -eq 'api') {
-                return @([pscustomobject]@{ filename = 'avm/res/storage/storage-account/main.bicep' })
-            }
-            if (-not $script:routingLabelProvisioned) {
-                throw [System.InvalidOperationException]::new("GitHub operation failed: 'Needs: Core Team :genie:' not found")
-            }
-        }
-        $first = Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:pr `
-            -Repository 'Azure/bicep-registry-modules' -CatalogIndex $script:catalogIndex 3>$null 6>$null
-        $first.Status | Should -Be 'MissingLabel'
-        $script:routingLabelProvisioned = $true
-        $second = Set-AvmPrReviewerRoutingForPullRequest -PullRequest $script:pr `
-            -Repository 'Azure/bicep-registry-modules' -CatalogIndex $script:catalogIndex 6>$null
-        $second.Status | Should -Be 'Updated'
-        $second.NewReviewers | Should -Be @('Azure/azure-verified-modules-module-owners')
-        $second.NewLabels | Should -Be @('Needs: Core Team :genie:', 'Status: Module Orphaned :yellow_circle:')
-        $second.Warnings | Should -HaveCount 0
-        Should -Invoke Invoke-RepositoryGitHub -Exactly 2 -ParameterFilter { $Arguments[0] -eq 'pr' }
-    }
 }
 
 Describe 'Invoke-AvmPrReviewerRouting summary' {
@@ -575,7 +513,7 @@ Describe 'Invoke-AvmPrReviewerRouting summary' {
 
         $summary = Get-Content -Raw -LiteralPath $script:summaryPath
         $summary | Should -Match '(?m)^### Pull request reviewer routing\r?$'
-        $summary | Should -Match ([regex]::Escape('| [#1](https://github.com/Azure/bicep-registry-modules/pull/1) | `storage-owner` for `avm/res/storage/storage-account` | none |'))
+        $summary | Should -Match ([regex]::Escape('| [#1](https://github.com/Azure/bicep-registry-modules/pull/1) | `storage-owner` for `avm/res/storage/storage-account` |'))
     }
 
     It 'marks a WhatIf run as a dry run without editing the pull request' {
@@ -583,7 +521,7 @@ Describe 'Invoke-AvmPrReviewerRouting summary' {
         $summary = Get-Content -Raw -LiteralPath $script:summaryPath
         $summary | Should -Match 'Pull request reviewer routing \(dry run, nothing changed\)'
         $summary | Should -Match '1 would be updated'
-        $summary | Should -Match '\| Pull request \| Reviewers to request \| Labels to add \|'
+        $summary | Should -Match '\| Pull request \| Reviewers to request \|'
         Should -Invoke Invoke-RepositoryGitHub -Exactly 0 -ParameterFilter { $Arguments[0] -eq 'pr' }
     }
 
@@ -595,50 +533,6 @@ Describe 'Invoke-AvmPrReviewerRouting summary' {
         $summary | Should -Match ([regex]::Escape('- `[https://github.com/Azure/bicep-registry-modules/pull/1]: changed files boom`'))
     }
 
-    It 'records missing labels as warnings, not failures or completed routing' {
-        Mock Get-AvmReviewerRoutingCatalogIndex {
-            @{ 'avm/res/storage/storage-account' = @{ owners = @() } }
-        }
-        Mock Invoke-RepositoryGitHub {
-            if ($Arguments[0] -eq 'api') {
-                return @([pscustomobject]@{ filename = 'avm/res/storage/storage-account/main.bicep' })
-            }
-            throw [System.InvalidOperationException]::new("GitHub operation failed: 'Needs: Core Team :genie:' not found")
-        }
-        $null = Invoke-AvmPrReviewerRouting -Repository 'Azure/bicep-registry-modules' 3>$null 6>$null
-
-        $summary = Get-Content -Raw -LiteralPath $script:summaryPath
-        $summary | Should -Match '0 updated, 0 already routed, 0 draft\(s\) skipped, 0 failed\. 1 deferred with missing-label warnings\.'
-        $summary | Should -Match '(?m)^Warnings:\r?$'
-        $summary | Should -Match ([regex]::Escape($script:pr.url))
-        $summary | Should -Match ([regex]::Escape('label [Needs: Core Team :genie:] does not exist'))
-        $summary | Should -Not -Match '(?m)^Failures:'
-        $summary | Should -Not -Match '\| Reviewers requested \|'
-    }
-
-    It 'continues routing the remaining requests after a missing-label warning' {
-        Mock Get-AvmReviewerRoutingCatalogIndex {
-            @{ 'avm/res/storage/storage-account' = @{ owners = @() } }
-        }
-        $script:secondPr = $script:pr.PSObject.Copy()
-        $script:secondPr.number = 2
-        $script:secondPr.url = 'https://github.com/Azure/bicep-registry-modules/pull/2'
-        Mock Get-AvmPrReviewerRoutingCandidates { @($script:pr, $script:secondPr) }
-        Mock Invoke-RepositoryGitHub {
-            if ($Arguments[0] -eq 'api') {
-                return @([pscustomobject]@{ filename = 'avm/res/storage/storage-account/main.bicep' })
-            }
-            if ($Arguments[2] -eq $script:pr.url) {
-                throw [System.InvalidOperationException]::new("GitHub operation failed: 'Needs: Core Team :genie:' not found")
-            }
-        }
-        $null = Invoke-AvmPrReviewerRouting -Repository 'Azure/bicep-registry-modules' 3>$null 6>$null
-
-        $summary = Get-Content -Raw -LiteralPath $script:summaryPath
-        $summary | Should -Match '2 pull request\(s\) checked.*1 updated.*0 failed\. 1 deferred'
-        $summary | Should -Match ([regex]::Escape('| [#2](https://github.com/Azure/bicep-registry-modules/pull/2) | `Azure/azure-verified-modules-module-owners`'))
-        Should -Invoke Invoke-RepositoryGitHub -Exactly 2 -ParameterFilter { $Arguments[0] -eq 'pr' }
-    }
 }
 
 Describe 'Invoke-AvmPrReviewerRouting diagnostics' {
