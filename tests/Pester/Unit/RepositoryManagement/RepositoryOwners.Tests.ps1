@@ -6,6 +6,30 @@ BeforeAll {
     . (Join-Path $lib 'Logging.ps1')
 }
 
+Describe 'Direct collaborator cleanup issue log' {
+    It 'returns no issues after successfully removing a collaborator' {
+        Mock Invoke-GitHubCliWithRetry {
+            param($commands)
+            switch ($commands[0].Arguments[1]) {
+                'repos/Azure/test-repo/collaborators?affiliation=direct' {
+                    return @{ success = $true; output = @([pscustomobject]@{ login = 'outside-user'; role_name = 'write' }) }
+                }
+                'repos/Azure/test-repo/collaborators/outside-user' {
+                    $commands[0].Arguments | Should -Contain 'DELETE'
+                    return @{ success = $true }
+                }
+                default { throw "Unexpected GitHub call: $($commands[0].Arguments)" }
+            }
+        }
+
+        $issues = @(Remove-DirectCollaborators -orgAndRepoName 'Azure/test-repo' `
+                -moduleMetaData @{ owners = @() } -planOnly $false -issueLog @())
+
+        $issues.Count | Should -Be 0
+        Should -Invoke Invoke-GitHubCliWithRetry -Exactly 2
+    }
+}
+
 Describe 'Repository metadata owner reconciliation' {
     It 'does not expose the removed forceUserRemoval parameter' {
         (Get-Command Remove-DirectCollaborators).Parameters.ContainsKey('forceUserRemoval') |
