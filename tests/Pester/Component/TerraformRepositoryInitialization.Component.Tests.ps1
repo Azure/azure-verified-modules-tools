@@ -332,7 +332,7 @@ Describe 'Component: resumable Terraform avm init' -Tag Component {
                 'metadata.json'            = (Get-TestPublishedMetadata)
                 'terraform.tf'             = "terraform {}`n"
                 '_header.md'               = "# Azure Storage Account`n"
-                'examples/default/main.tf' = "# example`n"
+                'examples/defaults/main.tf' = "# example`n"
                 'tests/.gitkeep'           = ''
             }
         }
@@ -378,7 +378,7 @@ Describe 'Component: resumable Terraform avm init' -Tag Component {
         Get-TestRemoteLog -Bare $bare | Should -Be @('chore: initialize module repository', 'README.md: Setup instructions')
         $published = Get-TestRemoteFile -Bare $bare
         foreach ($file in @('metadata.json', '_header.md', 'main.tf', 'variables.tf', 'outputs.tf', 'terraform.tf',
-                'examples/default/main.tf', 'examples/default/_header.md', 'tests/.gitkeep', 'LICENSE', 'README.md')) {
+                'examples/defaults/main.tf', 'examples/defaults/_header.md', 'tests/.gitkeep', 'LICENSE', 'README.md')) {
             $published | Should -Contain $file
         }
         (Invoke-TestGit @('--git-dir', $bare, 'show', 'main:_header.md')) -join "`n" |
