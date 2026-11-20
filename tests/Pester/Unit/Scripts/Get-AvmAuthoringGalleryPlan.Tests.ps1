@@ -17,6 +17,7 @@ Describe 'Get-AvmAuthoringGalleryPlan' {
 
     AfterEach {
         $env:GITHUB_OUTPUT = $script:previousOutput
+        Remove-Variable -Name AvmAuthoringGalleryFindAttempts -Scope Global -ErrorAction SilentlyContinue
     }
 
     It 'plans only a full stable release that is in MCR and missing from Gallery' {
@@ -27,6 +28,23 @@ Describe 'Get-AvmAuthoringGalleryPlan' {
     It 'does not publish an already-published manual selection' {
         & $script:planner -ReleaseTag v1.0.0
         Get-Content -LiteralPath $env:GITHUB_OUTPUT | Should -BeExactly 'tags='
+    }
+
+    It 'retries a Gallery package-not-found response' {
+        $global:AvmAuthoringGalleryFindAttempts = 0
+        Mock Find-PSResource {
+            $global:AvmAuthoringGalleryFindAttempts++
+            if ($global:AvmAuthoringGalleryFindAttempts -eq 1) {
+                Write-Error 'Package does not exist on the server.'
+            } else {
+                [pscustomobject]@{ Version = [version]'1.0.0' }
+            }
+        }
+
+        & $script:planner
+
+        Get-Content -LiteralPath $env:GITHUB_OUTPUT | Should -BeExactly 'tags=v1.1.0'
+        Should -Invoke Find-PSResource -Exactly 2
     }
 
     It 'rejects a manual tag that is not ready: <Tag>' -TestCases @(

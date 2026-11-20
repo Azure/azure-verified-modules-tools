@@ -36,8 +36,17 @@ $pending = @()
 if ($ready.Count -gt 0) {
     . (Join-Path $PSScriptRoot 'Import-AvmNetworkRetry.ps1')
     $published = @(Invoke-AvmRetry -RetryActivity 'Listing Avm.Authoring versions on PSGallery' -RetryAction {
-        Find-PSResource -Name Avm.Authoring -Version '*' -Repository PSGallery |
+        $findErrors = $null
+        $found = Find-PSResource -Name Avm.Authoring -Version '*' -Repository PSGallery `
+            -ErrorAction SilentlyContinue -ErrorVariable findErrors
+        foreach ($findError in @($findErrors)) {
+            throw $findError
+        }
+        $found |
             ForEach-Object { $_.Version.ToString() }
+    } -RetryOnPermanentFailure {
+        param($ErrorRecord)
+        $ErrorRecord.Exception.Message -match '(?i)\bPackage does not exist on the server\b'
     })
     $pending = @($ready | Where-Object { $published -cnotcontains $_.Substring(1) } | Select-Object -Unique)
 }
