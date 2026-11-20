@@ -128,7 +128,7 @@ function Remove-DirectCollaborators {
             Write-Warning "User has direct access to $orgAndRepoName, but is an owner or AVM core team member and has admin access. They are likely JIT elevated, so skipping the error: $($userLogin)"
         } else {
             Write-Warning "User has direct access to $orgAndRepoName, but AVM repos cannot have direct user access outside of JIT, removing access now: $($userLogin) - role: $($user.role_name)"
-            $issueLog = Invoke-CollaboratorRemoval -orgAndRepoName $orgAndRepoName -userLogin $userLogin -planOnly $planOnly -issueLog $issueLog
+            $issueLog = @(Invoke-CollaboratorRemoval -orgAndRepoName $orgAndRepoName -userLogin $userLogin -planOnly $planOnly -issueLog $issueLog)
         }
     }
 
