@@ -241,9 +241,18 @@ It 'classifies a forwarded registry location conservatively: <Case>' -ForEach @(
             Optional = $true
         }
         @{
-            Case = 'other version'
+            Case = 'verified interface 0.10.1'
             Source = 'Azure/avm-utl-interfaces/azure'
             Version = '0.10.1'
+            Telemetry = 'var.enable_telemetry'
+            Location = 'var.location'
+            Business = ''
+            Optional = $true
+        }
+        @{
+            Case = 'unknown version'
+            Source = 'Azure/avm-utl-interfaces/azure'
+            Version = '0.10.2'
             Telemetry = 'var.enable_telemetry'
             Location = 'var.location'
             Business = ''
