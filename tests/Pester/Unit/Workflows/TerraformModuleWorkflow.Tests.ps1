@@ -70,6 +70,22 @@ Describe 'terraform-module reusable workflow' {
     It 'no longer lists per-example e2e targeting as a divergence' {
         $script:workflow | Should -Not -Match 'has no per-example targeting'
     }
+
+    It 'delegates Terraform module-gate reporting and enforcement to the immutable shared action' {
+        $gateMatch = [regex]::Match($script:workflow, '(?ms)^  module-gate:\r?\n.*?(?=^  [A-Za-z][\w-]*:\r?\n|\z)')
+        $gateMatch.Success | Should -BeTrue
+        $gate = $gateMatch.Value
+
+        $gate | Should -Match '(?m)^    name: Report check status\r?$'
+        $gate | Should -Match '(?m)^    if: always\(\)\r?$'
+        $gate | Should -Match '(?m)^    needs: \[bootstrap, subscriptions, unit-test, pr-check, pr-check-fork, integration-test, discover-examples, select-e2e-tests, e2e-test\]\r?$'
+        $gate | Should -Match '(?m)^    permissions:\r?\n      pull-requests: write\r?$'
+        ([regex]::Matches($gate, '(?m)^      - name:')).Count | Should -Be 1
+        ([regex]::Matches($gate, '(?m)^\s+uses:\s+Azure/azure-verified-modules-tools/\.github/actions/report-check-status@[0-9a-f]{40}\r?$')).Count | Should -Be 1
+        $gate | Should -Match '(?m)^          ecosystem: terraform\r?$'
+        $gate | Should -Match '(?m)^          results: \$\{\{ toJSON\(needs\) \}\}\r?$'
+        $gate | Should -Not -Match '(?m)^        (run|shell):|actions/github-script|azure/login|actions/checkout|ACTIONS_ID_TOKEN|secrets:|id-token:'
+    }
 }
 
 Describe 'Terraform E2E label routing and merge gates' {
@@ -80,7 +96,6 @@ Describe 'Terraform E2E label routing and merge gates' {
         $null = & $module { Import-AvmPowerShellModule -Name powershell-yaml -Global }
         $script:gatesWorkflow = ConvertFrom-Yaml (Get-Content -LiteralPath (Join-Path $root '.github' 'workflows' 'terraform-module.yml') -Raw)
         $script:listScript = [scriptblock]::Create($script:gatesWorkflow.jobs['discover-examples'].steps[-1].run)
-        $script:gateScript = [scriptblock]::Create($script:gatesWorkflow.jobs['module-gate'].steps[-1].run)
         $script:matrixScript = [scriptblock]::Create($script:gatesWorkflow.jobs['select-e2e-tests'].steps[-1].run)
         $script:exampleScript = [scriptblock]::Create($script:gatesWorkflow.jobs['e2e-test'].steps[-1].run)
     }
@@ -88,7 +103,7 @@ Describe 'Terraform E2E label routing and merge gates' {
     BeforeEach {
         $script:gateEnvironment = @{}
         foreach ($name in @(
-            'EVENT_NAME', 'PR_LABELS', 'IS_FORK', 'RUNNER_TEMP', 'GITHUB_OUTPUT', 'RESULTS', 'REPOSITORY_NAME',
+            'EVENT_NAME', 'PR_LABELS', 'IS_FORK', 'RUNNER_TEMP', 'GITHUB_OUTPUT',
             'E2E_EXAMPLE', 'SUBSCRIPTIONS', 'SUBSCRIPTION_OVERRIDE', 'REQUIRED_EXAMPLES', 'OPTIONAL_EXAMPLES', 'RUN_OPTIONAL'
         )) {
             $script:gateEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
@@ -110,22 +125,6 @@ Describe 'Terraform E2E label routing and merge gates' {
         $script:examplesJson = '["default","waf-aligned","private"]'
         $script:writeHostMessages = [Collections.Generic.List[string]]::new()
         $script:exampleResult = [pscustomobject]@{ Status = 'pass'; FilesProcessed = 1 }
-        $script:gateResults = @{
-            bootstrap = @{ result = 'success' }
-            subscriptions = @{ result = 'success' }
-            'unit-test' = @{ result = 'success' }
-            'pr-check' = @{ result = 'success' }
-            'integration-test' = @{ result = 'success' }
-            'discover-examples' = @{
-                result = 'success'
-                outputs = @{
-                    requiredExamples = '["default","waf-aligned"]'; runRequired = 'true'
-                    optionalExamples = '["private"]'; runOptional = 'false'
-                }
-            }
-            'select-e2e-tests' = @{ result = 'success'; outputs = @{ deploymentMatrix = '[{"Name":"default"}]' } }
-            'e2e-test' = @{ result = 'success' }
-        }
         Mock Import-Module {}
         Mock avm {
             if ($args -contains '--list') { return $script:examplesJson }
@@ -176,15 +175,13 @@ Describe 'Terraform E2E label routing and merge gates' {
         $outputs.runOptional | Should -BeExactly 'true'
     }
 
-    It 'refuses merge-group deployment authorization and fails the merge gate' {
+    It 'refuses merge-group deployment authorization and preserves privileged job trust guards' {
         $env:EVENT_NAME = 'merge_group'
         $env:PR_LABELS = '["PR: Run Required E2E Tests","PR: Run All E2E Tests"]'
         & $script:listScript
         $outputs = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
         $outputs.runRequired | Should -BeExactly 'false'
         $outputs.runOptional | Should -BeExactly 'false'
-        $env:RESULTS = ConvertTo-Json -InputObject $script:gateResults -Depth 5
-        { & $script:gateScript } | Should -Throw '*merge queues are not supported*'
         foreach ($name in @('subscriptions', 'pr-check', 'integration-test')) {
             $script:gatesWorkflow.jobs[$name]['if'] | Should -BeExactly "github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)"
         }
@@ -234,208 +231,6 @@ Describe 'Terraform E2E label routing and merge gates' {
         $null = New-Item -ItemType Directory -Path (Join-Path $PWD.Path 'examples' $ExampleName) -Force
         $script:examplesJson = '["private"]'
         { & $script:listScript } | Should -Throw '*exists but is not runnable*'
-    }
-
-    It 'does not require unselected optional tests to run' {
-        $env:RESULTS = ConvertTo-Json -InputObject $script:gateResults -Depth 5
-        { & $script:gateScript } | Should -Not -Throw
-    }
-
-    It 'allows an explicitly empty selected matrix without requiring a deployment job' {
-        $script:gateResults['discover-examples'].outputs.requiredExamples = '[]'
-        $script:gateResults['select-e2e-tests'].outputs.deploymentMatrix = '[]'
-        $script:gateResults['e2e-test'].result = 'skipped'
-        $env:RESULTS = ConvertTo-Json -InputObject $script:gateResults -Depth 5
-        { & $script:gateScript } | Should -Not -Throw
-    }
-
-    It 'gates selected optional tests just like required tests: <Result>' -ForEach @(
-        @{ Result = 'success'; Passes = $true }
-        @{ Result = 'failure'; Passes = $false }
-        @{ Result = 'cancelled'; Passes = $false }
-        @{ Result = 'skipped'; Passes = $false }
-    ) {
-        $script:gateResults['discover-examples'].outputs.runOptional = 'true'
-        $script:gateResults['e2e-test'].result = $Result
-        $env:RESULTS = ConvertTo-Json -InputObject $script:gateResults -Depth 5
-        if ($Passes) { { & $script:gateScript } | Should -Not -Throw }
-        else { { & $script:gateScript } | Should -Throw '*Selected E2E tests did not pass*' }
-    }
-
-    It 'rejects failed, cancelled or skipped required validation: <Job>/<Result>' -ForEach @(
-        @{ Job = 'bootstrap'; Result = 'failure' }
-        @{ Job = 'subscriptions'; Result = 'skipped' }
-        @{ Job = 'pr-check'; Result = 'failure' }
-        @{ Job = 'unit-test'; Result = 'cancelled' }
-        @{ Job = 'integration-test'; Result = 'skipped' }
-    ) {
-        $script:gateResults[$Job].result = $Result
-        $env:RESULTS = ConvertTo-Json -InputObject $script:gateResults -Depth 5
-        { & $script:gateScript } | Should -Throw '*did not pass*'
-    }
-
-    It 'blocks merging until existing required examples are authorized' {
-        $script:gateResults['discover-examples'].outputs.runRequired = 'false'
-        $script:gateResults['e2e-test'].result = 'skipped'
-        $env:RESULTS = ConvertTo-Json -InputObject $script:gateResults -Depth 5
-        $path = Join-Path $TestDrive 'missing-label-gate.ps1'
-        Set-Content -LiteralPath $path -Value $script:gateScript.ToString() -Encoding utf8
-        $result = & $script:gatesModule {
-            param($Path)
-            Invoke-AvmProcess -FilePath (Get-Command pwsh).Source -ArgumentList @('-NoProfile', '-File', $Path) -IgnoreExitCode
-        } $path
-        $result.ExitCode | Should -Be 1
-        $result.StdOut | Should -Match '::error title=E2E authorization label required::'
-        $result.StdOut | Should -Match '"PR: Run Required E2E Tests".*"PR: Run All E2E Tests"'
-        $result.StdErr | Should -Not -Match 'Exception|throw'
-    }
-
-    It 'publishes actionable label guidance without changing authorization: <Case>' -ForEach @(
-        @{ Case = 'missing label'; Missing = $true; Expected = 'create'; Summary = $true }
-        @{ Case = 'rerun updates existing bot comment'; Missing = $true; Existing = $true; Expected = 'update'; Summary = $true }
-        @{ Case = 'human cannot spoof owned comment'; Missing = $true; Human = $true; Expected = 'create'; Summary = $true }
-        @{ Case = 'required label resolves comment'; Existing = $true; Expected = 'update' }
-        @{ Case = 'optional label resolves comment'; Existing = $true; Optional = $true; Expected = 'update' }
-        @{ Case = 'optional-only examples explain missing label'; Empty = $true; Missing = $true; Expected = 'create'; Summary = $true; Warning = $true }
-        @{ Case = 'required label selects no optional examples'; Empty = $true; Expected = 'create'; Summary = $true; Warning = $true }
-        @{ Case = 'all label selects optional-only examples'; Empty = $true; Optional = $true; Expected = 'create'; Summary = $true; Warning = $true }
-        @{ Case = 'absent required scenarios update comment'; Existing = $true; Empty = $true; Expected = 'update'; Summary = $true; Warning = $true }
-        @{ Case = 'absent runnable examples explain labels cannot create tests'; Empty = $true; NoOptional = $true; Expected = 'create'; Summary = $true; Warning = $true }
-        @{ Case = 'all label cannot select nonexistent examples'; Empty = $true; NoOptional = $true; Optional = $true; Expected = 'create'; Summary = $true; Warning = $true }
-        @{ Case = 'optional-only fork gets summary without API calls'; Empty = $true; Missing = $true; Fork = $true; Summary = $true; Warning = $true; Expected = '' }
-        @{ Case = 'optional-only stale label cannot post'; Empty = $true; Missing = $true; NewlyAuthorized = $true; Summary = $true; Warning = $true; Expected = '' }
-        @{ Case = 'no unnecessary success comment'; Expected = '' }
-        @{ Case = 'fork receives summary without API calls'; Missing = $true; Fork = $true; Summary = $true; Warning = $true; Expected = '' }
-        @{ Case = 'denied comment permission remains visible'; Missing = $true; Denied = $true; Summary = $true; Warning = $true; Expected = '' }
-        @{ Case = 'stale commit cannot post'; Missing = $true; Stale = $true; Summary = $true; Expected = '' }
-        @{ Case = 'newly added label cannot get stale warning'; Missing = $true; NewlyAuthorized = $true; Summary = $true; Expected = '' }
-        @{ Case = 'removed label cannot get stale resolution'; Existing = $true; NewlyRemoved = $true; Expected = '' }
-        @{ Case = 'failed discovery cannot resolve comment'; Failed = $true; Existing = $true; Expected = '' }
-        @{ Case = 'template remains exempt'; Template = $true; Missing = $true; Expected = '' }
-    ) {
-        param($Missing, $Existing, $Human, $Optional, $Empty, $NoOptional, $Fork, $Denied, $Stale, $NewlyAuthorized, $NewlyRemoved, $Failed, $Template, $Expected, $Summary, $Warning)
-        $reporter = $script:gatesWorkflow.jobs['module-gate'].steps[0]
-        $reporter.uses | Should -BeExactly 'actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd'
-        $reporter['if'] | Should -BeExactly "always() && github.event_name == 'pull_request'"
-        $script:gatesWorkflow.jobs['module-gate'].permissions['pull-requests'] | Should -BeExactly 'write'
-        $scenario = @{
-            missing = [bool]$Missing; existing = [bool]$Existing; human = [bool]$Human; optional = [bool]$Optional
-            empty = [bool]$Empty; noOptional = [bool]$NoOptional; fork = [bool]$Fork; denied = [bool]$Denied; stale = [bool]$Stale
-            newlyAuthorized = [bool]$NewlyAuthorized; newlyRemoved = [bool]$NewlyRemoved
-            failed = [bool]$Failed; template = [bool]$Template
-        } | ConvertTo-Json -Compress
-        $source = ConvertTo-Json -InputObject $reporter.with.script -Compress
-        $harness = @'
-const scenario = SCENARIO;
-const source = SOURCE;
-const result = { mutations: [], warnings: [], errors: [], summaries: [], api: [] };
-const context = {
-  repo: { owner: 'Azure', repo: scenario.template ? 'terraform-azurerm-avm-template' : 'module' },
-  payload: { pull_request: { number: 42, head: { sha: 'current', repo: { full_name: scenario.fork ? 'fork/module' : 'Azure/module' } } } },
-  serverUrl: 'https://github.com', runId: 123
-};
-const label = scenario.optional ? 'PR: Run All E2E Tests' : 'PR: Run Required E2E Tests';
-const authorized = scenario.newlyAuthorized || (!scenario.missing && !scenario.newlyRemoved);
-process.env.RESULTS = JSON.stringify({ 'discover-examples': {
-  result: scenario.failed ? 'failure' : 'success',
-  outputs: {
-    requiredExamples: scenario.empty ? '[]' : '["default"]',
-    optionalExamples: scenario.noOptional ? '[]' : '["private"]',
-    runRequired: scenario.missing ? 'false' : 'true',
-    runOptional: scenario.optional ? 'true' : 'false'
-  }
-} });
-const core = {
-  error: message => result.errors.push(message),
-  warning: message => result.warnings.push(message),
-  summary: { addRaw(text) { result.summaries.push(text); return this; }, async write() {} }
-};
-const comments = scenario.existing || scenario.human ? [{
-  id: 7, user: { login: scenario.human ? 'contributor' : 'github-actions[bot]' },
-  body: '<!-- avm-terraform-e2e-label -->\nprevious'
-}] : [];
-const github = {
-  rest: {
-    pulls: { async get() {
-      result.api.push('get');
-      if (scenario.denied) throw new Error('Resource not accessible by integration');
-      return { data: { head: { sha: scenario.stale ? 'newer' : 'current' }, labels: authorized ? [{ name: label }] : [] } };
-    } },
-    issues: {
-      listComments() {},
-      async createComment(params) { result.mutations.push({ operation: 'create', ...params }); },
-      async updateComment(params) { result.mutations.push({ operation: 'update', ...params }); }
-    }
-  },
-  async paginate() { result.api.push('list'); return comments; }
-};
-const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-new AsyncFunction('github', 'context', 'core', source)(github, context, core)
-  .then(() => console.log(JSON.stringify(result)))
-  .catch(error => { console.error(error); process.exitCode = 1; });
-'@
-        $harness = $harness.Replace('SCENARIO', $scenario).Replace('SOURCE', $source)
-        $path = Join-Path $TestDrive 'label-feedback.cjs'
-        Set-Content -LiteralPath $path -Value $harness -Encoding utf8
-        $execution = & $script:gatesModule {
-            param($Path)
-            Invoke-AvmProcess -FilePath 'node' -ArgumentList @($Path)
-        } $path
-        $result = ConvertFrom-Json -InputObject $execution.StdOut
-        if ($Expected) {
-            $result.mutations.Count | Should -Be 1
-            $result.mutations[0].operation | Should -BeExactly $Expected
-            if ($Empty) {
-                $result.mutations[0].body | Should -Match 'no required E2E examples found'
-                $result.mutations[0].body | Should -Match 'does not currently block merging'
-                $result.mutations[0].body | Should -Match '`PR: Run Required E2E Tests`'
-                $result.mutations[0].body | Should -Match '`PR: Run All E2E Tests`'
-                if ($NoOptional) { $result.mutations[0].body | Should -Match 'No E2E deployment tests can run' }
-                elseif ($Optional) { $result.mutations[0].body | Should -Match 'Optional E2E tests were selected' }
-                else { $result.mutations[0].body | Should -Match 'No E2E deployment tests were selected' }
-                if ($NoOptional) { $result.mutations[0].body | Should -Match 'No runnable E2E examples were discovered' }
-            }
-            elseif ($Missing) {
-                $result.mutations[0].body | Should -Match '`PR: Run Required E2E Tests`'
-                $result.mutations[0].body | Should -Match '`PR: Run All E2E Tests`'
-                $result.mutations[0].body | Should -Match 'required \*\*and\*\* optional'
-                $result.mutations[0].body | Should -Match 'Labels on a fork do not authorize'
-            }
-            else {
-                $result.mutations[0].body | Should -Match 'requirement satisfied'
-                $result.mutations[0].body | Should -Match 'does not mean validation has passed'
-            }
-        }
-        else { $result.mutations.Count | Should -Be 0 }
-        $result.summaries.Count | Should -Be ([int][bool]$Summary)
-        $result.errors.Count | Should -Be ([int]([bool]$Summary -and -not $Empty))
-        $result.warnings.Count | Should -Be ([int][bool]$Warning + [int]([bool]$Empty -and [bool]$Fork))
-        if ($Summary) { $result.summaries[0] | Should -Match 'release-branch handoff' }
-        if ($Fork -or $Failed -or $Template) { $result.api.Count | Should -Be 0 }
-    }
-
-    It 'does not interpret failed, cancelled or skipped E2E dependencies as passing: <Job>/<Result>' -ForEach @(
-        @{ Job = 'bootstrap'; Result = 'failure' }
-        @{ Job = 'discover-examples'; Result = 'failure' }
-        @{ Job = 'discover-examples'; Result = 'skipped' }
-        @{ Job = 'select-e2e-tests'; Result = 'failure' }
-        @{ Job = 'select-e2e-tests'; Result = 'skipped' }
-        @{ Job = 'e2e-test'; Result = 'failure' }
-        @{ Job = 'e2e-test'; Result = 'cancelled' }
-        @{ Job = 'e2e-test'; Result = 'skipped' }
-    ) {
-        $script:gateResults[$Job].result = $Result
-        $env:RESULTS = ConvertTo-Json -InputObject $script:gateResults -Depth 5
-        { & $script:gateScript } | Should -Throw
-    }
-
-    It 'explicitly permits absent required scenarios without requiring a label' {
-        $script:gateResults['discover-examples'].outputs.requiredExamples = '[]'
-        $script:gateResults['discover-examples'].outputs.runRequired = 'false'
-        $script:gateResults['e2e-test'].result = 'skipped'
-        $env:RESULTS = ConvertTo-Json -InputObject $script:gateResults -Depth 5
-        $script:gateResults['select-e2e-tests'].result = 'skipped'
-        { & $script:gateScript } | Should -Not -Throw
     }
 
     It 'assigns named round-robin subscriptions and classifications before fan-out without publishing IDs' {

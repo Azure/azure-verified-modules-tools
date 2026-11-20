@@ -18,6 +18,11 @@ boundary.
   implementations.
 - Share logic when behavior and safety requirements are the same. Keep distinct
   trust, platform, or user-facing boundaries explicit.
+- Cross-ecosystem and cross-repository behavior must have one shared
+  implementation. Keep consumer workflows and templates thin: supply inputs
+  and ecosystem-specific policy rather than copying orchestration, reporting,
+  or safety controls. Test shared behavior at its owner and enforce delegation
+  in consumer contract tests so copied implementations cannot silently return.
 - Add abstractions, dependencies, configuration, and public options only when a
   demonstrated need justifies their ongoing cost.
 - Do not hard-code tool versions or supported-version constraints, including
