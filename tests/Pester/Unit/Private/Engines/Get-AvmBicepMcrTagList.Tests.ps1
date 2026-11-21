@@ -65,6 +65,37 @@ Describe 'Get-AvmBicepMcrTagList' -Tag 'Unit' {
         $result.Tags.Count | Should -Be 0
     }
 
+    It 'recognizes the MCR WebContentNotFound HTML response for an unpublished repository' {
+        InModuleScope 'Avm.Authoring' {
+            $script:mcrStatus = 404
+            $script:mcrContent = '<!DOCTYPE html><html><title>WebContentNotFound</title></html>'
+            $script:mcrHeaders = @{ 'x-ms-error-code' = 'WebContentNotFound'; 'Content-Type' = 'text/html' }
+        }
+        $result = InModuleScope 'Avm.Authoring' {
+            Get-AvmBicepMcrTagList -ModulePath 'avm/res/mock/widget'
+        }
+        $result.Exists | Should -BeFalse
+        $result.Tags.Count | Should -Be 0
+    }
+
+    It 'rejects HTML responses with an incomplete or misleading not-found marker: <Case>' -ForEach @(
+        @{ Case = 'wrong code'; Status = 404; Code = 'OtherError'; Type = 'text/html'; Link = $null }
+        @{ Case = 'wrong media type'; Status = 404; Code = 'WebContentNotFound'; Type = 'application/json'; Link = $null }
+        @{ Case = 'success response'; Status = 200; Code = 'WebContentNotFound'; Type = 'text/html'; Link = $null }
+        @{ Case = 'pagination link'; Status = 404; Code = 'WebContentNotFound'; Type = 'text/html'; Link = 'next' }
+    ) {
+        InModuleScope 'Avm.Authoring' -Parameters @{
+            Status = $Status; Code = $Code; Type = $Type; Link = $Link
+        } {
+            param($Status, $Code, $Type, $Link)
+            $script:mcrStatus = $Status
+            $script:mcrContent = '<html>Missing</html>'
+            $script:mcrHeaders = @{ 'x-ms-error-code' = $Code; 'Content-Type' = $Type; Link = $Link }
+            { Get-AvmBicepMcrTagList -ModulePath 'avm/res/mock/widget' } |
+                Should -Throw '*not valid JSON*'
+        }
+    }
+
     It 'follows same-endpoint pagination rather than silently accepting a partial tag list' {
         InModuleScope 'Avm.Authoring' {
             Mock Invoke-WebRequest {
@@ -95,6 +126,31 @@ Describe 'Get-AvmBicepMcrTagList' -Tag 'Unit' {
         @($result.Tags).Count | Should -Be 2
         $result.Tags.Contains('0.1.1') | Should -BeTrue
         InModuleScope 'Avm.Authoring' { Should -Invoke Invoke-WebRequest -Exactly 2 }
+    }
+
+    It 'rejects a WebContentNotFound response after a successful page' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Invoke-WebRequest {
+                if (-not $Uri.Query) {
+                    $status = 200
+                    $content = '{"name":"bicep/avm/res/mock/widget","tags":["0.1.0"]}'
+                    $headers = @{ Link = '</v2/bicep/avm/res/mock/widget/tags/list?last=0.1.0>; rel="next"' }
+                }
+                else {
+                    $status = 404
+                    $content = '<html>Missing</html>'
+                    $headers = @{ 'x-ms-error-code' = 'WebContentNotFound'; 'Content-Type' = 'text/html' }
+                }
+                [pscustomobject]@{
+                    StatusCode = $status
+                    Content = $content
+                    Headers = $headers
+                    BaseResponse = [pscustomobject]@{ RequestMessage = [pscustomobject]@{ RequestUri = $Uri } }
+                }
+            }
+            { Get-AvmBicepMcrTagList -ModulePath 'avm/res/mock/widget' } |
+                Should -Throw '*not valid JSON*'
+        }
     }
 
     It 'fails on invalid status, shape, versions, not-found bodies and pagination: <Case>' -TestCases @(

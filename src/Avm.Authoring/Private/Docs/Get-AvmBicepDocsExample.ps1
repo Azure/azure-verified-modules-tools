@@ -17,7 +17,9 @@ function Get-AvmBicepDocsExample {
         [System.Collections.Generic.Dictionary[string, object]] $CompiledTemplateCache,
 
         [AllowEmptyCollection()]
-        [string[]] $RequiredParameters = @()
+        [string[]] $RequiredParameters = @(),
+
+        [string] $LibraryReference = ''
     )
 
     Set-StrictMode -Version 3.0
@@ -73,6 +75,25 @@ function Get-AvmBicepDocsExample {
                 catch [System.Text.DecoderFallbackException] {
                     throw [AvmConfigurationException]::new(
                         "Bicep example must contain valid UTF-8: $($testFile.FullName)")
+                }
+                $librarySource = $source.ReplaceLineEndings("`n")
+                if ($LibraryReference) {
+                    $tokens = [regex]::Matches(
+                        (Get-AvmBicepCommentFreeSource -Source $librarySource),
+                        "(?<literal>'''[\s\S]*?'''|'(?:\\.|[^'\\\r\n])*')|(?m:^[ \t]*import[ \t]+(?:\{[^}]*\}|\*[ \t]+as[ \t]+[A-Za-z_][A-Za-z0-9_]*)[ \t\r\n]+from[ \t]+')(?<path>[^'\r\n]+)(?=')")
+                    for ($tokenIndex = $tokens.Count - 1; $tokenIndex -ge 0; $tokenIndex--) {
+                        $path = $tokens[$tokenIndex].Groups['path']
+                        if (-not $path.Success -or $path.Value -notmatch '^\.\.?/') {
+                            continue
+                        }
+                        $target = [System.IO.Path]::GetFullPath(
+                            [System.IO.Path]::Combine($testFile.DirectoryName, $path.Value))
+                        if ($pathComparer.Equals($target, $currentSource)) {
+                            $librarySource = $librarySource.Remove($path.Index, $path.Length).Insert(
+                                $path.Index, "br/public:$($LibraryReference):<version>")
+                        }
+                    }
+                    $librarySource = $librarySource.TrimEnd("`n")
                 }
                 $lines = $source.ReplaceLineEndings("`n") -split "`n"
                 $start = -1
@@ -233,6 +254,7 @@ function Get-AvmBicepDocsExample {
                     InvalidReason      = $validationError
                     IgnoreReason       = $ignore
                     HasIgnore          = [System.IO.File]::Exists($ignorePath)
+                    LibrarySource      = $librarySource
                     BicepParameters    = if ($null -ne $fragments) { $fragments.BicepParameters } else { '' }
                     JsonParameters     = if ($null -ne $fragments) { $fragments.JsonParameters } else { '' }
                     BicepParameterFile = if ($null -ne $fragments) { $fragments.BicepParameterFile } else { '' }

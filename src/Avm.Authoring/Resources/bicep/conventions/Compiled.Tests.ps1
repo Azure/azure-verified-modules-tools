@@ -195,7 +195,7 @@ Describe 'Compiled Bicep: <Label>' -ForEach $cases {
     }
     if ($Case.Variables.psbase.Count -gt 0) {
         It 'uses a camelCase compiled variable <Name>' -ForEach @($Case.Variables.psbase.Keys | ForEach-Object { @{ Name = $_ } }) -Tag 'avm.bicep.variable-name' {
-            [string]$Name | Should -MatchExactly '^(?:[a-z]+[a-zA-Z0-9]+|\$fxv#[0-9]+)$'
+            [string]$Name | Should -MatchExactly '^(?:[a-z]+[a-zA-Z0-9]+|\$fxv#[0-9]+|_[0-9]+\.(?:_[0-9]+|[a-z]+[a-zA-Z0-9]+))$'
         }
 
     }

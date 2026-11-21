@@ -13,6 +13,73 @@ Describe 'Integration: Bicep docs scoped examples' -Tag Integration -Skip:($env:
         Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
     }
 
+    It 'keeps versioned <Kind> documentation byte-stable relative to the previous official template' -ForEach @(
+        @{ Kind = 'resource'; Path = 'avm/res/storage/storage-account' }
+        @{ Kind = 'pattern'; Path = 'avm/ptn/mock/example' }
+    ) {
+        $root = Join-Path $TestDrive "previous-template-$Kind"
+        $module = Join-Path $root $Path
+        $null = New-Item -ItemType Directory -Path $module -Force
+        Copy-Item -Path (Join-Path $script:fixtureRoot '*') -Destination $module -Recurse
+        [IO.File]::WriteAllText((Join-Path $module 'version.json'), '{"version":"0.1.0"}')
+        $template = Join-Path $root 'avm-readme-v1.scriban'
+        $previous = Join-Path $script:repoRoot 'tests' 'fixtures' 'bicep-docs-template' 'avm-readme-v1.scriban'
+        Copy-Item -LiteralPath $previous -Destination $template
+        [IO.File]::WriteAllText((Join-Path $root 'bicepconfig.json'),
+            '{"documentation":{"template":{"file":"avm-readme-v1.scriban"}}}')
+        $rendered = InModuleScope Avm.Authoring -Parameters @{
+            Module = $module; Root = $root; Template = $template
+        } {
+            param($Module, $Root, $Template)
+            $tool = Resolve-AvmTool -Name bicep
+            $values = Get-AvmBicepDocsCustomValue -ModulePath $Module -RepositoryRoot $Root -ToolPath $tool.Path
+            $inputSource = Join-Path $Module 'main.bicep'
+            $old = Invoke-AvmBicepDocsRender -Values $values -SourcePath $inputSource `
+                -ToolPath $tool.Path -WorkingDirectory $Module
+            Copy-Item -LiteralPath (Get-AvmBicepDocsTemplate).Path -Destination $Template -Force
+            $new = Invoke-AvmBicepDocsRender -Values $values -SourcePath $inputSource `
+                -ToolPath $tool.Path -WorkingDirectory $Module
+            @{ Old = $old; New = $new }
+        }
+        $rendered.Old.ExitCode | Should -Be 0 -Because $rendered.Old.StdErr
+        $rendered.New.ExitCode | Should -Be 0 -Because $rendered.New.StdErr
+        $rendered.New.StdOut | Should -BeExactly $rendered.Old.StdOut
+    }
+
+    It 'renders a real export-only library through an explicitly configured previous template' {
+        $root = Join-Path $TestDrive 'export-only-library'
+        $module = Join-Path $root 'avm' 'utl' 'mock' 'naming'
+        $example = Join-Path $module 'tests' 'e2e' 'defaults'
+        $null = New-Item -ItemType Directory -Path $example -Force
+        [IO.File]::WriteAllText((Join-Path $module 'main.bicep'), @'
+metadata name = 'Naming library'
+
+@export()
+func getName(value string) string => value
+'@)
+        [IO.File]::WriteAllText((Join-Path $module 'version.json'), '{"version":"0.1.0"}')
+        [IO.File]::WriteAllText((Join-Path $example 'main.test.bicep'), @'
+metadata name = 'Use the library'
+
+import { getName } from '../../../main.bicep'
+output name string = getName('example')
+'@)
+        $template = Join-Path $root 'avm-readme-v1.scriban'
+        Copy-Item -LiteralPath (Join-Path $script:repoRoot 'tests' 'fixtures' 'bicep-docs-template' 'avm-readme-v1.scriban') `
+            -Destination $template
+        [IO.File]::WriteAllText((Join-Path $root 'bicepconfig.json'),
+            '{"documentation":{"template":{"file":"avm-readme-v1.scriban"}}}')
+        $result = Invoke-AvmDocs -Path $module -CheckDrift -IncludeRenderedContent -SkipModuleVersionCheck
+        $readmes = @($result.GeneratedReadmes | Where-Object Path -eq 'README.md')
+        $readmes.Count | Should -Be 1 -Because (@($result.Issues | ForEach-Object Message) -join '; ')
+        $content = $readmes[0].Content
+        @([regex]::Matches($content, "import \{ getName \} from 'br/public:avm/utl/mock/naming:<version>'")).Count |
+            Should -Be 2
+        $content | Should -Match '<summary>via Bicep import</summary>'
+        $content | Should -Not -Match "from '\.\./\.\./\.\./main\.bicep'|validate and deploy the module successfully|via Bicep module"
+        Test-Path -LiteralPath (Join-Path $module 'README.md') | Should -BeFalse
+    }
+
     It 'renders reassigned e2e examples in the scoped child without writing READMEs' {
         $root = Join-Path $TestDrive 'repository'
         $module = Join-Path $root 'avm' 'res' 'storage' 'storage-account'
