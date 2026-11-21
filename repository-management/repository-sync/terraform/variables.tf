@@ -115,7 +115,7 @@ variable "azure_local_environment_lock" {
 
 variable "azure_local_environment_mode" {
   type        = string
-  description = "Azure Local repository role. Consumer is implemented; lifecycle and migration remain fail-closed pending their module contracts."
+  description = "Azure Local repository role. Consumer is implemented; lifecycle and migration retain the existing path pending module contracts."
   default     = null
   nullable    = true
 

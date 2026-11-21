@@ -346,10 +346,11 @@ operator work outside repository sync.
 Repository sync selects all active AVM HCI and Azure Local Terraform modules
 through the checked-in `azure-local-*` groups. Each repository has an explicit
 `consumer`, `lifecycle`, or `migration` role. The reusable Terraform workflow
-implements consumer readiness today and fails closed for the other roles until
-their module-specific contracts are added.
+implements consumer readiness today. Lifecycle and migration roles retain their
+existing E2E path and remain explicitly unsupported until their module-specific
+contracts are added.
 
-For selected repositories, the Tools `avm` environment must provide both:
+To activate a supported consumer, the Tools `avm` environment must provide both:
 
 - `AVM_AZURE_LOCAL_ENVIRONMENT_LOCK`: the exact nonsecret version-1 BRM lock
   configuration containing the storage account resource ID, container, canonical
@@ -359,13 +360,15 @@ For selected repositories, the Tools `avm` environment must provide both:
   lock-container Blob Data Contributor access without broadening unrelated
   identities.
 
-Repository sync validates both inputs before local writes or GitHub/Azure
-operations, adds the supplied groups to the dedicated test identity, and
-publishes `AVM_AZURE_LOCAL_ENVIRONMENT_LOCK` plus
-`AVM_AZURE_LOCAL_ENVIRONMENT_MODE` to the selected repository. Missing or
-malformed inputs stop the selected module rather than disabling fixture use.
-The lock source must be a verified BRM bootstrap output, not a hand-authored
-production value in this repository.
+When both values are absent, repository sync leaves every selected repository
+unchanged. Supplying either value alone fails for a consumer. When both are
+present, repository
+sync validates them before local writes or GitHub/Azure operations, adds the
+supplied groups to the dedicated test identity, and publishes
+`AVM_AZURE_LOCAL_ENVIRONMENT_LOCK` plus `AVM_AZURE_LOCAL_ENVIRONMENT_MODE` only
+to consumer repositories. Lifecycle and migration repositories remain on the
+existing path. The lock source must be a verified BRM bootstrap output, not a
+hand-authored production value in this repository.
 
 BAMI creates no direct Owner assignment. A future approved saved plan destroys
 only the obsolete deterministic

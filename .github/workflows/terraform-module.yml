@@ -824,13 +824,14 @@ jobs:
               'enabled=false' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
               return
           }
-          if ($env:LOCK_MODE -cnotin @('consumer', 'lifecycle', 'migration')) {
-              throw [ArgumentException]::new('AVM_AZURE_LOCAL_ENVIRONMENT_MODE must accompany the lock configuration.')
+          if ($env:LOCK_MODE -cin @('lifecycle', 'migration')) {
+              'enabled=false' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+              "mode=$env:LOCK_MODE" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+              Write-Host "Azure Local $($env:LOCK_MODE) mode is catalogued but not yet implemented; retaining the existing E2E path."
+              return
           }
           if ($env:LOCK_MODE -cne 'consumer') {
-              throw [InvalidOperationException]::new(
-                  "Azure Local '$($env:LOCK_MODE)' repositories require their module-specific lifecycle contract; consumer readiness is not a substitute."
-              )
+              throw [ArgumentException]::new('AVM_AZURE_LOCAL_ENVIRONMENT_MODE must accompany the lock configuration.')
           }
 
           $document = $null

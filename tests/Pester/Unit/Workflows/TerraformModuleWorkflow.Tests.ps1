@@ -458,7 +458,7 @@ Describe 'Terraform Azure Local environment lock integration' {
         $pool[0].tag | Should -BeExactly 'Azure Local'
     }
 
-    It 'fails closed when a lifecycle or migration repository has not implemented its contract' -ForEach @(
+    It 'retains the existing path when a lifecycle or migration repository has not implemented its contract' -ForEach @(
         @{ Mode = 'lifecycle' }
         @{ Mode = 'migration' }
     ) {
@@ -472,8 +472,10 @@ Describe 'Terraform Azure Local environment lock integration' {
                 '/subscriptions/22222222-2222-4222-8222-222222222222/resourceGroups/rg-avm-ci-azure-local-control'
         } | ConvertTo-Json -Compress
         $env:LOCK_MODE = $Mode
-        { & $script:azureLocalContextScript } |
-            Should -Throw '*module-specific lifecycle contract*'
+        & $script:azureLocalContextScript
+        $output = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
+        $output.enabled | Should -BeExactly 'false'
+        $output.mode | Should -BeExactly $Mode
     }
 
     It 'rejects incomplete, extra, or duplicate lock configuration <Case>' -ForEach @(

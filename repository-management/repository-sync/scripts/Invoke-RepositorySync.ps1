@@ -100,7 +100,15 @@ else {
 }
 $effectiveEntraGroups = @($settings.EntraGroups)
 $resolvedAzureLocalLock = $null
-if ($null -ne $settings.AzureLocalEnvironment) {
+if ($settings.AzureLocalEnvironment -ceq 'consumer' -and
+    (-not [string]::IsNullOrWhiteSpace($azureLocalEnvironmentLock) -or
+        -not [string]::IsNullOrWhiteSpace($azureLocalEntraGroups))) {
+    if ([string]::IsNullOrWhiteSpace($azureLocalEnvironmentLock) -or
+        [string]::IsNullOrWhiteSpace($azureLocalEntraGroups)) {
+        throw [ArgumentException]::new(
+            'AVM_AZURE_LOCAL_ENVIRONMENT_LOCK and AVM_AZURE_LOCAL_ENTRA_GROUPS must be supplied together.'
+        )
+    }
     $resolvedAzureLocalLock = ConvertFrom-AvmAzureLocalEnvironmentLock -Json $azureLocalEnvironmentLock
     $effectiveEntraGroups += @(ConvertFrom-AvmAzureLocalEntraGroups -Json $azureLocalEntraGroups)
     $effectiveEntraGroups = @($effectiveEntraGroups | Select-Object -Unique)
@@ -164,7 +172,7 @@ if ($null -ne $testTenant.Settings) {
 }
 if ($null -ne $resolvedAzureLocalLock) {
     $terraformVariables["azure_local_environment_lock"] = $resolvedAzureLocalLock
-    $terraformVariables["azure_local_environment_mode"] = $settings.AzureLocalEnvironment
+    $terraformVariables["azure_local_environment_mode"] = 'consumer'
 }
 if ($null -ne $existingIdentity) {
     $terraformVariables["existing_identity"] = @{

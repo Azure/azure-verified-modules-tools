@@ -219,7 +219,7 @@ Describe 'Repository sync unified driver' -Tag Component {
         }
     }
 
-    It 'fails closed for marked Azure Local repositories with missing verified inputs' {
+    It 'preserves existing behavior for a marked consumer without Azure Local inputs' {
         $script:config.repositoryGroups += @{
             name = 'azure-local'
             repositories = @('avm-ptn-example-repo')
@@ -227,9 +227,50 @@ Describe 'Repository sync unified driver' -Tag Component {
         }
         $script:config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $script:configPath
 
-        { & $script:driver @script:arguments } | Should -Throw '*validated version 1 JSON object*'
-        $script:fixture.Events | Should -HaveCount 0
-        Test-Path -LiteralPath (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeFalse
+        $null = & $script:driver @script:arguments
+        $variables = Get-Content -Raw -LiteralPath (Join-Path $script:terraformRoot 'terraform.tfvars.json') |
+            ConvertFrom-Json -AsHashtable
+        $variables.ContainsKey('azure_local_environment_lock') | Should -BeFalse
+        $variables.ContainsKey('azure_local_environment_mode') | Should -BeFalse
+        $variables.entra_group_names | Should -Be @(
+            'avm-test-entra-readers',
+            'avm-test-management-group-owners'
+        )
+    }
+
+    It 'does not route <Mode> modules into consumer fixture activation' -ForEach @(
+        @{ Mode = 'lifecycle' }
+        @{ Mode = 'migration' }
+    ) {
+        $script:config.repositoryGroups += @{
+            name = 'azure-local'
+            repositories = @('avm-ptn-example-repo')
+            azureLocalEnvironment = $Mode
+        }
+        $script:config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $script:configPath
+        $subscription = '22222222-2222-4222-8222-222222222222'
+        $digest = [Convert]::ToHexString(
+            [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($subscription))
+        ).ToLowerInvariant()
+        $script:arguments.azureLocalEnvironmentLock = @{
+            schemaVersion = 1
+            storageAccountResourceId =
+                '/subscriptions/11111111-1111-4111-8111-111111111111/resourceGroups/rg-avm-ci-state/providers/Microsoft.Storage/storageAccounts/avmreceipts'
+            containerName = 'avm-azure-local-locks'
+            blobName = "avm-hci-$digest"
+            fixtureResourceGroupId = "/subscriptions/$subscription/resourceGroups/rg-avm-ci-azure-local-control"
+        } | ConvertTo-Json -Compress
+        $script:arguments.azureLocalEntraGroups = '["avm-test-azure-local-lock-operators"]'
+
+        $null = & $script:driver @script:arguments
+        $variables = Get-Content -Raw -LiteralPath (Join-Path $script:terraformRoot 'terraform.tfvars.json') |
+            ConvertFrom-Json -AsHashtable
+        $variables.ContainsKey('azure_local_environment_lock') | Should -BeFalse
+        $variables.ContainsKey('azure_local_environment_mode') | Should -BeFalse
+        $variables.entra_group_names | Should -Be @(
+            'avm-test-entra-readers',
+            'avm-test-management-group-owners'
+        )
     }
 
     It 'fails closed for a marked Azure Local repository without identity groups' {
@@ -252,7 +293,21 @@ Describe 'Repository sync unified driver' -Tag Component {
             fixtureResourceGroupId = "/subscriptions/$subscription/resourceGroups/rg-avm-ci-azure-local-control"
         } | ConvertTo-Json -Compress
 
-        { & $script:driver @script:arguments } | Should -Throw '*JSON array*'
+        { & $script:driver @script:arguments } | Should -Throw '*must be supplied together*'
+        $script:fixture.Events | Should -HaveCount 0
+        Test-Path -LiteralPath (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeFalse
+    }
+
+    It 'fails closed when only one Azure Local source is configured' {
+        $script:config.repositoryGroups += @{
+            name = 'azure-local'
+            repositories = @('avm-ptn-example-repo')
+            azureLocalEnvironment = 'consumer'
+        }
+        $script:config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $script:configPath
+        $script:arguments.azureLocalEntraGroups = '["avm-test-azure-local-lock-operators"]'
+
+        { & $script:driver @script:arguments } | Should -Throw '*must be supplied together*'
         $script:fixture.Events | Should -HaveCount 0
         Test-Path -LiteralPath (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeFalse
     }
