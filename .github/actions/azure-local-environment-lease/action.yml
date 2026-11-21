@@ -1,0 +1,92 @@
+name: Azure Local environment lease
+description: Coordinate Azure Local lifecycle and consumer access with an ETag-protected cooperative state blob.
+inputs:
+  operation:
+    description: status, acquire, release, or recover.
+    required: true
+  storageAccountResourceId:
+    description: Full ARM resource ID of the persistent storage account that owns the lock container.
+    required: true
+  fixtureResourceGroupId:
+    description: Full ARM resource ID of the BRM control resource group used to verify fixture existence and avm-generation.
+    required: true
+  containerName:
+    description: Existing private Blob container that survives fixture teardown.
+    required: true
+  blobName:
+    description: Exact canonical avm-hci-<SHA-256 subscription digest> lock blob name.
+    required: true
+  ownerHash:
+    description: Nonsecret SHA-256 hash derived by the caller from the stable run identity.
+    required: false
+  expectedGeneration:
+    description: Authoritative avm-generation value supplied by the caller's BRM readiness check.
+    required: false
+  mode:
+    description: consumer or lifecycle. Consumers require a generation; lifecycle may prepare an environment without one.
+    required: false
+    default: consumer
+  refreshGeneration:
+    description: Allow the same lifecycle owner to refresh the lock record after a verified recreate.
+    required: false
+    default: 'false'
+  allowUninitialized:
+    description: Allow lifecycle initial prepare only after the control resource group is proven absent.
+    required: false
+    default: 'false'
+  cleanupConfirmed:
+    description: True only after the caller's ecosystem-specific cleanup has completed and been verified.
+    required: false
+    default: 'false'
+  expectedOwnerHash:
+    description: Exact current owner hash required for explicit recovery.
+    required: false
+  ownerInactiveConfirmed:
+    description: Operator attestation that the recorded owner is no longer active; recovery only.
+    required: false
+    default: 'false'
+  recoveryReason:
+    description: Nonsecret reason for explicit recovery.
+    required: false
+outputs:
+  state:
+    description: leased, released, or missing.
+    value: ${{ steps.lease.outputs.state }}
+  acquired:
+    description: Whether the current operation holds or observes an acquired lock for the exact owner.
+    value: ${{ steps.lease.outputs.acquired }}
+  ownerHash:
+    description: SHA-256 owner hash from the lock record, or the caller's hash after acquire.
+    value: ${{ steps.lease.outputs.ownerHash }}
+  generation:
+    description: Generation from the lock record.
+    value: ${{ steps.lease.outputs.generation }}
+  updatedAtUtc:
+    description: Last lock-record update timestamp.
+    value: ${{ steps.lease.outputs.updatedAtUtc }}
+  fixtureExists:
+    description: Whether the control resource group exists at the time of the operation.
+    value: ${{ steps.lease.outputs.fixtureExists }}
+runs:
+  using: composite
+  steps:
+    - name: Run environment lock operation
+      id: lease
+      shell: pwsh
+      env:
+        AVM_AZURE_LOCAL_OPERATION: ${{ inputs.operation }}
+        AVM_AZURE_LOCAL_STORAGE_ACCOUNT_RESOURCE_ID: ${{ inputs.storageAccountResourceId }}
+        AVM_AZURE_LOCAL_FIXTURE_RESOURCE_GROUP_ID: ${{ inputs.fixtureResourceGroupId }}
+        AVM_AZURE_LOCAL_CONTAINER_NAME: ${{ inputs.containerName }}
+        AVM_AZURE_LOCAL_BLOB_NAME: ${{ inputs.blobName }}
+        AVM_AZURE_LOCAL_OWNER_HASH: ${{ inputs.ownerHash }}
+        AVM_AZURE_LOCAL_EXPECTED_GENERATION: ${{ inputs.expectedGeneration }}
+        AVM_AZURE_LOCAL_MODE: ${{ inputs.mode }}
+        AVM_AZURE_LOCAL_REFRESH_GENERATION: ${{ inputs.refreshGeneration }}
+        AVM_AZURE_LOCAL_ALLOW_UNINITIALIZED: ${{ inputs.allowUninitialized }}
+        AVM_AZURE_LOCAL_CLEANUP_CONFIRMED: ${{ inputs.cleanupConfirmed }}
+        AVM_AZURE_LOCAL_EXPECTED_OWNER_HASH: ${{ inputs.expectedOwnerHash }}
+        AVM_AZURE_LOCAL_OWNER_INACTIVE_CONFIRMED: ${{ inputs.ownerInactiveConfirmed }}
+        AVM_AZURE_LOCAL_RECOVERY_REASON: ${{ inputs.recoveryReason }}
+      run: |
+        & (Join-Path $env:GITHUB_ACTION_PATH 'Invoke-AzureLocalEnvironmentLease.ps1') -Execute
