@@ -1039,7 +1039,7 @@ Describe 'Bicep release-tag safety contracts' {
 
         @($runtime.jobs.Keys | Sort-Object) | Should -Be @('release')
         $runtime.jobs.release.name | Should -BeExactly 'Create ${{ inputs.modulePath }}: ${{ inputs.releaseTagLabel }}'
-        $runtime.jobs.release.Contains('environment') | Should -BeFalse
+        $runtime.jobs.release.environment | Should -BeExactly 'publish-approval'
         $runtime.jobs.release.Contains('needs') | Should -BeFalse
         $runtime.jobs.release.Contains('strategy') | Should -BeFalse
         $tagging = $runtime.jobs.release.steps | Where-Object { $_.name -eq 'Create module release tags' }

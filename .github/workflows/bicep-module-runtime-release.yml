@@ -38,6 +38,7 @@ jobs:
   release:
     name: 'Create ${{ inputs.modulePath }}: ${{ inputs.releaseTagLabel }}'
     runs-on: ubuntu-latest
+    environment: publish-approval
     permissions:
       contents: write
     env:
