@@ -49,7 +49,7 @@ Describe 'terraform-module reusable workflow' {
 
     It 'keeps the whole e2e matrix dependent on successful discovery' {
         $script:e2eJob | Should -Match 'needs:\s*\[bootstrap, subscriptions, discover-examples, select-e2e-tests\]'
-        $script:e2eJob | Should -Not -Match 'always\(\)|cancelled\(\)|failure\(\)|continue-on-error:'
+        $script:e2eJob | Should -Not -Match '(?m)^    if:.*(?:always\(\)|cancelled\(\)|failure\(\))|continue-on-error:'
         $script:discoveryJob | Should -Not -Match 'continue-on-error:'
     }
 
@@ -97,7 +97,11 @@ Describe 'Terraform E2E label routing and merge gates' {
         $script:gatesWorkflow = ConvertFrom-Yaml (Get-Content -LiteralPath (Join-Path $root '.github' 'workflows' 'terraform-module.yml') -Raw)
         $script:listScript = [scriptblock]::Create($script:gatesWorkflow.jobs['discover-examples'].steps[-1].run)
         $script:matrixScript = [scriptblock]::Create($script:gatesWorkflow.jobs['select-e2e-tests'].steps[-1].run)
-        $script:exampleScript = [scriptblock]::Create($script:gatesWorkflow.jobs['e2e-test'].steps[-1].run)
+        $e2eStep = @($script:gatesWorkflow.jobs['e2e-test'].steps | Where-Object {
+                $_.Contains('id') -and $_['id'] -ceq 'e2e'
+            })
+        $e2eStep.Count | Should -Be 1
+        $script:exampleScript = [scriptblock]::Create($e2eStep[0].run)
     }
 
     BeforeEach {
@@ -314,6 +318,162 @@ Describe 'Terraform E2E label routing and merge gates' {
         $script:exampleResult.Status = 'skipped'
         $script:exampleResult.FilesProcessed = 0
         { & $script:exampleScript } | Should -Throw '*did not execute successfully*'
+    }
+}
+
+Describe 'Terraform Azure Local environment lock integration' {
+    BeforeAll {
+        $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..')).Path
+        $module = Import-Module (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -PassThru
+        $null = & $module { Import-AvmPowerShellModule -Name powershell-yaml -Global }
+        $script:azureLocalWorkflow = ConvertFrom-Yaml (
+            Get-Content -LiteralPath (Join-Path $script:root '.github' 'workflows' 'terraform-module.yml') -Raw
+        )
+        $script:azureLocalSteps = $script:azureLocalWorkflow.jobs['e2e-test'].steps
+        $script:azureLocalContextStep = @(
+            $script:azureLocalSteps | Where-Object {
+                $_.Contains('id') -and $_['id'] -ceq 'azure-local-lock'
+            }
+        )
+        $script:azureLocalContextStep.Count | Should -Be 1
+        $script:azureLocalContextScript = [scriptblock]::Create($script:azureLocalContextStep[0].run)
+    }
+
+    BeforeEach {
+        $script:azureLocalEnvironment = @{}
+        foreach ($name in @(
+            'LOCK_CONFIG', 'GITHUB_OUTPUT', 'REPOSITORY',
+            'WORKFLOW_REF', 'RUN_ID', 'RUN_ATTEMPT', 'JOB_NAME', 'MATRIX_JOB_INDEX', 'E2E_EXAMPLE'
+        )) {
+            $script:azureLocalEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+        }
+        $env:GITHUB_OUTPUT = Join-Path $TestDrive 'azure-local-context-output'
+        Remove-Item -LiteralPath $env:GITHUB_OUTPUT -Force -ErrorAction SilentlyContinue
+        $env:REPOSITORY = 'Azure/terraform-azurerm-avm-res-mock'
+        $env:WORKFLOW_REF =
+            'Azure/terraform-azurerm-avm-res-mock/.github/workflows/ci.yml@refs/pull/1/merge'
+        $env:RUN_ID = '123456'
+        $env:RUN_ATTEMPT = '2'
+        $env:JOB_NAME = 'e2e-test'
+        $env:MATRIX_JOB_INDEX = '3'
+        $env:E2E_EXAMPLE = 'azure-local'
+        $env:LOCK_CONFIG = ''
+    }
+
+    AfterEach {
+        foreach ($name in $script:azureLocalEnvironment.Keys) {
+            $value = $script:azureLocalEnvironment[$name]
+            [Environment]::SetEnvironmentVariable($name, ($null -eq $value ? [NullString]::Value : $value))
+        }
+    }
+
+    It 'keeps Azure Local lock, readiness, and release conditional in the existing e2e job' {
+        $leaseSteps = @(
+            $script:azureLocalSteps | Where-Object {
+                $_.Contains('uses') -and $_['uses'] -ceq
+                    'Azure/azure-verified-modules-tools/.github/actions/azure-local-environment-lease@ed65b1e2c6168c366be694fa13fb8a07c85b1dff'
+            }
+        )
+        $leaseSteps.Count | Should -Be 3
+        $script:azureLocalContextStep[0]['env']['LOCK_CONFIG'] |
+            Should -BeExactly '${{ vars.AVM_AZURE_LOCAL_ENVIRONMENT_LOCK }}'
+        $script:azureLocalContextStep[0]['env'].Keys |
+            Should -Not -Contain 'GITHUB_SECRETS'
+        @($leaseSteps | ForEach-Object { $_.with.operation }) |
+            Should -Be @('status', 'acquire', 'release')
+        $release = @($leaseSteps | Where-Object { $_.with.operation -ceq 'release' })[0]
+        $release.if | Should -Match 'always\(\)'
+        $release.if | Should -Match "steps\.e2e\.outcome == 'success'"
+        $release.if | Should -Match "steps\.azure-local-projection\.outcome == 'failure'"
+        $release.if | Should -Not -Match "steps\.e2e\.outcome == 'skipped'"
+        $release.with.cleanupConfirmed | Should -BeExactly 'true'
+        @($script:azureLocalSteps | Where-Object {
+                $_.Contains('id') -and $_['id'] -ceq 'azure-local-projection'
+            }).Count | Should -Be 1
+        $projectionStep = @($script:azureLocalSteps | Where-Object {
+                $_.Contains('id') -and $_['id'] -ceq 'azure-local-projection'
+            })[0]
+        $projectionStep.run | Should -Match 'Write-HciEnvironmentProjection'
+        $projectionStep.run | Should -Match 'AVM_AZURE_LOCAL_ENVIRONMENT'
+        $projectionStep.run | Should -Match '\$projection\.generation -cne \$env:EXPECTED_GENERATION'
+        $projectionStep.run | Should -Match 'ARM_SUBSCRIPTION_ID=\$\(\$projection\.subscriptionId\)'
+        $projectionStep.run | Should -Match 'TF_VAR_subscription_id=\$\(\$projection\.subscriptionId\)'
+        $projectionStep.run | Should -Not -Match 'Get-HciEnvironmentReadiness'
+        $checkout = @($script:azureLocalSteps | Where-Object {
+                $_.Contains('uses') -and
+                $_['uses'] -ceq 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' -and
+                $_['with']['repository'] -ceq 'Azure/bicep-registry-modules'
+            })
+        $checkout.Count | Should -Be 1
+        $checkout[0].with.ref | Should -BeExactly 'd556b8c5d70ff0646168f21e8807087ce2e1c3dd'
+        $conditionalSteps = @($script:azureLocalContextStep[0]) + @(
+            $script:azureLocalSteps | Where-Object {
+                $_.Contains('id') -and
+                $_['id'] -cin @('azure-local-lock-status', 'azure-local-lock-acquire', 'azure-local-projection')
+            }
+        )
+        foreach ($step in $conditionalSteps) {
+            if ($step['id'] -cne 'azure-local-lock') {
+                $step['if'] | Should -Match "steps\.azure-local-lock\.outputs\.enabled == 'true'"
+            }
+        }
+    }
+
+    It 'does nothing when the nonsecret lock configuration is absent' {
+        & $script:azureLocalContextScript
+        $output = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
+        $output.enabled | Should -BeExactly 'false'
+        $output.Keys | Should -Be @('enabled')
+    }
+
+    It 'derives one canonical reserved subscription and a stable matrix owner hash' {
+        $subscriptionId = '22222222-2222-4222-8222-222222222222'
+        $env:LOCK_CONFIG = @(
+            @{
+                schemaVersion = 1
+                storageAccountResourceId =
+                    '/subscriptions/11111111-1111-4111-8111-111111111111/resourceGroups/rg-state/providers/Microsoft.Storage/storageAccounts/avmstateaccount'
+                containerName = 'avm-azure-local-locks'
+                blobName = 'avm-hci-' + (
+                    [Convert]::ToHexString(
+                        [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($subscriptionId))
+                    ).ToLowerInvariant()
+                )
+                fixtureResourceGroupId = "/subscriptions/$subscriptionId/resourceGroups/rg-avm-ci-azure-local-control"
+            } | ConvertTo-Json -Compress
+        )
+        & $script:azureLocalContextScript
+        $output = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
+        $output.enabled | Should -BeExactly 'true'
+        $output.subscriptionId | Should -BeExactly $subscriptionId
+        $output.ownerHash | Should -Match '^[a-f0-9]{64}$'
+        $output.subscriptionKey | Should -Match '^[a-f0-9]{64}$'
+        $pool = @(ConvertFrom-Json -InputObject $output.testSubscriptionIds)
+        $pool.Count | Should -Be 1
+        $pool[0].id | Should -BeExactly $subscriptionId
+        $pool[0].tag | Should -BeExactly 'Azure Local'
+    }
+
+    It 'rejects incomplete, extra, or duplicate lock configuration <Case>' -ForEach @(
+        @{
+            Case = 'missing property'
+            Json = '{"schemaVersion":1,"storageAccountResourceId":"x","containerName":"y","blobName":"z"}'
+        }
+        @{
+            Case = 'extra property'
+            Json = '{"schemaVersion":1,"storageAccountResourceId":"x","containerName":"y","blobName":"z","fixtureResourceGroupId":"w","generation":"x"}'
+        }
+        @{
+            Case = 'duplicate property'
+            Json = '{"schemaVersion":1,"storageAccountResourceId":"x","containerName":"y","blobName":"z","fixtureResourceGroupId":"w","schemaVersion":1}'
+        }
+        @{
+            Case = 'wrong version type'
+            Json = '{"schemaVersion":"1","storageAccountResourceId":"x","containerName":"y","blobName":"z","fixtureResourceGroupId":"w"}'
+        }
+    ) {
+        $env:LOCK_CONFIG = $Json
+        { & $script:azureLocalContextScript } | Should -Throw
     }
 }
 
@@ -997,9 +1157,9 @@ Describe 'terraform-module required Azure feature registration' {
         $script:jobs[$Job] | Should -Not -Match 'azure/login@|register-features|Register required features'
     }
 
-    It 'adds pinned Azure login only to the two protected deployment test jobs' {
+    It 'adds pinned Azure login only to the protected deployment test jobs' {
         ([regex]::Matches($script:workflow, 'uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c')).Count |
-            Should -Be 2
+            Should -Be 3
         $script:jobs['integration-test'] | Should -Match '(?m)^    environment: integration-test\r?$'
         $script:jobs['e2e-test'] | Should -Match '(?m)^    environment: examples-test-execution\r?$'
         $script:workflow | Should -Not -Match '(?i)feature unregister|provider unregister'
@@ -1007,13 +1167,22 @@ Describe 'terraform-module required Azure feature registration' {
 
     It 'uses the effective test identity and the correct selected subscription in <Job>' -ForEach @(
         @{ Job = 'integration-test'; Selection = 'steps.test-environment.outputs.subscriptionId' }
-        @{ Job = 'e2e-test'; Selection = 'steps.test-environment.outputs.subscriptionId' }
+        @{ Job = 'e2e-test'; Selection = '' }
     ) {
         $block = $script:jobs[$Job]
         $block | Should -Match 'client-id: \$\{\{ env\.ARM_CLIENT_ID \}\}'
         $block | Should -Match 'tenant-id: \$\{\{ env\.ARM_TENANT_ID \}\}'
-        $block | Should -Match ('subscription-id: \$\{\{ ' + [regex]::Escape($Selection) + ' \}\}')
-        $block | Should -Match ('SELECTED_SUBSCRIPTION_ID: \$\{\{ ' + [regex]::Escape($Selection) + ' \}\}')
+        if ($Job -ceq 'integration-test') {
+            $block | Should -Match ('subscription-id: \$\{\{ ' + [regex]::Escape($Selection) + ' \}\}')
+            $block | Should -Match ('SELECTED_SUBSCRIPTION_ID: \$\{\{ ' + [regex]::Escape($Selection) + ' \}\}')
+        }
+        else {
+            $conditional =
+                'steps.azure-local-lock.outputs.enabled == ''true'' && steps.azure-local-lock.outputs.subscriptionId || steps.test-environment.outputs.subscriptionId'
+            $block | Should -Match 'subscription-id: \$\{\{ steps\.azure-local-lock\.outputs\.subscriptionId \}\}'
+            $block | Should -Match ('subscription-id: \$\{\{ ' + [regex]::Escape($conditional) + ' \}\}')
+            $block | Should -Match ('SELECTED_SUBSCRIPTION_ID: \$\{\{ ' + [regex]::Escape($conditional) + ' \}\}')
+        }
         ([regex]::Matches($block, "if: steps.required-features.outputs.required == 'true'")).Count |
             Should -Be 2
     }
