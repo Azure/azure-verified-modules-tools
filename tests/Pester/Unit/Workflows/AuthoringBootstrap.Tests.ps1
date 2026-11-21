@@ -79,7 +79,7 @@ Describe 'Prepared Bicep runtime selection' {
     BeforeAll {
         $root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..')).Path
         $scripts = @(
-            foreach ($name in @('bicep-module-runtime', 'bicep-module-runtime-e2e', 'bicep-module-runtime-deployment', 'bicep-release')) {
+            foreach ($name in @('bicep-module-runtime', 'bicep-module-runtime-e2e', 'bicep-module-runtime-deployment', 'bicep-module-runtime-release')) {
                 $workflow = ConvertFrom-Yaml (Get-Content -Raw (Join-Path $root '.github' 'workflows' "$name.yml"))
                 foreach ($job in $workflow.jobs.Values) {
                     if (-not $job.Contains('steps')) { continue }

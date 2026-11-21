@@ -515,10 +515,9 @@ function Write-AvmWorkflowOutput {
         $release.jobs.initialize.steps[1].with.ref | Should -BeExactly '${{ steps.target.outputs.sha }}'
         $release.jobs.initialize.steps[-1].env.TARGET_COMMIT | Should -BeExactly '${{ steps.target.outputs.sha }}'
         $release.jobs.initialize.outputs.targetCommit | Should -BeExactly '${{ steps.target.outputs.sha }}'
-        $tagging = $release.jobs.release.steps | Where-Object name -EQ 'Create module release tags'
-        $tagging.env.TARGET_COMMIT | Should -BeExactly '${{ needs.initialize.outputs.targetCommit }}'
-        $tagging.env.PENDING_RELEASE | Should -BeExactly 'true'
-        $tagging.env.REQUIRE_CHANGELOG | Should -BeExactly 'true'
+        $release.jobs.release.with.targetCommit | Should -BeExactly '${{ needs.initialize.outputs.targetCommit }}'
+        $release.jobs.release.with.pendingRelease | Should -BeTrue
+        $release.jobs.release.with.requireChangelog | Should -BeTrue
         $release.on.workflow_call.inputs.initializeOnly.default | Should -BeFalse
         $release.on.workflow_call.outputs.moduleMatrix.value | Should -BeExactly '${{ jobs.initialize.outputs.moduleMatrix }}'
         $release.jobs.release.if | Should -Match '!inputs.initializeOnly'

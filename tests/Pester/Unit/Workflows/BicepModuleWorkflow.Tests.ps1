@@ -270,9 +270,10 @@ Describe 'Bicep reusable workflow ownership and syntax' {
     It 'uses the shared pinned installer and retains runtime capabilities' {
         $runtimeNames = @(
             'bicep-module-runtime', 'bicep-module-runtime-deployment',
-            'bicep-module-runtime-e2e', 'bicep-module-runtime-static'
+            'bicep-module-runtime-e2e', 'bicep-module-runtime-release',
+            'bicep-module-runtime-static'
         )
-        @($script:workflows.Keys | Where-Object { $_ -in $runtimeNames }) | Should -HaveCount 4
+        @($script:workflows.Keys | Where-Object { $_ -in $runtimeNames }) | Should -HaveCount 5
         foreach ($workflow in $runtimeNames | ForEach-Object { $script:workflows[$_] }) {
             $text = $workflow | ConvertTo-Json -Depth 100
             $text | Should -Not -Match '\.avm-tools|\.avm-entrypoint|tools-ref|github\.workflow_sha'
@@ -289,9 +290,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             $text | Should -Not -Match 'Install-PSResource -Name Avm\.Authoring'
             $text | Should -Match 'AvmCapabilities'
         }
-        $release = ($script:entrypoints | Where-Object name -EQ 'Reusable: Bicep release').jobs.release
-        ($release.steps | Where-Object name -EQ 'Install Avm.Authoring').uses |
-            Should -Match '^Azure/azure-verified-modules-tools/\.github/actions/install-avm-authoring@[0-9a-f]{40}$'
+        $release = $script:workflows['bicep-module-runtime-release'].jobs.release
         $tagging = $release.steps | Where-Object { $_.name -eq 'Create module release tags' }
         $tagging.run | Should -Match 'Set-AvmBicepReleaseTags'
         $tagging.run | Should -Match 'RequireChangelog'
@@ -444,7 +443,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             $runtime.jobs.'discover-examples'.steps,
             $script:workflows['bicep-module-runtime-deployment'].jobs.deploy.steps,
             $script:workflows['bicep-module-runtime-e2e'].jobs.'select-deployments'.steps,
-            ($script:entrypoints | Where-Object name -EQ 'Reusable: Bicep release').jobs.release.steps
+            $script:workflows['bicep-module-runtime-release'].jobs.release.steps
         ) | ForEach-Object {
             @($_ | Where-Object name -In @('Select prepared authoring runtime', 'Verify downloaded AVM tools'))
         }
@@ -1001,49 +1000,58 @@ Describe 'Bicep release-tag safety contracts' {
     It 'passes pending-release semantics through the tag-only publication path' {
         $release = $script:entrypoints | Where-Object name -EQ 'Reusable: Bicep release'
         $release.jobs.release.permissions.contents | Should -BeExactly 'write'
-        $tagging = $release.jobs.release.steps | Where-Object { $_.name -eq 'Create module release tags' }
-        $tagging.env.PENDING_RELEASE | Should -BeExactly 'true'
-        $tagging.env.REQUIRE_CHANGELOG | Should -BeExactly 'true'
-        $tagging.env.BASE_COMMIT | Should -BeExactly '${{ needs.initialize.outputs.baseCommit }}'
-        $tagging.env.TARGET_COMMIT | Should -BeExactly '${{ needs.initialize.outputs.targetCommit }}'
+        $release.jobs.release.with.pendingRelease | Should -BeTrue
+        $release.jobs.release.with.requireChangelog | Should -BeTrue
+        $release.jobs.release.with.baseCommit | Should -BeExactly '${{ needs.initialize.outputs.baseCommit }}'
+        $runtime = $script:workflows['bicep-module-runtime-release']
+        $runtime.on.workflow_call.inputs.pendingRelease.default | Should -BeFalse
+        $runtime.on.workflow_call.inputs.requireChangelog.default | Should -BeFalse
+        $tagging = $runtime.jobs.release.steps | Where-Object { $_.name -eq 'Create module release tags' }
+        $tagging.env.PENDING_RELEASE | Should -BeExactly '${{ inputs.pendingRelease }}'
+        $tagging.env.REQUIRE_CHANGELOG | Should -BeExactly '${{ inputs.requireChangelog }}'
+        $tagging.env.BASE_COMMIT | Should -BeExactly '${{ inputs.baseCommit }}'
         $tagging.run | Should -Match 'Set-AvmBicepReleaseTags'
     }
 
     It 'groups tag creation under each module with planned tags and no approval job' {
         $release = $script:entrypoints | Where-Object name -EQ 'Reusable: Bicep release'
         $rootJob = $release.jobs.release
+        $runtime = $script:workflows['bicep-module-runtime-release']
+
         $release.on.workflow_call.inputs.initializeOnly.default | Should -BeFalse
         @($release.on.workflow_call.outputs.Keys | Sort-Object) |
             Should -Be @('authoringArtifact', 'baseCommit', 'hasModules', 'moduleMatrix', 'targetCommit')
         $release.on.workflow_call.outputs.moduleMatrix.value | Should -BeExactly '${{ jobs.initialize.outputs.moduleMatrix }}'
         $release.on.workflow_call.outputs.authoringArtifact.value | Should -BeExactly '${{ jobs.bootstrap.outputs.artifact }}'
-        $rootJob.name | Should -BeExactly 'Create ${{ matrix.modulePath }}: ${{ matrix.releaseTagLabel }}'
+        $rootJob.name | Should -BeExactly '${{ matrix.modulePath }}'
         $rootJob.strategy.matrix | Should -BeExactly '${{ fromJSON(needs.initialize.outputs.moduleMatrix) }}'
-        $rootJob.Contains('uses') | Should -BeFalse
+        $rootJob.uses | Should -BeExactly './.github/workflows/bicep-module-runtime-release.yml'
         $rootJob.if | Should -Match '!inputs.initializeOnly'
-        $rootJob.if | Should -Match "github.repository == 'Azure/bicep-registry-modules'"
-        $rootJob.if | Should -Match "github.ref == 'refs/heads/main'"
-        $rootJob.concurrency.group | Should -BeExactly 'avm-publish-${{ matrix.modulePath }}'
-        $rootJob.concurrency.queue | Should -BeExactly 'max'
-        $rootJob.environment | Should -BeExactly 'publish-approval'
-        $rootJob.needs | Should -Be @('bootstrap', 'initialize')
+        $rootJob.with.modulePath | Should -BeExactly '${{ matrix.modulePath }}'
+        $rootJob.with.plannedTags | Should -BeExactly '${{ matrix.plannedTags }}'
+        $rootJob.with.releaseTagLabel | Should -BeExactly '${{ matrix.releaseTagLabel }}'
+        $rootJob.with.Contains('requirePublishApproval') | Should -BeFalse
 
         $selector = $release.jobs.initialize.steps | Where-Object { $_.name -eq 'Initialize release' }
         $selector.run | Should -Match 'Set-AvmBicepReleaseTags'
         $selector.run | Should -Match '\-WhatIf'
         $selector.run | Should -Match 'GITHUB_STEP_SUMMARY'
 
-        $tagging = $rootJob.steps | Where-Object { $_.name -eq 'Create module release tags' }
-        $tagging.env.MODULE_PATH | Should -BeExactly '${{ matrix.modulePath }}'
-        $tagging.env.EXPECTED_RELEASE_TAGS | Should -BeExactly '${{ matrix.plannedTags }}'
+        @($runtime.jobs.Keys | Sort-Object) | Should -Be @('release')
+        $runtime.jobs.release.name | Should -BeExactly 'Create ${{ inputs.modulePath }}: ${{ inputs.releaseTagLabel }}'
+        $runtime.jobs.release.environment | Should -BeExactly 'publish-approval'
+        $runtime.jobs.release.Contains('needs') | Should -BeFalse
+        $runtime.jobs.release.Contains('strategy') | Should -BeFalse
+        $tagging = $runtime.jobs.release.steps | Where-Object { $_.name -eq 'Create module release tags' }
+        $tagging.env.EXPECTED_RELEASE_TAGS | Should -BeExactly '${{ inputs.plannedTags }}'
         $tagging.run | Should -Match 'planned release tags changed after selection'
         $tagging.run.IndexOf('Set-AvmBicepReleaseTags @parameters -WhatIf') |
             Should -BeLessThan $tagging.run.IndexOf('$tags = @(Set-AvmBicepReleaseTags')
 
         $module = 'avm/res/mock/widget'
         $tags = "$module/child/1.2.5, $module/1.2.3"
-        $releaseName = $rootJob.name.Replace('${{ matrix.modulePath }}', $module).
-            Replace('${{ matrix.releaseTagLabel }}', $tags)
+        $releaseName = $runtime.jobs.release.name.Replace('${{ inputs.modulePath }}', $module).
+            Replace('${{ inputs.releaseTagLabel }}', $tags)
         $releaseName | Should -BeExactly "Create ${module}: $tags"
     }
 

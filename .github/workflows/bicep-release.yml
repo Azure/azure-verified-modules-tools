@@ -191,115 +191,21 @@ jobs:
             Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
   release:
-    name: 'Create ${{ matrix.modulePath }}: ${{ matrix.releaseTagLabel }}'
+    name: '${{ matrix.modulePath }}'
     needs: [bootstrap, initialize]
-    if: |
-      !cancelled() &&
-      !inputs.initializeOnly &&
-      needs.initialize.outputs.hasModules == 'true' &&
-      github.ref == 'refs/heads/main' &&
-      github.repository == 'Azure/bicep-registry-modules'
-    runs-on: ubuntu-latest
-    environment: publish-approval
+    if: ${{ !inputs.initializeOnly && needs.initialize.outputs.hasModules == 'true' }}
     permissions:
       contents: write
-    env:
-      AVM_AUTHORING_MODULE: Avm.Authoring
-    concurrency:
-      group: avm-publish-${{ matrix.modulePath }}
-      queue: max
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.initialize.outputs.moduleMatrix) }}
-    steps:
-      - name: Check out caller
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          ref: ${{ needs.initialize.outputs.targetCommit }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Download prepared authoring runtime
-        if: needs.bootstrap.outputs.artifact != ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ${{ needs.bootstrap.outputs.artifact }}
-          path: ${{ runner.temp }}/avm-authoring
-      - name: Select prepared authoring runtime
-        if: needs.bootstrap.outputs.artifact != ''
-        shell: pwsh
-        run: |
-          $packageRoot = Join-Path $env:RUNNER_TEMP 'avm-authoring'
-          $manifest = Join-Path $packageRoot 'Avm.Authoring.psd1'
-          if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { throw 'Prepared Avm.Authoring manifest is missing.' }
-          $discoveryRoot = Join-Path $env:RUNNER_TEMP 'avm-authoring-discovery'
-          $discoveryModule = Join-Path $discoveryRoot 'Avm.Authoring'
-          Remove-Item -LiteralPath $discoveryRoot -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Path $discoveryModule -Force | Out-Null
-          Copy-Item -Path (Join-Path $packageRoot '*') -Destination $discoveryModule -Recurse -Force
-          $artifactHash = (Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash
-          $discoveryManifest = Join-Path $discoveryModule 'Avm.Authoring.psd1'
-          if ((Get-FileHash -LiteralPath $discoveryManifest -Algorithm SHA256).Hash -cne $artifactHash) {
-            throw 'Prepared Avm.Authoring discovery package does not match the downloaded artifact.'
-          }
-          $env:PSModulePath = "$discoveryRoot$([IO.Path]::PathSeparator)$env:PSModulePath"
-          $candidates = @(Get-Module -ListAvailable -Name Avm.Authoring)
-          $selected = @($candidates | Where-Object { $_.ModuleBase -ceq $discoveryModule })
-          $unexpected = @($candidates | Where-Object { $_.ModuleBase -cne $discoveryModule })
-          if ($selected.Count -ne 1 -or $unexpected.Count -ne 0) {
-            throw 'Prepared Avm.Authoring package must be the only discoverable Avm.Authoring module.'
-          }
-          $byName = Import-Module -Name Avm.Authoring -Global -PassThru -ErrorAction Stop
-          if ($byName.ModuleBase -cne $discoveryModule) { throw 'Named Avm.Authoring import did not resolve to the prepared package.' }
-          "PSModulePath=$env:PSModulePath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "AVM_AUTHORING_MODULE=$discoveryManifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "AVM_AUTHORING_ARTIFACT_MANIFEST=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "AVM_AUTHORING_ARTIFACT_MANIFEST_SHA256=$artifactHash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Install Avm.Authoring
-        if: env.AVM_AUTHORING_MODULE == 'Avm.Authoring'
-        uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
-      - name: Create module release tags
-        shell: pwsh
-        env:
-          MODULE_PATH: ${{ matrix.modulePath }}
-          TARGET_COMMIT: ${{ needs.initialize.outputs.targetCommit }}
-          BASE_COMMIT: ${{ needs.initialize.outputs.baseCommit }}
-          PENDING_RELEASE: 'true'
-          REQUIRE_CHANGELOG: 'true'
-          EXPECTED_RELEASE_TAGS: ${{ matrix.plannedTags }}
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
-          $capabilities = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities
-          if ($capabilities.BicepWorkflowOrchestration -isnot [int] -or $capabilities.BicepWorkflowOrchestration -ne 1) {
-            throw 'The installed Avm.Authoring package does not provide BicepWorkflowOrchestration = 1.'
-          }
-          if ($capabilities.BicepReleaseSelection -isnot [int] -or $capabilities.BicepReleaseSelection -ne 1) {
-            throw 'The installed Avm.Authoring package does not provide BicepReleaseSelection = 1.'
-          }
-          $expectedTags = @(ConvertFrom-Json -InputObject $env:EXPECTED_RELEASE_TAGS)
-          if ($expectedTags.Count -eq 0) { throw 'The selected release plan must contain at least one tag.' }
-          $parameters = @{
-            Root = $env:GITHUB_WORKSPACE
-            ModulePath = $env:MODULE_PATH
-            BaseCommit = $env:BASE_COMMIT
-            TargetCommit = $env:TARGET_COMMIT
-            PendingRelease = [bool]::Parse($env:PENDING_RELEASE)
-            RequireChangelog = [bool]::Parse($env:REQUIRE_CHANGELOG)
-            SkipModuleVersionCheck = $true
-          }
-          $planned = @(Set-AvmBicepReleaseTags @parameters -WhatIf)
-          $plannedTags = @($planned | ForEach-Object { $_.Tag })
-          if ($plannedTags.Count -ne $expectedTags.Count) {
-            throw 'The planned release tags changed after selection. No tags were created.'
-          }
-          for ($index = 0; $index -lt $plannedTags.Count; $index++) {
-            if ($plannedTags[$index] -cne $expectedTags[$index]) {
-              throw 'The planned release tags changed after selection. No tags were created.'
-            }
-          }
-          $tags = @(Set-AvmBicepReleaseTags -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH -BaseCommit $env:BASE_COMMIT `
-              -TargetCommit $env:TARGET_COMMIT -PendingRelease:([bool]::Parse($env:PENDING_RELEASE)) `
-              -RequireChangelog:([bool]::Parse($env:REQUIRE_CHANGELOG)) -SkipModuleVersionCheck -Confirm:$false)
-          if ($tags.Count -eq 0) { Write-Output 'No publishable module changes were found.' }
-          foreach ($tag in $tags) { Write-Output "$($tag.Tag): created=$($tag.Created), reused=$($tag.Reused)" }
+    uses: ./.github/workflows/bicep-module-runtime-release.yml
+    with:
+      modulePath: ${{ matrix.modulePath }}
+      plannedTags: ${{ matrix.plannedTags }}
+      releaseTagLabel: ${{ matrix.releaseTagLabel }}
+      targetCommit: ${{ needs.initialize.outputs.targetCommit }}
+      baseCommit: ${{ needs.initialize.outputs.baseCommit }}
+      pendingRelease: true
+      requireChangelog: true
+      authoringArtifact: ${{ needs.bootstrap.outputs.artifact }}
