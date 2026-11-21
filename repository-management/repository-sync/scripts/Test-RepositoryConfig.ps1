@@ -98,6 +98,34 @@ $actualConfigPath = [System.IO.Path]::Combine(
     "config.json"
 )
 $actualConfig = Get-Content -Path $actualConfigPath -Raw | ConvertFrom-Json
+$azureLocalRepositories = @(
+    'avm-ptn-azure-local-migrate',
+    'avm-ptn-hci-ad-provisioner',
+    'avm-ptn-hci-server-provisioner',
+    'avm-res-azurestackhci-cluster',
+    'avm-res-azurestackhci-logicalnetwork',
+    'avm-res-azurestackhci-virtualmachineinstance',
+    'avm-res-hybridcontainerservice-provisionedclusterinstance'
+)
+$azureLocalGroups = @($actualConfig.repositoryGroups | Where-Object {
+    $_.name -like 'azure-local-*'
+})
+Assert-Equal 3 $azureLocalGroups.Count 'Exactly three Azure Local repository role groups are required.'
+$azureLocalModes = @('consumer', 'lifecycle', 'migration')
+Assert-Equal (($azureLocalModes | Sort-Object) -join ',') `
+    (($azureLocalGroups.azureLocalEnvironment | Sort-Object) -join ',') `
+    'The Azure Local repository role modes changed.'
+Assert-Equal (($azureLocalRepositories | Sort-Object) -join ',') `
+    (($azureLocalGroups.repositories | Sort-Object) -join ',') `
+    'The Azure Local repository selection changed.'
+foreach ($repository in $azureLocalRepositories) {
+    $settings = Resolve-RepositorySettings -repositoryConfig $actualConfig -repoId $repository
+    if ($settings.AzureLocalEnvironment -cnotin $azureLocalModes) {
+        throw "Repository '$repository' must have an explicit Azure Local environment mode."
+    }
+}
+$nonAzureLocal = Resolve-RepositorySettings -repositoryConfig $actualConfig -repoId 'avm-res-storage-storageaccount'
+Assert-Equal $null $nonAzureLocal.AzureLocalEnvironment 'Azure Local inputs leaked to an unrelated repository.'
 $configuredRepositories = @(
     $actualConfig.repositoryGroups |
         ForEach-Object { $_.repositories } |

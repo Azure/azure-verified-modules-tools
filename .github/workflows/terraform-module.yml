@@ -809,6 +809,7 @@ jobs:
         shell: pwsh
         env:
           LOCK_CONFIG: ${{ vars.AVM_AZURE_LOCAL_ENVIRONMENT_LOCK }}
+          LOCK_MODE: ${{ vars.AVM_AZURE_LOCAL_ENVIRONMENT_MODE }}
           REPOSITORY: ${{ github.repository }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
           RUN_ID: ${{ github.run_id }}
@@ -822,6 +823,14 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($raw)) {
               'enabled=false' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
               return
+          }
+          if ($env:LOCK_MODE -cnotin @('consumer', 'lifecycle', 'migration')) {
+              throw [ArgumentException]::new('AVM_AZURE_LOCAL_ENVIRONMENT_MODE must accompany the lock configuration.')
+          }
+          if ($env:LOCK_MODE -cne 'consumer') {
+              throw [InvalidOperationException]::new(
+                  "Azure Local '$($env:LOCK_MODE)' repositories require their module-specific lifecycle contract; consumer readiness is not a substitute."
+              )
           }
 
           $document = $null
@@ -882,6 +891,7 @@ jobs:
           ).ToLowerInvariant()
 
           'enabled=true' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "mode=$env:LOCK_MODE" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "storageAccountResourceId=$($config['storageAccountResourceId'])" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "fixtureResourceGroupId=$($config['fixtureResourceGroupId'])" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "containerName=$($config['containerName'])" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8

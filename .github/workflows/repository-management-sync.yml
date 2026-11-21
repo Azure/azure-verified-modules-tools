@@ -234,6 +234,8 @@ jobs:
             -repoId $env:REPO_ID `
             -repoUrl $env:REPO_URL `
             -repoMetaData $repoMetaData `
+            -azureLocalEnvironmentLock $env:AVM_AZURE_LOCAL_ENVIRONMENT_LOCK `
+            -azureLocalEntraGroups $env:AVM_AZURE_LOCAL_ENTRA_GROUPS `
             -outputDirectory "${{ github.workspace }}" `
             -bamiSettings $bamiSettings `
             -candidateOutputDirectory $candidateDirectory `
@@ -264,6 +266,8 @@ jobs:
           TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID: ${{ vars.TEST_BAMI_SUBSCRIPTION_VENDING_IDENTITY_PRINCIPAL_ID }}
           TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID: ${{ vars.TEST_BAMI_SUBSCRIPTION_VENDING_MANAGEMENT_GROUP_ID }}
           TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE: ${{ vars.TEST_BAMI_SUBSCRIPTION_VENDING_BILLING_SCOPE }}
+          AVM_AZURE_LOCAL_ENVIRONMENT_LOCK: ${{ vars.AVM_AZURE_LOCAL_ENVIRONMENT_LOCK }}
+          AVM_AZURE_LOCAL_ENTRA_GROUPS: ${{ vars.AVM_AZURE_LOCAL_ENTRA_GROUPS }}
           REPO_META_DATA_JSON: ${{ toJson(matrix.repoMetaData) }}
           REPO_ID: ${{ matrix.repoId }}
           REPO_URL: ${{ matrix.repoUrl }}

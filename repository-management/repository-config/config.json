@@ -170,6 +170,31 @@
       }
     },
     {
+      "name": "azure-local-consumers",
+      "repositories": [
+        "avm-res-azurestackhci-logicalnetwork",
+        "avm-res-azurestackhci-virtualmachineinstance",
+        "avm-res-hybridcontainerservice-provisionedclusterinstance"
+      ],
+      "azureLocalEnvironment": "consumer"
+    },
+    {
+      "name": "azure-local-lifecycle",
+      "repositories": [
+        "avm-ptn-hci-ad-provisioner",
+        "avm-ptn-hci-server-provisioner",
+        "avm-res-azurestackhci-cluster"
+      ],
+      "azureLocalEnvironment": "lifecycle"
+    },
+    {
+      "name": "azure-local-migration",
+      "repositories": [
+        "avm-ptn-azure-local-migrate"
+      ],
+      "azureLocalEnvironment": "migration"
+    },
+    {
       "name": "azure-migrate",
       "repositories": [
         "avm-ptn-azure-local-migrate"

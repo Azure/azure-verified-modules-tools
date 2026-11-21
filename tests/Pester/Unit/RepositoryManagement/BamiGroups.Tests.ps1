@@ -29,6 +29,42 @@ Describe 'Configured repository Entra memberships' {
             (Resolve-RepositorySettings -repositoryConfig $script:config -repoId $repository).EntraGroups |
                 Should -Be $default.entraGroups
         }
+
+    }
+
+    Describe 'Azure Local repository-sync inputs' {
+        BeforeAll {
+            $subscription = '22222222-2222-4222-8222-222222222222'
+            $digest = [Convert]::ToHexString(
+                [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($subscription))
+            ).ToLowerInvariant()
+            $script:azureLocalLock = @{
+                schemaVersion = 1
+                storageAccountResourceId =
+                    '/subscriptions/11111111-1111-4111-8111-111111111111/resourceGroups/rg-avm-ci-state/providers/Microsoft.Storage/storageAccounts/avmreceipts'
+                containerName = 'avm-azure-local-locks'
+                blobName = "avm-hci-$digest"
+                fixtureResourceGroupId = "/subscriptions/$subscription/resourceGroups/rg-avm-ci-azure-local-control"
+            } | ConvertTo-Json -Compress
+        }
+
+        It 'normalizes the exact verified lock contract and rejects retargeting' {
+            $lock = ConvertFrom-AvmAzureLocalEnvironmentLock -Json $script:azureLocalLock
+            $lock.schemaVersion | Should -Be 1
+            $lock.blobName | Should -Match '^avm-hci-[0-9a-f]{64}$'
+            {
+                ConvertFrom-AvmAzureLocalEnvironmentLock -Json (
+                    $script:azureLocalLock -replace 'avm-hci-', 'avm-other-'
+                )
+            } | Should -Throw '*validated version 1 JSON object*'
+        }
+
+        It 'requires explicit nonempty Azure Local identity groups' {
+            $groups = @(ConvertFrom-AvmAzureLocalEntraGroups -Json '["avm-test-azure-local-lock-operators","Readers"]')
+            ($groups -join ',') | Should -BeExactly 'avm-test-azure-local-lock-operators,Readers'
+            { ConvertFrom-AvmAzureLocalEntraGroups -Json '[]' } | Should -Throw '*at least one*'
+            { ConvertFrom-AvmAzureLocalEntraGroups -Json '"not-an-array"' } | Should -Throw '*JSON array*'
+        }
     }
 
     It 'accumulates arbitrary names in ordered groups without replacing defaults or duplicating edges' {
@@ -68,6 +104,11 @@ Describe 'Configured repository Entra memberships' {
             $groups = @(@{ name = 'invalid'; repositories = @('unmatched'); entraGroups = $names })
             { Resolve-AvmRepositoryEntraGroups -Groups $groups -RepositoryId 'example' } | Should -Throw
         }
+        {
+            Resolve-RepositorySettings -repositoryConfig ([pscustomobject]@{ repositoryGroups = @(
+                    [pscustomobject]@{ name = 'invalid-mode'; repositories = @('example'); azureLocalEnvironment = 'unknown' }
+                ) }) -repoId 'example'
+        } | Should -Throw '*consumer, lifecycle, or migration*'
     }
 
     It 'binds only subscription vending to the complete bootstrap-owned identity evidence' {

@@ -341,6 +341,32 @@ edges without a publisher change. There is no fixed group-ID interface or
 licensing, first portal access, and Fabric tenant settings remain bootstrap
 operator work outside repository sync.
 
+### Azure Local fixture activation
+
+Repository sync selects all active AVM HCI and Azure Local Terraform modules
+through the checked-in `azure-local-*` groups. Each repository has an explicit
+`consumer`, `lifecycle`, or `migration` role. The reusable Terraform workflow
+implements consumer readiness today and fails closed for the other roles until
+their module-specific contracts are added.
+
+For selected repositories, the Tools `avm` environment must provide both:
+
+- `AVM_AZURE_LOCAL_ENVIRONMENT_LOCK`: the exact nonsecret version-1 BRM lock
+  configuration containing the storage account resource ID, container, canonical
+  subscription-digest blob name, and control resource-group ID.
+- `AVM_AZURE_LOCAL_ENTRA_GROUPS`: a JSON array of existing Entra group display
+  names. Together these groups must grant control-resource-group Reader and
+  lock-container Blob Data Contributor access without broadening unrelated
+  identities.
+
+Repository sync validates both inputs before local writes or GitHub/Azure
+operations, adds the supplied groups to the dedicated test identity, and
+publishes `AVM_AZURE_LOCAL_ENVIRONMENT_LOCK` plus
+`AVM_AZURE_LOCAL_ENVIRONMENT_MODE` to the selected repository. Missing or
+malformed inputs stop the selected module rather than disabling fixture use.
+The lock source must be a verified BRM bootstrap output, not a hand-authored
+production value in this repository.
+
 BAMI creates no direct Owner assignment. A future approved saved plan destroys
 only the obsolete deterministic
 Owner assignment for the same repository principal, pinned management group,

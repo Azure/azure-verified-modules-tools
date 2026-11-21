@@ -175,6 +175,88 @@ Describe 'Repository sync unified driver' -Tag Component {
         }
     }
 
+    It 'publishes the verified Azure Local lock and explicit identity groups to marked repositories' {
+        $script:config.repositoryGroups += @{
+            name = 'azure-local'
+            repositories = @('avm-ptn-example-repo')
+            azureLocalEnvironment = 'consumer'
+        }
+        $script:config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $script:configPath
+        $subscription = '22222222-2222-4222-8222-222222222222'
+        $digest = [Convert]::ToHexString(
+            [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($subscription))
+        ).ToLowerInvariant()
+        $script:arguments.azureLocalEnvironmentLock = @{
+            schemaVersion = 1
+            storageAccountResourceId =
+                '/subscriptions/11111111-1111-4111-8111-111111111111/resourceGroups/rg-avm-ci-state/providers/Microsoft.Storage/storageAccounts/avmreceipts'
+            containerName = 'avm-azure-local-locks'
+            blobName = "avm-hci-$digest"
+            fixtureResourceGroupId = "/subscriptions/$subscription/resourceGroups/rg-avm-ci-azure-local-control"
+        } | ConvertTo-Json -Compress
+        $script:arguments.azureLocalEntraGroups =
+            '["avm-test-azure-local-lock-operators","avm-test-subscription-persistent-readers"]'
+
+        $null = & $script:driver @script:arguments
+        $variables = Get-Content -Raw -LiteralPath (Join-Path $script:terraformRoot 'terraform.tfvars.json') |
+            ConvertFrom-Json -AsHashtable
+        $variables.azure_local_environment_lock.schemaVersion | Should -Be 1
+        $variables.azure_local_environment_mode | Should -BeExactly 'consumer'
+        $variables.azure_local_environment_lock.blobName | Should -BeExactly "avm-hci-$digest"
+        $variables.entra_group_names | Should -Be @(
+            'avm-test-entra-readers',
+            'avm-test-management-group-owners',
+            'avm-test-azure-local-lock-operators',
+            'avm-test-subscription-persistent-readers'
+        )
+        Should -Invoke Invoke-TerraformPlanAndApply -Exactly 1 -ParameterFilter {
+            ($entraGroupNames -join ',') -ceq (@(
+                'avm-test-entra-readers',
+                'avm-test-management-group-owners',
+                'avm-test-azure-local-lock-operators',
+                'avm-test-subscription-persistent-readers'
+            ) -join ',')
+        }
+    }
+
+    It 'fails closed for marked Azure Local repositories with missing verified inputs' {
+        $script:config.repositoryGroups += @{
+            name = 'azure-local'
+            repositories = @('avm-ptn-example-repo')
+            azureLocalEnvironment = 'consumer'
+        }
+        $script:config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $script:configPath
+
+        { & $script:driver @script:arguments } | Should -Throw '*validated version 1 JSON object*'
+        $script:fixture.Events | Should -HaveCount 0
+        Test-Path -LiteralPath (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeFalse
+    }
+
+    It 'fails closed for a marked Azure Local repository without identity groups' {
+        $script:config.repositoryGroups += @{
+            name = 'azure-local'
+            repositories = @('avm-ptn-example-repo')
+            azureLocalEnvironment = 'consumer'
+        }
+        $script:config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $script:configPath
+        $subscription = '22222222-2222-4222-8222-222222222222'
+        $digest = [Convert]::ToHexString(
+            [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($subscription))
+        ).ToLowerInvariant()
+        $script:arguments.azureLocalEnvironmentLock = @{
+            schemaVersion = 1
+            storageAccountResourceId =
+                '/subscriptions/11111111-1111-4111-8111-111111111111/resourceGroups/rg-avm-ci-state/providers/Microsoft.Storage/storageAccounts/avmreceipts'
+            containerName = 'avm-azure-local-locks'
+            blobName = "avm-hci-$digest"
+            fixtureResourceGroupId = "/subscriptions/$subscription/resourceGroups/rg-avm-ci-azure-local-control"
+        } | ConvertTo-Json -Compress
+
+        { & $script:driver @script:arguments } | Should -Throw '*JSON array*'
+        $script:fixture.Events | Should -HaveCount 0
+        Test-Path -LiteralPath (Join-Path $script:terraformRoot 'terraform.tfvars.json') | Should -BeFalse
+    }
+
     It 'ignores a retired cutover environment value: <Value>' -ForEach @(
         @{ Value = 'split' }
         @{ Value = 'unified-v1' }

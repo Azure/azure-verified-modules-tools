@@ -1124,7 +1124,7 @@ Describe 'Terraform effective contract and state wiring' {
         $azure | Should -Match 'condition\s*=\s*local.member_is_repository_identity'
     }
 
-    It 'publishes only the three standard noncredential settings as Actions variables and retains Dependabot mirrors' {
+    It 'publishes the three standard settings plus the optional Azure Local lock as noncredential variables' {
         $secrets = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'github' 'github.actions_secrets.tf')
         $variables = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'github' 'github.repository.variables.tf')
         $dependabot = Get-Content -Raw (Join-Path $script:root 'repository-management' 'repository-sync' 'terraform' 'modules' 'github' 'github.dependabot_secrets.tf')
@@ -1142,6 +1142,12 @@ Describe 'Terraform effective contract and state wiring' {
         $variables | Should -Match 'value\s*=\s*var.arm_tenant_id'
         $variables | Should -Match 'value\s*=\s*var.arm_client_id'
         $variables | Should -Match 'value\s*=\s*jsonencode\(var.test_subscription_ids\)'
+        $variables | Should -Match 'variable_name\s*=\s*"AVM_AZURE_LOCAL_ENVIRONMENT_LOCK"'
+        $variables | Should -Match 'value\s*=\s*jsonencode\(var.azure_local_environment_lock\)'
+        $variables | Should -Match 'count\s*=\s*var.azure_local_environment_lock == null \? 0 : 1'
+        $variables | Should -Match 'variable_name\s*=\s*"AVM_AZURE_LOCAL_ENVIRONMENT_MODE"'
+        $variables | Should -Match 'value\s*=\s*var.azure_local_environment_mode'
+        $variables | Should -Match 'count\s*=\s*var.azure_local_environment_mode == null \? 0 : 1'
         $variables | Should -Not -Match 'ARM_CLIENT_SECRET|TOKEN|PASSWORD|OVERRIDE|TF_VAR_'
         $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'terraform-module.yml')
         ([regex]::Matches($workflow, 'TEST_SUBSCRIPTION_IDS: \$\{\{ vars.TEST_SUBSCRIPTION_IDS \|\| secrets.TEST_SUBSCRIPTION_IDS \}\}')).Count | Should -Be 5
@@ -1163,6 +1169,8 @@ Describe 'Terraform effective contract and state wiring' {
         $main | Should -Match 'arm_client_id\s*=\s*local.test_settings.client_id'
         $main | Should -Match 'arm_tenant_id\s*=\s*local.test_settings.tenant_id'
         $main | Should -Match 'test_subscription_ids\s*=\s*local.test_settings.test_subscription_ids'
+        $main | Should -Match 'azure_local_environment_lock\s*=\s*var.azure_local_environment_lock'
+        $main | Should -Match 'azure_local_environment_mode\s*=\s*var.azure_local_environment_mode'
         $main | Should -Match 'module "bami"'
         $main | Should -Match 'github_repository_id\s*=\s*module.github.repository_id'
         $main | Should -Match 'github_organization_id\s*=\s*module.github.organization_id'
@@ -1179,6 +1187,10 @@ Describe 'Terraform effective contract and state wiring' {
         $providers | Should -Match 'client_id\s*=\s*var.bami_test_settings == null \? null : var.bami_test_settings.controller_client_id'
         $workflow = Get-Content -Raw (Join-Path $script:root '.github' 'workflows' 'repository-management-sync.yml')
         $workflow | Should -Not -Match 'vars\.ARM_(TENANT_ID|CLIENT_ID|SUBSCRIPTION_ID)|vars\.TEST_SUBSCRIPTION_IDS'
+        $workflow | Should -Match 'AVM_AZURE_LOCAL_ENVIRONMENT_LOCK: \$\{\{ vars\.AVM_AZURE_LOCAL_ENVIRONMENT_LOCK \}\}'
+        $workflow | Should -Match 'AVM_AZURE_LOCAL_ENTRA_GROUPS: \$\{\{ vars\.AVM_AZURE_LOCAL_ENTRA_GROUPS \}\}'
+        $workflow | Should -Match '-azureLocalEnvironmentLock \$env:AVM_AZURE_LOCAL_ENVIRONMENT_LOCK'
+        $workflow | Should -Match '-azureLocalEntraGroups \$env:AVM_AZURE_LOCAL_ENTRA_GROUPS'
     }
 
     It 'uses mock providers only for the explicitly permitted retirement-state seed test' {

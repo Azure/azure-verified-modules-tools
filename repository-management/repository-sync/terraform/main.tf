@@ -51,6 +51,8 @@ module "github" {
   arm_client_id                                              = local.test_settings.client_id
   arm_tenant_id                                              = local.test_settings.tenant_id
   test_subscription_ids                                      = local.test_settings.test_subscription_ids
+  azure_local_environment_lock                               = var.azure_local_environment_lock
+  azure_local_environment_mode                               = var.azure_local_environment_mode
   module_id                                                  = var.module_id
   module_name                                                = var.module_name
   copilot_agent_firewall_allow_list                          = var.github_copilot_agent_firewall_allow_list

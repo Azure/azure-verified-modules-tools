@@ -342,7 +342,7 @@ Describe 'Terraform Azure Local environment lock integration' {
     BeforeEach {
         $script:azureLocalEnvironment = @{}
         foreach ($name in @(
-            'LOCK_CONFIG', 'GITHUB_OUTPUT', 'REPOSITORY',
+            'LOCK_CONFIG', 'LOCK_MODE', 'GITHUB_OUTPUT', 'REPOSITORY',
             'WORKFLOW_REF', 'RUN_ID', 'RUN_ATTEMPT', 'JOB_NAME', 'MATRIX_JOB_INDEX', 'E2E_EXAMPLE'
         )) {
             $script:azureLocalEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
@@ -358,6 +358,7 @@ Describe 'Terraform Azure Local environment lock integration' {
         $env:MATRIX_JOB_INDEX = '3'
         $env:E2E_EXAMPLE = 'azure-local'
         $env:LOCK_CONFIG = ''
+        $env:LOCK_MODE = ''
     }
 
     AfterEach {
@@ -377,6 +378,8 @@ Describe 'Terraform Azure Local environment lock integration' {
         $leaseSteps.Count | Should -Be 3
         $script:azureLocalContextStep[0]['env']['LOCK_CONFIG'] |
             Should -BeExactly '${{ vars.AVM_AZURE_LOCAL_ENVIRONMENT_LOCK }}'
+        $script:azureLocalContextStep[0]['env']['LOCK_MODE'] |
+            Should -BeExactly '${{ vars.AVM_AZURE_LOCAL_ENVIRONMENT_MODE }}'
         $script:azureLocalContextStep[0]['env'].Keys |
             Should -Not -Contain 'GITHUB_SECRETS'
         @($leaseSteps | ForEach-Object { $_.with.operation }) |
@@ -442,6 +445,7 @@ Describe 'Terraform Azure Local environment lock integration' {
                 fixtureResourceGroupId = "/subscriptions/$subscriptionId/resourceGroups/rg-avm-ci-azure-local-control"
             } | ConvertTo-Json -Compress
         )
+        $env:LOCK_MODE = 'consumer'
         & $script:azureLocalContextScript
         $output = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
         $output.enabled | Should -BeExactly 'true'
@@ -452,6 +456,24 @@ Describe 'Terraform Azure Local environment lock integration' {
         $pool.Count | Should -Be 1
         $pool[0].id | Should -BeExactly $subscriptionId
         $pool[0].tag | Should -BeExactly 'Azure Local'
+    }
+
+    It 'fails closed when a lifecycle or migration repository has not implemented its contract' -ForEach @(
+        @{ Mode = 'lifecycle' }
+        @{ Mode = 'migration' }
+    ) {
+        $env:LOCK_CONFIG = @{
+            schemaVersion = 1
+            storageAccountResourceId =
+                '/subscriptions/11111111-1111-4111-8111-111111111111/resourceGroups/rg-state/providers/Microsoft.Storage/storageAccounts/avmstateaccount'
+            containerName = 'avm-azure-local-locks'
+            blobName = ('avm-hci-' + ('0' * 64))
+            fixtureResourceGroupId =
+                '/subscriptions/22222222-2222-4222-8222-222222222222/resourceGroups/rg-avm-ci-azure-local-control'
+        } | ConvertTo-Json -Compress
+        $env:LOCK_MODE = $Mode
+        { & $script:azureLocalContextScript } |
+            Should -Throw '*module-specific lifecycle contract*'
     }
 
     It 'rejects incomplete, extra, or duplicate lock configuration <Case>' -ForEach @(
@@ -473,6 +495,7 @@ Describe 'Terraform Azure Local environment lock integration' {
         }
     ) {
         $env:LOCK_CONFIG = $Json
+        $env:LOCK_MODE = 'consumer'
         { & $script:azureLocalContextScript } | Should -Throw
     }
 }

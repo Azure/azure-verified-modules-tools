@@ -21,6 +21,31 @@ variable "test_subscription_ids" {
   description = "List of subscription IDs to use for testing."
 }
 
+variable "azure_local_environment_lock" {
+  type = object({
+    schemaVersion           = number
+    storageAccountResourceId = string
+    containerName            = string
+    blobName                 = string
+    fixtureResourceGroupId   = string
+  })
+  description = "Verified BRM Azure Local lock target for selected HCI/Azure Local repositories."
+  default     = null
+  nullable    = true
+}
+
+variable "azure_local_environment_mode" {
+  type        = string
+  description = "Azure Local repository role: consumer, lifecycle, or migration."
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = (var.azure_local_environment_mode == null) == (var.azure_local_environment_lock == null)
+    error_message = "The Azure Local lock and mode must be supplied together."
+  }
+}
+
 variable "subscription_vending_management_group_id" {
   type        = string
   description = "Optional subscription-vending management group identifier for the selected repository."

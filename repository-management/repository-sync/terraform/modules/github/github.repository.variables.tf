@@ -24,3 +24,17 @@ resource "github_actions_variable" "test_subscription_ids" {
   variable_name = "TEST_SUBSCRIPTION_IDS"
   value         = jsonencode(var.test_subscription_ids)
 }
+
+resource "github_actions_variable" "azure_local_environment_lock" {
+  count         = var.azure_local_environment_lock == null ? 0 : 1
+  repository    = github_repository.this.name
+  variable_name = "AVM_AZURE_LOCAL_ENVIRONMENT_LOCK"
+  value         = jsonencode(var.azure_local_environment_lock)
+}
+
+resource "github_actions_variable" "azure_local_environment_mode" {
+  count         = var.azure_local_environment_mode == null ? 0 : 1
+  repository    = github_repository.this.name
+  variable_name = "AVM_AZURE_LOCAL_ENVIRONMENT_MODE"
+  value         = var.azure_local_environment_mode
+}

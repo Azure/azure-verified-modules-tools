@@ -2,6 +2,7 @@
 # GH_TOKEN
 # TEST_BAMI_* (the eight-field BAMI settings bundle)
 # ARM_BACKEND_* (the separate state-only identity and storage)
+# AVM_AZURE_LOCAL_ENVIRONMENT_LOCK and AVM_AZURE_LOCAL_ENTRA_GROUPS for selected HCI modules
 
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -29,6 +30,8 @@ param(
     ),
     [switch]$forceFileUpdate,
     [hashtable]$bamiSettings = @{},
+    [AllowEmptyString()] [string]$azureLocalEnvironmentLock = $env:AVM_AZURE_LOCAL_ENVIRONMENT_LOCK,
+    [AllowEmptyString()] [string]$azureLocalEntraGroups = $env:AVM_AZURE_LOCAL_ENTRA_GROUPS,
     [string]$candidateOutputDirectory = "",
     [string]$authoringModulePath = "",
     [string]$repositorySyncRepositoryId = $env:GITHUB_REPOSITORY_ID
@@ -95,6 +98,13 @@ $testTenant = if ($repositoryCreationModeEnabled) {
 else {
     Resolve-RepositoryTestTenantSettings -TestTenant $selectedTestTenant -BamiValues $bamiSettings
 }
+$effectiveEntraGroups = @($settings.EntraGroups)
+$resolvedAzureLocalLock = $null
+if ($null -ne $settings.AzureLocalEnvironment) {
+    $resolvedAzureLocalLock = ConvertFrom-AvmAzureLocalEnvironmentLock -Json $azureLocalEnvironmentLock
+    $effectiveEntraGroups += @(ConvertFrom-AvmAzureLocalEntraGroups -Json $azureLocalEntraGroups)
+    $effectiveEntraGroups = @($effectiveEntraGroups | Select-Object -Unique)
+}
 $existingIdentity = Resolve-AvmSubscriptionVendingIdentity -ExistingIdentity $settings.ExistingIdentity -Values $bamiSettings
 $repoSplit = $repoUrl.Split("/")
 $orgName = $repoSplit[3]
@@ -150,7 +160,11 @@ $terraformVariables = @{
 
 if ($null -ne $testTenant.Settings) {
     $terraformVariables["bami_test_settings"] = ConvertTo-AvmRepositoryTerraformSettings -Settings $testTenant.Settings
-    $terraformVariables["entra_group_names"] = @($settings.EntraGroups)
+    $terraformVariables["entra_group_names"] = @($effectiveEntraGroups)
+}
+if ($null -ne $resolvedAzureLocalLock) {
+    $terraformVariables["azure_local_environment_lock"] = $resolvedAzureLocalLock
+    $terraformVariables["azure_local_environment_mode"] = $settings.AzureLocalEnvironment
 }
 if ($null -ne $existingIdentity) {
     $terraformVariables["existing_identity"] = @{
@@ -196,7 +210,7 @@ $issueLog = @(Invoke-RepositorySyncLogGroup -Name 'Terraform repository configur
         resourceTypesThatCannotBeDestroyed = $resourceTypesThatCannotBeDestroyed
         environment = $environment
         bamiSettings = $testTenant.Settings
-        entraGroupNames = @($settings.EntraGroups)
+        entraGroupNames = @($effectiveEntraGroups)
         existingIdentity = $existingIdentity
         issueLog = $issues
     }

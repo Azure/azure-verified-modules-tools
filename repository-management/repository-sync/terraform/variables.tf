@@ -76,6 +76,63 @@ variable "entra_group_names" {
   default     = []
 }
 
+variable "azure_local_environment_lock" {
+  type = object({
+    schemaVersion            = number
+    storageAccountResourceId = string
+    containerName            = string
+    blobName                 = string
+    fixtureResourceGroupId   = string
+  })
+  description = "Verified BRM Azure Local lock target. Present only for configured HCI/Azure Local repositories."
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = var.azure_local_environment_lock == null ? true : (
+      var.azure_local_environment_lock.schemaVersion == 1 &&
+      can(regex(
+        "^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Storage/storageAccounts/[a-z0-9]{3,24}$",
+        var.azure_local_environment_lock.storageAccountResourceId
+      )) &&
+      can(regex(
+        "^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+$",
+        var.azure_local_environment_lock.fixtureResourceGroupId
+      )) &&
+      can(regex("^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$", var.azure_local_environment_lock.containerName)) &&
+      !strcontains(var.azure_local_environment_lock.containerName, "--") &&
+      var.azure_local_environment_lock.blobName == try(
+        "avm-hci-${sha256(lower(regex(
+          "^/subscriptions/([0-9a-fA-F-]{36})/resourceGroups/",
+          var.azure_local_environment_lock.fixtureResourceGroupId
+        )[0]))}",
+        ""
+      )
+    )
+    error_message = "The Azure Local lock must contain the exact BRM schema and canonical fixture subscription digest."
+  }
+}
+
+variable "azure_local_environment_mode" {
+  type        = string
+  description = "Azure Local repository role. Consumer is implemented; lifecycle and migration remain fail-closed pending their module contracts."
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = var.azure_local_environment_mode == null ? true : contains(
+      ["consumer", "lifecycle", "migration"],
+      var.azure_local_environment_mode
+    )
+    error_message = "The Azure Local environment mode must be consumer, lifecycle, or migration."
+  }
+
+  validation {
+    condition     = (var.azure_local_environment_mode == null) == (var.azure_local_environment_lock == null)
+    error_message = "The Azure Local lock and mode must be supplied together."
+  }
+}
+
 variable "existing_identity" {
   type = object({
     name                = string

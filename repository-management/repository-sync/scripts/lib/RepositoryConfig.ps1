@@ -141,5 +141,6 @@ function Resolve-RepositorySettings {
         TestTenant                                      = Resolve-AvmGroupTestTenant -Groups $repositoryConfig.repositoryGroups -SelectorProperty 'repositories' -Item $repoId
         EntraGroups                                     = Resolve-AvmRepositoryEntraGroups -Groups $repositoryConfig.repositoryGroups -RepositoryId $repoId
         ExistingIdentity                                = Resolve-AvmGroupExistingIdentity -Groups $repositoryConfig.repositoryGroups -SelectorProperty 'repositories' -Item $repoId
+        AzureLocalEnvironment                           = Resolve-AvmGroupAzureLocalEnvironment -Groups $repositoryConfig.repositoryGroups -SelectorProperty 'repositories' -Item $repoId
     }
 }
