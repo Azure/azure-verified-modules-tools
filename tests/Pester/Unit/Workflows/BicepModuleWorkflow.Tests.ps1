@@ -223,10 +223,9 @@ Describe 'Bicep reusable workflow ownership and syntax' {
 
     It 'keeps legacy reusable workflows on their established tools contract' {
         $legacyNames = @(
-            'bicep-module', 'bicep-module-deployment', 'bicep-module-preview',
-            'bicep-module-publish', 'bicep-module-publish-only', 'bicep-module-static'
+            'bicep-module', 'bicep-module-deployment', 'bicep-module-preview', 'bicep-module-static'
         )
-        @($script:workflows.Keys | Where-Object { $_ -in $legacyNames }) | Should -HaveCount 6
+        @($script:workflows.Keys | Where-Object { $_ -in $legacyNames }) | Should -HaveCount 4
         foreach ($workflow in $legacyNames | ForEach-Object { $script:workflows[$_] }) {
             @($workflow.on.Keys) | Should -Be @('workflow_call')
             $workflow.name | Should -Match '^Reusable: Bicep Module'
@@ -239,8 +238,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
 
     It 'uses tools-owned support at the explicit immutable revision in every legacy executable job' {
         $legacyNames = @(
-            'bicep-module', 'bicep-module-deployment', 'bicep-module-preview',
-            'bicep-module-publish', 'bicep-module-publish-only', 'bicep-module-static'
+            'bicep-module', 'bicep-module-deployment', 'bicep-module-preview', 'bicep-module-static'
         )
         foreach ($workflow in $legacyNames | ForEach-Object { $script:workflows[$_] }) {
             foreach ($job in $workflow.jobs.Values) {
@@ -479,7 +477,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
     }
 
     It 'keeps nested reusable calls relative and forwards the immutable tools contract' {
-        foreach ($name in @('bicep-module', 'bicep-module-preview', 'bicep-module-publish')) {
+        foreach ($name in @('bicep-module', 'bicep-module-preview')) {
             $job = $script:workflows[$name].jobs.job_module_deploy_validation
             $job.uses | Should -BeExactly './.github/workflows/bicep-module-deployment.yml'
             $job.with.'tools-ref' | Should -BeExactly '${{ inputs.tools-ref }}'
@@ -517,7 +515,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
     }
 
     It 'keeps generic validation and nested deployment on the same explicit target commit' {
-        foreach ($name in @('bicep-module-preview', 'bicep-module-publish', 'bicep-module-publish-only')) {
+        foreach ($name in @('bicep-module-preview')) {
             foreach ($job in $script:workflows[$name].jobs.Values) {
                 if (-not $job.Contains('steps')) { continue }
                 foreach ($step in $job.steps | Where-Object { $_['name'] -eq 'Check out caller' }) {
@@ -526,7 +524,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
                 }
             }
         }
-        foreach ($name in @('bicep-module-preview', 'bicep-module-publish')) {
+        foreach ($name in @('bicep-module-preview')) {
             $script:workflows[$name].jobs.job_module_deploy_validation.with.targetCommit | Should -BeExactly '${{ inputs.targetCommit }}'
         }
         $inner = $script:workflows['bicep-module-deployment']
@@ -687,7 +685,7 @@ Describe 'Bicep required checks and deployment guards' {
     }
 
     It 'preserves stable jobs, required/advisory matrices, and skip/failure dependencies' {
-        foreach ($name in @('bicep-module', 'bicep-module-preview', 'bicep-module-publish')) {
+        foreach ($name in @('bicep-module', 'bicep-module-preview')) {
             $jobs = $script:workflows[$name].jobs
             $jobs.job_module_static_validation.name | Should -BeExactly 'Static validation'
             $jobs.job_psrule_must.strategy.matrix.baseline.baselineName |
@@ -708,7 +706,7 @@ Describe 'Bicep required checks and deployment guards' {
     }
 
     It 'preserves environment-bound identity and one whole-lifecycle lock' {
-        foreach ($name in @('bicep-module', 'bicep-module-preview', 'bicep-module-publish')) {
+        foreach ($name in @('bicep-module', 'bicep-module-preview')) {
             $jobs = $script:workflows[$name].jobs
             $jobs.job_initialize_subscription_selection.environment | Should -BeExactly 'avm-validation'
             $jobs.job_initialize_subscription_selection.permissions.Contains('id-token') | Should -BeFalse
@@ -735,7 +733,7 @@ Describe 'Bicep required checks and deployment guards' {
     It 'selects only the published module client mapping while preserving tenant and subscription precedence' {
         $pool = '${{ vars.VALIDATE_SUBSCRIPTION_IDS || vars.TEST_SUBSCRIPTION_IDS || secrets.VALIDATE_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS }}'
         $managementGroup = '${{ vars.VALIDATE_MANAGEMENT_GROUP_ID || vars.ARM_MGMTGROUP_ID || secrets.VALIDATE_MANAGEMENT_GROUP_ID || secrets.ARM_MGMTGROUP_ID }}'
-        foreach ($name in @('bicep-module', 'bicep-module-preview', 'bicep-module-publish')) {
+        foreach ($name in @('bicep-module', 'bicep-module-preview')) {
             $jobs = $script:workflows[$name].jobs
             $jobs.job_initialize_subscription_selection.steps[-1].env.TEST_SUBSCRIPTION_IDS | Should -BeExactly $pool
             $jobs.job_initialize_subscription_selection.steps[-1].env.VALIDATE_MODULE_CLIENT_IDS |
@@ -759,7 +757,7 @@ Describe 'Bicep required checks and deployment guards' {
         $selection = $script:actions['bicep-subscription-selection'].runs.steps[-1].run
         $selection | Should -Match 'ModuleClientIds = \$env:VALIDATE_MODULE_CLIENT_IDS'
         $selection | Should -Match 'PoolJson = \$env:TEST_SUBSCRIPTION_IDS'
-        foreach ($name in @('bicep-module-preview', 'bicep-module-publish')) {
+        foreach ($name in @('bicep-module-preview')) {
             $jobs = $script:workflows[$name].jobs
             $jobs.job_module_deploy_validation.with.tokenNamePrefix | Should -BeExactly 'gci'
             $jobs.job_psrule_must.steps[-1].env.TOKEN_NAMEPREFIX | Should -BeExactly 'gci'
@@ -914,7 +912,7 @@ Describe 'Bicep required checks and deployment guards' {
     }
 
     It 'requires mapping selection only for requested Azure tests, never static, preview or tag-only work' {
-        foreach ($name in @('bicep-module', 'bicep-module-preview', 'bicep-module-publish')) {
+        foreach ($name in @('bicep-module', 'bicep-module-preview')) {
             $jobs = $script:workflows[$name].jobs
             $jobs.job_initialize_subscription_selection.if |
                 Should -Match "deploymentValidation == 'true'"
@@ -928,7 +926,7 @@ Describe 'Bicep required checks and deployment guards' {
                 $job | Should -Not -Match 'VALIDATE_MODULE_CLIENT_IDS|moduleClientIds|azure/login@|id-token'
             }
         }
-        foreach ($name in @('bicep-module-static', 'bicep-module-publish-only')) {
+        foreach ($name in @('bicep-module-static')) {
             $script:workflows.ContainsKey($name) | Should -BeTrue
             ($script:workflows[$name] | ConvertTo-Json -Depth 30) |
                 Should -Not -Match 'VALIDATE_MODULE_CLIENT_IDS|moduleClientIds|azure/login@|id-token'
@@ -942,7 +940,7 @@ Describe 'Bicep required checks and deployment guards' {
         @{ Scenario = 'active tests'; Files = '[{"path":"tests/e2e/defaults/main.test.bicep","e2eIgnore":false}]'; Enabled = 'true'; Expected = $true }
         @{ Scenario = 'ignored test records'; Files = '[{"path":"tests/e2e/defaults/main.test.bicep","e2eIgnore":true}]'; Enabled = 'true'; Expected = $true }
     ) {
-        foreach ($name in @('bicep-module-preview', 'bicep-module-publish')) {
+        foreach ($name in @('bicep-module-preview')) {
             $expression = $script:workflows[$name].jobs.job_initialize_subscription_selection.if.
                 Replace('fromJSON(inputs.workflowInput).deploymentValidation', '$Enabled').
                 Replace('inputs.moduleTestFilePaths', '$Files').
@@ -987,7 +985,7 @@ Describe 'Bicep required checks and deployment guards' {
 
 Describe 'Bicep release-tag safety contracts' {
     It 'serializes every release variant and limits writes to actual publishing jobs' {
-        foreach ($name in @('bicep-module', 'bicep-module-preview', 'bicep-module-publish', 'bicep-module-publish-only')) {
+        foreach ($name in @('bicep-module', 'bicep-module-preview')) {
             $jobName = if ($name -eq 'bicep-module-preview') { 'job_preview_module' } else { 'job_publish_module' }
             $job = $script:workflows[$name].jobs[$jobName]
             $job.concurrency.group | Should -BeExactly 'avm-publish-${{ inputs.modulePath }}'
@@ -1067,17 +1065,10 @@ Describe 'Bicep release-tag safety contracts' {
         $audit.jobs.audit.steps[-1].run | Should -Match 'Invoke-AvmBicepReleaseAudit'
     }
 
-    It 'preserves preview-only push behavior and explicit release approval' {
+    It 'preserves preview-only push behavior' {
         $preview = $script:workflows['bicep-module-preview'].jobs.job_preview_module
         $preview.if | Should -Match "github.event_name == 'push'"
         $preview.if | Should -Match 'includeAllVersionedModules'
         $preview.steps[-1].with.preview | Should -Be 'true'
-        foreach ($name in @('bicep-module-publish', 'bicep-module-publish-only')) {
-            $jobs = $script:workflows[$name].jobs
-            $jobs.job_publish_approval.environment | Should -BeExactly 'publish-approval'
-            $jobs.job_publish_module.if | Should -Match "job_publish_approval.result == 'success'"
-        }
-        $script:workflows['bicep-module-publish'].jobs.job_publish_module.if | Should -Match 'inputs.publishReleaseTag'
-        @($script:workflows['bicep-module-publish-only'].jobs.Keys).Count | Should -Be 2
     }
 }
