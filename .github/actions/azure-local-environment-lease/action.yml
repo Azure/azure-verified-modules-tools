@@ -67,6 +67,9 @@ outputs:
   fixtureExists:
     description: Whether the control resource group exists at the time of the operation.
     value: ${{ steps.lease.outputs.fixtureExists }}
+  fixtureGeneration:
+    description: Current avm-generation tag, when the control resource group exists and is valid.
+    value: ${{ steps.lease.outputs.fixtureGeneration }}
 runs:
   using: composite
   steps:

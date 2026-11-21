@@ -20,6 +20,7 @@ BeforeAll {
     $script:now = [datetime]::UtcNow.ToString(
         'yyyy-MM-ddTHH:mm:ss.fffffffK', [Globalization.CultureInfo]::InvariantCulture
     )
+    $script:fixtureTenant = '33333333-3333-4333-8333-333333333333'
 }
 
 Describe 'Azure Local environment lease action contract' {
@@ -38,6 +39,7 @@ Describe 'Azure Local environment lease action contract' {
         $script | Should -Match "Name = 'ownerHash'"
         $script | Should -Match "Name = 'updatedAtUtc'"
         $script | Should -Match "Name = 'fixtureExists'"
+        $script | Should -Match "Name = 'fixtureGeneration'"
     }
 
     It 'rejects unsupported target identifiers' {
@@ -60,11 +62,6 @@ Describe 'Azure Local environment lease action contract' {
                 Container = 'avm-locks'; Blob = 'avm-hci-short'
             }
             @{
-                StorageId = '/subscriptions/22222222-2222-4222-8222-222222222222/resourceGroups/rg-avm-azure-local-control/providers/Microsoft.Storage/storageAccounts/avmstateaccount'
-                FixtureId = $script:fixtureId
-                Container = 'avm-locks'; Blob = $script:blobName
-            }
-            @{
                 StorageId = $script:storageId; FixtureId = $script:fixtureId
                 Container = 'avm-locks'; Blob = ('avm-hci-' + ('a' * 64))
             }
@@ -82,7 +79,17 @@ Describe 'Azure Local environment lease transitions' {
     BeforeEach {
         $script:fixtureExists = $true
         $script:fixtureGeneration = $script:generation
+        $script:ownedGroups = 'rg-avm-azure-local-foundation;rg-avm-azure-local-image;rg-avm-azure-local-staging'
         $script:resolvedStorageId = $script:storageId
+        $script:storageTags = @{
+            lifecycle = 'tenant-persistent'
+            'avm-owner' = 'Azure/bicep-registry-modules'
+            'avm-environment' = 'azure-local'
+            'avm-purpose' = 'image-operation-receipts'
+            'avm-receipt-version' = '1'
+            'avm-tenant' = $script:fixtureTenant
+            'avm-subscription' = '22222222-2222-4222-8222-222222222222'
+        }
         $script:snapshot = [pscustomobject]@{
             Exists = $false
             ETag = $null
@@ -93,16 +100,19 @@ Describe 'Azure Local environment lease transitions' {
             param($ProcessInvoker, $Arguments, $Description)
             if ($Arguments[0] -ceq 'account') {
                 $subscription = $Arguments[$Arguments.IndexOf('--subscription') + 1]
-                return @{ id = $subscription; user = @{ type = 'servicePrincipal' } }
+                return @{
+                    id = $subscription; tenantId = $script:fixtureTenant
+                    user = @{ type = 'servicePrincipal' }
+                }
             }
             if ($Arguments[0] -ceq 'storage' -and $Arguments[1] -ceq 'account' -and $Arguments[2] -ceq 'show') {
-                return @{ id = $script:resolvedStorageId }
+                return @{ id = $script:resolvedStorageId; tags = $script:storageTags }
             }
             if ($Arguments[0] -ceq 'group' -and $Arguments[1] -ceq 'exists') {
                 return $script:fixtureExists
             }
             if ($Arguments[0] -ceq 'group' -and $Arguments[1] -ceq 'show') {
-                return @{ generation = $script:fixtureGeneration }
+                return @{ generation = $script:fixtureGeneration; ownedGroups = $script:ownedGroups }
             }
             throw "Unexpected JSON command: $($Arguments -join ' ')"
         }
@@ -138,6 +148,15 @@ Describe 'Azure Local environment lease transitions' {
         Should -Invoke Set-AzureLocalLockSnapshot -Exactly 1
     }
 
+    It 'projects the current authoritative fixture generation during status' {
+        $result = Invoke-AzureLocalEnvironmentLease @script:base -Operation status -Mode consumer
+
+        $result.State | Should -BeExactly 'missing'
+        $result.FixtureExists | Should -BeTrue
+        $result.FixtureGeneration | Should -BeExactly $script:generation
+        Should -Invoke Set-AzureLocalLockSnapshot -Exactly 0
+    }
+
     It 'permits lifecycle initial prepare only with proven absent fixture and no generation' {
         $script:fixtureExists = $false
         $result = Invoke-AzureLocalEnvironmentLease @script:base -Operation acquire -Mode lifecycle `
@@ -146,6 +165,36 @@ Describe 'Azure Local environment lease transitions' {
         $result.Acquired | Should -BeTrue
         $result.FixtureExists | Should -BeFalse
         $script:lastRecord.generation | Should -BeExactly ''
+    }
+
+    It 'permits uninitialized control-group storage only when teardown explicitly excludes the control group' {
+        $storageId =
+            '/subscriptions/22222222-2222-4222-8222-222222222222/resourceGroups/rg-avm-azure-local-control/providers/Microsoft.Storage/storageAccounts/avmstateaccount'
+        $script:resolvedStorageId = $storageId
+        $script:fixtureGeneration = ''
+        $parameters = @{} + $script:base
+        $parameters.StorageAccountResourceId = $storageId
+
+        $result = Invoke-AzureLocalEnvironmentLease @parameters -Operation acquire -Mode lifecycle `
+            -OwnerHash $script:ownerHash -AllowUninitialized $true
+        $result.Acquired | Should -BeTrue
+        $result.FixtureExists | Should -BeTrue
+        $result.FixtureGeneration | Should -BeExactly ''
+
+        $script:snapshot = [pscustomobject]@{ Exists = $false; ETag = $null; Record = $null }
+        $script:ownedGroups = 'rg-avm-azure-local-control;rg-avm-azure-local-foundation'
+        {
+            Invoke-AzureLocalEnvironmentLease @parameters -Operation acquire -Mode lifecycle `
+                -OwnerHash $script:ownerHash -AllowUninitialized $true
+        } | Should -Throw '*explicitly excluded from BRM avm-owned-groups*'
+    }
+
+    It 'requires exact persistent receipt-account tags' {
+        $script:storageTags['avm-purpose'] = 'different-purpose'
+        {
+            Invoke-AzureLocalEnvironmentLease @script:base -Operation status
+        } | Should -Throw '*exact BRM persistent receipt-account tags*'
+        Should -Invoke Get-AzureLocalLockSnapshot -Exactly 0
     }
 
     It 'rejects consumer use of an absent fixture' {
@@ -161,7 +210,7 @@ Describe 'Azure Local environment lease transitions' {
         {
             Invoke-AzureLocalEnvironmentLease @script:base -Operation acquire -Mode lifecycle `
                 -OwnerHash $script:ownerHash -AllowUninitialized $true
-        } | Should -Throw '*proven absent control resource group*'
+        } | Should -Throw '*no authoritative generation*'
         Should -Invoke Set-AzureLocalLockSnapshot -Exactly 0
     }
 

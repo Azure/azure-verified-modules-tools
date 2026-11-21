@@ -55,12 +55,6 @@ function Get-AzureLocalLockTarget {
     if ($BlobName -cnotmatch '\Aavm-hci-[0-9a-f]{64}\z') {
         throw [ArgumentException]::new('blobName must use the canonical avm-hci-<64 lowercase SHA-256 hex> form.')
     }
-    if ([guid]$match.Groups['subscription'].Value -eq [guid]$fixtureMatch.Groups['subscription'].Value -and
-        $match.Groups['group'].Value -ieq $fixtureGroupName) {
-        throw [ArgumentException]::new(
-            'The lock storage account must remain outside the BRM control resource group so initial prepare has mutual exclusion.'
-        )
-    }
     $fixtureSubscription = ([guid]$fixtureMatch.Groups['subscription'].Value).ToString('D')
     $fixtureSubscriptionDigest = [Convert]::ToHexString(
         [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($fixtureSubscription))
@@ -408,27 +402,49 @@ function Invoke-AzureLocalEnvironmentLease {
         throw [ArgumentException]::new('Only lifecycle operations may allow an uninitialized fixture.')
     }
     $subscriptions = @($target.SubscriptionId, $target.FixtureSubscriptionId) | Select-Object -Unique
+    $fixtureTenantId = ''
     foreach ($subscription in $subscriptions) {
         $account = Invoke-AzureLocalJsonRead -ProcessInvoker $ProcessInvoker -Arguments @(
             'account', 'show', '--subscription', $subscription, '--only-show-errors',
-            '--output', 'json', '--query', '{id:id,user:user}'
+            '--output', 'json', '--query', '{id:id,tenantId:tenantId,user:user}'
         ) -Description 'Azure Local lock identity verification'
         if ($account['id'] -isnot [string] -or $account['id'] -ine $subscription -or
             $account['user'] -isnot [Collections.IDictionary] -or
             $account['user']['type'] -ine 'servicePrincipal') {
             throw [InvalidOperationException]::new('Azure CLI must use a service-principal context in every selected subscription.')
         }
+        if ($subscription -ieq $target.FixtureSubscriptionId) {
+            $fixtureTenantId = [string]$account['tenantId']
+        }
     }
     $storageAccount = Invoke-AzureLocalJsonRead -ProcessInvoker $ProcessInvoker -Arguments @(
         'storage', 'account', 'show', '--name', $target.StorageAccountName,
         '--resource-group', $target.StorageAccountResourceGroupName,
         '--subscription', $target.SubscriptionId, '--only-show-errors',
-        '--output', 'json', '--query', '{id:id}'
+        '--output', 'json', '--query', '{id:id,tags:tags}'
     ) -Description 'Azure Local lock storage account verification'
     if ($storageAccount['id'] -isnot [string] -or
         $storageAccount['id'] -ine $StorageAccountResourceId) {
         throw [InvalidOperationException]::new(
             'The persistent lock storage account resource ID does not match the Azure-resolved account.'
+        )
+    }
+    $storageTags = $storageAccount['tags']
+    $requiredStorageTags = [ordered]@{
+        lifecycle = 'tenant-persistent'
+        'avm-owner' = 'Azure/bicep-registry-modules'
+        'avm-environment' = 'azure-local'
+        'avm-purpose' = 'image-operation-receipts'
+        'avm-receipt-version' = '1'
+        'avm-tenant' = $fixtureTenantId.ToLowerInvariant()
+        'avm-subscription' = $target.FixtureSubscriptionId
+    }
+    if ($storageTags -isnot [Collections.IDictionary] -or
+        @($requiredStorageTags.Keys | Where-Object {
+                [string]$storageTags[$_] -cne [string]$requiredStorageTags[$_]
+            }).Count -gt 0) {
+        throw [InvalidOperationException]::new(
+            'The lock storage account lacks the exact BRM persistent receipt-account tags.'
         )
     }
     $fixture = Invoke-AzureLocalJsonRead -ProcessInvoker $ProcessInvoker -Arguments @(
@@ -438,18 +454,42 @@ function Invoke-AzureLocalEnvironmentLease {
     if ($fixture -isnot [bool]) {
         throw [InvalidDataException]::new('Azure Local control resource-group existence check did not return a Boolean.')
     }
-    if ($fixture -and -not [string]::IsNullOrEmpty($ExpectedGeneration)) {
+    $fixtureGeneration = ''
+    $ownedGroups = ''
+    if ($fixture) {
         $generation = Invoke-AzureLocalJsonRead -ProcessInvoker $ProcessInvoker -Arguments @(
             'group', 'show', '--name', $target.FixtureResourceGroupName,
             '--subscription', $target.FixtureSubscriptionId, '--only-show-errors',
-            '--output', 'json', '--query', '{generation:tags."avm-generation"}'
+            '--output', 'json',
+            '--query', '{generation:tags."avm-generation",ownedGroups:tags."avm-owned-groups"}'
         ) -Description 'Azure Local control resource-group generation inspection'
-        if ($generation['generation'] -isnot [string] -or
-            $generation['generation'] -cne $ExpectedGeneration) {
+        $fixtureGeneration = [string]$generation['generation']
+        $ownedGroups = [string]$generation['ownedGroups']
+        if (($Mode -ceq 'consumer' -or -not [string]::IsNullOrEmpty($ExpectedGeneration)) -and
+            $fixtureGeneration -cnotmatch '\A[0-9a-f]{32}\z') {
+            throw [InvalidOperationException]::new(
+                'The control resource group does not contain a valid authoritative avm-generation tag.'
+            )
+        }
+        if (-not [string]::IsNullOrEmpty($ExpectedGeneration) -and
+            $fixtureGeneration -cne $ExpectedGeneration) {
             throw [InvalidOperationException]::new(
                 'The supplied avm-generation does not match the authoritative control resource-group tag.'
             )
         }
+    }
+    $storageInFixtureResourceGroup =
+        $target.SubscriptionId -ieq $target.FixtureSubscriptionId -and
+        $target.StorageAccountResourceGroupName -ieq $target.FixtureResourceGroupName
+    if ($fixture -and $target.SubscriptionId -ieq $target.FixtureSubscriptionId -and (
+            [string]::IsNullOrWhiteSpace($ownedGroups) -or
+            @($ownedGroups.Split(';') | Where-Object {
+                    $_ -ieq $target.StorageAccountResourceGroupName
+                }).Count -gt 0
+        )) {
+        throw [InvalidOperationException]::new(
+            'The lock storage resource group must be explicitly excluded from BRM avm-owned-groups.'
+        )
     }
 
     $snapshot = Get-AzureLocalLockSnapshot -Target $target -ProcessInvoker $ProcessInvoker
@@ -457,13 +497,14 @@ function Invoke-AzureLocalEnvironmentLease {
         if (-not $snapshot.Exists) {
             return [pscustomobject]@{
                 State = 'missing'; Acquired = $false; OwnerHash = ''; Generation = ''; UpdatedAtUtc = ''
-                FixtureExists = $fixture
+                FixtureExists = $fixture; FixtureGeneration = $fixtureGeneration
             }
         }
         return [pscustomobject]@{
             State = $snapshot.Record['state']; Acquired = $snapshot.Record['state'] -ceq 'leased'
             OwnerHash = $snapshot.Record['ownerHash']; Generation = $snapshot.Record['generation']
             UpdatedAtUtc = $snapshot.Record['updatedAtUtc']; FixtureExists = $fixture
+            FixtureGeneration = $fixtureGeneration
         }
     }
 
@@ -475,13 +516,15 @@ function Invoke-AzureLocalEnvironmentLease {
             throw [ArgumentException]::new('consumer acquire requires the authoritative avm-generation value.')
         }
         if ($AllowUninitialized -and (
-                $fixture -or -not [string]::IsNullOrEmpty($ExpectedGeneration)
+                -not [string]::IsNullOrEmpty($ExpectedGeneration) -or
+                -not [string]::IsNullOrEmpty($fixtureGeneration) -or
+                $fixture -and -not $storageInFixtureResourceGroup
             )) {
             throw [ArgumentException]::new(
-                'allowUninitialized requires a proven absent control resource group and an empty expectedGeneration.'
+                'allowUninitialized requires no authoritative generation and an explicitly persistent control-group store.'
             )
         }
-        if ($fixture -and [string]::IsNullOrEmpty($ExpectedGeneration)) {
+        if ($fixture -and [string]::IsNullOrEmpty($ExpectedGeneration) -and -not $AllowUninitialized) {
             throw [ArgumentException]::new('Acquiring an existing fixture requires the authoritative avm-generation value.')
         }
         if (-not $fixture -and -not $AllowUninitialized) {
@@ -516,7 +559,7 @@ function Invoke-AzureLocalEnvironmentLease {
         return [pscustomobject]@{
             State = 'leased'; Acquired = $true; OwnerHash = $ownerHash
             Generation = $snapshot.Record['generation']; UpdatedAtUtc = $snapshot.Record['updatedAtUtc']
-            FixtureExists = $fixture
+            FixtureExists = $fixture; FixtureGeneration = $fixtureGeneration
         }
     }
 
@@ -536,7 +579,7 @@ function Invoke-AzureLocalEnvironmentLease {
             return [pscustomobject]@{
                 State = 'released'; Acquired = $false; OwnerHash = $ownerHash
                 Generation = $ExpectedGeneration; UpdatedAtUtc = $snapshot.Record['updatedAtUtc']
-                FixtureExists = $fixture
+                FixtureExists = $fixture; FixtureGeneration = $fixtureGeneration
             }
         }
         if ($snapshot.Record['state'] -cne 'leased' -or
@@ -555,7 +598,7 @@ function Invoke-AzureLocalEnvironmentLease {
         return [pscustomobject]@{
             State = 'released'; Acquired = $false; OwnerHash = $ownerHash
             Generation = $ExpectedGeneration; UpdatedAtUtc = $snapshot.Record['updatedAtUtc']
-            FixtureExists = $fixture
+            FixtureExists = $fixture; FixtureGeneration = $fixtureGeneration
         }
     }
 
@@ -583,7 +626,7 @@ function Invoke-AzureLocalEnvironmentLease {
     return [pscustomobject]@{
         State = 'released'; Acquired = $false; OwnerHash = $ExpectedOwnerHash
         Generation = $ExpectedGeneration; UpdatedAtUtc = $snapshot.Record['updatedAtUtc']
-        FixtureExists = $fixture
+        FixtureExists = $fixture; FixtureGeneration = $fixtureGeneration
     }
 }
 
@@ -612,7 +655,8 @@ if ($Execute) {
             @{ Name = 'ownerHash'; Value = $result.OwnerHash },
             @{ Name = 'generation'; Value = $result.Generation },
             @{ Name = 'updatedAtUtc'; Value = $result.UpdatedAtUtc },
-            @{ Name = 'fixtureExists'; Value = $result.FixtureExists.ToString().ToLowerInvariant() }
+            @{ Name = 'fixtureExists'; Value = $result.FixtureExists.ToString().ToLowerInvariant() },
+            @{ Name = 'fixtureGeneration'; Value = $result.FixtureGeneration }
         )) {
         "$($output.Name)=$($output.Value)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
     }
