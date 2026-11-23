@@ -270,6 +270,27 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         }
     }
 
+    It 'declares the ARM override secrets at every reusable E2E boundary' {
+        $secretNames = @(
+            'ARM_CLIENT_ID_OVERRIDE', 'ARM_TENANT_ID_OVERRIDE', 'ARM_SUBSCRIPTION_ID_OVERRIDE'
+        )
+        $definitions = @(
+            ($script:entrypoints | Where-Object name -EQ 'Reusable: Bicep PR check')
+            $script:workflows['bicep-module']
+            $script:workflows['bicep-module-preview']
+            $script:workflows['bicep-module-deployment']
+            $script:workflows['bicep-module-runtime']
+            $script:workflows['bicep-module-runtime-e2e']
+            $script:workflows['bicep-module-runtime-deployment']
+        )
+        foreach ($definition in $definitions) {
+            @($definition.on.workflow_call.secrets.Keys | Sort-Object) | Should -Be ($secretNames | Sort-Object)
+            foreach ($secretName in $secretNames) {
+                $definition.on.workflow_call.secrets[$secretName].required | Should -BeFalse
+            }
+        }
+    }
+
     It 'uses the shared pinned installer and retains runtime capabilities' {
         $runtimeNames = @(
             'bicep-module-runtime', 'bicep-module-runtime-deployment',

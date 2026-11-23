@@ -23,6 +23,16 @@ on:
         description: Optional validated caller commit; defaults to the triggering commit.
         type: string
         required: false
+    secrets:
+      ARM_CLIENT_ID_OVERRIDE:
+        description: Contributor-owned client ID override for a manual fork run.
+        required: false
+      ARM_TENANT_ID_OVERRIDE:
+        description: Contributor-owned tenant ID override for a manual fork run.
+        required: false
+      ARM_SUBSCRIPTION_ID_OVERRIDE:
+        description: Contributor-owned subscription ID override for a manual fork run.
+        required: false
 
 permissions: {}
 
