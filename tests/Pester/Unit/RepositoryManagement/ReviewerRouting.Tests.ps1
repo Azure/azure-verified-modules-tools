@@ -150,6 +150,11 @@ Describe 'Get-AvmPrReviewerRoutingCandidates' {
         $candidates.number | Should -Be @(1, 3)
     }
 
+    It 'includes recently updated drafts when requested for fork guidance' {
+        $candidates = @(Get-AvmPrReviewerRoutingCandidates -Repository 'Azure/bicep-registry-modules' -UpdatedWithinMinutes 60 -IncludeDraft)
+        $candidates.number | Should -Be @(1, 2)
+    }
+
     It 'allows complete pagination instead of a fixed 500-request limit' {
         $null = Get-AvmPrReviewerRoutingCandidates -Repository 'Azure/bicep-registry-modules'
         Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter {
@@ -191,6 +196,72 @@ Describe 'Get-AvmPrReviewerRoutingCandidates' {
     }
 }
 
+Describe 'Set-AvmForkE2eGuidance' {
+    BeforeEach {
+        $script:fork = [pscustomobject]@{
+            number = 42
+            url = 'https://github.com/Azure/bicep-registry-modules/pull/42'
+            isDraft = $true
+            isCrossRepository = $true
+            state = 'OPEN'
+        }
+        Mock Invoke-RepositoryGitHub { @() }
+    }
+
+    It 'posts guidance for open fork drafts in both ecosystems' -ForEach @(
+        @{ EcosystemName = 'bicep' }
+        @{ EcosystemName = 'terraform' }
+    ) {
+        Set-AvmForkE2eGuidance -PullRequest $script:fork -Repository 'Azure/example' -Ecosystem $EcosystemName
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter {
+            $Arguments -contains 'POST' -and
+            ($Arguments -join ' ') -like "*contributing/$EcosystemName/contribution-flow/#running-e2e-for-external-contributions*"
+        }
+    }
+
+    It 'does not comment on same-repository or closed pull requests' {
+        $script:fork.isCrossRepository = $false
+        Set-AvmForkE2eGuidance -PullRequest $script:fork -Repository 'Azure/example' -Ecosystem bicep
+        $script:fork.isCrossRepository = $true
+        $script:fork.state = 'CLOSED'
+        Set-AvmForkE2eGuidance -PullRequest $script:fork -Repository 'Azure/example' -Ecosystem bicep
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 0
+    }
+
+    It 'detects an existing app comment across paginated results without updating it' {
+        Mock Invoke-RepositoryGitHub {
+            if (($Arguments -join ' ') -match '&page=1(?:\s|$)') {
+                return @(1..100 | ForEach-Object { [pscustomobject]@{ user = [pscustomobject]@{ login = 'contributor' }; body = 'other' } })
+            }
+            return @([pscustomobject]@{ user = [pscustomobject]@{ login = 'azure-verified-modules[bot]' }; body = '<!-- avm-fork-e2e-guidance:v1 -->' })
+        }
+        Set-AvmForkE2eGuidance -PullRequest $script:fork -Repository 'Azure/example' -Ecosystem bicep
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 2
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 0 -ParameterFilter { $Arguments -contains 'POST' }
+    }
+
+    It 'does not let a contributor spoof the bot marker' {
+        Mock Invoke-RepositoryGitHub {
+            if ($Arguments -notcontains 'POST') {
+                return @([pscustomobject]@{ user = [pscustomobject]@{ login = 'contributor' }; body = '<!-- avm-fork-e2e-guidance:v1 -->' })
+            }
+        }
+        Set-AvmForkE2eGuidance -PullRequest $script:fork -Repository 'Azure/example' -Ecosystem bicep
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter { $Arguments -contains 'POST' }
+    }
+
+    It 'does not post in WhatIf mode' {
+        Set-AvmForkE2eGuidance -PullRequest $script:fork -Repository 'Azure/example' -Ecosystem bicep -WhatIf
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 0 -ParameterFilter { $Arguments -contains 'POST' }
+    }
+
+    It 'reports missing fork information instead of silently skipping it' {
+        $script:fork.PSObject.Properties.Remove('isCrossRepository')
+        { Set-AvmForkE2eGuidance -PullRequest $script:fork -Repository 'Azure/example' -Ecosystem bicep } |
+            Should -Throw '*Missing fork or state information*'
+    }
+}
+
 Describe 'Resolve-AvmPrReviewerRouting' {
     BeforeEach {
         Mock Get-AvmPrReviewerRoutingEligibility { @{ Eligible = $true; Reason = $null } }
@@ -204,6 +275,8 @@ Describe 'Resolve-AvmPrReviewerRouting' {
             number = 1
             url = 'https://github.com/Azure/bicep-registry-modules/pull/1'
             isDraft = $false
+            isCrossRepository = $false
+            state = 'OPEN'
             reviewRequests = @()
             reviews = @()
             headRefOid = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
@@ -485,6 +558,8 @@ Describe 'Invoke-AvmPrReviewerRouting summary' {
             number = 1
             url = 'https://github.com/Azure/bicep-registry-modules/pull/1'
             isDraft = $false
+            isCrossRepository = $false
+            state = 'OPEN'
             reviewRequests = @()
             reviews = @()
             headRefOid = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
@@ -533,6 +608,22 @@ Describe 'Invoke-AvmPrReviewerRouting summary' {
         $summary | Should -Match ([regex]::Escape('- `[https://github.com/Azure/bicep-registry-modules/pull/1]: changed files boom`'))
     }
 
+    It 'still routes reviewers when fork guidance fails' {
+        Mock Set-AvmForkE2eGuidance { throw 'comment failed' }
+        { Invoke-AvmPrReviewerRouting -Repository 'Azure/bicep-registry-modules' 6>$null 3>$null } |
+            Should -Throw '*comment failed*'
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter { $Arguments -contains 'edit' }
+    }
+
+    It 'comments on a fork draft without requesting reviewers' {
+        $script:pr.isDraft = $true
+        $script:pr.isCrossRepository = $true
+        Mock Invoke-RepositoryGitHub { @() }
+        Invoke-AvmPrReviewerRouting -Repository 'Azure/bicep-registry-modules' 6>$null
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter { $Arguments -contains 'POST' }
+        Should -Invoke Invoke-RepositoryGitHub -Exactly 0 -ParameterFilter { $Arguments -contains 'edit' }
+    }
+
 }
 
 Describe 'Invoke-AvmPrReviewerRouting diagnostics' {
@@ -542,6 +633,8 @@ Describe 'Invoke-AvmPrReviewerRouting diagnostics' {
             number = 1
             url = 'https://github.com/Azure/bicep-registry-modules/pull/1'
             isDraft = $true
+            isCrossRepository = $false
+            state = 'OPEN'
             reviewRequests = @()
             reviews = @()
             headRefOid = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
