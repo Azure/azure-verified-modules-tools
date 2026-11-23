@@ -74,6 +74,8 @@ Describe 'Component: Bicep Pester unit tier' -Tag 'Component' {
     It 'retains the actual public child receipt in the normalized hosted unit artifact' {
         $script:realUnitResult = Invoke-AvmTestUnit -Path $script:root -Tag fast
         $script:realUnitResult.Status | Should -Be 'pass'
+        $script:failedUnitResult = Invoke-AvmTestUnit -Path $script:root -Tag failure
+        $script:failedUnitResult.Status | Should -BeExactly 'fail'
         $emptyRoot = Join-Path $TestDrive 'no authored suite'
         $null = New-Item -ItemType Directory -Path $emptyRoot -Force
         Set-Content -LiteralPath (Join-Path $emptyRoot 'main.bicep') `
@@ -85,9 +87,10 @@ Describe 'Component: Bicep Pester unit tier' -Tag 'Component' {
         $workflow = ConvertFrom-Yaml (Get-Content -LiteralPath (
                 Join-Path $script:repoRoot '.github' 'workflows' 'bicep-module-runtime.yml') -Raw)
         $unitRun = @($workflow.jobs.'unit-test'.steps | Where-Object name -EQ 'Unit tests')[0].run
+        $failureRun = @($workflow.jobs.'unit-test'.steps | Where-Object name -EQ 'Report failed unit tests')[0].run
         $saved = @{}
         foreach ($name in @('RUNNER_TEMP', 'GITHUB_OUTPUT', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT',
-                'MODULE_PATH', 'AVM_AUTHORING_MODULE', 'AVM_AUTHORING_ARTIFACT_MANIFEST_SHA256')) {
+                'MODULE_PATH', 'UNIT_RESULT_PATH', 'AVM_AUTHORING_MODULE', 'AVM_AUTHORING_ARTIFACT_MANIFEST_SHA256')) {
             $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
         }
         $previousLocation = $PWD.Path
@@ -158,6 +161,19 @@ Describe 'Component: Bicep Pester unit tier' -Tag 'Component' {
             $information | Should -Contain '::warning::[avm.bicep.example-warning] warning main.bicep: Quota is 20%25 full.'
             $information | Should -Contain '::notice::[avm.bicep.example-info] info main.bicep: Advisory information.'
             ($information -join "`n") | Should -Not -Match 'sensitive-expected|sensitive-actual'
+
+            $env:MODULE_PATH = 'avm/res/mock/failed-unit'
+            Mock Invoke-AvmTestUnit { $script:failedUnitResult }
+            $information = @(. ([scriptblock]::Create($unitRun)) 6>&1 | ForEach-Object { [string]$_ })
+            ($information -join "`n") | Should -Match '::error::\[avm\.bicep\.pester-failed\].*Bicep module\.fails:'
+            ($information -join "`n") | Should -Match 'Expected'
+            $failedKey = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
+                    [Text.Encoding]::UTF8.GetBytes($env:MODULE_PATH))).ToLowerInvariant().Substring(0, 16)
+            $env:UNIT_RESULT_PATH = Join-Path $env:RUNNER_TEMP 'avm-bicep-unit-results' "$failedKey.json"
+            $failure = $null
+            $output = @(try { . ([scriptblock]::Create($failureRun)) } catch { $failure = $_ })
+            ($output -join "`n") | Should -Match '\[avm\.bicep\.pester-failed\].*Bicep module\.fails:'
+            $failure.Exception.Message | Should -Match 'Bicep unit tests failed'
 
             $script:missingReceiptResult = $script:realUnitResult | Select-Object * -ExcludeProperty Authoring
             $env:MODULE_PATH = 'avm/res/mock/missing-receipt'
