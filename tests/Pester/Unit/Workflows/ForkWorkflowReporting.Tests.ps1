@@ -62,6 +62,32 @@ Describe 'Trusted fork workflow reporting' {
         $write[0].Body.body | Should -Match 'release-branch handoff process'
     }
 
+    It 'executes the shared action in fork reporting mode' {
+        Import-Module powershell-yaml -ErrorAction Stop
+        $actionPath = Join-Path $script:root '.github' 'actions' 'report-check-status'
+        $action = Get-Content -Raw (Join-Path $actionPath 'action.yml') | ConvertFrom-Yaml
+        $saved = @{}
+        foreach ($name in @('GITHUB_ACTION_PATH', 'GITHUB_EVENT_PATH', 'GITHUB_EVENT_NAME', 'GITHUB_REPOSITORY', 'GITHUB_SERVER_URL', 'REPORT_FORK_RUN')) {
+            $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+        }
+        try {
+            $env:GITHUB_ACTION_PATH = $actionPath
+            $env:GITHUB_EVENT_PATH = Join-Path $TestDrive 'event.json'
+            $env:GITHUB_EVENT_NAME = 'workflow_run'
+            $env:GITHUB_REPOSITORY = 'Azure/bicep-registry-modules'
+            $env:GITHUB_SERVER_URL = 'https://github.com'
+            $env:REPORT_FORK_RUN = 'true'
+            $script:event | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $env:GITHUB_EVENT_PATH
+            . ([scriptblock]::Create($action.runs.steps[0].run))
+            @($script:calls | Where-Object Method -EQ POST) | Should -HaveCount 1
+        }
+        finally {
+            foreach ($name in $saved.Keys) {
+                [Environment]::SetEnvironmentVariable($name, $(if ($null -eq $saved[$name]) { [NullString]::Value } else { $saved[$name] }), 'Process')
+            }
+        }
+    }
+
     It 'does not post for unrelated failures or a stale pull request' -ForEach @(
         @{ Case = 'unrelated' }, @{ Case = 'stale' }, @{ Case = 'retargeted' }, @{ Case = 'same-repo' }
     ) {
