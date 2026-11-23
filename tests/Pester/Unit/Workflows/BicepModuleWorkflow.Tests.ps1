@@ -311,12 +311,14 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $runtimeLeaf = $script:workflows['bicep-module-runtime-deployment']
         $runtimeLeaf.on.workflow_call.secrets.AVM_SECRETS_CONTEXT.required | Should -BeFalse
         $deploy = $runtimeLeaf.jobs.deploy.steps | Where-Object { $_['id'] -ceq 'deploy' }
-        $deploy.env.AVM_CI_SECRETS |
-            Should -BeExactly '${{ secrets.AVM_SECRETS_CONTEXT || toJSON(secrets) }}'
+        $deploy.env.AVM_CI_SECRETS | Should -BeExactly '${{ toJSON(secrets) }}'
+        $deploy.env.AVM_SECRETS_CONTEXT | Should -BeExactly '${{ secrets.AVM_SECRETS_CONTEXT }}'
+        $deploy.run | Should -Match 'Resolve-AvmWorkflowSecretsJson'
         $moduleLeaf = $script:workflows['bicep-module-deployment']
         $moduleLeaf.on.workflow_call.secrets.AVM_SECRETS_CONTEXT.required | Should -BeFalse
-        $moduleLeaf.jobs.job_module_deploy_validation.steps[-1].with.githubSecrets |
-            Should -BeExactly '${{ secrets.AVM_SECRETS_CONTEXT || toJSON(secrets) }}'
+        $moduleDeployment = $moduleLeaf.jobs.job_module_deploy_validation.steps[-1].with
+        $moduleDeployment.githubSecrets | Should -BeExactly '${{ toJSON(secrets) }}'
+        $moduleDeployment.githubSecretsContext | Should -BeExactly '${{ secrets.AVM_SECRETS_CONTEXT }}'
     }
 
     It 'uses the shared pinned installer and retains runtime capabilities' {
@@ -804,12 +806,11 @@ Describe 'Bicep required checks and deployment guards' {
             }
         }
         $deployment = $script:workflows['bicep-module-deployment'].jobs.job_module_deploy_validation.steps[-1].with
-        $deployment.subscriptionPool | Should -Match '^\$\{\{ vars\.VALIDATE_SUBSCRIPTION_IDS'
-        $deployment.subscriptionPool | Should -Match 'fromJSON\(secrets\.AVM_SECRETS_CONTEXT \|\| toJSON\(secrets\)\)\.VALIDATE_SUBSCRIPTION_IDS'
-        $deployment.managementGroupId | Should -Match 'fromJSON\(secrets\.AVM_SECRETS_CONTEXT \|\| toJSON\(secrets\)\)\.ARM_MGMTGROUP_ID'
-        $deployment.fallbackSubscriptionId | Should -Match 'fromJSON\(secrets\.AVM_SECRETS_CONTEXT \|\| toJSON\(secrets\)\)\.VALIDATE_SUBSCRIPTION_ID'
+        $deployment.subscriptionPool | Should -BeExactly $pool
+        $deployment.managementGroupId | Should -BeExactly $managementGroup
+        $deployment.fallbackSubscriptionId | Should -BeExactly '${{ vars.VALIDATE_SUBSCRIPTION_ID || secrets.VALIDATE_SUBSCRIPTION_ID }}'
         $deployment.moduleClientIds | Should -BeExactly '${{ vars.VALIDATE_MODULE_CLIENT_IDS }}'
-        $deployment.tenantId | Should -Match 'fromJSON\(secrets\.AVM_SECRETS_CONTEXT \|\| toJSON\(secrets\)\)\.VALIDATE_TENANT_ID'
+        $deployment.tenantId | Should -BeExactly '${{ vars.VALIDATE_TENANT_ID || secrets.VALIDATE_TENANT_ID }}'
         $deployment.Contains('clientId') | Should -BeFalse
         $deployment.Contains('azureCredentials') | Should -BeFalse
         $selection = $script:actions['bicep-subscription-selection'].runs.steps[-1].run
@@ -830,11 +831,6 @@ Describe 'Bicep required checks and deployment guards' {
             armTenantIdOverride = '${{ secrets.ARM_TENANT_ID_OVERRIDE || vars.ARM_TENANT_ID_OVERRIDE }}'
             armSubscriptionIdOverride = '${{ secrets.ARM_SUBSCRIPTION_ID_OVERRIDE || vars.ARM_SUBSCRIPTION_ID_OVERRIDE }}'
         }
-        $nestedOverrides = [ordered]@{
-            armClientIdOverride = '${{ secrets.ARM_CLIENT_ID_OVERRIDE || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).ARM_CLIENT_ID_OVERRIDE || vars.ARM_CLIENT_ID_OVERRIDE }}'
-            armTenantIdOverride = '${{ secrets.ARM_TENANT_ID_OVERRIDE || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).ARM_TENANT_ID_OVERRIDE || vars.ARM_TENANT_ID_OVERRIDE }}'
-            armSubscriptionIdOverride = '${{ secrets.ARM_SUBSCRIPTION_ID_OVERRIDE || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).ARM_SUBSCRIPTION_ID_OVERRIDE || vars.ARM_SUBSCRIPTION_ID_OVERRIDE }}'
-        }
         foreach ($name in @('bicep-module', 'bicep-module-preview')) {
             $selection = $script:workflows[$name].jobs.job_initialize_subscription_selection.steps[-1].with
             $selection.allowOverrides | Should -BeExactly $allow
@@ -844,7 +840,7 @@ Describe 'Bicep required checks and deployment guards' {
         }
         $deployment = $script:workflows['bicep-module-deployment'].jobs.job_module_deploy_validation.steps[-1].with
         $deployment.allowOverrides | Should -BeExactly $allow
-        foreach ($entry in $nestedOverrides.GetEnumerator()) {
+        foreach ($entry in $overrides.GetEnumerator()) {
             $deployment[$entry.Key] | Should -BeExactly $entry.Value
         }
 
@@ -865,10 +861,12 @@ Describe 'Bicep required checks and deployment guards' {
             $step.run | Should -Not -Match 'VALIDATE_(CLIENT_ID|TENANT_ID|SUBSCRIPTION_ID)_OVERRIDE'
         }
         $runtimeDeployment.env.ALLOW_VALIDATION_OVERRIDES | Should -BeExactly $allow
-        $runtimeDeployment.env.ARM_CLIENT_ID_OVERRIDE | Should -BeExactly $nestedOverrides.armClientIdOverride
-        $runtimeDeployment.env.ARM_TENANT_ID_OVERRIDE | Should -BeExactly $nestedOverrides.armTenantIdOverride
-        $runtimeDeployment.env.ARM_SUBSCRIPTION_ID_OVERRIDE | Should -BeExactly $nestedOverrides.armSubscriptionIdOverride
+        $runtimeDeployment.env.ARM_CLIENT_ID_OVERRIDE | Should -BeExactly $overrides.armClientIdOverride
+        $runtimeDeployment.env.ARM_TENANT_ID_OVERRIDE | Should -BeExactly $overrides.armTenantIdOverride
+        $runtimeDeployment.env.ARM_SUBSCRIPTION_ID_OVERRIDE | Should -BeExactly $overrides.armSubscriptionIdOverride
+        $runtimeDeployment.env.AVM_SECRETS_CONTEXT | Should -BeExactly '${{ secrets.AVM_SECRETS_CONTEXT }}'
         $runtimeDeployment.run | Should -Match 'Resolve-AvmWorkflowValidationConfiguration'
+        $runtimeDeployment.run | Should -Match 'SecretContextJson \$env:AVM_SECRETS_CONTEXT'
     }
 
     It 'pins shared runtime override support to the caller-supplied reusable workflow commit' {

@@ -42,6 +42,9 @@ inputs:
   githubSecrets:
     description: Secrets consumed only by the native CI-input adapter.
     required: true
+  githubSecretsContext:
+    description: Packed secrets received through a nested reusable-workflow boundary.
+    default: ''
   allowOverrides:
     description: Whether contributor-owned fork validation overrides are admitted.
     default: 'false'
@@ -69,9 +72,11 @@ runs:
         FALLBACK_SUBSCRIPTION_ID: ${{ inputs.fallbackSubscriptionId }}
         VALIDATE_MODULE_CLIENT_IDS: ${{ inputs.moduleClientIds }}
         VALIDATE_TENANT_ID: ${{ inputs.tenantId }}
+        ARM_MGMTGROUP_ID: ${{ inputs.managementGroupId }}
         TOKEN_NAMEPREFIX: ${{ inputs.tokenNamePrefix }}
         AVM_CI_VARIABLES: ${{ inputs.githubVariables }}
         AVM_CI_SECRETS: ${{ inputs.githubSecrets }}
+        AVM_SECRETS_CONTEXT: ${{ inputs.githubSecretsContext }}
         CI_KEY_VAULT_NAME: ${{ inputs.ciKeyVaultName }}
         ALLOW_VALIDATION_OVERRIDES: ${{ inputs.allowOverrides }}
         ARM_CLIENT_ID_OVERRIDE: ${{ inputs.armClientIdOverride }}
@@ -86,8 +91,10 @@ runs:
         $validation = Resolve-AvmWorkflowValidationConfiguration -ModulePath $env:MODULE_PATH `
           -PoolJson $env:POOL_JSON -FallbackSubscriptionId $env:FALLBACK_SUBSCRIPTION_ID `
           -ModuleClientIds $env:VALIDATE_MODULE_CLIENT_IDS -TenantId $env:VALIDATE_TENANT_ID `
+          -ManagementGroupId $env:ARM_MGMTGROUP_ID -TokenNamePrefix $env:TOKEN_NAMEPREFIX `
           -ArmClientIdOverride $env:ARM_CLIENT_ID_OVERRIDE -ArmTenantIdOverride $env:ARM_TENANT_ID_OVERRIDE `
           -ArmSubscriptionIdOverride $env:ARM_SUBSCRIPTION_ID_OVERRIDE `
+          -SecretContextJson $env:AVM_SECRETS_CONTEXT `
           -AllowOverrides:(ConvertTo-AvmWorkflowBoolean $env:ALLOW_VALIDATION_OVERRIDES)
         $parameters = @{
           Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH; TestCase = $case
@@ -100,8 +107,9 @@ runs:
           $workflowInput = ConvertFrom-AvmWorkflowScalarInput -Json $env:WORKFLOW_INPUT
           Assert-AvmWorkflowIsolationInput -IsolationMode $case.isolationMode -CompiledTemplate $compiled -RemoveDeployment (ConvertTo-AvmWorkflowBoolean $workflowInput.removeDeployment)
         }
-        $prefix = Get-AvmWorkflowNamePrefix -IsolationMode $case.isolationMode -Prefix $env:TOKEN_NAMEPREFIX
+        $prefix = Get-AvmWorkflowNamePrefix -IsolationMode $case.isolationMode -Prefix $validation.tokenNamePrefix
         Write-AvmWorkflowOutput -Name namePrefix -Value $prefix
+        Write-AvmWorkflowOutput -Name managementGroupId -Value $validation.managementGroupId
         Write-Output "::add-mask::$($auth.subscriptionId)"
         foreach ($entry in $auth.GetEnumerator()) { Write-AvmWorkflowOutput -Name $entry.Key -Value $entry.Value }
         $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes("$env:MODULE_PATH|$($case.path)"))).ToLowerInvariant()
@@ -151,16 +159,19 @@ runs:
         ARM_SUBSCRIPTION_ID: ${{ steps.auth.outputs.subscriptionId }}
         ARM_TENANT_ID: ${{ steps.context.outputs.tenantId }}
         ARM_CLIENT_ID: ${{ steps.auth.outputs.clientId }}
-        ARM_MGMTGROUP_ID: ${{ inputs.managementGroupId }}
+        ARM_MGMTGROUP_ID: ${{ steps.auth.outputs.managementGroupId }}
         TOKEN_NAMEPREFIX: ${{ inputs.tokenNamePrefix }}
         localToken_namePrefix: ${{ steps.auth.outputs.namePrefix }}
         CI_KEY_VAULT_NAME: ${{ inputs.ciKeyVaultName }}
         AVM_CI_VARIABLES: ${{ inputs.githubVariables }}
         AVM_CI_SECRETS: ${{ inputs.githubSecrets }}
+        AVM_SECRETS_CONTEXT: ${{ inputs.githubSecretsContext }}
       run: |
         $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Validation.ps1')
         Import-AvmWorkflowPackage
+        $env:AVM_CI_SECRETS = Resolve-AvmWorkflowSecretsJson `
+          -DirectJson $env:AVM_CI_SECRETS -SecretContextJson $env:AVM_SECRETS_CONTEXT
         $workflowInput = ConvertFrom-AvmWorkflowScalarInput -Json $env:WORKFLOW_INPUT
         $parameters = @{
           Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH; Phase = 'Deploy'; Example = $env:SELECTED_EXAMPLE

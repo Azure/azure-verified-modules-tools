@@ -1354,6 +1354,52 @@ Describe 'Component: Bicep fork validation overrides' -Tag Component {
         $resolved.fallbackSubscriptionId | Should -BeExactly $script:subscription
     }
 
+    It 'resolves packed fork overrides before conflicting variables and fills missing defaults' {
+        $parameters = $script:overrideDefaults.Clone()
+        $parameters.PoolJson = ''
+        $parameters.FallbackSubscriptionId = ''
+        $parameters.TenantId = ''
+        $parameters.ArmClientIdOverride = '00000000-0000-0000-0000-000000000000'
+        $parameters.ArmTenantIdOverride = '00000000-0000-0000-0000-000000000000'
+        $parameters.ArmSubscriptionIdOverride = '00000000-0000-0000-0000-000000000000'
+        $parameters.SecretContextJson = ConvertTo-Json -InputObject @{
+            ARM_CLIENT_ID_OVERRIDE = $script:secondClient
+            ARM_TENANT_ID_OVERRIDE = $script:secondSubscription
+            ARM_SUBSCRIPTION_ID_OVERRIDE = $script:subscription
+            VALIDATE_SUBSCRIPTION_IDS = $script:overrideDefaults.PoolJson
+            VALIDATE_SUBSCRIPTION_ID = $script:secondSubscription
+            VALIDATE_TENANT_ID = $script:tenant
+            ARM_MGMTGROUP_ID = 'packed-group'
+            TOKEN_NAMEPREFIX = 'avm'
+        } -Compress
+
+        $resolved = Resolve-AvmWorkflowValidationConfiguration @parameters -AllowOverrides
+        $mapping = $resolved.moduleClientIds | ConvertFrom-Json -AsHashtable
+
+        $mapping[$script:modulePath] | Should -BeExactly $script:secondClient
+        $resolved.tenantId | Should -BeExactly $script:secondSubscription
+        $resolved.poolJson | Should -BeExactly ''
+        $resolved.fallbackSubscriptionId | Should -BeExactly $script:subscription
+        $resolved.managementGroupId | Should -BeExactly 'packed-group'
+        $resolved.tokenNamePrefix | Should -BeExactly 'avm'
+    }
+
+    It 'preserves the complete packed secret document for arbitrary CI inputs' {
+        $direct = '{"CI_FORK_CANARY":"direct"}'
+        $packed = '{"CI_FORK_CANARY":"packed","MODULE_PRIVATE":"value"}'
+
+        Resolve-AvmWorkflowSecretsJson -DirectJson $direct | Should -BeExactly $direct
+        Resolve-AvmWorkflowSecretsJson -DirectJson $direct -SecretContextJson $packed |
+            Should -BeExactly $packed
+    }
+
+    It 'rejects malformed packed secret context without returning a partial configuration' {
+        { Resolve-AvmWorkflowSecretsJson -DirectJson '{}' -SecretContextJson '[]' } |
+            Should -Throw '*must be a JSON object*'
+        { Resolve-AvmWorkflowValidationConfiguration @script:overrideDefaults -SecretContextJson '{"bad":42}' } |
+            Should -Throw '*values must be strings or null*'
+    }
+
     It 'rejects invalid <Name> before selection or authentication' -ForEach @(
         @{ Name = 'ARM_CLIENT_ID_OVERRIDE'; Parameter = 'ArmClientIdOverride' }
         @{ Name = 'ARM_TENANT_ID_OVERRIDE'; Parameter = 'ArmTenantIdOverride' }
