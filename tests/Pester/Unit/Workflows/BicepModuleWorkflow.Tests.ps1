@@ -210,7 +210,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         foreach ($entrypoint in $script:entrypoints) {
             @($entrypoint.on.Keys) | Should -Be @('workflow_call')
             $expectedInputs = if ($entrypoint.name -eq 'Reusable: Bicep PR check') {
-                @('authoringRef', 'authoringSource', 'initializeOnly')
+                @('authoringRef', 'authoringSource', 'initializeOnly', 'tools-ref')
             }
             else {
                 @('authoringRef', 'authoringSource', 'baseCommit', 'initializeOnly', 'targetCommit')
@@ -219,6 +219,9 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             $entrypoint.on.workflow_call.inputs.authoringSource.default | Should -BeExactly 'gallery'
             $entrypoint.permissions.Count | Should -Be 0
         }
+        $prCheck = $script:entrypoints | Where-Object name -EQ 'Reusable: Bicep PR check'
+        $prCheck.on.workflow_call.inputs['tools-ref'].required | Should -BeTrue
+        $prCheck.on.workflow_call.inputs['tools-ref'].Contains('default') | Should -BeFalse
     }
 
     It 'keeps legacy reusable workflows on their established tools contract' {
@@ -276,7 +279,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         @($script:workflows.Keys | Where-Object { $_ -in $runtimeNames }) | Should -HaveCount 5
         foreach ($workflow in $runtimeNames | ForEach-Object { $script:workflows[$_] }) {
             $text = $workflow | ConvertTo-Json -Depth 100
-            $text | Should -Not -Match '\.avm-entrypoint|tools-ref'
+            $text | Should -Not -Match '\.avm-entrypoint|github\.workflow_sha'
             $installers = @(
                 foreach ($job in $workflow.jobs.Values) {
                     if (-not $job.Contains('steps')) { continue }
@@ -365,6 +368,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $prCheck.jobs.check.with.e2eRoute | Should -BeExactly '${{ matrix.e2eRoute }}'
         $prCheck.jobs.check.with.workflowInput | Should -BeExactly '${{ needs.initialize.outputs.workflowInput }}'
         $prCheck.jobs.check.with.baseCommit | Should -BeExactly '${{ needs.initialize.outputs.baseCommit }}'
+        $prCheck.jobs.check.with['tools-ref'] | Should -BeExactly '${{ inputs.tools-ref }}'
 
         $runtime.jobs.'pr-check'.name | Should -BeExactly 'PR check'
         $runtime.jobs.'unit-test'.name | Should -BeExactly 'Unit tests'
@@ -382,6 +386,9 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $runtime.jobs.'e2e-test'.strategy.'fail-fast' | Should -BeFalse
         $runtime.jobs.'e2e-test'.Contains('continue-on-error') | Should -BeFalse
         $runtime.jobs.'e2e-test'.uses | Should -BeExactly './.github/workflows/bicep-module-runtime-deployment.yml'
+        $runtime.jobs.'e2e-test'.with['tools-ref'] | Should -BeExactly '${{ inputs.tools-ref }}'
+        $script:workflows['bicep-module-runtime-e2e'].jobs.deploy.with['tools-ref'] |
+            Should -BeExactly '${{ inputs.tools-ref }}'
     }
 
     It 'names both E2E matrix callers and the visible child by classification and scenario' {
@@ -803,7 +810,14 @@ Describe 'Bicep required checks and deployment guards' {
         }
     }
 
-    It 'pins shared runtime override support to the reusable workflow commit' {
+    It 'pins shared runtime override support to the caller-supplied reusable workflow commit' {
+        $toolsSha = 'a' * 40
+        $callerSha = 'b' * 40
+        foreach ($name in @('bicep-module-runtime', 'bicep-module-runtime-e2e', 'bicep-module-runtime-deployment')) {
+            $workflow = $script:workflows[$name]
+            $workflow.on.workflow_call.inputs['tools-ref'].required | Should -BeTrue
+            $workflow.on.workflow_call.inputs['tools-ref'].Contains('default') | Should -BeFalse
+        }
         foreach ($entry in @(
                 @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples' }
                 @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments' }
@@ -813,10 +827,21 @@ Describe 'Bicep required checks and deployment guards' {
                 Where-Object name -EQ 'Check out workflow support'
             $step.uses | Should -Match 'actions/checkout@[0-9a-f]{40}$'
             $step.with.repository | Should -BeExactly 'Azure/azure-verified-modules-tools'
-            $step.with.ref | Should -BeExactly '${{ github.workflow_sha }}'
+            $step.with.ref | Should -BeExactly '${{ inputs.tools-ref }}'
+            $resolvedRef = $step.with.ref.Replace('${{ inputs.tools-ref }}', $toolsSha)
+            $resolvedRef | Should -BeExactly $toolsSha
+            $resolvedRef | Should -Not -BeExactly $callerSha
             $step.with.'sparse-checkout' | Should -Match 'scripts/bicep-workflows'
             $step.with.'sparse-checkout' | Should -Match 'repository-management/shared'
+            $validator = $script:workflows[$entry.Workflow].jobs[$entry.Job].steps |
+                Where-Object name -EQ 'Validate tools revision'
+            $validator.env.TOOLS_REF | Should -BeExactly '${{ inputs.tools-ref }}'
+            $validator.run | Should -Match '\[0-9a-f\]\{40\}'
         }
+        $prCheck = $script:entrypoints | Where-Object name -EQ 'Reusable: Bicep PR check'
+        $prValidator = $prCheck.jobs.initialize.steps | Where-Object name -EQ 'Validate tools revision'
+        $prValidator.env.TOOLS_REF | Should -BeExactly '${{ inputs.tools-ref }}'
+        $prCheck.jobs.check.with['tools-ref'] | Should -BeExactly '${{ inputs.tools-ref }}'
     }
 
     It 'confines CI contexts to input validation and deployment and preserves cleanup order' {

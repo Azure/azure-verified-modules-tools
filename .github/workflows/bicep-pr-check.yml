@@ -15,6 +15,10 @@ on:
         description: Return the prepared module matrix for a caller-owned per-module workflow group.
         type: boolean
         default: false
+      tools-ref:
+        description: Full tools commit SHA, identical to the caller's reusable workflow revision.
+        type: string
+        required: true
     outputs:
       moduleMatrix:
         value: ${{ jobs.initialize.outputs.moduleMatrix }}
@@ -78,6 +82,12 @@ jobs:
       moduleMatrix: ${{ steps.initialize.outputs.moduleMatrix }}
       hasModules: ${{ steps.initialize.outputs.hasModules }}
     steps:
+      - name: Validate tools revision
+        shell: pwsh
+        env:
+          TOOLS_REF: ${{ inputs.tools-ref }}
+        run: |
+          if ($env:TOOLS_REF -cnotmatch '^[0-9a-f]{40}$') { throw 'tools-ref must be the full immutable SHA used by the caller.' }
       - name: Check out caller
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -172,4 +182,5 @@ jobs:
       workflowInput: ${{ needs.initialize.outputs.workflowInput }}
       targetCommit: ${{ needs.initialize.outputs.targetCommit }}
       authoringArtifact: ${{ needs.bootstrap.outputs.artifact }}
+      tools-ref: ${{ inputs.tools-ref }}
     secrets: inherit

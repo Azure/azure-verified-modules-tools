@@ -18,6 +18,10 @@ on:
       authoringArtifact:
         type: string
         default: ''
+      tools-ref:
+        description: Full tools commit SHA, identical to the caller's reusable workflow revision.
+        type: string
+        required: true
 
 permissions: {}
 
@@ -78,11 +82,17 @@ jobs:
       - name: Install Avm.Authoring
         if: env.AVM_AUTHORING_MODULE == 'Avm.Authoring'
         uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
+      - name: Validate tools revision
+        shell: pwsh
+        env:
+          TOOLS_REF: ${{ inputs.tools-ref }}
+        run: |
+          if ($env:TOOLS_REF -cnotmatch '^[0-9a-f]{40}$') { throw 'tools-ref must be the full immutable SHA used by the caller.' }
       - name: Check out workflow support
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: Azure/azure-verified-modules-tools
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ inputs.tools-ref }}
           path: .avm-tools
           persist-credentials: false
           sparse-checkout: |
@@ -154,4 +164,5 @@ jobs:
       testCase: ${{ toJSON(matrix.testCase) }}
       targetCommit: ${{ inputs.targetCommit }}
       authoringArtifact: ${{ inputs.authoringArtifact }}
+      tools-ref: ${{ inputs.tools-ref }}
     secrets: inherit
