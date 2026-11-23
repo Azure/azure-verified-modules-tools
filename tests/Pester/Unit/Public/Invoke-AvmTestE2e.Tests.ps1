@@ -292,9 +292,29 @@ Describe 'Invoke-AvmTestE2e native workflow options' {
                 $ResourceLocation -ceq 'East US' -and $UseCiInputs -and $TestSubscriptionIds -match '"name":"test"' -and
                 $SubscriptionSelectionSeed -eq 42 -and $SubscriptionJobIndex -eq 7 -and
                 $Phase -eq 'Deploy' -and $CleanupStatePath -ceq 'cleanup.json' -and
+                $ResourceGroupPrefix -ceq 'avmtest' -and
                 $KeepResources -and $DeploymentRetryLimit -eq 2 -and $ValidationRetryLimit -eq 1
             }
             Should -Invoke Invoke-AvmTerraformTestE2e -Exactly 0
+        }
+    }
+
+    It 'uses the requested Bicep resource group prefix: <Name>' -ForEach @(
+        @{ Name = 'default'; Prefix = $null; Expected = 'avmtest' }
+        @{ Name = 'explicit override'; Prefix = 'team-e2e'; Expected = 'team-e2e' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Prefix = $Prefix; Expected = $Expected } {
+            param($Prefix, $Expected)
+            $options = @{ Ecosystem = 'bicep' }
+            if ($null -ne $Prefix) {
+                $options.ResourceGroupPrefix = $Prefix
+            }
+
+            $null = Invoke-AvmTestE2e @options
+
+            Should -Invoke Invoke-AvmBicepTestE2e -Exactly 1 -ParameterFilter {
+                $ResourceGroupPrefix -ceq $Expected
+            }
         }
     }
 
@@ -307,7 +327,19 @@ Describe 'Invoke-AvmTestE2e native workflow options' {
             Should -Invoke Invoke-AvmBicepTestE2e -Exactly 1 -ParameterFilter {
                 $Phase -ceq 'Complete' -and $CleanupStatePath -ceq 'path with spaces.json' -and
                 $SubscriptionId -eq '00000000-0000-0000-0000-000000000001' -and
-                $TenantId -eq '00000000-0000-0000-0000-000000000002'
+                $TenantId -eq '00000000-0000-0000-0000-000000000002' -and
+                -not $PSBoundParameters.ContainsKey('ResourceGroupPrefix')
+            }
+        }
+    }
+
+    It 'does not add a location requirement to the completion CLI path' {
+        InModuleScope Avm.Authoring {
+            $null = Invoke-AvmTestE2e -Ecosystem bicep -Phase Complete `
+                -CleanupStatePath cleanup.json -SkipModuleVersionCheck
+
+            Should -Invoke Invoke-AvmBicepTestE2e -Exactly 1 -ParameterFilter {
+                $Phase -eq 'Complete' -and -not $PSBoundParameters.ContainsKey('Location')
             }
         }
     }

@@ -56,6 +56,37 @@ Describe 'Component: Bicep native end-to-end workflow' -Tag Component {
         $stored['tenantId'] | Should -Be '00000000-0000-0000-0000-000000000002'
     }
 
+    It 'uses a <Name> resource group prefix' -ForEach @(
+        @{ Name = 'default'; Prefix = $null; Expected = 'avmtest' }
+        @{ Name = 'custom'; Prefix = 'team-e2e'; Expected = 'team-e2e' }
+    ) {
+        if ($null -eq $Prefix) {
+            $script:options.Remove('ResourceGroupPrefix')
+        }
+        else {
+            $script:options.ResourceGroupPrefix = $Prefix
+        }
+
+        $result = Invoke-AvmTestE2e @script:options
+
+        $result.Status | Should -Be 'pass'
+        $stored = Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json -AsHashtable
+        $stored['case']['resourceGroupName'] | Should -Match "^$Expected-[0-9a-f]{32}$"
+        $stored['ownedResourceGroups'][0]['id'].Split('/')[-1] | Should -Match "^$Expected-[0-9a-f]{32}$"
+    }
+
+    It 'preserves an explicit metadata location without pinning resource placement' {
+        $script:options.Location = 'West Europe'
+
+        $result = Invoke-AvmTestE2e @script:options
+
+        $result.Status | Should -Be 'pass'
+        @($script:fixture.NativeInputs | ForEach-Object Location | Select-Object -Unique) |
+            Should -Be @('westeurope')
+        @($script:fixture.NativeInputs | ForEach-Object { $_.Parameters['resourceLocation'] } |
+            Select-Object -Unique) | Should -Be @('eastus')
+    }
+
     It 'runs assertions then the exact case hook before cleanup and reselects context between them' {
         Set-Content -LiteralPath (Join-Path $script:fixture.Directory 'deployed.Tests.ps1') -Value 'param($TestInputData)'
         Set-Content -LiteralPath (Join-Path $script:fixture.Directory 'post.ps1') -Value 'exit 0'

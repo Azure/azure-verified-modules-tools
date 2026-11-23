@@ -174,9 +174,12 @@ function Invoke-AvmBicepTestE2e {
     if ($null -ne $state -and ($state['subscriptionId'] -ine $selection.SubscriptionId -or $state['tenantId'] -ine $TenantId)) {
         throw [AvmConfigurationException]::new('Completion state does not match the resolved subscription and tenant.')
     }
+    if ($Phase -ne 'Complete' -and -not $PSBoundParameters.ContainsKey('Location')) {
+        $Location = (Get-AvmBicepResourceLocation).Location
+    }
     $Location = ($Location -replace '\s', '').ToLowerInvariant()
     if ($Location -cnotmatch '^[a-z0-9]+$') {
-        throw [AvmConfigurationException]::new('Bicep e2e requires an explicit Azure -Location for deployment metadata.')
+        throw [AvmConfigurationException]::new('Bicep e2e requires a valid Azure -Location for deployment metadata.')
     }
     if ($ResourceGroupPrefix -and ($ResourceGroupPrefix -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,56}$' -or
             $ResourceGroupPrefix.EndsWith('.'))) {
