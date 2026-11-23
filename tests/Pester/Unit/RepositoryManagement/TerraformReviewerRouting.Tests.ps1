@@ -23,6 +23,7 @@ BeforeAll {
             number = $Number
             url = "https://github.com/$script:terraformRoutingRepository/pull/$Number"
             isDraft = $false
+            isCrossRepository = $false
             reviewRequests = @()
             reviews = @()
             headRefOid = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
@@ -371,13 +372,13 @@ Describe 'Terraform reviewer routing search pagination' {
         Mock Invoke-RepositoryGitHub { $script:terraformRoutingSearchResponse }
     }
 
-    It 'batches exact repository qualifiers and a server-side ready-request lookback' {
+    It 'batches exact repository qualifiers and includes drafts in the lookback' {
         $repositories = @(1..21 | ForEach-Object { "Azure/terraform-azure-avm-res-module-$_" })
         @(Get-AvmPrReviewerRoutingSearchCandidates -Repositories $repositories -UpdatedWithinMinutes 60) | Should -HaveCount 0
         Should -Invoke Invoke-RepositoryGitHub -Exactly 2
         Should -Invoke Invoke-RepositoryGitHub -Exactly 1 -ParameterFilter {
             $query = @($Arguments | Where-Object { $_ -like 'q=*' })[0]
-            $query -match 'is:pr is:open draft:false archived:false updated:>=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z ' -and
+            $query -match 'is:pr is:open archived:false updated:>=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z ' -and
             $query -like '*repo:Azure/terraform-azure-avm-res-module-20' -and
             $query -notlike '*repo:Azure/terraform-azure-avm-res-module-21*' -and
             $Arguments -contains 'per_page=100' -and $Arguments -contains 'sort=created' -and $Arguments -contains 'order=asc'

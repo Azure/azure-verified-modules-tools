@@ -23,7 +23,7 @@ on:
         default: '60'
         type: string
       what_if:
-        description: 'Compute and log the routing decisions without calling gh pr edit.'
+        description: 'Compute and log routing and fork guidance without making changes.'
         default: true
         type: boolean
 permissions:
@@ -101,7 +101,7 @@ jobs:
           permission-pull-requests: write
           permission-members: read
 
-      - name: Route pull request reviewers and labels
+      - name: Route reviewers and provide fork E2E guidance
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           ROUTING_REPOSITORIES: ${{ steps.routing-repositories.outputs.targets }}

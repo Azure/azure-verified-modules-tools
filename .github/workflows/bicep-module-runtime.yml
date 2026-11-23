@@ -329,7 +329,14 @@ jobs:
       - name: Report failed unit tests
         if: steps.unit-result.outputs.failed == 'True'
         shell: pwsh
-        run: throw 'Bicep unit tests failed. Inspect the uploaded machine-readable unit result artifact.'
+        env:
+          UNIT_RESULT_PATH: ${{ steps.unit-result.outputs.resultPath }}
+        run: |
+          $result = Get-Content -LiteralPath $env:UNIT_RESULT_PATH -Raw | ConvertFrom-Json
+          foreach ($issue in @($result.issues)) {
+            Write-Output ('[{0}] {1} {2}: {3}' -f $issue.code, $issue.severity, $issue.file, $issue.message)
+          }
+          throw 'Bicep unit tests failed. See the diagnostics above and the uploaded unit result artifact.'
 
   discover-examples:
     name: Select E2E tests and subscriptions

@@ -42,6 +42,51 @@ Describe 'Component: Bicep native end-to-end workflow' -Tag Component {
         $script:fixture.CurrentSubscription | Should -Be '00000000-0000-0000-0000-000000000099'
     }
 
+    It 'infers omitted target IDs from the active Azure PowerShell context' {
+        $script:options.Remove('SubscriptionId')
+        $script:options.Remove('TenantId')
+
+        $result = Invoke-AvmTestE2e @script:options
+
+        $result.Status | Should -Be 'pass'
+        @($script:fixture.NativeInputs | ForEach-Object SubscriptionId | Select-Object -Unique) |
+            Should -Be @('00000000-0000-0000-0000-000000000099')
+        $stored = Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json -AsHashtable
+        $stored['subscriptionId'] | Should -Be '00000000-0000-0000-0000-000000000099'
+        $stored['tenantId'] | Should -Be '00000000-0000-0000-0000-000000000002'
+    }
+
+    It 'uses a <Name> resource group prefix' -ForEach @(
+        @{ Name = 'default'; Prefix = $null; Expected = 'avmtest' }
+        @{ Name = 'custom'; Prefix = 'team-e2e'; Expected = 'team-e2e' }
+    ) {
+        if ($null -eq $Prefix) {
+            $script:options.Remove('ResourceGroupPrefix')
+        }
+        else {
+            $script:options.ResourceGroupPrefix = $Prefix
+        }
+
+        $result = Invoke-AvmTestE2e @script:options
+
+        $result.Status | Should -Be 'pass'
+        $stored = Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json -AsHashtable
+        $stored['case']['resourceGroupName'] | Should -Match "^$Expected-[0-9a-f]{32}$"
+        $stored['ownedResourceGroups'][0]['id'].Split('/')[-1] | Should -Match "^$Expected-[0-9a-f]{32}$"
+    }
+
+    It 'preserves an explicit metadata location without pinning resource placement' {
+        $script:options.Location = 'West Europe'
+
+        $result = Invoke-AvmTestE2e @script:options
+
+        $result.Status | Should -Be 'pass'
+        @($script:fixture.NativeInputs | ForEach-Object Location | Select-Object -Unique) |
+            Should -Be @('westeurope')
+        @($script:fixture.NativeInputs | ForEach-Object { $_.Parameters['resourceLocation'] } |
+            Select-Object -Unique) | Should -Be @('eastus')
+    }
+
     It 'runs assertions then the exact case hook before cleanup and reselects context between them' {
         Set-Content -LiteralPath (Join-Path $script:fixture.Directory 'deployed.Tests.ps1') -Value 'param($TestInputData)'
         Set-Content -LiteralPath (Join-Path $script:fixture.Directory 'post.ps1') -Value 'exit 0'
@@ -307,10 +352,23 @@ Describe 'Component: Bicep native end-to-end workflow' -Tag Component {
         $script:fixture.Calls.Count | Should -Be 0
     }
 
-    It 'rejects missing explicit identity and unsafe group prefixes before cloud activity' {
+    It 'rejects an unusable ambient identity before cloud activity' {
         $script:options.Remove('TenantId')
+        InModuleScope Avm.Authoring {
+            Mock Get-AzContext {
+                @{
+                    Subscription = @{ Id = '00000000-0000-0000-0000-000000000001' }
+                    Tenant = @{ Id = '' }
+                    Environment = @{ Name = 'AzureCloud' }
+                    Account = @{ Id = 'fixture-account' }
+                }
+            }
+        }
         { Invoke-AvmTestE2e @script:options } | Should -Throw -ExpectedMessage '*TenantId*'
-        $script:options.TenantId = '00000000-0000-0000-0000-000000000002'
+        $script:fixture.Calls.Count | Should -Be 0
+    }
+
+    It 'rejects unsafe group prefixes before cloud activity' {
         $script:options.ResourceGroupPrefix = 'unsafe/group'
         { Invoke-AvmTestE2e @script:options } | Should -Throw -ExpectedMessage '*ResourceGroupPrefix*'
         $script:fixture.Calls.Count | Should -Be 0

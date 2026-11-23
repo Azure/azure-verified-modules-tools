@@ -19,7 +19,7 @@
 #  - One failing pull request must not abort the sweep.
 
 $script:AvmPrReviewerRoutingFallbackTeam = 'Azure/azure-verified-modules-module-owners'
-$script:AvmPrReviewerRoutingFields = 'author,number,url,isDraft,reviewRequests,reviews,headRefOid,state'
+$script:AvmPrReviewerRoutingFields = 'author,number,url,isDraft,isCrossRepository,reviewRequests,reviews,headRefOid,state'
 
 function Get-AvmPrReviewerRoutingCandidates {
     <#
@@ -34,7 +34,8 @@ function Get-AvmPrReviewerRoutingCandidates {
     param(
         [Parameter(Mandatory)] [string] $Repository,
         [string] $PullRequestUrl,
-        [ValidateRange(0, [int]::MaxValue)] [int] $UpdatedWithinMinutes = 0
+        [ValidateRange(0, [int]::MaxValue)] [int] $UpdatedWithinMinutes = 0,
+        [switch] $IncludeDraft
     )
 
     if (-not [string]::IsNullOrWhiteSpace($PullRequestUrl)) {
@@ -52,12 +53,59 @@ function Get-AvmPrReviewerRoutingCandidates {
         'pr', 'list', '--repo', $Repository, '--state', 'open', '--limit', ([int]::MaxValue.ToString([cultureinfo]::InvariantCulture)),
         '--json', "$($script:AvmPrReviewerRoutingFields),updatedAt"
     ))
-    $pullRequests = @($pullRequests | Where-Object { -not $_.isDraft })
+    if (-not $IncludeDraft) {
+        $pullRequests = @($pullRequests | Where-Object { -not $_.isDraft })
+    }
     if ($UpdatedWithinMinutes -gt 0) {
         $cutoff = (Get-Date).ToUniversalTime().AddMinutes(-$UpdatedWithinMinutes)
         $pullRequests = @($pullRequests | Where-Object { $_.updatedAt -and ([datetime]$_.updatedAt).ToUniversalTime() -ge $cutoff })
     }
     return $pullRequests
+}
+
+function Set-AvmForkE2eGuidance {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] [object] $PullRequest,
+        [Parameter(Mandatory)] [string] $Repository,
+        [ValidateSet('bicep', 'terraform')] [string] $Ecosystem
+    )
+
+    if (-not $PullRequest.PSObject.Properties['isCrossRepository'] -or
+        $null -eq $PullRequest.isCrossRepository -or -not $PullRequest.PSObject.Properties['state']) {
+        throw [System.IO.InvalidDataException]::new("Missing fork or state information for '$($PullRequest.url)'.")
+    }
+    if (-not $PullRequest.isCrossRepository -or $PullRequest.state -ine 'open') {
+        return
+    }
+
+    $marker = '<!-- avm-fork-e2e-guidance:v1 -->'
+    $page = 1
+    do {
+        $comments = @(Invoke-RepositoryGitHub -AsJson -ReadOnly -Arguments @(
+            'api', "repos/$Repository/issues/$($PullRequest.number)/comments?per_page=100&page=$page",
+            '--hostname', 'github.com'
+        ))
+        foreach ($comment in $comments) {
+            if ($null -ne $comment.user -and $comment.user.login -eq 'azure-verified-modules[bot]' -and
+                $comment.body -and $comment.body.Contains($marker)) {
+                return
+            }
+        }
+        $page++
+    } while ($comments.Count -eq 100)
+
+    $guide = "https://azure.github.io/Azure-Verified-Modules/contributing/$Ecosystem/contribution-flow/"
+    $body = @"
+$marker
+E2E tests cannot run from a fork pull request because it cannot access upstream credentials. When this contribution is ready for E2E testing, an authorized Microsoft FTE must review the current PR head and follow the [release-branch handoff process]($guide#running-e2e-for-external-contributions). A same-repository follow-up PR can then run the credentialed tests.
+"@
+    if ($PSCmdlet.ShouldProcess($PullRequest.url, 'Post fork E2E guidance')) {
+        $null = Invoke-RepositoryGitHub -Arguments @(
+            'api', '--hostname', 'github.com', '--method', 'POST',
+            "repos/$Repository/issues/$($PullRequest.number)/comments", '-f', "body=$body"
+        ) -MaxRetries 0
+    }
 }
 
 function Get-AvmPrReviewerRoutingChangedFiles {
@@ -430,7 +478,7 @@ function Invoke-AvmPrReviewerRouting {
 
     try {
         if (-not $PSBoundParameters.ContainsKey('PullRequests')) {
-            $PullRequests = @(Get-AvmPrReviewerRoutingCandidates -Repository $Repository -PullRequestUrl $PullRequestUrl -UpdatedWithinMinutes $UpdatedWithinMinutes)
+            $PullRequests = @(Get-AvmPrReviewerRoutingCandidates -Repository $Repository -PullRequestUrl $PullRequestUrl -UpdatedWithinMinutes $UpdatedWithinMinutes -IncludeDraft)
         }
         Write-Verbose "Processing [$($PullRequests.Count)] pull request(s) in [$Repository]." -Verbose
         if (-not $PSBoundParameters.ContainsKey('CatalogIndex')) {
@@ -466,9 +514,25 @@ function Invoke-AvmPrReviewerRouting {
                 }
                 $pr = $details[0]
             }
-            $outcome = Set-AvmPrReviewerRoutingForPullRequest -PullRequest $pr -Repository $Repository `
-                -CatalogIndex $CatalogIndex -Ecosystem $Ecosystem -EligibilityCache $eligibilityCache -WhatIf:$WhatIfPreference
-            $outcomes.Add($outcome)
+            $commentError = $null
+            try {
+                Set-AvmForkE2eGuidance -PullRequest $pr -Repository $Repository -Ecosystem $Ecosystem -WhatIf:$WhatIfPreference
+            }
+            catch {
+                $commentError = $_.Exception.Message
+            }
+            try {
+                $outcome = Set-AvmPrReviewerRoutingForPullRequest -PullRequest $pr -Repository $Repository `
+                    -CatalogIndex $CatalogIndex -Ecosystem $Ecosystem -EligibilityCache $eligibilityCache -WhatIf:$WhatIfPreference
+                if ($commentError) { throw [System.InvalidOperationException]::new("Fork guidance: $commentError") }
+                $outcomes.Add($outcome)
+            }
+            catch {
+                if ($commentError -and $_.Exception.Message -notlike 'Fork guidance:*') {
+                    throw [System.InvalidOperationException]::new("Fork guidance: $commentError; reviewer routing: $($_.Exception.Message)")
+                }
+                throw
+            }
         }
         catch {
             # A single unroutable pull request must not stop the remaining ones on a scheduled run.

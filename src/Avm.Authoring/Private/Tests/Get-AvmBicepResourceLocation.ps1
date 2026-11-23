@@ -4,7 +4,6 @@ function Get-AvmBicepResourceLocation {
     param(
         [string] $ResourceType,
 
-        [Parameter(Mandatory)]
         [string] $MetadataLocation,
 
         [string[]] $UnavailableRegions = @(),

@@ -11,7 +11,12 @@ Run Bicep or Terraform deployment tests with ordinary cleanup.
 Bicep discovers tests/e2e/**/main.test.bicep and compiles temporary
 ARM templates without editing source. Existing Azure PowerShell and
 Azure CLI sign-ins must identify the same account, tenant, cloud and
-selected subscription. Required Az modules are checked, not installed.
+selected subscription. Azure CLI remains required for independent
+identity checks and deployment/resource discovery used by safe cleanup;
+deployments use Az.Resources. Required Az modules are checked, not
+installed. Missing Bicep target IDs use opted-in CI values first, then
+the authenticated Azure PowerShell context when no pool selects the
+subscription.
 Native ARM validation and deployment support resource-group,
 subscription, management-group and tenant scope, including nested
 and cross-scope module deployments. Select authorized test targets:
@@ -61,9 +66,10 @@ The reaper is a fallback, not the normal cleanup mechanism.
 All runs the complete lifecycle. Deploy retains all attempts and state
 for a separate Complete call after caller-owned sign-in renewal.
 Complete requires matching direct case/module source, assertion files
-and post hook, plus explicit subscription/tenant. It rereads outputs by
-exact deployment ID and never submits a deployment. The source check
-does not fingerprint every imported helper or dependency.
+and post hook, plus a matching explicit, CI or context-derived
+subscription/tenant. It rereads outputs by exact deployment ID and
+never submits a deployment. The source check does not fingerprint
+every imported helper or dependency.
 Interrupted completion must use avm test cleanup rather than replaying
 authored scripts. Actions callers may upload state as an artifact;
 recovery requires that the upload finished before runner loss.
@@ -116,7 +122,7 @@ Accept a PATH tool only when it reports the lock-pinned version.
 ### -CleanupStatePath
 
 Optional new state file for one selected case. Complete requires an
-existing file and the explicitly matching subscription and tenant.
+existing file and the matching resolved subscription and tenant.
 
 | Property | Value |
 | --- | --- |
@@ -197,8 +203,9 @@ Return a JSON array of runnable example names without cloud access.
 
 ### -Location
 
-Bicep deployment-metadata location, fixed across regional retries.
-Also the placement fallback for explicitly global resource types.
+Bicep deployment-metadata location, selected from the existing e2e
+region policy when omitted and fixed across regional retries. Also the
+placement fallback for explicitly global resource types.
 
 | Property | Value |
 | --- | --- |
@@ -326,14 +333,15 @@ recursive cleanup/recovery to the persisted ownership boundary.
 
 ### -ResourceGroupPrefix
 
-Required for resource-group Bicep cases; up to 57 safe name characters.
+Bicep-only: resource-group name prefix, defaulting to avmtest when
+omitted; up to 57 safe name characters.
 
 | Property | Value |
 | --- | --- |
 | Type | `String` |
 | Required | false |
 | Position | named |
-| Default value |  |
+| Default value | avmtest |
 | Accept pipeline input | false |
 | Accept wildcard characters | false |
 
@@ -380,7 +388,8 @@ Complete, which uses the recorded target.
 
 ### -SubscriptionId
 
-Bicep-only: explicit test subscription GUID. Ambient defaults are not used.
+Bicep-only: explicit test subscription GUID. When omitted without a
+subscription pool, use the opted-in CI value or active Az context.
 
 | Property | Value |
 | --- | --- |
@@ -419,7 +428,8 @@ Shared nonnegative seed for deterministic subscription ordering.
 
 ### -TenantId
 
-Bicep-only: explicit tenant GUID required for every deployment scope.
+Bicep-only: explicit tenant GUID. When omitted, use the opted-in CI
+value or active Az context for every deployment scope.
 
 | Property | Value |
 | --- | --- |
@@ -484,7 +494,8 @@ Opt into AVM_CI_VARIABLES and AVM_CI_SECRETS JSON, localToken_*,
 TOKEN_NAMEPREFIX and deprecated CI_KEY_VAULT_NAME inputs. CI secrets
 beat variables; CI_ aliases beat CI__ aliases within a source.
 Missing explicit IDs may use VALIDATE_SUBSCRIPTION_ID and
-VALIDATE_TENANT_ID. Pools resolve VALIDATE_SUBSCRIPTION_IDS then
+VALIDATE_TENANT_ID. Unresolved IDs then use the active Az context.
+Pools resolve VALIDATE_SUBSCRIPTION_IDS then
 TEST_SUBSCRIPTION_IDS from variables, then secrets, then environment.
 When ManagementGroupId is omitted, the same source order resolves
 VALIDATE_MANAGEMENT_GROUP_ID before ARM_MGMTGROUP_ID within each source.
@@ -527,28 +538,34 @@ avm test e2e --list
 ### EXAMPLE 2
 
 ```powershell
-avm test e2e --subscription-id $testSubscriptionId --tenant-id $testTenantId --location eastus --resource-group-prefix avm-e2e
+avm test e2e
 ```
 
 ### EXAMPLE 3
 
 ```powershell
-avm test e2e --example defaults --subscription-id $testSubscriptionId --tenant-id $testTenantId --location eastus --phase Deploy --cleanup-state-path cleanup.json
+avm test e2e --subscription-id $testSubscriptionId --tenant-id $testTenantId --location eastus --resource-group-prefix avm-e2e
 ```
 
 ### EXAMPLE 4
 
 ```powershell
-avm test e2e --phase Complete --cleanup-state-path cleanup.json --subscription-id $testSubscriptionId --tenant-id $testTenantId
+avm test e2e --example defaults --subscription-id $testSubscriptionId --tenant-id $testTenantId --location eastus --phase Deploy --cleanup-state-path cleanup.json
 ```
 
 ### EXAMPLE 5
 
 ```powershell
-avm test e2e --max-retry 0 --ecosystem terraform
+avm test e2e --phase Complete --cleanup-state-path cleanup.json --subscription-id $testSubscriptionId --tenant-id $testTenantId
 ```
 
 ### EXAMPLE 6
+
+```powershell
+avm test e2e --max-retry 0 --ecosystem terraform
+```
+
+### EXAMPLE 7
 
 ```powershell
 Invoke-AvmTestE2e -Path . -Ecosystem bicep -RequireResourceIsolation -SubscriptionId $testSubscriptionId -TenantId $testTenantId -Location eastus -ResourceGroupPrefix avm-e2e

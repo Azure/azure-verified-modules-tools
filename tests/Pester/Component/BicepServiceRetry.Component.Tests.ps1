@@ -43,7 +43,8 @@ Describe 'Component: Bicep native service retry <Kind>' -Tag Component -ForEach 
         Remove-NativeBicepWorkflowFixture -Fixture $script:fixture
     }
 
-    It 'forwards the selected subscription through validation before the only Create' {
+    It 'defaults metadata and forwards the selected subscription through regional validation' {
+        $script:options.Remove('Location')
         $script:fixture.RegionalValidationFailures = 1
         $result = Invoke-AvmTestE2e @script:options
         $result.Status | Should -Be 'pass'
@@ -54,10 +55,12 @@ Describe 'Component: Bicep native service retry <Kind>' -Tag Component -ForEach 
         $creates.Count | Should -Be 1
         $creates[0].Parameters.resourceLocation | Should -Be 'centralus'
         @($script:fixture.NativeInputs.Parameters.baseTime | Sort-Object -Unique).Count | Should -Be 1
-        @($script:fixture.NativeInputs.Location | Sort-Object -Unique) | Should -Be @('westus')
+        @($script:fixture.NativeInputs.Location | Sort-Object -Unique) | Should -Be @('eastus')
         @($script:fixture.NativeInputs.SubscriptionId | Sort-Object -Unique) | Should -Be @($script:options.SubscriptionId)
         @($script:fixture.Calls | Where-Object { $_ -like 'delete-record:*' }).Count | Should -Be 0
         $script:fixture.Calls | Should -Contain 'pester'
+        (Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json).case.metadataLocation |
+            Should -Be 'eastus'
     }
 
     It 'classifies the same subscription-bound evidence at <Scope> validation scope' -ForEach @(
