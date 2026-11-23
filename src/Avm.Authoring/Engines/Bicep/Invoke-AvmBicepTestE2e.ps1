@@ -99,12 +99,55 @@ function Invoke-AvmBicepTestE2e {
         if ([string]::IsNullOrEmpty($TestSubscriptionIds)) { $TestSubscriptionIds = $ci.PoolJson }
     }
     if ([string]::IsNullOrWhiteSpace($TenantId)) { $TenantId = $ci.TenantId }
+    $inferSubscription = [string]::IsNullOrWhiteSpace($SubscriptionId) -and [string]::IsNullOrWhiteSpace($TestSubscriptionIds)
+    $inferTenant = [string]::IsNullOrWhiteSpace($TenantId)
+    if ($inferSubscription -or $inferTenant) {
+        $contextCommand = Get-Command -Name Get-AzContext -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($null -eq $contextCommand) {
+            throw [AvmConfigurationException]::new(
+                'Cannot infer missing Bicep e2e target IDs because Get-AzContext is unavailable. Authenticate with Azure PowerShell or supply -SubscriptionId and -TenantId explicitly.')
+        }
+        $activeContext = & $contextCommand -ErrorAction Stop
+        $activeAccount = [string](Get-AvmPropertyValue -InputObject (
+                Get-AvmPropertyValue -InputObject $activeContext -Name 'Account') -Name 'Id')
+        $activeEnvironment = [string](Get-AvmPropertyValue -InputObject (
+                Get-AvmPropertyValue -InputObject $activeContext -Name 'Environment') -Name 'Name')
+        if ([string]::IsNullOrWhiteSpace($activeAccount) -or
+            [string]::IsNullOrWhiteSpace($activeEnvironment)) {
+            throw [AvmConfigurationException]::new(
+                'Cannot infer missing Bicep e2e target IDs from Azure PowerShell because there is no authenticated active context. Supply the IDs explicitly or run Connect-AzAccount.')
+        }
+        if ($inferSubscription) {
+            $activeSubscription = [string](Get-AvmPropertyValue -InputObject (
+                    Get-AvmPropertyValue -InputObject $activeContext -Name 'Subscription') -Name 'Id')
+            $subscription = [guid]::Empty
+            if (-not [guid]::TryParseExact($activeSubscription, 'D', [ref]$subscription) -or
+                $subscription -eq [guid]::Empty) {
+                throw [AvmConfigurationException]::new(
+                    'Cannot infer -SubscriptionId from the active Azure PowerShell context. Supply a valid subscription GUID or select an Azure subscription.')
+            }
+            $SubscriptionId = $subscription.ToString('D')
+        }
+        if ($inferTenant) {
+            $activeTenant = [string](Get-AvmPropertyValue -InputObject (
+                    Get-AvmPropertyValue -InputObject $activeContext -Name 'Tenant') -Name 'Id')
+            $inferredTenant = [guid]::Empty
+            if (-not [guid]::TryParseExact($activeTenant, 'D', [ref]$inferredTenant) -or
+                $inferredTenant -eq [guid]::Empty) {
+                throw [AvmConfigurationException]::new(
+                    'Cannot infer -TenantId from the active Azure PowerShell context. Supply a valid tenant GUID or select an Azure subscription.')
+            }
+            $TenantId = $inferredTenant.ToString('D')
+        }
+    }
     if ($UseCiInputs -and -not $PSBoundParameters.ContainsKey('ManagementGroupId')) {
         $ManagementGroupId = $ci.ManagementGroupId
     }
     $tenant = [guid]::Empty
     if (-not [guid]::TryParseExact($TenantId, 'D', [ref]$tenant) -or $tenant -eq [guid]::Empty) {
-        throw [AvmConfigurationException]::new('Bicep e2e requires an explicit, nonempty GUID -TenantId.')
+        throw [AvmConfigurationException]::new(
+            'Bicep e2e requires a valid, nonempty GUID -TenantId from parameters, CI inputs, or the active Azure PowerShell context.')
     }
     $repoRoot = Get-AvmBicepTestRepositoryRoot -Context $Context
     $registryLayout = $Context.Kind -eq 'bicep-monorepo' -or $repoRoot -cne $Context.Root
@@ -129,7 +172,7 @@ function Invoke-AvmBicepTestE2e {
     )
     $selection = $selections[0]
     if ($null -ne $state -and ($state['subscriptionId'] -ine $selection.SubscriptionId -or $state['tenantId'] -ine $TenantId)) {
-        throw [AvmConfigurationException]::new('Completion state does not match the explicitly selected subscription and tenant.')
+        throw [AvmConfigurationException]::new('Completion state does not match the resolved subscription and tenant.')
     }
     $Location = ($Location -replace '\s', '').ToLowerInvariant()
     if ($Location -cnotmatch '^[a-z0-9]+$') {

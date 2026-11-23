@@ -7,7 +7,12 @@ function Invoke-AvmTestE2e {
         Bicep discovers tests/e2e/**/main.test.bicep and compiles temporary
         ARM templates without editing source. Existing Azure PowerShell and
         Azure CLI sign-ins must identify the same account, tenant, cloud and
-        selected subscription. Required Az modules are checked, not installed.
+        selected subscription. Azure CLI remains required for independent
+        identity checks and deployment/resource discovery used by safe cleanup;
+        deployments use Az.Resources. Required Az modules are checked, not
+        installed. Missing Bicep target IDs use opted-in CI values first, then
+        the authenticated Azure PowerShell context when no pool selects the
+        subscription.
         Native ARM validation and deployment support resource-group,
         subscription, management-group and tenant scope, including nested
         and cross-scope module deployments. Select authorized test targets:
@@ -57,9 +62,10 @@ function Invoke-AvmTestE2e {
         All runs the complete lifecycle. Deploy retains all attempts and state
         for a separate Complete call after caller-owned sign-in renewal.
         Complete requires matching direct case/module source, assertion files
-        and post hook, plus explicit subscription/tenant. It rereads outputs by
-        exact deployment ID and never submits a deployment. The source check
-        does not fingerprint every imported helper or dependency.
+        and post hook, plus a matching explicit, CI or context-derived
+        subscription/tenant. It rereads outputs by exact deployment ID and
+        never submits a deployment. The source check does not fingerprint
+        every imported helper or dependency.
         Interrupted completion must use avm test cleanup rather than replaying
         authored scripts. Actions callers may upload state as an artifact;
         recovery requires that the upload finished before runner loss.
@@ -102,9 +108,11 @@ function Invoke-AvmTestE2e {
     .PARAMETER Recurse
         Bicep-only: include child-module test cases.
     .PARAMETER SubscriptionId
-        Bicep-only: explicit test subscription GUID. Ambient defaults are not used.
+        Bicep-only: explicit test subscription GUID. When omitted without a
+        subscription pool, use the opted-in CI value or active Az context.
     .PARAMETER TenantId
-        Bicep-only: explicit tenant GUID required for every deployment scope.
+        Bicep-only: explicit tenant GUID. When omitted, use the opted-in CI
+        value or active Az context for every deployment scope.
     .PARAMETER ManagementGroupId
         Bicep-only: existing target management-group name for that scope.
         With UseCiInputs, omitting this parameter uses the configured CI target.
@@ -139,7 +147,8 @@ function Invoke-AvmTestE2e {
         TOKEN_NAMEPREFIX and deprecated CI_KEY_VAULT_NAME inputs. CI secrets
         beat variables; CI_ aliases beat CI__ aliases within a source.
         Missing explicit IDs may use VALIDATE_SUBSCRIPTION_ID and
-        VALIDATE_TENANT_ID. Pools resolve VALIDATE_SUBSCRIPTION_IDS then
+        VALIDATE_TENANT_ID. Unresolved IDs then use the active Az context.
+        Pools resolve VALIDATE_SUBSCRIPTION_IDS then
         TEST_SUBSCRIPTION_IDS from variables, then secrets, then environment.
         When ManagementGroupId is omitted, the same source order resolves
         VALIDATE_MANAGEMENT_GROUP_ID before ARM_MGMTGROUP_ID within each source.
@@ -160,7 +169,7 @@ function Invoke-AvmTestE2e {
         Bicep All (default), Deploy, or Complete for caller-owned sign-in renewal.
     .PARAMETER CleanupStatePath
         Optional new state file for one selected case. Complete requires an
-        existing file and the explicitly matching subscription and tenant.
+        existing file and the matching resolved subscription and tenant.
     .PARAMETER KeepResources
         Bicep-only: run assertions but retain every attempt, skipping post and cleanup.
     .PARAMETER RequireResourceIsolation
@@ -190,6 +199,8 @@ function Invoke-AvmTestE2e {
 
     .EXAMPLE
         avm test e2e --list
+    .EXAMPLE
+        avm test e2e --location eastus --resource-group-prefix avm-e2e
     .EXAMPLE
         avm test e2e --subscription-id $testSubscriptionId --tenant-id $testTenantId --location eastus --resource-group-prefix avm-e2e
     .EXAMPLE
