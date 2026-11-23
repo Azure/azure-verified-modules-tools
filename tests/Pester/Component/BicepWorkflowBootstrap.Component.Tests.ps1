@@ -66,6 +66,7 @@ Describe 'Component: Bicep isolated workflow bootstrap' -Tag Component {
         $script:environment.GITHUB_RUN_ID = '1'
         $script:environment.GITHUB_RUN_ATTEMPT = '1'
         $script:environment.DISPLAY_SUBSCRIPTION_NAMES = 'false'
+        $script:environment.ALLOW_VALIDATION_OVERRIDES = 'false'
         $scriptPath = Join-Path $script:fixture 'action.ps1'
         [IO.File]::WriteAllText($scriptPath, $definition.runs.steps[0].run)
         $result = InModuleScope Avm.Authoring -Parameters @{
