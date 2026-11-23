@@ -78,6 +78,16 @@ jobs:
       - name: Install Avm.Authoring
         if: env.AVM_AUTHORING_MODULE == 'Avm.Authoring'
         uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
+      - name: Check out workflow support
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: Azure/azure-verified-modules-tools
+          ref: ${{ github.workflow_sha }}
+          path: .avm-tools
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/bicep-workflows
+            repository-management/shared
       - name: Select test cases and subscriptions
         id: select
         shell: pwsh
@@ -88,20 +98,31 @@ jobs:
           VALIDATE_SUBSCRIPTION_ID: ${{ vars.VALIDATE_SUBSCRIPTION_ID || secrets.VALIDATE_SUBSCRIPTION_ID }}
           VALIDATE_MODULE_CLIENT_IDS: ${{ vars.VALIDATE_MODULE_CLIENT_IDS }}
           VALIDATE_TENANT_ID: ${{ vars.VALIDATE_TENANT_ID || secrets.VALIDATE_TENANT_ID }}
+          ALLOW_VALIDATION_OVERRIDES: ${{ github.event_name == 'workflow_dispatch' && github.event.repository.fork }}
+          ARM_CLIENT_ID_OVERRIDE: ${{ secrets.ARM_CLIENT_ID_OVERRIDE || vars.ARM_CLIENT_ID_OVERRIDE }}
+          ARM_TENANT_ID_OVERRIDE: ${{ secrets.ARM_TENANT_ID_OVERRIDE || vars.ARM_TENANT_ID_OVERRIDE }}
+          ARM_SUBSCRIPTION_ID_OVERRIDE: ${{ secrets.ARM_SUBSCRIPTION_ID_OVERRIDE || vars.ARM_SUBSCRIPTION_ID_OVERRIDE }}
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
+          . (Join-Path $env:GITHUB_WORKSPACE '.avm-tools' 'scripts' 'bicep-workflows' 'Deployment.ps1')
           $capabilities = (Get-Module Avm.Authoring).PrivateData.AvmCapabilities
           if ($capabilities.BicepWorkflowE2eRuntime -isnot [int] -or $capabilities.BicepWorkflowE2eRuntime -ne 1) {
             throw 'The installed Avm.Authoring package does not provide BicepWorkflowE2eRuntime = 1.'
           }
           $testFiles = @(ConvertFrom-Json -InputObject $env:TEST_FILES -AsHashtable)
+          $validation = Resolve-AvmWorkflowValidationConfiguration -ModulePath $env:MODULE_PATH `
+              -PoolJson $env:TEST_SUBSCRIPTION_IDS -FallbackSubscriptionId $env:VALIDATE_SUBSCRIPTION_ID `
+              -ModuleClientIds $env:VALIDATE_MODULE_CLIENT_IDS -TenantId $env:VALIDATE_TENANT_ID `
+              -ArmClientIdOverride $env:ARM_CLIENT_ID_OVERRIDE -ArmTenantIdOverride $env:ARM_TENANT_ID_OVERRIDE `
+              -ArmSubscriptionIdOverride $env:ARM_SUBSCRIPTION_ID_OVERRIDE `
+              -AllowOverrides:(ConvertTo-AvmWorkflowBoolean $env:ALLOW_VALIDATION_OVERRIDES)
           Write-Host "Selecting E2E test cases and subscriptions for '$env:MODULE_PATH' with Get-AvmBicepE2eDeploymentMatrix."
           $matrix = @(Get-AvmBicepE2eDeploymentMatrix -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH `
-              -TestFiles $testFiles -PoolJson $env:TEST_SUBSCRIPTION_IDS -FallbackSubscriptionId $env:VALIDATE_SUBSCRIPTION_ID `
-              -ModuleClientIds $env:VALIDATE_MODULE_CLIENT_IDS -TenantId $env:VALIDATE_TENANT_ID `
+              -TestFiles $testFiles -PoolJson $validation.poolJson -FallbackSubscriptionId $validation.fallbackSubscriptionId `
+              -ModuleClientIds $validation.moduleClientIds -TenantId $validation.tenantId `
               -RandomSeed ([int](([long]$env:GITHUB_RUN_ID + [long]$env:GITHUB_RUN_ATTEMPT) % [int]::MaxValue)) `
-              -DisplaySubscriptionNames:($env:TEST_SUBSCRIPTION_IDS -ne '') -SkipModuleVersionCheck)
+              -DisplaySubscriptionNames:($validation.poolJson -ne '') -SkipModuleVersionCheck)
           foreach ($testCase in $matrix) {
             $isRequired = $testCase.Name -cin @('default', 'defaults', 'waf-aligned')
             $testCase | Add-Member -NotePropertyName IsRequired -NotePropertyValue $isRequired -Force

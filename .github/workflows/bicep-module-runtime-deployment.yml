@@ -89,6 +89,17 @@ jobs:
         if: >-
           !fromJSON(inputs.testCase).E2eIgnore && env.AVM_AUTHORING_MODULE == 'Avm.Authoring'
         uses: Azure/azure-verified-modules-tools/.github/actions/install-avm-authoring@d44d0021b58a51e9630f3ce22008736507b57f81 # v0.0.0
+      - name: Check out workflow support
+        if: ${{ !fromJSON(inputs.testCase).E2eIgnore }}
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: Azure/azure-verified-modules-tools
+          ref: ${{ github.workflow_sha }}
+          path: .avm-tools
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/bicep-workflows
+            repository-management/shared
       - name: Check selected test and install Azure tools
         id: context
         if: ${{ !fromJSON(inputs.testCase).E2eIgnore }}
@@ -102,9 +113,14 @@ jobs:
           VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS: ${{ vars.VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS }}
           VALIDATE_TENANT_ID: ${{ vars.VALIDATE_TENANT_ID || secrets.VALIDATE_TENANT_ID }}
           TOKEN_NAMEPREFIX: ${{ secrets.TOKEN_NAMEPREFIX }}
+          ALLOW_VALIDATION_OVERRIDES: ${{ github.event_name == 'workflow_dispatch' && github.event.repository.fork }}
+          ARM_CLIENT_ID_OVERRIDE: ${{ secrets.ARM_CLIENT_ID_OVERRIDE || vars.ARM_CLIENT_ID_OVERRIDE }}
+          ARM_TENANT_ID_OVERRIDE: ${{ secrets.ARM_TENANT_ID_OVERRIDE || vars.ARM_TENANT_ID_OVERRIDE }}
+          ARM_SUBSCRIPTION_ID_OVERRIDE: ${{ secrets.ARM_SUBSCRIPTION_ID_OVERRIDE || vars.ARM_SUBSCRIPTION_ID_OVERRIDE }}
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
+          . (Join-Path $env:GITHUB_WORKSPACE '.avm-tools' 'scripts' 'bicep-workflows' 'Deployment.ps1')
           Write-Host 'Checking the authoring runtime and its Azure PowerShell dependencies.'
           if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.PSResourceGet)) {
             for ($attempt = 1; $attempt -le 3; $attempt++) {
@@ -165,10 +181,16 @@ jobs:
             if (-not $installed) { throw $lastFailure }
           }
           $testCase = ConvertFrom-Json -InputObject $env:TEST_CASE -AsHashtable
+          $validation = Resolve-AvmWorkflowValidationConfiguration -ModulePath $env:MODULE_PATH `
+              -PoolJson $env:TEST_SUBSCRIPTION_IDS -FallbackSubscriptionId $env:VALIDATE_SUBSCRIPTION_ID `
+              -ModuleClientIds $env:VALIDATE_MODULE_CLIENT_IDS -TenantId $env:VALIDATE_TENANT_ID `
+              -ArmClientIdOverride $env:ARM_CLIENT_ID_OVERRIDE -ArmTenantIdOverride $env:ARM_TENANT_ID_OVERRIDE `
+              -ArmSubscriptionIdOverride $env:ARM_SUBSCRIPTION_ID_OVERRIDE `
+              -AllowOverrides:(ConvertTo-AvmWorkflowBoolean $env:ALLOW_VALIDATION_OVERRIDES)
           Write-Host "Revalidating the test case and selected identity for '$env:MODULE_PATH' with Get-AvmBicepE2eTestContext."
           $context = Get-AvmBicepE2eTestContext -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH `
-              -TestCase $testCase -PoolJson $env:TEST_SUBSCRIPTION_IDS -FallbackSubscriptionId $env:VALIDATE_SUBSCRIPTION_ID `
-              -ModuleClientIds $env:VALIDATE_MODULE_CLIENT_IDS -TenantId $env:VALIDATE_TENANT_ID `
+              -TestCase $testCase -PoolJson $validation.poolJson -FallbackSubscriptionId $validation.fallbackSubscriptionId `
+              -ModuleClientIds $validation.moduleClientIds -TenantId $validation.tenantId `
               -ModuleSubscriptionCleanupManagementGroupIds $env:VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS `
               -NamePrefix $env:TOKEN_NAMEPREFIX -SkipModuleVersionCheck
           foreach ($property in $context.PSObject.Properties) {

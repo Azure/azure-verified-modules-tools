@@ -1303,6 +1303,70 @@ Describe 'Component: Bicep workflow module identity action' -Tag Component {
     }
 }
 
+Describe 'Component: Bicep fork validation overrides' -Tag Component {
+    BeforeEach {
+        $script:overrideDefaults = @{
+            ModulePath = $script:modulePath
+            PoolJson = '[{"id":"11111111-2222-4333-8444-555555555555","name":"General"}]'
+            FallbackSubscriptionId = $script:secondSubscription
+            ModuleClientIds = ConvertTo-AvmBicepModuleClientIdJson -ClientIds @{ $script:modulePath = $script:client }
+            TenantId = $script:tenant
+        }
+    }
+
+    It 'preserves published identity and subscription defaults when overrides are disabled' {
+        $env:VALIDATE_CLIENT_ID = $script:secondClient
+        $parameters = $script:overrideDefaults.Clone()
+        $parameters.ArmClientIdOverride = $script:secondClient
+        $parameters.ArmTenantIdOverride = $script:secondSubscription
+        $parameters.ArmSubscriptionIdOverride = $script:subscription
+
+        $resolved = Resolve-AvmWorkflowValidationConfiguration @parameters
+
+        $resolved.moduleClientIds | Should -BeExactly $parameters.ModuleClientIds
+        $resolved.tenantId | Should -BeExactly $script:tenant
+        $resolved.poolJson | Should -BeExactly $parameters.PoolJson
+        $resolved.fallbackSubscriptionId | Should -BeExactly $script:secondSubscription
+    }
+
+    It 'preserves the mapped identity when only the plain legacy client is configured' {
+        $env:VALIDATE_CLIENT_ID = $script:secondClient
+
+        $resolved = Resolve-AvmWorkflowValidationConfiguration @script:overrideDefaults -AllowOverrides
+
+        $resolved.moduleClientIds | ConvertFrom-Json -AsHashtable |
+            ForEach-Object { $_[$script:modulePath] } | Should -BeExactly $script:client
+    }
+
+    It 'adapts explicit ARM overrides into existing E2E command inputs' {
+        $parameters = $script:overrideDefaults.Clone()
+        $parameters.ArmClientIdOverride = $script:secondClient
+        $parameters.ArmTenantIdOverride = $script:secondSubscription
+        $parameters.ArmSubscriptionIdOverride = $script:subscription
+
+        $resolved = Resolve-AvmWorkflowValidationConfiguration @parameters -AllowOverrides
+        $mapping = $resolved.moduleClientIds | ConvertFrom-Json -AsHashtable
+
+        $mapping.Keys | Should -Be @($script:modulePath)
+        $mapping[$script:modulePath] | Should -BeExactly $script:secondClient
+        $resolved.tenantId | Should -BeExactly $script:secondSubscription
+        $resolved.poolJson | Should -BeExactly ''
+        $resolved.fallbackSubscriptionId | Should -BeExactly $script:subscription
+    }
+
+    It 'rejects invalid <Name> before selection or authentication' -ForEach @(
+        @{ Name = 'ARM_CLIENT_ID_OVERRIDE'; Parameter = 'ArmClientIdOverride' }
+        @{ Name = 'ARM_TENANT_ID_OVERRIDE'; Parameter = 'ArmTenantIdOverride' }
+        @{ Name = 'ARM_SUBSCRIPTION_ID_OVERRIDE'; Parameter = 'ArmSubscriptionIdOverride' }
+    ) {
+        $parameters = $script:overrideDefaults.Clone()
+        $parameters[$Parameter] = 'not-a-guid'
+
+        { Resolve-AvmWorkflowValidationConfiguration @parameters -AllowOverrides } |
+            Should -Throw "*$Name must be a nonempty GUID*"
+    }
+}
+
 Describe 'Component: Bicep shared workflow native phase forwarding' -Tag Component {
     BeforeEach {
         $script:root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))

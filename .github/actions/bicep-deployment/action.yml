@@ -42,6 +42,18 @@ inputs:
   githubSecrets:
     description: Secrets consumed only by the native CI-input adapter.
     required: true
+  allowOverrides:
+    description: Whether contributor-owned fork validation overrides are admitted.
+    default: 'false'
+  armClientIdOverride:
+    description: Preferred ARM client override.
+    default: ''
+  armTenantIdOverride:
+    description: Preferred ARM tenant override.
+    default: ''
+  armSubscriptionIdOverride:
+    description: Preferred ARM subscription override.
+    default: ''
 runs:
   using: composite
   steps:
@@ -61,16 +73,26 @@ runs:
         AVM_CI_VARIABLES: ${{ inputs.githubVariables }}
         AVM_CI_SECRETS: ${{ inputs.githubSecrets }}
         CI_KEY_VAULT_NAME: ${{ inputs.ciKeyVaultName }}
+        ALLOW_VALIDATION_OVERRIDES: ${{ inputs.allowOverrides }}
+        ARM_CLIENT_ID_OVERRIDE: ${{ inputs.armClientIdOverride }}
+        ARM_TENANT_ID_OVERRIDE: ${{ inputs.armTenantIdOverride }}
+        ARM_SUBSCRIPTION_ID_OVERRIDE: ${{ inputs.armSubscriptionIdOverride }}
       run: |
         $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Deployment.ps1')
         $case = ConvertFrom-Json -InputObject $env:TEST_CASE -AsHashtable
         if (ConvertTo-AvmWorkflowBoolean $case.e2eIgnore) { throw 'Ignored tests must not enter deployment authentication.' }
         Initialize-AvmWorkflow -Profile Matrix -Confirm:$false
+        $validation = Resolve-AvmWorkflowValidationConfiguration -ModulePath $env:MODULE_PATH `
+          -PoolJson $env:POOL_JSON -FallbackSubscriptionId $env:FALLBACK_SUBSCRIPTION_ID `
+          -ModuleClientIds $env:VALIDATE_MODULE_CLIENT_IDS -TenantId $env:VALIDATE_TENANT_ID `
+          -ArmClientIdOverride $env:ARM_CLIENT_ID_OVERRIDE -ArmTenantIdOverride $env:ARM_TENANT_ID_OVERRIDE `
+          -ArmSubscriptionIdOverride $env:ARM_SUBSCRIPTION_ID_OVERRIDE `
+          -AllowOverrides:(ConvertTo-AvmWorkflowBoolean $env:ALLOW_VALIDATION_OVERRIDES)
         $parameters = @{
           Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH; TestCase = $case
-          PoolJson = $env:POOL_JSON; FallbackSubscriptionId = $env:FALLBACK_SUBSCRIPTION_ID
-          ModuleClientIds = $env:VALIDATE_MODULE_CLIENT_IDS; TenantId = $env:VALIDATE_TENANT_ID
+          PoolJson = $validation.poolJson; FallbackSubscriptionId = $validation.fallbackSubscriptionId
+          ModuleClientIds = $validation.moduleClientIds; TenantId = $validation.tenantId
         }
         $auth = Get-AvmWorkflowAuthentication @parameters
         if ($case.isolationMode -ne 'fallback') {

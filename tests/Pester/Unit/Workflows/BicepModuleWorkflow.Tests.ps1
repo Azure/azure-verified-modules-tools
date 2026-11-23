@@ -276,7 +276,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         @($script:workflows.Keys | Where-Object { $_ -in $runtimeNames }) | Should -HaveCount 5
         foreach ($workflow in $runtimeNames | ForEach-Object { $script:workflows[$_] }) {
             $text = $workflow | ConvertTo-Json -Depth 100
-            $text | Should -Not -Match '\.avm-tools|\.avm-entrypoint|tools-ref|github\.workflow_sha'
+            $text | Should -Not -Match '\.avm-entrypoint|tools-ref'
             $installers = @(
                 foreach ($job in $workflow.jobs.Values) {
                     if (-not $job.Contains('steps')) { continue }
@@ -755,13 +755,67 @@ Describe 'Bicep required checks and deployment guards' {
         $deployment.Contains('clientId') | Should -BeFalse
         $deployment.Contains('azureCredentials') | Should -BeFalse
         $selection = $script:actions['bicep-subscription-selection'].runs.steps[-1].run
-        $selection | Should -Match 'ModuleClientIds = \$env:VALIDATE_MODULE_CLIENT_IDS'
-        $selection | Should -Match 'PoolJson = \$env:TEST_SUBSCRIPTION_IDS'
+        $selection | Should -Match 'ModuleClientIds = \$validation\.moduleClientIds'
+        $selection | Should -Match 'PoolJson = \$validation\.poolJson'
         foreach ($name in @('bicep-module-preview')) {
             $jobs = $script:workflows[$name].jobs
             $jobs.job_module_deploy_validation.with.tokenNamePrefix | Should -BeExactly 'gci'
             $jobs.job_psrule_must.steps[-1].env.TOKEN_NAMEPREFIX | Should -BeExactly 'gci'
             $jobs.job_psrule_opt.steps[-1].env.TOKEN_NAMEPREFIX | Should -BeExactly 'gci'
+        }
+    }
+
+    It 'admits ARM overrides only for fork-owned manual runs and preserves secret precedence' {
+        $allow = '${{ github.event_name == ''workflow_dispatch'' && github.event.repository.fork }}'
+        $overrides = [ordered]@{
+            armClientIdOverride = '${{ secrets.ARM_CLIENT_ID_OVERRIDE || vars.ARM_CLIENT_ID_OVERRIDE }}'
+            armTenantIdOverride = '${{ secrets.ARM_TENANT_ID_OVERRIDE || vars.ARM_TENANT_ID_OVERRIDE }}'
+            armSubscriptionIdOverride = '${{ secrets.ARM_SUBSCRIPTION_ID_OVERRIDE || vars.ARM_SUBSCRIPTION_ID_OVERRIDE }}'
+        }
+        foreach ($name in @('bicep-module', 'bicep-module-preview')) {
+            $selection = $script:workflows[$name].jobs.job_initialize_subscription_selection.steps[-1].with
+            $selection.allowOverrides | Should -BeExactly $allow
+            foreach ($entry in $overrides.GetEnumerator()) {
+                $selection[$entry.Key] | Should -BeExactly $entry.Value
+            }
+        }
+        $deployment = $script:workflows['bicep-module-deployment'].jobs.job_module_deploy_validation.steps[-1].with
+        $deployment.allowOverrides | Should -BeExactly $allow
+        foreach ($entry in $overrides.GetEnumerator()) {
+            $deployment[$entry.Key] | Should -BeExactly $entry.Value
+        }
+
+        $runtimeSelections = @(
+            $script:workflows['bicep-module-runtime'].jobs.'discover-examples'.steps[-1]
+            $script:workflows['bicep-module-runtime-e2e'].jobs.'select-deployments'.steps[-1]
+        )
+        $runtimeDeployment = $script:workflows['bicep-module-runtime-deployment'].jobs.deploy.steps |
+            Where-Object { $_['id'] -ceq 'context' }
+        foreach ($step in $runtimeSelections + @($runtimeDeployment)) {
+            $step.env.ALLOW_VALIDATION_OVERRIDES | Should -BeExactly $allow
+            $step.env.ARM_CLIENT_ID_OVERRIDE | Should -BeExactly $overrides.armClientIdOverride
+            $step.env.ARM_TENANT_ID_OVERRIDE | Should -BeExactly $overrides.armTenantIdOverride
+            $step.env.ARM_SUBSCRIPTION_ID_OVERRIDE | Should -BeExactly $overrides.armSubscriptionIdOverride
+            $step.run | Should -Match 'Resolve-AvmWorkflowValidationConfiguration'
+            $step.run | Should -Match 'ModuleClientIds (?:= )?\$validation\.moduleClientIds'
+            $step.run | Should -Match 'TenantId (?:= )?\$validation\.tenantId'
+            $step.run | Should -Not -Match 'VALIDATE_(CLIENT_ID|TENANT_ID|SUBSCRIPTION_ID)_OVERRIDE'
+        }
+    }
+
+    It 'pins shared runtime override support to the reusable workflow commit' {
+        foreach ($entry in @(
+                @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples' }
+                @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments' }
+                @{ Workflow = 'bicep-module-runtime-deployment'; Job = 'deploy' }
+            )) {
+            $step = $script:workflows[$entry.Workflow].jobs[$entry.Job].steps |
+                Where-Object name -EQ 'Check out workflow support'
+            $step.uses | Should -Match 'actions/checkout@[0-9a-f]{40}$'
+            $step.with.repository | Should -BeExactly 'Azure/azure-verified-modules-tools'
+            $step.with.ref | Should -BeExactly '${{ github.workflow_sha }}'
+            $step.with.'sparse-checkout' | Should -Match 'scripts/bicep-workflows'
+            $step.with.'sparse-checkout' | Should -Match 'repository-management/shared'
         }
     }
 
@@ -791,7 +845,7 @@ Describe 'Bicep required checks and deployment guards' {
         $auth = $action.runs.steps | Where-Object { $_['id'] -eq 'auth' }
         $auth.env.Contains('AVM_AUTHORING_VERSION') | Should -BeFalse
         $auth.env.VALIDATE_MODULE_CLIENT_IDS | Should -BeExactly '${{ inputs.moduleClientIds }}'
-        $auth.run | Should -Match 'ModuleClientIds = \$env:VALIDATE_MODULE_CLIENT_IDS'
+        $auth.run | Should -Match 'ModuleClientIds = \$validation\.moduleClientIds'
         $auth.run | Should -Match 'Initialize-AvmWorkflow -Profile Matrix '
         $auth.run.IndexOf('Initialize-AvmWorkflow') | Should -BeLessThan $auth.run.IndexOf('Get-AvmWorkflowAuthentication')
         $logins = @($action.runs.steps | Where-Object { $_['uses'] -like 'azure/login@*' })
