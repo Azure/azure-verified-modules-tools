@@ -10,6 +10,18 @@ inputs:
   displaySubscriptionNames:
     description: Show friendly names only when the selected pool came from variables.
     default: 'false'
+  allowOverrides:
+    description: Whether contributor-owned fork validation overrides are admitted.
+    default: 'false'
+  armClientIdOverride:
+    description: Preferred ARM client override.
+    default: ''
+  armTenantIdOverride:
+    description: Preferred ARM tenant override.
+    default: ''
+  armSubscriptionIdOverride:
+    description: Preferred ARM subscription override.
+    default: ''
 outputs:
   deploymentMatrix:
     description: Test cases carrying original subscription positions and digests.
@@ -28,18 +40,28 @@ runs:
         MODULE_PATH: ${{ inputs.modulePath }}
         MODULE_TEST_FILES: ${{ inputs.moduleTestFilePaths }}
         DISPLAY_SUBSCRIPTION_NAMES: ${{ inputs.displaySubscriptionNames }}
+        ALLOW_VALIDATION_OVERRIDES: ${{ inputs.allowOverrides }}
+        ARM_CLIENT_ID_OVERRIDE: ${{ inputs.armClientIdOverride }}
+        ARM_TENANT_ID_OVERRIDE: ${{ inputs.armTenantIdOverride }}
+        ARM_SUBSCRIPTION_ID_OVERRIDE: ${{ inputs.armSubscriptionIdOverride }}
       run: |
         $root = [IO.Path]::GetFullPath((Join-Path $env:AVM_ACTION_PATH '..' '..' '..'))
         . (Join-Path $root 'scripts' 'bicep-workflows' 'Deployment.ps1')
         $tests = ConvertFrom-Json -InputObject $env:MODULE_TEST_FILES -AsHashtable -NoEnumerate
         if ($tests -isnot [array]) { throw 'Deployment tests must be a JSON array.' }
+        $validation = Resolve-AvmWorkflowValidationConfiguration -ModulePath $env:MODULE_PATH `
+          -PoolJson $env:TEST_SUBSCRIPTION_IDS -FallbackSubscriptionId $env:VALIDATE_SUBSCRIPTION_ID `
+          -ModuleClientIds $env:VALIDATE_MODULE_CLIENT_IDS -TenantId $env:VALIDATE_TENANT_ID `
+          -ArmClientIdOverride $env:ARM_CLIENT_ID_OVERRIDE -ArmTenantIdOverride $env:ARM_TENANT_ID_OVERRIDE `
+          -ArmSubscriptionIdOverride $env:ARM_SUBSCRIPTION_ID_OVERRIDE `
+          -AllowOverrides:(ConvertTo-AvmWorkflowBoolean $env:ALLOW_VALIDATION_OVERRIDES)
         if (@($tests | Where-Object { -not (ConvertTo-AvmWorkflowBoolean $_.e2eIgnore) }).Count -gt 0) {
           Initialize-AvmWorkflow -Profile Matrix -Confirm:$false
         }
         $parameters = @{
           Root = $env:GITHUB_WORKSPACE; ModulePath = $env:MODULE_PATH; TestFiles = $tests
-          PoolJson = $env:TEST_SUBSCRIPTION_IDS; FallbackSubscriptionId = $env:VALIDATE_SUBSCRIPTION_ID
-          ModuleClientIds = $env:VALIDATE_MODULE_CLIENT_IDS; TenantId = $env:VALIDATE_TENANT_ID
+          PoolJson = $validation.poolJson; FallbackSubscriptionId = $validation.fallbackSubscriptionId
+          ModuleClientIds = $validation.moduleClientIds; TenantId = $validation.tenantId
           RandomSeed = [int](([long]$env:GITHUB_RUN_ID + [long]$env:GITHUB_RUN_ATTEMPT) % [int]::MaxValue)
           DisplaySubscriptionNames = ConvertTo-AvmWorkflowBoolean $env:DISPLAY_SUBSCRIPTION_NAMES
         }

@@ -29,6 +29,30 @@ on:
         type: boolean
         required: false
         default: false
+    secrets:
+      ARM_CLIENT_ID_OVERRIDE:
+        description: Contributor-owned client ID override for a manual fork run.
+        required: false
+      ARM_TENANT_ID_OVERRIDE:
+        description: Contributor-owned tenant ID override for a manual fork run.
+        required: false
+      ARM_SUBSCRIPTION_ID_OVERRIDE:
+        description: Contributor-owned subscription ID override for a manual fork run.
+        required: false
+      VALIDATE_SUBSCRIPTION_IDS:
+        required: false
+      TEST_SUBSCRIPTION_IDS:
+        required: false
+      VALIDATE_SUBSCRIPTION_ID:
+        required: false
+      VALIDATE_TENANT_ID:
+        required: false
+      VALIDATE_MANAGEMENT_GROUP_ID:
+        required: false
+      ARM_MGMTGROUP_ID:
+        required: false
+      TOKEN_NAMEPREFIX:
+        required: false
 
 permissions: {}
 
@@ -154,6 +178,10 @@ jobs:
           modulePath: ${{ inputs.modulePath }}
           moduleTestFilePaths: ${{ inputs.moduleTestFilePaths }}
           displaySubscriptionNames: ${{ vars.VALIDATE_SUBSCRIPTION_IDS != '' || vars.TEST_SUBSCRIPTION_IDS != '' }}
+          allowOverrides: ${{ github.event_name == 'workflow_dispatch' && github.event.repository.fork }}
+          armClientIdOverride: ${{ secrets.ARM_CLIENT_ID_OVERRIDE || vars.ARM_CLIENT_ID_OVERRIDE }}
+          armTenantIdOverride: ${{ secrets.ARM_TENANT_ID_OVERRIDE || vars.ARM_TENANT_ID_OVERRIDE }}
+          armSubscriptionIdOverride: ${{ secrets.ARM_SUBSCRIPTION_ID_OVERRIDE || vars.ARM_SUBSCRIPTION_ID_OVERRIDE }}
         env:
           TEST_SUBSCRIPTION_IDS: ${{ vars.VALIDATE_SUBSCRIPTION_IDS || vars.TEST_SUBSCRIPTION_IDS || secrets.VALIDATE_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS }}
           VALIDATE_SUBSCRIPTION_ID: ${{ vars.VALIDATE_SUBSCRIPTION_ID || secrets.VALIDATE_SUBSCRIPTION_ID }}

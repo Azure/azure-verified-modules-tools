@@ -21,6 +21,73 @@ function Get-AvmWorkflowCompilerAdapters {
     }
 }
 
+function Resolve-AvmWorkflowOverrideGuid {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Name,
+        [AllowEmptyString()] [string] $Value
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) { return '' }
+
+    $identifier = [guid]::Empty
+    if (-not [guid]::TryParseExact($Value, 'D', [ref]$identifier) -or $identifier -eq [guid]::Empty) {
+        throw [ArgumentException]::new("$Name must be a nonempty GUID.")
+    }
+    return $identifier.ToString('D')
+}
+
+function Resolve-AvmWorkflowValidationConfiguration {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $ModulePath,
+        [AllowEmptyString()] [string] $PoolJson,
+        [AllowEmptyString()] [string] $FallbackSubscriptionId,
+        [AllowEmptyString()] [string] $ModuleClientIds,
+        [AllowEmptyString()] [string] $TenantId,
+        [AllowEmptyString()] [string] $ArmClientIdOverride,
+        [AllowEmptyString()] [string] $ArmTenantIdOverride,
+        [AllowEmptyString()] [string] $ArmSubscriptionIdOverride,
+        [switch] $AllowOverrides
+    )
+
+    $configuration = [ordered]@{
+        poolJson = $PoolJson
+        fallbackSubscriptionId = $FallbackSubscriptionId
+        moduleClientIds = $ModuleClientIds
+        tenantId = $TenantId
+    }
+    if (-not $AllowOverrides) { return $configuration }
+
+    $clientId = Resolve-AvmWorkflowOverrideGuid `
+        -Name 'ARM_CLIENT_ID_OVERRIDE' -Value $ArmClientIdOverride
+    $tenant = Resolve-AvmWorkflowOverrideGuid `
+        -Name 'ARM_TENANT_ID_OVERRIDE' -Value $ArmTenantIdOverride
+    $subscription = Resolve-AvmWorkflowOverrideGuid `
+        -Name 'ARM_SUBSCRIPTION_ID_OVERRIDE' -Value $ArmSubscriptionIdOverride
+
+    if ($clientId) {
+        $canonicalPath = $ModulePath.Replace('\', '/')
+        $segments = @($canonicalPath -split '/')
+        if ($segments.Count -lt 4 -or $segments[0] -cne 'avm' -or
+            $segments[1] -cnotin @('res', 'ptn', 'utl') -or
+            $segments[2] -cnotmatch '^[a-z0-9-]+$' -or $segments[3] -cnotmatch '^[a-z0-9-]+$' -or
+            @($segments | Where-Object { $_ -in @('', '.', '..') }).Count -gt 0) {
+            throw [ArgumentException]::new('ModulePath must contain a canonical AVM module root.')
+        }
+        $moduleRoot = ($segments[0..3] -join '/')
+        $mapping = @{}
+        $mapping[$moduleRoot] = $clientId
+        $configuration.moduleClientIds = ConvertTo-Json -InputObject $mapping -Compress
+    }
+    if ($tenant) { $configuration.tenantId = $tenant }
+    if ($subscription) {
+        $configuration.poolJson = ''
+        $configuration.fallbackSubscriptionId = $subscription
+    }
+    return $configuration
+}
+
 function Get-AvmWorkflowModuleIdentity {
     [CmdletBinding()]
     param(
