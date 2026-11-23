@@ -83,7 +83,7 @@ function Get-AvmPrReviewerRoutingSearchCandidates {
     $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     for ($offset = 0; $offset -lt $Repositories.Count; $offset += 20) {
         $batch = @($Repositories[$offset..([math]::Min($offset + 19, $Repositories.Count - 1))])
-        $query = "is:pr is:open draft:false archived:false updated:>=$cutoff " +
+        $query = "is:pr is:open archived:false updated:>=$cutoff " +
             (($batch | ForEach-Object { "repo:$_" }) -join ' ')
         $batchCount = 0
         $expectedCount = $null
