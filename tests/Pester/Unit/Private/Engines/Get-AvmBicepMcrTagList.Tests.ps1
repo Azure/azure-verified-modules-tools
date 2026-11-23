@@ -65,6 +65,67 @@ Describe 'Get-AvmBicepMcrTagList' -Tag 'Unit' {
         $result.Tags.Count | Should -Be 0
     }
 
+    It 'treats the MCR platform HTML WebContentNotFound response as unpublished' {
+        InModuleScope 'Avm.Authoring' {
+            $script:mcrStatus = 404
+            $script:mcrContent = '<!doctype html><html>Web content not found.</html>'
+            $script:mcrHeaders = @{
+                'Content-Type' = 'text/html; charset=utf-8'
+                'X-Ms-Error-Code' = 'WebContentNotFound'
+            }
+        }
+        $result = InModuleScope 'Avm.Authoring' {
+            Get-AvmBicepMcrTagList -ModulePath 'avm/res/mock/widget'
+        }
+        $result.Exists | Should -BeFalse
+        $result.Tags.Count | Should -Be 0
+    }
+
+    It 'does not accept WebContentNotFound with the wrong content type' {
+        InModuleScope 'Avm.Authoring' {
+            $script:mcrStatus = 404
+            $script:mcrContent = '<!doctype html><html>Web content not found.</html>'
+            $script:mcrHeaders = @{
+                'Content-Type' = 'application/json'
+                'X-Ms-Error-Code' = 'WebContentNotFound'
+            }
+            { Get-AvmBicepMcrTagList -ModulePath 'avm/res/mock/widget' } |
+                Should -Throw '*not valid JSON*'
+        }
+    }
+
+    It 'does not accept a platform not-found response after pagination' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Invoke-WebRequest {
+                if (-not $Uri.Query) {
+                    return [pscustomobject]@{
+                        StatusCode = 200
+                        Content = '{"name":"bicep/avm/res/mock/widget","tags":["0.1.0"]}'
+                        Headers = @{
+                            Link = '</v2/bicep/avm/res/mock/widget/tags/list?n=1&last=0.1.0>; rel="next"'
+                        }
+                        BaseResponse = [pscustomobject]@{
+                            RequestMessage = [pscustomobject]@{ RequestUri = $Uri }
+                        }
+                    }
+                }
+                return [pscustomobject]@{
+                    StatusCode = 404
+                    Content = '<!doctype html><html>Web content not found.</html>'
+                    Headers = @{
+                        'Content-Type' = 'text/html'
+                        'X-Ms-Error-Code' = 'WebContentNotFound'
+                    }
+                    BaseResponse = [pscustomobject]@{
+                        RequestMessage = [pscustomobject]@{ RequestUri = $Uri }
+                    }
+                }
+            }
+            { Get-AvmBicepMcrTagList -ModulePath 'avm/res/mock/widget' } |
+                Should -Throw '*not valid JSON*'
+        }
+    }
+
     It 'follows same-endpoint pagination rather than silently accepting a partial tag list' {
         InModuleScope 'Avm.Authoring' {
             Mock Invoke-WebRequest {
