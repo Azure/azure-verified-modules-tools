@@ -123,6 +123,97 @@ function Write-AvmReportAnnotation {
     Write-Host "::${Level}::$escaped"
 }
 
+function Set-AvmWorkflowFeedbackComment {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string] $Repository, [int] $Number, [string] $Marker, [string] $Body, [bool] $Create)
+
+    $previous = $null
+    $page = 1
+    do {
+        $comments = @(Invoke-AvmGitHubApi -Endpoint "repos/$Repository/issues/$Number/comments?per_page=100&page=$page")
+        $previous = $comments | Where-Object {
+            $_['user']['login'] -ceq 'github-actions[bot]' -and $_['body'] -is [string] -and
+            $_['body'].StartsWith($Marker, [StringComparison]::Ordinal)
+        } | Select-Object -First 1
+        $page++
+    } while ($null -eq $previous -and $comments.Count -eq 100)
+    if ($null -ne $previous) {
+        if ($previous['body'] -cne $Body -and $PSCmdlet.ShouldProcess("$Repository comment $($previous['id'])", 'Update E2E feedback')) {
+            $null = Invoke-AvmGitHubApi -Endpoint "repos/$Repository/issues/comments/$($previous['id'])" -Method PATCH -Body @{ body = $Body }
+            return $true
+        }
+    }
+    elseif ($Create -and $PSCmdlet.ShouldProcess("$Repository PR $Number", 'Create E2E feedback')) {
+        $null = Invoke-AvmGitHubApi -Endpoint "repos/$Repository/issues/$Number/comments" -Method POST -Body @{ body = $Body }
+        return $true
+    }
+    return $false
+}
+
+function Invoke-AvmForkWorkflowReport {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([System.Collections.IDictionary] $Event, [string] $Repository, [string] $ServerUrl)
+
+    if ($Repository -cnotmatch '\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z') {
+        throw [ArgumentException]::new('Repository must be an owner/name pair.')
+    }
+    $run = $Event['workflow_run']
+    if ($run['event'] -cne 'pull_request' -or $run['conclusion'] -cne 'failure' -or
+        $run['head_repository']['full_name'] -ceq $Repository -or
+        $run['head_repository']['full_name'] -cnotmatch '\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z' -or
+        $run['id'] -isnot [long] -and $run['id'] -isnot [int] -or $run['id'] -lt 1) { return }
+
+    $jobs = @()
+    $page = 1
+    do {
+        $batch = @(Invoke-AvmGitHubApi -Endpoint "repos/$Repository/actions/runs/$($run['id'])/jobs?per_page=100&page=$page")
+        $items = @($batch[0]['jobs'])
+        $jobs += $items
+        $page++
+    } while ($items.Count -eq 100)
+    $gate = @($jobs | Where-Object { $_['name'] -ceq 'Report check status' -and $_['conclusion'] -ceq 'failure' })
+    if ($gate.Count -ne 1) { return }
+    $page = 1
+    $requiredFailure = $false
+    do {
+        $annotations = @(Invoke-AvmGitHubApi -Endpoint "repos/$Repository/check-runs/$($gate[0]['id'])/annotations?per_page=100&page=$page")
+        $requiredFailure = @($annotations | Where-Object {
+                $_['annotation_level'] -ceq 'failure' -and $_['message'] -is [string] -and
+                $_['message'].StartsWith('Required E2E tests must run and pass before merging.', [StringComparison]::Ordinal)
+            }).Count -gt 0
+        $page++
+    } while (-not $requiredFailure -and $annotations.Count -eq 100)
+    if (-not $requiredFailure) { return }
+
+    $owner = $run['head_repository']['full_name'].Split('/')[0]
+    $head = [uri]::EscapeDataString("${owner}:$($run['head_branch'])")
+    $base = [string]$Event['repository']['default_branch']
+    $encodedBase = [uri]::EscapeDataString($base)
+    $pulls = @()
+    $page = 1
+    do {
+        $items = @(Invoke-AvmGitHubApi -Endpoint "repos/$Repository/pulls?state=open&base=$encodedBase&head=$head&per_page=100&page=$page")
+        $pulls += $items
+        $page++
+    } while ($items.Count -eq 100)
+    $pull = @($pulls | Where-Object {
+            $_['head']['sha'] -ceq $run['head_sha'] -and
+            $_['head']['repo']['full_name'] -ceq $run['head_repository']['full_name']
+        })
+    if ($pull.Count -ne 1) { return }
+    $number = $pull[0]['number']
+    if ($number -isnot [long] -and $number -isnot [int] -or $number -lt 1) {
+        throw [IO.InvalidDataException]::new('Invalid pull request number.')
+    }
+    $current = Invoke-AvmGitHubApi -Endpoint "repos/$Repository/pulls/$number"
+    if ($current['state'] -cne 'open' -or $current['base']['ref'] -cne $base -or
+        $current['head']['sha'] -cne $run['head_sha'] -or
+        $current['head']['repo']['full_name'] -cne $run['head_repository']['full_name']) { return }
+    $marker = '<!-- avm-bicep-required-e2e-label-feedback -->'
+    $body = "$marker`n`n## Action required: fork E2E tests`n`nRequired E2E tests cannot run with credentials from a fork pull request, and adding an E2E label does not authorize them. Ask an authorized Microsoft FTE to review the current changes and follow the [release-branch handoff process](https://github.com/Azure/bicep-registry-modules/blob/main/.github/skills/avm-release-branch/SKILL.md) before running credentialed tests.`n`n[View PR-check run]($ServerUrl/$Repository/actions/runs/$($run['id']))"
+    $null = Set-AvmWorkflowFeedbackComment -Repository $Repository -Number $number -Marker $marker -Body $body -Create $true
+}
+
 function Invoke-AvmWorkflowReport {
     <#
     .SYNOPSIS
@@ -264,26 +355,9 @@ function Invoke-AvmWorkflowReport {
             Write-AvmReportAnnotation -Level warning -Message 'Skipped stale E2E feedback because the PR head or E2E labels changed.'
             return $report
         }
-        $previous = $null
-        $page = 1
-        do {
-            $comments = @(Invoke-AvmGitHubApi -Endpoint "repos/$Repository/issues/$number/comments?per_page=100&page=$page")
-            $previous = $comments | Where-Object {
-                $_['user']['login'] -ceq 'github-actions[bot]' -and $_['body'] -is [string] -and $_['body'].StartsWith($marker, [StringComparison]::Ordinal)
-            } | Select-Object -First 1
-            $page++
-        } while ($null -eq $previous -and $comments.Count -eq 100)
         $body = "$marker`n`n$($feedback -join "`n`n")`n`n[View PR-check run]($ServerUrl/$Repository/actions/runs/$RunId)"
-        if ($null -ne $previous) {
-            if ($previous['body'] -cne $body -and $PSCmdlet.ShouldProcess("$Repository comment $($previous['id'])", 'Update E2E feedback')) {
-                $null = Invoke-AvmGitHubApi -Endpoint "repos/$Repository/issues/comments/$($previous['id'])" -Method PATCH -Body @{ body = $body }
-                $report.CommentPublished = $true
-            }
-        }
-        elseif (($missing -or $noRequired) -and $PSCmdlet.ShouldProcess("$Repository PR $number", 'Create E2E feedback')) {
-            $null = Invoke-AvmGitHubApi -Endpoint "repos/$Repository/issues/$number/comments" -Method POST -Body @{ body = $body }
-            $report.CommentPublished = $true
-        }
+        $report.CommentPublished = Set-AvmWorkflowFeedbackComment -Repository $Repository -Number $number `
+            -Marker $marker -Body $body -Create ($missing -or $noRequired)
     }
     catch [AvmGitHubException] {
         if ($_.Exception.StatusCode -ne 403) { throw }
