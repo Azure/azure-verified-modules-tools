@@ -77,16 +77,17 @@ function Get-AvmBicepDocsConfiguration {
     }
     $digest = [System.Security.Cryptography.SHA256]::HashData([System.IO.File]::ReadAllBytes($path))
     $hash = [Convert]::ToHexString($digest).ToLowerInvariant()
-    if ($hash -cne $template.Hash) {
+    $previousOfficialHash = '6faeb739cc2ca368fb4cc91e6a936852a9cfdfa23bc9e76a5b137990e6d1cd1a'
+    if ($hash -cne $template.Hash -and $hash -cne $previousOfficialHash) {
         throw [AvmConfigurationException]::new(
             "Bicep documentation template '$path' differs from the packaged $($template.Version) template. Review and copy the canonical '$($template.Path)' into the repository before rendering; 'avm docs' does not overwrite tracked templates.")
     }
 
     return [pscustomobject]@{
         ConfigPath          = $configPath
-        TemplatePath        = $path
+        TemplatePath        = if ($hash -ceq $template.Hash) { $path } else { $template.Path }
         Version             = $template.Version
-        Hash                = $hash
-        UsesPackageTemplate = $false
+        Hash                = $template.Hash
+        UsesPackageTemplate = $hash -cne $template.Hash
     }
 }

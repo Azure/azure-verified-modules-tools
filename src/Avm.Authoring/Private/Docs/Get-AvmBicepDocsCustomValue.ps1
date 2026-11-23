@@ -220,6 +220,43 @@ function Get-AvmBicepDocsCustomValue {
         $compiled['outputs']
     }
     else { @{} }
+    $exportedSymbols = @(
+        foreach ($namespace in @($compiled['functions'])) {
+            if ($namespace -isnot [System.Collections.IDictionary] -or
+                $namespace['members'] -isnot [System.Collections.IDictionary]) {
+                continue
+            }
+            foreach ($name in $namespace['members'].psbase.Keys) {
+                $member = $namespace['members'][$name]
+                if ($member -is [System.Collections.IDictionary] -and
+                    $member['metadata'] -is [System.Collections.IDictionary] -and
+                    $member['metadata']['__bicep_export!'] -eq $true) {
+                    [string]$name
+                }
+            }
+        }
+    )
+    if ($exportedSymbols.Count -eq 0) {
+        if ($compiled['definitions'] -is [System.Collections.IDictionary]) {
+            $exportedSymbols += @($compiled['definitions'].psbase.Keys | Where-Object {
+                    $definition = $compiled['definitions'][$_]
+                    $definition -is [System.Collections.IDictionary] -and
+                    $definition['metadata'] -is [System.Collections.IDictionary] -and
+                    $definition['metadata']['__bicep_export!'] -eq $true
+                })
+        }
+        if ($compiled['metadata'] -is [System.Collections.IDictionary]) {
+            $exportedSymbols += @($compiled['metadata']['__bicep_exported_variables!'] |
+                    Where-Object { $_ -is [System.Collections.IDictionary] -and $_['name'] -is [string] } |
+                    ForEach-Object { $_['name'] })
+        }
+    }
+    $resourceCount = if ($compiled['resources'] -is [System.Collections.IDictionary] -or
+        $compiled['resources'] -is [array]) { $compiled['resources'].Count } else { 0 }
+    $isFunctionLibrary = (
+        $exportedSymbols.Count -gt 0 -and $resourceCount -eq 0 -and
+        $compiledParameters.Count -eq 0 -and $compiledOutputs.Count -eq 0
+    )
     $requiredParameters = @(
         if ($null -ne $cached) {
             $cached.Required
@@ -237,7 +274,8 @@ function Get-AvmBicepDocsCustomValue {
     $examples = Get-AvmBicepDocsExample -ModulePath $ModulePath `
         -RepositoryRoot $RepositoryRoot -ToolPath $ToolPath `
         -CompiledTemplate $compiled -RequiredParameters $requiredParameters `
-        -CompiledTemplateCache $CompiledTemplateCache
+        -CompiledTemplateCache $CompiledTemplateCache `
+        -LibraryReference $(if ($isFunctionLibrary -and $moduleReference) { $moduleReference } else { '' })
     $scopeChildren = @($items | Where-Object {
             $_.PSIsContainer -and $_.Name -clike '*-scope'
         } | Sort-Object -Culture 'en-US' -Property Name | ForEach-Object {
@@ -251,6 +289,8 @@ function Get-AvmBicepDocsCustomValue {
     return @{
         moduleReference    = $moduleReference
         moduleSymbol       = $symbol
+        isFunctionLibrary  = if ($isFunctionLibrary) { 'true' } else { 'false' }
+        exportedFunctions  = @($exportedSymbols | Sort-Object -Culture 'en-US') -join ', '
         headerType         = $headerType
         descriptionSuffix  = $descriptionSuffix
         isVersioned        = if ([System.IO.File]::Exists((Join-Path $ModulePath 'version.json'))) {

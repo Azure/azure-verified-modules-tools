@@ -1012,6 +1012,85 @@ Describe 'Component: Bicep docs source rendering' -Tag Component {
         $result.headerType | Should -BeExactly 'Microsoft.Storage/storageaccounts'
     }
 
+    It 'models export-only libraries and rewrites only their actual local imports' {
+        $fixture = New-BicepDocsFixture -Name 'export-only-library'
+        $examplePath = Join-Path $fixture.Module 'tests' 'e2e' 'rg-scope.max' 'main.test.bicep'
+        $source = @"
+var text = '''
+import { fake } from '../../../main.bicep'
+'''
+// import { fake } from '../../../main.bicep'
+import {
+  getName
+} from '../../../main.bicep'
+import * as names from '../../../main.bicep'
+import { unrelated } from './other.bicep'
+"@
+        [System.IO.File]::WriteAllText($examplePath, $source)
+        $compiledPath = Join-Path $fixture.Module 'main.json'
+        $compiled = @{
+            resources = @()
+            functions = @(@{
+                    namespace = '__bicep'
+                    members = @{
+                        getName = @{ metadata = @{ '__bicep_export!' = $true } }
+                    }
+                })
+        }
+        [System.IO.File]::WriteAllText(
+            $compiledPath, (ConvertTo-Json -InputObject $compiled -Depth 20))
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ F = $fixture } {
+            param($F)
+            Get-AvmBicepDocsCustomValue -ModulePath $F.Module `
+                -RepositoryRoot $F.Root -ToolPath 'mock-bicep'
+        }
+        $result.isFunctionLibrary | Should -BeExactly 'true'
+        $result.exportedFunctions | Should -BeExactly 'getName'
+        $example = ($result.examples | ConvertFrom-Json -AsHashtable)['tests/e2e/rg-scope.max/main.test.bicep'].LibrarySource
+        $example | Should -Match "from 'br/public:avm/res/storage/storage-account:<version>'"
+        @([regex]::Matches($example, "br/public:avm/res/storage/storage-account:<version>")).Count | Should -Be 2
+        @([regex]::Matches($example, "fake \} from '\.\./\.\./\.\./main\.bicep'")).Count | Should -Be 2
+        $example | Should -Match "from '\./other\.bicep'"
+
+        $compiled.resources = @(@{
+                type = 'Microsoft.Resources/deployments'; apiVersion = '2022-09-01'
+            })
+        [System.IO.File]::WriteAllText(
+            $compiledPath, (ConvertTo-Json -InputObject $compiled -Depth 20))
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ F = $fixture } {
+            param($F)
+            Get-AvmBicepDocsCustomValue -ModulePath $F.Module `
+                -RepositoryRoot $F.Root -ToolPath 'mock-bicep'
+        }
+        $result.isFunctionLibrary | Should -BeExactly 'false'
+
+        $compiled.resources = @(@{
+                type = 'Microsoft.Storage/storageAccounts'; apiVersion = '2023-05-01'; existing = $true
+            })
+        [System.IO.File]::WriteAllText(
+            $compiledPath, (ConvertTo-Json -InputObject $compiled -Depth 20))
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ F = $fixture } {
+            param($F)
+            Get-AvmBicepDocsCustomValue -ModulePath $F.Module `
+                -RepositoryRoot $F.Root -ToolPath 'mock-bicep'
+        }
+        $result.isFunctionLibrary | Should -BeExactly 'false'
+
+        $compiled.resources = @()
+        $compiled.functions = @()
+        $compiled.definitions = @{ myType = @{ metadata = @{ '__bicep_export!' = $true } } }
+        $compiled.metadata = @{ '__bicep_exported_variables!' = @(@{ name = 'myVariable' }) }
+        [System.IO.File]::WriteAllText(
+            $compiledPath, (ConvertTo-Json -InputObject $compiled -Depth 20))
+        $result = InModuleScope 'Avm.Authoring' -Parameters @{ F = $fixture } {
+            param($F)
+            Get-AvmBicepDocsCustomValue -ModulePath $F.Module `
+                -RepositoryRoot $F.Root -ToolPath 'mock-bicep'
+        }
+        $result.isFunctionLibrary | Should -BeExactly 'true'
+        $result.exportedFunctions | Should -BeExactly 'myType, myVariable'
+    }
+
     It 'requires an unmodified versioned template relative to the nearest config' {
         $fixture = New-BicepDocsFixture -Name 'template-guard'
         [System.IO.File]::AppendAllText($fixture.Template, "`nunauthorized edit")

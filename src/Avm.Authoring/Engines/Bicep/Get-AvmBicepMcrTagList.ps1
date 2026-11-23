@@ -60,6 +60,13 @@ function Get-AvmBicepMcrTagList {
                 "MCR tag-list request for '$ModulePath' returned HTTP $($response.StatusCode); published versions are unknown.")
         }
 
+        if ($page -eq 0 -and $response.StatusCode -eq 404 -and $null -ne $response.Headers -and
+            (@($response.Headers['x-ms-error-code']) -join ',') -ceq 'WebContentNotFound' -and
+            (@($response.Headers['Content-Type']) -join ',') -match '^text/html(?:\s*;.*)?$' -and
+            [string]::IsNullOrWhiteSpace((@($response.Headers['Link']) -join ','))) {
+            return [pscustomobject]@{ Exists = $false; Tags = $published }
+        }
+
         $document = $null
         try {
             $document = [System.Text.Json.JsonDocument]::Parse([string]$response.Content)
