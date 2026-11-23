@@ -40,7 +40,10 @@ function Get-AvmWorkflowReportState {
         @('bootstrap', 'subscriptions', 'unit-test', 'pr-check', 'integration-test',
             'discover-examples', 'select-e2e-tests', 'e2e-test')
     }
-    else { @('initialize', 'check') }
+    else {
+        @('initialize', 'check')
+        if ($Results.Contains('check-fork')) { 'check-fork' }
+    }
     foreach ($name in $jobs) {
         if ($Results[$name] -isnot [System.Collections.IDictionary] -or
             $Results[$name]['result'] -cnotin @('success', 'failure', 'cancelled', 'skipped')) {
@@ -107,8 +110,13 @@ function Get-AvmWorkflowReportState {
                     $_['modulePath'] -isnot [string] -or -not $_['modulePath'].StartsWith('avm/utl/', [StringComparison]::Ordinal)
                 }).Count -eq 0
         }
-        if ($hasModules -and $Results['check']['result'] -cne 'success') {
-            $state.Failures.Add('Bicep module checks did not succeed (static, unit, or selected E2E tests).')
+        if ($hasModules) {
+            $checkJobs = @('check')
+            if ($Results.Contains('check-fork')) { $checkJobs += 'check-fork' }
+            $selected = @($checkJobs | Where-Object { $Results[$_]['result'] -cne 'skipped' })
+            if ($selected.Count -ne 1 -or $Results[$selected[0]]['result'] -cne 'success') {
+                $state.Failures.Add('Bicep module checks did not succeed (static, unit, or selected E2E tests).')
+            }
         }
     }
     if ($state.OptionalSelected -and -not $state.Authorized) {

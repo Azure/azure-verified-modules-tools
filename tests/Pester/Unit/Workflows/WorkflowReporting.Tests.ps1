@@ -175,6 +175,23 @@ Describe 'Shared AVM workflow reporting' {
             }
         }
 
+        It 'uses exactly one of the Bicep upstream or fork check routes' {
+            if ($Ecosystem -cne 'bicep') { return }
+            $script:results['check-fork'] = @{ result = 'skipped' }
+            (Invoke-TestWorkflowReport).Passed | Should -BeTrue
+
+            $script:results.check.result = 'skipped'
+            $script:results['check-fork'].result = 'success'
+            (Invoke-TestWorkflowReport).Passed | Should -BeTrue
+
+            $script:results.check.result = 'success'
+            (Invoke-TestWorkflowReport).Passed | Should -BeFalse
+
+            $script:results.check.result = 'skipped'
+            $script:results['check-fork'].result = 'skipped'
+            (Invoke-TestWorkflowReport).Passed | Should -BeFalse
+        }
+
         It 'enforces selected E2E outcomes and initializer coverage errors' -ForEach @(
             @{ Result = 'failure' }, @{ Result = 'cancelled' }, @{ Result = 'skipped' }
         ) {

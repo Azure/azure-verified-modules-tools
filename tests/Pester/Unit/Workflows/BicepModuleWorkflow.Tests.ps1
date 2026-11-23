@@ -270,9 +270,11 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         }
     }
 
-    It 'declares the ARM override secrets at every reusable E2E boundary' {
+    It 'declares validation and ARM override secrets at every reusable E2E boundary' {
         $secretNames = @(
-            'ARM_CLIENT_ID_OVERRIDE', 'ARM_TENANT_ID_OVERRIDE', 'ARM_SUBSCRIPTION_ID_OVERRIDE'
+            'ARM_CLIENT_ID_OVERRIDE', 'ARM_TENANT_ID_OVERRIDE', 'ARM_SUBSCRIPTION_ID_OVERRIDE',
+            'VALIDATE_SUBSCRIPTION_IDS', 'TEST_SUBSCRIPTION_IDS', 'VALIDATE_SUBSCRIPTION_ID',
+            'VALIDATE_TENANT_ID', 'VALIDATE_MANAGEMENT_GROUP_ID', 'ARM_MGMTGROUP_ID', 'TOKEN_NAMEPREFIX'
         )
         $definitions = @(
             ($script:entrypoints | Where-Object name -EQ 'Reusable: Bicep PR check')

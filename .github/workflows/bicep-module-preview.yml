@@ -39,6 +39,20 @@ on:
       ARM_SUBSCRIPTION_ID_OVERRIDE:
         description: Contributor-owned subscription ID override for a manual fork run.
         required: false
+      VALIDATE_SUBSCRIPTION_IDS:
+        required: false
+      TEST_SUBSCRIPTION_IDS:
+        required: false
+      VALIDATE_SUBSCRIPTION_ID:
+        required: false
+      VALIDATE_TENANT_ID:
+        required: false
+      VALIDATE_MANAGEMENT_GROUP_ID:
+        required: false
+      ARM_MGMTGROUP_ID:
+        required: false
+      TOKEN_NAMEPREFIX:
+        required: false
 
 permissions: {}
 
