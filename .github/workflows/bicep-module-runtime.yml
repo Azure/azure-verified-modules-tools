@@ -505,4 +505,5 @@ jobs:
       targetCommit: ${{ inputs.targetCommit }}
       authoringArtifact: ${{ inputs.authoringArtifact }}
       tools-ref: ${{ inputs.tools-ref }}
-    secrets: inherit
+    secrets:
+      AVM_SECRETS_CONTEXT: ${{ toJSON(secrets) }}

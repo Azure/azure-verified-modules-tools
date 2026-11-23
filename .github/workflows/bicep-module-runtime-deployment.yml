@@ -46,6 +46,8 @@ on:
         required: false
       TOKEN_NAMEPREFIX:
         required: false
+      AVM_SECRETS_CONTEXT:
+        required: false
 
 permissions: {}
 
@@ -142,16 +144,16 @@ jobs:
         env:
           MODULE_PATH: ${{ inputs.modulePath }}
           TEST_CASE: ${{ inputs.testCase }}
-          TEST_SUBSCRIPTION_IDS: ${{ vars.VALIDATE_SUBSCRIPTION_IDS || vars.TEST_SUBSCRIPTION_IDS || secrets.VALIDATE_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS }}
-          VALIDATE_SUBSCRIPTION_ID: ${{ vars.VALIDATE_SUBSCRIPTION_ID || secrets.VALIDATE_SUBSCRIPTION_ID }}
+          TEST_SUBSCRIPTION_IDS: ${{ vars.VALIDATE_SUBSCRIPTION_IDS || vars.TEST_SUBSCRIPTION_IDS || secrets.VALIDATE_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).VALIDATE_SUBSCRIPTION_IDS || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).TEST_SUBSCRIPTION_IDS }}
+          VALIDATE_SUBSCRIPTION_ID: ${{ vars.VALIDATE_SUBSCRIPTION_ID || secrets.VALIDATE_SUBSCRIPTION_ID || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).VALIDATE_SUBSCRIPTION_ID }}
           VALIDATE_MODULE_CLIENT_IDS: ${{ vars.VALIDATE_MODULE_CLIENT_IDS }}
           VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS: ${{ vars.VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS }}
-          VALIDATE_TENANT_ID: ${{ vars.VALIDATE_TENANT_ID || secrets.VALIDATE_TENANT_ID }}
-          TOKEN_NAMEPREFIX: ${{ secrets.TOKEN_NAMEPREFIX }}
+          VALIDATE_TENANT_ID: ${{ vars.VALIDATE_TENANT_ID || secrets.VALIDATE_TENANT_ID || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).VALIDATE_TENANT_ID }}
+          TOKEN_NAMEPREFIX: ${{ secrets.TOKEN_NAMEPREFIX || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).TOKEN_NAMEPREFIX }}
           ALLOW_VALIDATION_OVERRIDES: ${{ github.event_name == 'workflow_dispatch' && github.event.repository.fork }}
-          ARM_CLIENT_ID_OVERRIDE: ${{ secrets.ARM_CLIENT_ID_OVERRIDE || vars.ARM_CLIENT_ID_OVERRIDE }}
-          ARM_TENANT_ID_OVERRIDE: ${{ secrets.ARM_TENANT_ID_OVERRIDE || vars.ARM_TENANT_ID_OVERRIDE }}
-          ARM_SUBSCRIPTION_ID_OVERRIDE: ${{ secrets.ARM_SUBSCRIPTION_ID_OVERRIDE || vars.ARM_SUBSCRIPTION_ID_OVERRIDE }}
+          ARM_CLIENT_ID_OVERRIDE: ${{ secrets.ARM_CLIENT_ID_OVERRIDE || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).ARM_CLIENT_ID_OVERRIDE || vars.ARM_CLIENT_ID_OVERRIDE }}
+          ARM_TENANT_ID_OVERRIDE: ${{ secrets.ARM_TENANT_ID_OVERRIDE || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).ARM_TENANT_ID_OVERRIDE || vars.ARM_TENANT_ID_OVERRIDE }}
+          ARM_SUBSCRIPTION_ID_OVERRIDE: ${{ secrets.ARM_SUBSCRIPTION_ID_OVERRIDE || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).ARM_SUBSCRIPTION_ID_OVERRIDE || vars.ARM_SUBSCRIPTION_ID_OVERRIDE }}
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
@@ -255,7 +257,7 @@ jobs:
           RESOURCE_LOCATION: ${{ fromJSON(inputs.workflowInput).customLocation }}
           SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_ID: ${{ steps.context.outputs.SubscriptionCleanupManagementGroupId }}
           AVM_CI_VARIABLES: ${{ toJSON(vars) }}
-          AVM_CI_SECRETS: ${{ toJSON(secrets) }}
+          AVM_CI_SECRETS: ${{ secrets.AVM_SECRETS_CONTEXT || toJSON(secrets) }}
           STATE_PATH: ${{ runner.temp }}/avm-bicep-state/${{ steps.context.outputs.ArtifactKey }}.cleanup.json
         run: |
           $ErrorActionPreference = 'Stop'

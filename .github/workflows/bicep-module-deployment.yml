@@ -47,6 +47,8 @@ on:
         required: false
       TOKEN_NAMEPREFIX:
         required: false
+      AVM_SECRETS_CONTEXT:
+        required: false
 
 permissions: {}
 
@@ -102,16 +104,16 @@ jobs:
           modulePath: ${{ inputs.modulePath }}
           workflowInput: ${{ inputs.workflowInput }}
           testCase: ${{ inputs.testCase }}
-          subscriptionPool: ${{ vars.VALIDATE_SUBSCRIPTION_IDS || vars.TEST_SUBSCRIPTION_IDS || secrets.VALIDATE_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS }}
-          fallbackSubscriptionId: ${{ vars.VALIDATE_SUBSCRIPTION_ID || secrets.VALIDATE_SUBSCRIPTION_ID }}
+          subscriptionPool: ${{ vars.VALIDATE_SUBSCRIPTION_IDS || vars.TEST_SUBSCRIPTION_IDS || secrets.VALIDATE_SUBSCRIPTION_IDS || secrets.TEST_SUBSCRIPTION_IDS || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).VALIDATE_SUBSCRIPTION_IDS || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).TEST_SUBSCRIPTION_IDS }}
+          fallbackSubscriptionId: ${{ vars.VALIDATE_SUBSCRIPTION_ID || secrets.VALIDATE_SUBSCRIPTION_ID || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).VALIDATE_SUBSCRIPTION_ID }}
           moduleClientIds: ${{ vars.VALIDATE_MODULE_CLIENT_IDS }}
-          tenantId: ${{ vars.VALIDATE_TENANT_ID || secrets.VALIDATE_TENANT_ID }}
-          managementGroupId: ${{ vars.VALIDATE_MANAGEMENT_GROUP_ID || vars.ARM_MGMTGROUP_ID || secrets.VALIDATE_MANAGEMENT_GROUP_ID || secrets.ARM_MGMTGROUP_ID }}
-          tokenNamePrefix: ${{ inputs.tokenNamePrefix || secrets.TOKEN_NAMEPREFIX }}
+          tenantId: ${{ vars.VALIDATE_TENANT_ID || secrets.VALIDATE_TENANT_ID || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).VALIDATE_TENANT_ID }}
+          managementGroupId: ${{ vars.VALIDATE_MANAGEMENT_GROUP_ID || vars.ARM_MGMTGROUP_ID || secrets.VALIDATE_MANAGEMENT_GROUP_ID || secrets.ARM_MGMTGROUP_ID || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).VALIDATE_MANAGEMENT_GROUP_ID || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).ARM_MGMTGROUP_ID }}
+          tokenNamePrefix: ${{ inputs.tokenNamePrefix || secrets.TOKEN_NAMEPREFIX || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).TOKEN_NAMEPREFIX }}
           ciKeyVaultName: ${{ vars.CI_KEY_VAULT_NAME }}
           githubVariables: ${{ toJSON(vars) }}
-          githubSecrets: ${{ toJSON(secrets) }}
+          githubSecrets: ${{ secrets.AVM_SECRETS_CONTEXT || toJSON(secrets) }}
           allowOverrides: ${{ github.event_name == 'workflow_dispatch' && github.event.repository.fork }}
-          armClientIdOverride: ${{ secrets.ARM_CLIENT_ID_OVERRIDE || vars.ARM_CLIENT_ID_OVERRIDE }}
-          armTenantIdOverride: ${{ secrets.ARM_TENANT_ID_OVERRIDE || vars.ARM_TENANT_ID_OVERRIDE }}
-          armSubscriptionIdOverride: ${{ secrets.ARM_SUBSCRIPTION_ID_OVERRIDE || vars.ARM_SUBSCRIPTION_ID_OVERRIDE }}
+          armClientIdOverride: ${{ secrets.ARM_CLIENT_ID_OVERRIDE || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).ARM_CLIENT_ID_OVERRIDE || vars.ARM_CLIENT_ID_OVERRIDE }}
+          armTenantIdOverride: ${{ secrets.ARM_TENANT_ID_OVERRIDE || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).ARM_TENANT_ID_OVERRIDE || vars.ARM_TENANT_ID_OVERRIDE }}
+          armSubscriptionIdOverride: ${{ secrets.ARM_SUBSCRIPTION_ID_OVERRIDE || fromJSON(secrets.AVM_SECRETS_CONTEXT || toJSON(secrets)).ARM_SUBSCRIPTION_ID_OVERRIDE || vars.ARM_SUBSCRIPTION_ID_OVERRIDE }}

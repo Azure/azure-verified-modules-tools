@@ -206,7 +206,8 @@ jobs:
       workflowInput: ${{ inputs.workflowInput }}
       modulePath: ${{ inputs.modulePath }}
       testCase: ${{ toJSON(matrix.testCases) }}
-    secrets: inherit
+    secrets:
+      AVM_SECRETS_CONTEXT: ${{ toJSON(secrets) }}
 
   job_publish_module:
     name: Publishing
