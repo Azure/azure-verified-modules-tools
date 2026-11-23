@@ -123,12 +123,14 @@ function Invoke-AvmTestE2e {
         cleanup. It is persisted before deployment and cannot be supplied to
         Complete, which uses the recorded target.
     .PARAMETER Location
-        Bicep deployment-metadata location, fixed across regional retries.
-        Also the placement fallback for explicitly global resource types.
+        Bicep deployment-metadata location, selected from the existing e2e
+        region policy when omitted and fixed across regional retries. Also the
+        placement fallback for explicitly global resource types.
     .PARAMETER ResourceLocation
         Pin Bicep resource placement. Must agree with parameter/token locations.
     .PARAMETER ResourceGroupPrefix
-        Required for resource-group Bicep cases; up to 57 safe name characters.
+        Bicep-only: resource-group name prefix, defaulting to avmtest when
+        omitted; up to 57 safe name characters.
     .PARAMETER TokenFile
         JSON string-valued tokens, relative to the module root or absolute.
         Mutually exclusive with Tokens. Explicit scope parameters own scope tokens.
@@ -200,7 +202,7 @@ function Invoke-AvmTestE2e {
     .EXAMPLE
         avm test e2e --list
     .EXAMPLE
-        avm test e2e --location eastus --resource-group-prefix avm-e2e
+        avm test e2e
     .EXAMPLE
         avm test e2e --subscription-id $testSubscriptionId --tenant-id $testTenantId --location eastus --resource-group-prefix avm-e2e
     .EXAMPLE
@@ -232,7 +234,7 @@ function Invoke-AvmTestE2e {
         [string] $SubscriptionCleanupManagementGroupId,
         [string] $Location,
         [string] $ResourceLocation,
-        [string] $ResourceGroupPrefix,
+        [string] $ResourceGroupPrefix = 'avmtest',
         [string] $TokenFile,
         [Alias('AdditionalTokens')]
         [System.Collections.IDictionary] $Tokens = @{},
@@ -275,6 +277,9 @@ function Invoke-AvmTestE2e {
                 throw [AvmConfigurationException]::new('-MaxRetry is only supported for Terraform e2e tests.')
             }
             $inputOptions = @{ Context = $context; AllowPathFallback = $AllowPathFallback; Example = $Example; List = $List }
+            if ($Phase -ne 'Complete') {
+                $inputOptions.ResourceGroupPrefix = $ResourceGroupPrefix
+            }
             foreach ($name in $bicepOptions) {
                 if ($PSBoundParameters.ContainsKey($name)) { $inputOptions[$name] = $PSBoundParameters[$name] }
             }

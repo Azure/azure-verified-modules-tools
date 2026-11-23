@@ -203,8 +203,9 @@ Return a JSON array of runnable example names without cloud access.
 
 ### -Location
 
-Bicep deployment-metadata location, fixed across regional retries.
-Also the placement fallback for explicitly global resource types.
+Bicep deployment-metadata location, selected from the existing e2e
+region policy when omitted and fixed across regional retries. Also the
+placement fallback for explicitly global resource types.
 
 | Property | Value |
 | --- | --- |
@@ -332,14 +333,15 @@ recursive cleanup/recovery to the persisted ownership boundary.
 
 ### -ResourceGroupPrefix
 
-Required for resource-group Bicep cases; up to 57 safe name characters.
+Bicep-only: resource-group name prefix, defaulting to avmtest when
+omitted; up to 57 safe name characters.
 
 | Property | Value |
 | --- | --- |
 | Type | `String` |
 | Required | false |
 | Position | named |
-| Default value |  |
+| Default value | avmtest |
 | Accept pipeline input | false |
 | Accept wildcard characters | false |
 
@@ -536,7 +538,7 @@ avm test e2e --list
 ### EXAMPLE 2
 
 ```powershell
-avm test e2e --location eastus --resource-group-prefix avm-e2e
+avm test e2e
 ```
 
 ### EXAMPLE 3

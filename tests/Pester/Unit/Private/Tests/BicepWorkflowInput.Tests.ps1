@@ -287,6 +287,20 @@ Describe 'Bicep workflow subscription pool' {
 }
 
 Describe 'Bicep workflow resource location selection' {
+    It 'selects deployment metadata without requiring resource metadata or an explicit location' {
+        InModuleScope Avm.Authoring {
+            Mock Get-AzResourceProvider { throw 'Metadata selection must not inspect providers.' }
+            Mock Get-AzLocation { throw 'Metadata selection must not inspect locations.' }
+
+            $actual = Get-AvmBicepResourceLocation -AllowedRegions @('centralus')
+
+            $actual.Location | Should -Be 'centralus'
+            $actual.IsGlobal | Should -BeFalse
+            Should -Invoke Get-AzResourceProvider -Exactly 0
+            Should -Invoke Get-AzLocation -Exactly 0
+        }
+    }
+
     It 'queries the canonical provider explicitly and uses only supported allowed recommended paired regions' {
         InModuleScope Avm.Authoring {
             Mock Get-AzResourceProvider {
