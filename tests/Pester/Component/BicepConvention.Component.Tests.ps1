@@ -1567,6 +1567,29 @@ Describe 'Bicep static convention checks' -Tag 'Component' {
                 }).Count | Should -Be 0
         }
 
+        It 'accepts an initial version after the MCR platform WebContentNotFound response' {
+            InModuleScope 'Avm.Authoring' {
+                Mock Invoke-WebRequest {
+                    [pscustomobject]@{
+                        StatusCode   = 404
+                        Content      = '<!doctype html><html>Web content not found.</html>'
+                        Headers      = @{
+                            'Content-Type' = 'text/html; charset=utf-8'
+                            'X-Ms-Error-Code' = 'WebContentNotFound'
+                        }
+                        BaseResponse = [pscustomobject]@{
+                            RequestMessage = [pscustomobject]@{ RequestUri = $Uri }
+                        }
+                    }
+                }
+            }
+            $result = Invoke-AvmCheckConvention -Path $script:modulePath -SkipModuleVersionCheck
+            @($result.Issues | Where-Object {
+                    $_.Code -like 'avm.bicep.published-tags-*' -or
+                    $_.Code -like 'avm.bicep.changelog-*'
+                }).Count | Should -Be 0
+        }
+
         It 'fails closed when MCR is unavailable rather than treating tags as empty' {
             InModuleScope 'Avm.Authoring' {
                 Mock Invoke-WebRequest { throw [System.Net.Http.HttpRequestException]::new('MCR unavailable') }

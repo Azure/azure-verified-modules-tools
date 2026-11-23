@@ -59,6 +59,18 @@ function Get-AvmBicepMcrTagList {
             throw [AvmConfigurationException]::new(
                 "MCR tag-list request for '$ModulePath' returned HTTP $($response.StatusCode); published versions are unknown.")
         }
+        if ($response.StatusCode -eq 404) {
+            if ($null -eq $response.Headers) {
+                throw [AvmConfigurationException]::new(
+                    "MCR tag-list response for '$ModulePath' has no inspectable headers.")
+            }
+            $platformError = @($response.Headers['X-Ms-Error-Code']) -join ','
+            $contentType = @($response.Headers['Content-Type']) -join ','
+            if ($page -eq 0 -and $platformError -ceq 'WebContentNotFound' -and
+                $contentType -match '^text/html(?:\s*;\s*[^,]+)?$') {
+                return [pscustomobject]@{ Exists = $false; Tags = $published }
+            }
+        }
 
         $document = $null
         try {
