@@ -87,7 +87,7 @@ locals {
   location_state_removal = "(?m)^[[:space:]]*removed[[:space:]]*\\{[[:space:]]*from[[:space:]]*=[[:space:]]*[A-Za-z_][A-Za-z0-9_-]*([.][A-Za-z_][A-Za-z0-9_-]*)+[[:space:]]+lifecycle[[:space:]]*\\{[[:space:]]*destroy[[:space:]]*=[[:space:]]*false[[:space:]]*\\}[[:space:]]*\\}"
   location_uninspected_blocks = length(fileset(".", "*.tf.json")) > 0 || anytrue([
     for filename, source in local.location_source_files :
-    length(regexall("(?m)^[[:space:]]*(provider|import|action|list)[[:space:]\"]", source)) > 0 ||
+    length(regexall("(?m)^[[:space:]]*(provider|import|action|list)([[:space:]]+\"[^\"]+\")*[[:space:]]*\\{", source)) > 0 ||
     length(regexall("(?m)^[[:space:]]*removed[[:space:]]*\\{", source)) != length(regexall(local.location_state_removal, source))
   ])
   location_business_required = (
