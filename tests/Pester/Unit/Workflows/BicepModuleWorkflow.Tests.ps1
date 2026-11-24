@@ -286,11 +286,39 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             $script:workflows['bicep-module-runtime-deployment']
         )
         foreach ($definition in $definitions) {
-            @($definition.on.workflow_call.secrets.Keys | Sort-Object) | Should -Be ($secretNames | Sort-Object)
+            $expected = @($secretNames)
+            if ($definition.name -in @('Reusable: Bicep Module Deployment', 'Reusable: Bicep Module Runtime Deployment')) {
+                $expected += 'AVM_SECRETS_CONTEXT'
+            }
+            @($definition.on.workflow_call.secrets.Keys | Sort-Object) | Should -Be ($expected | Sort-Object)
             foreach ($secretName in $secretNames) {
                 $definition.on.workflow_call.secrets[$secretName].required | Should -BeFalse
             }
         }
+    }
+
+    It 'packs all caller secrets across nested deployment reusable workflows' {
+        foreach ($entry in @(
+                @{ Workflow = 'bicep-module-runtime'; Job = 'e2e-test' }
+                @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'deploy' }
+                @{ Workflow = 'bicep-module'; Job = 'job_module_deploy_validation' }
+                @{ Workflow = 'bicep-module-preview'; Job = 'job_module_deploy_validation' }
+            )) {
+            $job = $script:workflows[$entry.Workflow].jobs[$entry.Job]
+            @($job.secrets.Keys) | Should -Be @('AVM_SECRETS_CONTEXT')
+            $job.secrets.AVM_SECRETS_CONTEXT | Should -BeExactly '${{ toJSON(secrets) }}'
+        }
+        $runtimeLeaf = $script:workflows['bicep-module-runtime-deployment']
+        $runtimeLeaf.on.workflow_call.secrets.AVM_SECRETS_CONTEXT.required | Should -BeFalse
+        $deploy = $runtimeLeaf.jobs.deploy.steps | Where-Object { $_['id'] -ceq 'deploy' }
+        $deploy.env.AVM_CI_SECRETS | Should -BeExactly '${{ toJSON(secrets) }}'
+        $deploy.env.AVM_SECRETS_CONTEXT | Should -BeExactly '${{ secrets.AVM_SECRETS_CONTEXT }}'
+        $deploy.run | Should -Match 'Resolve-AvmWorkflowSecretsJson'
+        $moduleLeaf = $script:workflows['bicep-module-deployment']
+        $moduleLeaf.on.workflow_call.secrets.AVM_SECRETS_CONTEXT.required | Should -BeFalse
+        $moduleDeployment = $moduleLeaf.jobs.job_module_deploy_validation.steps[-1].with
+        $moduleDeployment.githubSecrets | Should -BeExactly '${{ toJSON(secrets) }}'
+        $moduleDeployment.githubSecretsContext | Should -BeExactly '${{ secrets.AVM_SECRETS_CONTEXT }}'
     }
 
     It 'uses the shared pinned installer and retains runtime capabilities' {
@@ -512,7 +540,8 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             $job.uses | Should -BeExactly './.github/workflows/bicep-module-deployment.yml'
             $job.with.'tools-ref' | Should -BeExactly '${{ inputs.tools-ref }}'
             $job.with.Contains('avm-authoring-version') | Should -BeFalse
-            $job.secrets | Should -BeExactly 'inherit'
+            @($job.secrets.Keys) | Should -Be @('AVM_SECRETS_CONTEXT')
+            $job.secrets.AVM_SECRETS_CONTEXT | Should -BeExactly '${{ toJSON(secrets) }}'
         }
     }
 
@@ -821,7 +850,7 @@ Describe 'Bicep required checks and deployment guards' {
         )
         $runtimeDeployment = $script:workflows['bicep-module-runtime-deployment'].jobs.deploy.steps |
             Where-Object { $_['id'] -ceq 'context' }
-        foreach ($step in $runtimeSelections + @($runtimeDeployment)) {
+        foreach ($step in $runtimeSelections) {
             $step.env.ALLOW_VALIDATION_OVERRIDES | Should -BeExactly $allow
             $step.env.ARM_CLIENT_ID_OVERRIDE | Should -BeExactly $overrides.armClientIdOverride
             $step.env.ARM_TENANT_ID_OVERRIDE | Should -BeExactly $overrides.armTenantIdOverride
@@ -831,6 +860,13 @@ Describe 'Bicep required checks and deployment guards' {
             $step.run | Should -Match 'TenantId (?:= )?\$validation\.tenantId'
             $step.run | Should -Not -Match 'VALIDATE_(CLIENT_ID|TENANT_ID|SUBSCRIPTION_ID)_OVERRIDE'
         }
+        $runtimeDeployment.env.ALLOW_VALIDATION_OVERRIDES | Should -BeExactly $allow
+        $runtimeDeployment.env.ARM_CLIENT_ID_OVERRIDE | Should -BeExactly $overrides.armClientIdOverride
+        $runtimeDeployment.env.ARM_TENANT_ID_OVERRIDE | Should -BeExactly $overrides.armTenantIdOverride
+        $runtimeDeployment.env.ARM_SUBSCRIPTION_ID_OVERRIDE | Should -BeExactly $overrides.armSubscriptionIdOverride
+        $runtimeDeployment.env.AVM_SECRETS_CONTEXT | Should -BeExactly '${{ secrets.AVM_SECRETS_CONTEXT }}'
+        $runtimeDeployment.run | Should -Match 'Resolve-AvmWorkflowValidationConfiguration'
+        $runtimeDeployment.run | Should -Match 'SecretContextJson \$env:AVM_SECRETS_CONTEXT'
     }
 
     It 'pins shared runtime override support to the caller-supplied reusable workflow commit' {

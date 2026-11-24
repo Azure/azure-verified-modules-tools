@@ -37,6 +37,40 @@ function Resolve-AvmWorkflowOverrideGuid {
     return $identifier.ToString('D')
 }
 
+function ConvertFrom-AvmWorkflowSecretContext {
+    [CmdletBinding()]
+    param([AllowEmptyString()] [string] $Json)
+
+    if ([string]::IsNullOrEmpty($Json)) { return @{} }
+    try {
+        $context = $Json | ConvertFrom-Json -AsHashtable
+    }
+    catch {
+        throw [ArgumentException]::new('AVM_SECRETS_CONTEXT must be a JSON object.', $_.Exception)
+    }
+    if ($context -isnot [Collections.IDictionary]) {
+        throw [ArgumentException]::new('AVM_SECRETS_CONTEXT must be a JSON object.')
+    }
+    foreach ($value in $context.Values) {
+        if ($null -ne $value -and $value -isnot [string]) {
+            throw [ArgumentException]::new('AVM_SECRETS_CONTEXT values must be strings or null.')
+        }
+    }
+    return $context
+}
+
+function Resolve-AvmWorkflowSecretsJson {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()] [string] $DirectJson,
+        [AllowEmptyString()] [string] $SecretContextJson
+    )
+
+    if ([string]::IsNullOrEmpty($SecretContextJson)) { return $DirectJson }
+    $null = ConvertFrom-AvmWorkflowSecretContext -Json $SecretContextJson
+    return $SecretContextJson
+}
+
 function Resolve-AvmWorkflowValidationConfiguration {
     [CmdletBinding()]
     param(
@@ -45,9 +79,12 @@ function Resolve-AvmWorkflowValidationConfiguration {
         [AllowEmptyString()] [string] $FallbackSubscriptionId,
         [AllowEmptyString()] [string] $ModuleClientIds,
         [AllowEmptyString()] [string] $TenantId,
+        [AllowEmptyString()] [string] $ManagementGroupId,
+        [AllowEmptyString()] [string] $TokenNamePrefix,
         [AllowEmptyString()] [string] $ArmClientIdOverride,
         [AllowEmptyString()] [string] $ArmTenantIdOverride,
         [AllowEmptyString()] [string] $ArmSubscriptionIdOverride,
+        [AllowEmptyString()] [string] $SecretContextJson,
         [switch] $AllowOverrides
     )
 
@@ -56,9 +93,37 @@ function Resolve-AvmWorkflowValidationConfiguration {
         fallbackSubscriptionId = $FallbackSubscriptionId
         moduleClientIds = $ModuleClientIds
         tenantId = $TenantId
+        managementGroupId = $ManagementGroupId
+        tokenNamePrefix = $TokenNamePrefix
+    }
+    $secrets = ConvertFrom-AvmWorkflowSecretContext -Json $SecretContextJson
+    foreach ($entry in @(
+            @{ Key = 'poolJson'; Names = @('VALIDATE_SUBSCRIPTION_IDS', 'TEST_SUBSCRIPTION_IDS') }
+            @{ Key = 'fallbackSubscriptionId'; Names = @('VALIDATE_SUBSCRIPTION_ID') }
+            @{ Key = 'tenantId'; Names = @('VALIDATE_TENANT_ID') }
+            @{ Key = 'managementGroupId'; Names = @('VALIDATE_MANAGEMENT_GROUP_ID', 'ARM_MGMTGROUP_ID') }
+            @{ Key = 'tokenNamePrefix'; Names = @('TOKEN_NAMEPREFIX') }
+        )) {
+        if (-not [string]::IsNullOrEmpty([string] $configuration[$entry.Key])) { continue }
+        foreach ($name in $entry.Names) {
+            if ($secrets.Contains($name) -and -not [string]::IsNullOrEmpty([string] $secrets[$name])) {
+                $configuration[$entry.Key] = [string] $secrets[$name]
+                break
+            }
+        }
     }
     if (-not $AllowOverrides) { return $configuration }
 
+    foreach ($entry in @(
+            @{ Name = 'ArmClientIdOverride'; Secret = 'ARM_CLIENT_ID_OVERRIDE' }
+            @{ Name = 'ArmTenantIdOverride'; Secret = 'ARM_TENANT_ID_OVERRIDE' }
+            @{ Name = 'ArmSubscriptionIdOverride'; Secret = 'ARM_SUBSCRIPTION_ID_OVERRIDE' }
+        )) {
+        if ($secrets.Contains($entry.Secret) -and
+            -not [string]::IsNullOrEmpty([string] $secrets[$entry.Secret])) {
+            Set-Variable -Name $entry.Name -Value ([string] $secrets[$entry.Secret])
+        }
+    }
     $clientId = Resolve-AvmWorkflowOverrideGuid `
         -Name 'ARM_CLIENT_ID_OVERRIDE' -Value $ArmClientIdOverride
     $tenant = Resolve-AvmWorkflowOverrideGuid `

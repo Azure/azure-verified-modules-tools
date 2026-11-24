@@ -47,6 +47,8 @@ on:
         required: false
       TOKEN_NAMEPREFIX:
         required: false
+      AVM_SECRETS_CONTEXT:
+        required: false
 
 permissions: {}
 
@@ -111,6 +113,7 @@ jobs:
           ciKeyVaultName: ${{ vars.CI_KEY_VAULT_NAME }}
           githubVariables: ${{ toJSON(vars) }}
           githubSecrets: ${{ toJSON(secrets) }}
+          githubSecretsContext: ${{ secrets.AVM_SECRETS_CONTEXT }}
           allowOverrides: ${{ github.event_name == 'workflow_dispatch' && github.event.repository.fork }}
           armClientIdOverride: ${{ secrets.ARM_CLIENT_ID_OVERRIDE || vars.ARM_CLIENT_ID_OVERRIDE }}
           armTenantIdOverride: ${{ secrets.ARM_TENANT_ID_OVERRIDE || vars.ARM_TENANT_ID_OVERRIDE }}

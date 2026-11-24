@@ -220,7 +220,8 @@ jobs:
       testCase: ${{ toJSON(matrix.testCases) }}
       tokenNamePrefix: gci
       targetCommit: ${{ inputs.targetCommit }}
-    secrets: inherit
+    secrets:
+      AVM_SECRETS_CONTEXT: ${{ toJSON(secrets) }}
 
   job_preview_module:
     name: Publishing preview

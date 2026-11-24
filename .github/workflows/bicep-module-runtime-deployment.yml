@@ -46,6 +46,8 @@ on:
         required: false
       TOKEN_NAMEPREFIX:
         required: false
+      AVM_SECRETS_CONTEXT:
+        required: false
 
 permissions: {}
 
@@ -148,6 +150,7 @@ jobs:
           VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS: ${{ vars.VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS }}
           VALIDATE_TENANT_ID: ${{ vars.VALIDATE_TENANT_ID || secrets.VALIDATE_TENANT_ID }}
           TOKEN_NAMEPREFIX: ${{ secrets.TOKEN_NAMEPREFIX }}
+          AVM_SECRETS_CONTEXT: ${{ secrets.AVM_SECRETS_CONTEXT }}
           ALLOW_VALIDATION_OVERRIDES: ${{ github.event_name == 'workflow_dispatch' && github.event.repository.fork }}
           ARM_CLIENT_ID_OVERRIDE: ${{ secrets.ARM_CLIENT_ID_OVERRIDE || vars.ARM_CLIENT_ID_OVERRIDE }}
           ARM_TENANT_ID_OVERRIDE: ${{ secrets.ARM_TENANT_ID_OVERRIDE || vars.ARM_TENANT_ID_OVERRIDE }}
@@ -219,15 +222,17 @@ jobs:
           $validation = Resolve-AvmWorkflowValidationConfiguration -ModulePath $env:MODULE_PATH `
               -PoolJson $env:TEST_SUBSCRIPTION_IDS -FallbackSubscriptionId $env:VALIDATE_SUBSCRIPTION_ID `
               -ModuleClientIds $env:VALIDATE_MODULE_CLIENT_IDS -TenantId $env:VALIDATE_TENANT_ID `
+              -TokenNamePrefix $env:TOKEN_NAMEPREFIX `
               -ArmClientIdOverride $env:ARM_CLIENT_ID_OVERRIDE -ArmTenantIdOverride $env:ARM_TENANT_ID_OVERRIDE `
               -ArmSubscriptionIdOverride $env:ARM_SUBSCRIPTION_ID_OVERRIDE `
+              -SecretContextJson $env:AVM_SECRETS_CONTEXT `
               -AllowOverrides:(ConvertTo-AvmWorkflowBoolean $env:ALLOW_VALIDATION_OVERRIDES)
           Write-Host "Revalidating the test case and selected identity for '$env:MODULE_PATH' with Get-AvmBicepE2eTestContext."
           $context = Get-AvmBicepE2eTestContext -Root $env:GITHUB_WORKSPACE -ModulePath $env:MODULE_PATH `
               -TestCase $testCase -PoolJson $validation.poolJson -FallbackSubscriptionId $validation.fallbackSubscriptionId `
               -ModuleClientIds $validation.moduleClientIds -TenantId $validation.tenantId `
               -ModuleSubscriptionCleanupManagementGroupIds $env:VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS `
-              -NamePrefix $env:TOKEN_NAMEPREFIX -SkipModuleVersionCheck
+              -NamePrefix $validation.tokenNamePrefix -SkipModuleVersionCheck
           foreach ($property in $context.PSObject.Properties) {
             "$($property.Name)=$($property.Value)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           }
@@ -256,10 +261,14 @@ jobs:
           SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_ID: ${{ steps.context.outputs.SubscriptionCleanupManagementGroupId }}
           AVM_CI_VARIABLES: ${{ toJSON(vars) }}
           AVM_CI_SECRETS: ${{ toJSON(secrets) }}
+          AVM_SECRETS_CONTEXT: ${{ secrets.AVM_SECRETS_CONTEXT }}
           STATE_PATH: ${{ runner.temp }}/avm-bicep-state/${{ steps.context.outputs.ArtifactKey }}.cleanup.json
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
+          . (Join-Path $env:GITHUB_WORKSPACE '.avm-tools' 'scripts' 'bicep-workflows' 'Deployment.ps1')
+          $env:AVM_CI_SECRETS = Resolve-AvmWorkflowSecretsJson `
+              -DirectJson $env:AVM_CI_SECRETS -SecretContextJson $env:AVM_SECRETS_CONTEXT
           $null = New-Item -ItemType Directory -Path (Split-Path $env:STATE_PATH) -Force
           Set-Location (Join-Path $env:GITHUB_WORKSPACE $env:MODULE_PATH)
           if (-not [string]::IsNullOrWhiteSpace($env:NAME_PREFIX)) {
