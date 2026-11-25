@@ -1,5 +1,6 @@
 $script:AvmGitHubDiagnosticCounts = @{ Warning = 0; Error = 0 }
 $script:AvmGitHubDiagnosticOverflow = [System.Collections.Generic.List[object]]::new()
+$script:AvmParallelDiagnosticTransfer = $false
 
 function Test-AvmGitHubActionsContext {
     [CmdletBinding()]
@@ -214,7 +215,9 @@ function Write-AvmLog {
 
         [int] $Line = 0,
 
-        [int] $Column = 0
+        [int] $Column = 0,
+
+        [string] $SourceRoot = (Get-Location).Path
     )
 
     begin {
@@ -232,10 +235,22 @@ function Write-AvmLog {
             return
         }
 
+        if ($script:AvmParallelDiagnosticTransfer -and $Level -in @('Warning', 'Error')) {
+            Write-Information -Tags 'AvmDiagnostic' -MessageData @{
+                Message    = $Message
+                Level      = $Level
+                File       = $File
+                Line       = $Line
+                Column     = $Column
+                SourceRoot = $SourceRoot
+            } -InformationAction Continue
+            return
+        }
+
         $text = if ($null -eq $Message) { '' } else { $Message }
-        $position = Format-AvmAnnotationProperty -File $File -Line $Line -Column $Column
+        $position = Format-AvmAnnotationProperty -File $File -Line $Line -Column $Column -SourceRoot $SourceRoot
         $diagnosticText = if ($Level -in @('Warning', 'Error')) {
-            Format-AvmDiagnosticText -Text $text -File $File -Line $Line -Column $Column
+            Format-AvmDiagnosticText -Text $text -File $File -Line $Line -Column $Column -SourceRoot $SourceRoot
         }
         else {
             $text
@@ -266,8 +281,9 @@ function Write-AvmLog {
                         Write-Information ('::warning{0}::{1}' -f $position, (ConvertTo-AvmAnnotationText -Text $diagnosticText)) -InformationAction Continue
                     }
                     else {
-                        Add-AvmGitHubDiagnosticOverflow -Level Warning -Message $diagnosticText -File $File -Line $Line -Column $Column
-                        Write-Information ('Warning: {0}' -f $diagnosticText) -InformationAction Continue
+                        Add-AvmGitHubDiagnosticOverflow -Level Warning -Message $diagnosticText -File $File -Line $Line -Column $Column -SourceRoot $SourceRoot
+                        # Legacy ##[ commands are recognised even after a line prefix.
+                        Write-Information ('Warning: {0}' -f $diagnosticText.ReplaceLineEndings("`nWarning: ").Replace('##[', '##%5B')) -InformationAction Continue
                     }
                 }
                 else {
@@ -281,8 +297,8 @@ function Write-AvmLog {
                         Write-Information ('::error{0}::{1}' -f $position, (ConvertTo-AvmAnnotationText -Text $diagnosticText)) -InformationAction Continue
                     }
                     else {
-                        Add-AvmGitHubDiagnosticOverflow -Level Error -Message $diagnosticText -File $File -Line $Line -Column $Column
-                        Write-Information ('Error: {0}' -f $diagnosticText) -InformationAction Continue
+                        Add-AvmGitHubDiagnosticOverflow -Level Error -Message $diagnosticText -File $File -Line $Line -Column $Column -SourceRoot $SourceRoot
+                        Write-Information ('Error: {0}' -f $diagnosticText.ReplaceLineEndings("`nError: ").Replace('##[', '##%5B')) -InformationAction Continue
                     }
                 }
                 else {
@@ -317,7 +333,7 @@ function ConvertTo-AvmAnnotationText {
 
     # Console indentation is load-bearing locally but leaks into the annotation
     # payload in GitHub Actions, so it is stripped on this branch only.
-    return $Text.TrimStart().Replace("`r", '').Replace("`n", '%0A')
+    return $Text.TrimStart().Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
 }
 
 function ConvertTo-AvmAnnotationPath {
@@ -330,13 +346,17 @@ function ConvertTo-AvmAnnotationPath {
         Files-changed view when its path is repo-relative and uses forward
         slashes. Terraform emits OS paths, so a Windows run yields
         'tests\unit\x.tftest.hcl', which GitHub cannot match against the diff.
+        Relative diagnostics use their source directory, while known
+        repository-relative paths retain their workspace anchor.
     #>
     [CmdletBinding()]
     [OutputType([string])]
     param(
         [Parameter(Mandatory)]
         [AllowEmptyString()]
-        [string] $Path
+        [string] $Path,
+
+        [string] $SourceRoot = (Get-Location).Path
     )
 
     if ([string]::IsNullOrWhiteSpace($Path)) {
@@ -345,14 +365,29 @@ function ConvertTo-AvmAnnotationPath {
 
     $normalised = $Path.Trim().Replace('\', '/')
 
-    $roots = @($env:GITHUB_WORKSPACE, (Get-Location).Path) |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-    foreach ($root in $roots) {
-        $prefix = $root.Replace('\', '/').TrimEnd('/') + '/'
-        if ($normalised.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $normalised = $normalised.Substring($prefix.Length)
-            break
+    $root = if ([string]::IsNullOrWhiteSpace($env:GITHUB_WORKSPACE)) { $SourceRoot } else { $env:GITHUB_WORKSPACE }
+    $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    $prefix = $root.Replace('\', '/').TrimEnd('/') + '/'
+
+    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_WORKSPACE) -and $normalised -notmatch '^(?:[A-Za-z]:/|/)') {
+        $sourcePrefix = [IO.Path]::GetRelativePath($root, $SourceRoot).Replace('\', '/').TrimEnd('/') + '/'
+        $sourcePath = [IO.Path]::GetFullPath($normalised, $SourceRoot)
+        $repositoryPath = [IO.Path]::GetFullPath($normalised, $root)
+        $alreadyRepositoryRelative = $sourcePrefix -ne './' -and -not $sourcePrefix.StartsWith('../') -and $normalised.StartsWith($sourcePrefix, $comparison)
+        $repositoryFile = $normalised -notmatch '(^|/)\.\.(/|$)' -and -not (Test-Path -LiteralPath $sourcePath) -and (Test-Path -LiteralPath $repositoryPath)
+        if ($alreadyRepositoryRelative -or $repositoryFile) {
+            $normalised = $repositoryPath.Replace('\', '/')
         }
+        else {
+            $normalised = $sourcePath.Replace('\', '/')
+        }
+    }
+    elseif ([IO.Path]::IsPathFullyQualified($normalised)) {
+        $normalised = [IO.Path]::GetFullPath($normalised).Replace('\', '/')
+    }
+
+    if ($normalised.StartsWith($prefix, $comparison)) {
+        $normalised = $normalised.Substring($prefix.Length)
     }
 
     while ($normalised.StartsWith('./')) {
@@ -375,10 +410,12 @@ function Format-AvmDiagnosticText {
 
         [int] $Line = 0,
 
-        [int] $Column = 0
+        [int] $Column = 0,
+
+        [string] $SourceRoot = (Get-Location).Path
     )
 
-    $path = ConvertTo-AvmAnnotationPath -Path $File
+    $path = ConvertTo-AvmAnnotationPath -Path $File -SourceRoot $SourceRoot
     if ([string]::IsNullOrWhiteSpace($path) -and $Line -le 0) {
         return $Text
     }
@@ -406,16 +443,19 @@ function Format-AvmAnnotationProperty {
 
         [int] $Line = 0,
 
-        [int] $Column = 0
+        [int] $Column = 0,
+
+        [string] $SourceRoot = (Get-Location).Path
     )
 
-    $path = ConvertTo-AvmAnnotationPath -Path $File
+    $path = ConvertTo-AvmAnnotationPath -Path $File -SourceRoot $SourceRoot
     if ([string]::IsNullOrWhiteSpace($path)) {
         return ''
     }
 
     $parts = [System.Collections.Generic.List[string]]::new()
-    $parts.Add('file={0}' -f $path.Replace(',', '%2C'))
+    $escapedPath = (ConvertTo-AvmAnnotationText -Text $path).Replace(':', '%3A').Replace(',', '%2C')
+    $parts.Add('file={0}' -f $escapedPath)
     if ($Line -gt 0) {
         $parts.Add('line={0}' -f $Line)
         if ($Column -gt 0) {
@@ -442,13 +482,15 @@ function Add-AvmGitHubDiagnosticOverflow {
 
         [int] $Line = 0,
 
-        [int] $Column = 0
+        [int] $Column = 0,
+
+        [string] $SourceRoot = (Get-Location).Path
     )
 
     $diagnostic = [pscustomobject]@{
         Level   = $Level
         Message = $Message
-        File    = ConvertTo-AvmAnnotationPath -Path $File
+        File    = ConvertTo-AvmAnnotationPath -Path $File -SourceRoot $SourceRoot
         Line    = $Line
         Column  = $Column
     }

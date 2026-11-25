@@ -373,13 +373,17 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             $job.permissions.Contains('id-token') | Should -BeFalse
             ($job | ConvertTo-Json -Depth 20) | Should -Not -Match '\bsecrets\b|AVM_CI_|azure/login|environment:'
         }
-        $runtime.jobs.'pr-check'.permissions.checks | Should -BeExactly 'write'
+        @($runtime.jobs.'pr-check'.permissions.Keys) | Should -Be @('contents')
+        foreach ($permission in $runtime.jobs.'pr-check'.permissions.Keys) {
+            $prCheck.jobs.check.permissions[$permission] |
+                Should -BeExactly $runtime.jobs.'pr-check'.permissions[$permission]
+        }
         $runtime.jobs.'unit-test'.permissions.Contains('checks') | Should -BeFalse
         $prCheckRun = $runtime.jobs.'pr-check'.steps[-1].run
         $prCheckRun | Should -Match 'avm -SkipModuleVersionCheck pr-check --passthru'
         $prCheckRun | Should -Not -Match 'Write-PrCheckIssues'
-        $runtime.jobs.'pr-check'.steps[-1].env.GH_TOKEN | Should -BeExactly '${{ github.token }}'
-        $runtime.jobs.'pr-check'.steps[-1].env.AVM_GITHUB_CHECK_RUN_ID | Should -BeExactly '${{ job.check_run_id }}'
+        ($runtime.jobs.'pr-check' | ConvertTo-Json -Depth 20) |
+            Should -Not -Match 'GH_TOKEN|AVM_GITHUB_CHECK_RUN_ID'
         $unitResult = @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Unit tests')
         $unitResult | Should -HaveCount 1
         $unitResult[0].id | Should -BeExactly 'unit-result'

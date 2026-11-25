@@ -240,6 +240,63 @@ Describe 'Invoke-Avm help listing' {
     }
 }
 
+Describe 'Invoke-Avm diagnostic finalization' {
+    It 'flushes the eleventh terminal diagnostic after rendering and preserves the typed failure with passthru=<PassThru>' -ForEach @(
+        @{ PassThru = $false }
+        @{ PassThru = $true }
+    ) {
+        $saved = @{}
+        foreach ($name in @('GITHUB_ACTIONS', 'GH_TOKEN', 'GITHUB_REPOSITORY', 'AVM_GITHUB_CHECK_RUN_ID', 'GITHUB_STEP_SUMMARY')) {
+            $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+            [Environment]::SetEnvironmentVariable($name, [NullString]::Value, 'Process')
+        }
+        $env:GITHUB_ACTIONS = 'true'
+        $env:GITHUB_STEP_SUMMARY = Join-Path $TestDrive "terminal-$PassThru.md"
+        try {
+            InModuleScope 'Avm.Authoring' -Parameters @{ PassThru = $PassThru } {
+                param($PassThru)
+                $script:AvmGitHubDiagnosticCounts.Error = 0
+                $script:AvmGitHubDiagnosticOverflow.Clear()
+                Mock Test-AvmModuleVersion
+                Mock Test-AvmDisableSentinel { $null }
+                Mock Write-AvmResult
+                Mock Invoke-AvmGitHubApi { throw 'No token must mean no API call.' }
+                Mock Invoke-AvmDoctor {
+                    foreach ($index in 1..10) { Write-AvmLog "earlier $index" -Level Error }
+                    [pscustomobject]@{
+                        Status = 'fail'
+                        Issues = @([pscustomobject]@{
+                            Severity = 'error'; File = 'main.bicep'; Line = 11; Column = 2
+                            Code = 'terminal-code'; Message = 'terminal diagnostic'
+                        })
+                    }
+                }
+                Mock Write-AvmGitHubDiagnosticSummary { }
+                $tokens = @('doctor')
+                if ($PassThru) { $tokens += '--passthru' }
+                $exception = try { Invoke-Avm @tokens; $null } catch { $_.Exception }
+                $exception.GetType().Name | Should -BeExactly 'AvmCommandException'
+                $exception.Result.Status | Should -BeExactly 'fail'
+                $exception.Message | Should -Match 'terminal diagnostic'
+                Should -Invoke Write-AvmResult -Exactly 1
+                Should -Invoke Write-AvmGitHubDiagnosticSummary -Exactly 1 -ParameterFilter {
+                    $Diagnostics.Count -eq 1 -and $Diagnostics[0].Line -eq 11 -and
+                    $Diagnostics[0].Message -match 'terminal diagnostic' -and
+                    $Reason -match 'unavailable'
+                }
+                Should -Invoke Invoke-AvmGitHubApi -Exactly 0
+                $script:AvmGitHubDiagnosticOverflow.Count | Should -Be 0
+            }
+        }
+        finally {
+            foreach ($name in $saved.Keys) {
+                [Environment]::SetEnvironmentVariable($name,
+                    $(if ($null -eq $saved[$name]) { [NullString]::Value } else { $saved[$name] }), 'Process')
+            }
+        }
+    }
+}
+
 Describe 'Invoke-Avm array dispatch' {
     It 'preserves <Case> without consuming the following parameter' -ForEach @(
         @{ Case = 'array expressions'; Invocation = "avm spec-verb -Names @('lint', 'check policy') -Label kept"; Count = 2; Values = 'lint|check policy' }

@@ -101,6 +101,10 @@ terminating PowerShell error shows only the command summary instead of replaying
 the entire failure again. Local interactive colour and explicit `CLICOLOR_FORCE`
 remain available; `NO_COLOR` takes precedence.
 
+The reusable Bicep PR check needs only read access to repository contents.
+Diagnostics beyond GitHub's ten warning/error command limit use the step
+summary; this default runtime does not request Checks API write access.
+
 PR checks and integration pair the selected General test subscription with the
 standard `ARM_CLIENT_ID` and `ARM_TENANT_ID`; `ARM_*_OVERRIDE` inputs apply only
 to e2e. A provider's explicit subscription or `TF_VAR_*` input can select a

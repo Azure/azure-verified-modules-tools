@@ -197,15 +197,14 @@ Describe 'Component: Bicep Pester unit tier' -Tag 'Component' {
         }
     }
 
-    It 'provides GitHub check-run context to the AVM PR check' {
+    It 'keeps default PR checks compatible with read-only reusable-workflow callers' {
         Import-Module -FullyQualifiedName @{ ModuleName = 'powershell-yaml'; RequiredVersion = '0.4.12' }
         $workflow = ConvertFrom-Yaml (Get-Content -LiteralPath (
                 Join-Path $script:repoRoot '.github' 'workflows' 'bicep-module-runtime.yml') -Raw)
         $prCheck = @($workflow.jobs.'pr-check'.steps | Where-Object name -EQ 'PR check')[0]
 
-        $workflow.jobs.'pr-check'.permissions.checks | Should -BeExactly 'write'
-        $prCheck.env.GH_TOKEN | Should -BeExactly '${{ github.token }}'
-        $prCheck.env.AVM_GITHUB_CHECK_RUN_ID | Should -BeExactly '${{ job.check_run_id }}'
+        @($workflow.jobs.'pr-check'.permissions.Keys) | Should -Be @('contents')
+        ($prCheck | ConvertTo-Json -Depth 20) | Should -Not -Match 'GH_TOKEN|AVM_GITHUB_CHECK_RUN_ID'
         $prCheck.run | Should -Match '(?m)^\s*Import-Module \$env:AVM_AUTHORING_MODULE -ErrorAction Stop\s*$'
         $prCheck.run | Should -Match '(?m)^\s*\$null = avm -SkipModuleVersionCheck pr-check --passthru\s*$'
     }

@@ -54,6 +54,7 @@ function Invoke-AvmParallel {
         -ChildPath 'Avm.Authoring.psd1'
     $workerCount = [Math]::Min($ThrottleLimit, $InputObject.Count)
     $nestedCommand = Test-AvmNestedCommandContext
+    $sourceRoot = (Get-Location).Path
     $pool = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspacePool(
         1,
         $workerCount)
@@ -68,18 +69,21 @@ param(
     $Argument,
     [string] $WorkerVerbosePreference,
     [string] $WorkerDebugPreference,
-    [bool] $NestedCommand
+    [bool] $NestedCommand,
+    [string] $SourceRoot
 )
 
 $ErrorActionPreference = 'Stop'
 $InformationPreference = 'Continue'
 $VerbosePreference = [System.Management.Automation.ActionPreference]$WorkerVerbosePreference
 $DebugPreference = [System.Management.Automation.ActionPreference]$WorkerDebugPreference
+Set-Location -LiteralPath $SourceRoot
 
 Import-Module -Name $ModuleManifest -ErrorAction Stop
+$module = Get-Module -Name 'Avm.Authoring' | Select-Object -First 1
+& $module { $script:AvmParallelDiagnosticTransfer = $true }
 
 if (-not [string]::IsNullOrWhiteSpace($FunctionName)) {
-    $module = Get-Module -Name 'Avm.Authoring' | Select-Object -First 1
     & $module {
         param($Name, $Item, $SharedArgument, $IsNested)
         if ($IsNested) {
@@ -127,6 +131,7 @@ else {
             $null = $pipeline.AddArgument([string]$VerbosePreference)
             $null = $pipeline.AddArgument([string]$DebugPreference)
             $null = $pipeline.AddArgument($nestedCommand)
+            $null = $pipeline.AddArgument($sourceRoot)
             $jobs.Add([pscustomobject]@{
                     Index      = $index
                     Pipeline   = $pipeline
@@ -173,10 +178,16 @@ else {
 
     foreach ($result in $orderedResults) {
         foreach ($record in $result.Information) {
-            Write-Information `
-                -MessageData $record.MessageData `
-                -Tags $record.Tags `
-                -InformationAction Continue
+            if ($record.Tags -contains 'AvmDiagnostic') {
+                $diagnostic = $record.MessageData
+                Write-AvmLog @diagnostic
+            }
+            else {
+                Write-Information `
+                    -MessageData $record.MessageData `
+                    -Tags $record.Tags `
+                    -InformationAction Continue
+            }
         }
         foreach ($record in $result.Warnings) {
             Write-AvmLog -Message $record.Message -Level Warning
@@ -187,6 +198,9 @@ else {
         foreach ($record in $result.Debug) {
             Write-Debug $record.Message -Debug
         }
+    }
+
+    foreach ($result in $orderedResults) {
         if ($null -ne $result.Failure) {
             throw $result.Failure
         }

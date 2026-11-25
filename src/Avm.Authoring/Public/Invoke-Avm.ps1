@@ -45,6 +45,7 @@ function Invoke-Avm {
         'help'
     }
 
+    $dispatchCompleted = $false
     try {
         $verboseRequested = Test-AvmDebugMode
         if (-not $verboseRequested) {
@@ -264,41 +265,43 @@ function Invoke-Avm {
         $result = & $cmd @bound @positional
         $dispatchSw.Stop()
         Write-AvmLog ('dispatch: completed {0} in {1}' -f $match.Cmdlet, (Format-AvmDuration -Duration $dispatchSw.Elapsed)) -Level Verbose
+        $dispatchCompleted = $true
+
+        $items = @($result | Where-Object { $null -ne $_ })
+        $rendered = @($items | Where-Object { $null -ne $_.PSObject.Properties['Status'] })
+        $passThrough = @($items | Where-Object { $null -eq $_.PSObject.Properties['Status'] })
+        Write-AvmLog ('dispatch: result objects={0}; rendered={1}; passthrough={2}' -f $items.Count, $rendered.Count, $passThrough.Count) -Level Verbose
+
+        # F25: render once per invocation, not once per emitted object.
+        if ($rendered.Count -gt 0) {
+            Write-AvmResult -Result $rendered -Verb $verbPath
+        }
+
+        # F02: a gauntlet verb that reports Status 'fail' or 'error' must make the
+        # hosting process exit non-zero, so wrapping git hooks and CI steps cannot
+        # pass silently. Read-only verbs (e.g. 'version') emit no 'Status' property
+        # and stream straight through untouched.
+        foreach ($item in $rendered) {
+            $status = ([string]$item.PSObject.Properties['Status'].Value).Trim()
+            if ($status.ToLowerInvariant() -in @('fail', 'error')) {
+                Assert-AvmCommandSuccess -Verb $verbPath -Status $status -Result $item
+            }
+        }
+
+        # F23: the rendered summary is the interactive contract. Only hand the raw
+        # result objects back when the caller asks for them; objects the renderer
+        # did not consume (e.g. 'avm version') always stream through.
+        if ($passThru) {
+            return $result
+        }
+
+        return $passThrough
     }
     catch [AvmException] {
+        if ($dispatchCompleted) { throw }
         Assert-AvmCleanFailure -Verb $verbPath -Exception $_.Exception
     }
     finally {
         Send-AvmGitHubDiagnosticOverflow
     }
-
-    $items = @($result | Where-Object { $null -ne $_ })
-    $rendered = @($items | Where-Object { $null -ne $_.PSObject.Properties['Status'] })
-    $passThrough = @($items | Where-Object { $null -eq $_.PSObject.Properties['Status'] })
-    Write-AvmLog ('dispatch: result objects={0}; rendered={1}; passthrough={2}' -f $items.Count, $rendered.Count, $passThrough.Count) -Level Verbose
-
-    # F25: render once per invocation, not once per emitted object.
-    if ($rendered.Count -gt 0) {
-        Write-AvmResult -Result $rendered -Verb $verbPath
-    }
-
-    # F02: a gauntlet verb that reports Status 'fail' or 'error' must make the
-    # hosting process exit non-zero, so wrapping git hooks and CI steps cannot
-    # pass silently. Read-only verbs (e.g. 'version') emit no 'Status' property
-    # and stream straight through untouched.
-    foreach ($item in $rendered) {
-        $status = ([string]$item.PSObject.Properties['Status'].Value).Trim()
-        if ($status.ToLowerInvariant() -in @('fail', 'error')) {
-            Assert-AvmCommandSuccess -Verb $verbPath -Status $status -Result $item
-        }
-    }
-
-    # F23: the rendered summary is the interactive contract. Only hand the raw
-    # result objects back when the caller asks for them; objects the renderer
-    # did not consume (e.g. 'avm version') always stream through.
-    if ($passThru) {
-        return $result
-    }
-
-    return $passThrough
 }

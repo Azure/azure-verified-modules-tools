@@ -242,6 +242,89 @@ Describe 'Write-AvmLog' {
             @($messages) | Should -Contain '::error::line one%0Aline two'
         }
 
+        It 'round-trips literal percent sequences and command delimiters in annotation data and properties' {
+            InModuleScope 'Avm.Authoring' {
+                $message = "literal %0A %0D %25`r`n::error::not another command"
+                $file = "main%2C,%3B;`r`n::error::.bicep"
+                $records = @()
+                Write-AvmLog $message -Level Error -File $file -Line 2 -InformationVariable records
+                $command = [string]$records[0].MessageData
+                $command | Should -Not -Match "[`r`n]"
+                $parts = $command -split '::', 3
+                $property = ($parts[1] -replace '^error file=', '') -replace ',line=2$', ''
+                $property.Replace('%0D', "`r").Replace('%0A', "`n").Replace('%3A', ':').
+                    Replace('%2C', ',').Replace('%25', '%') | Should -BeExactly $file
+                $parts[2].Replace('%0D', "`r").Replace('%0A', "`n").Replace('%25', '%') |
+                    Should -BeExactly "$message ($file, line 2)"
+            }
+        }
+
+        It 'keeps every overflow output line command-safe and retains the original API diagnostic for <Level>' -ForEach @(
+            @{ Level = 'Warning' }
+            @{ Level = 'Error' }
+        ) {
+            $env:GH_TOKEN = 'fixture-token'
+            $env:GITHUB_REPOSITORY = 'Azure/example'
+            $env:AVM_GITHUB_CHECK_RUN_ID = '123'
+            InModuleScope 'Avm.Authoring' -Parameters @{ Level = $Level } {
+                param($Level)
+                $script:overflowBody = $null
+                Mock Invoke-AvmGitHubApi {
+                    if ($Method -eq 'PATCH') { $script:overflowBody = $Body }
+                    return @{}
+                }
+                1..10 | ForEach-Object { Write-AvmLog "earlier $_" -Level $Level 6>$null }
+                $message = "first line %0A`r`n::error::injected command`r::warning::also injected ##[error]legacy"
+                $records = @()
+                Write-AvmLog $message -Level $Level -File 'main.bicep' -Line 3 -InformationVariable records
+                $lines = ([string]$records[0].MessageData) -split '\r\n|\r|\n'
+                $lines | Should -HaveCount 3
+                foreach ($line in $lines) { $line | Should -Match "^${Level}: " }
+                foreach ($line in $lines) { $line | Should -Not -Match '##\[' }
+                $script:AvmGitHubDiagnosticOverflow[0].Message | Should -BeExactly "$message (main.bicep, line 3)"
+                Send-AvmGitHubDiagnosticOverflow
+                $script:overflowBody.output.annotations[0].message |
+                    Should -BeExactly "$message (main.bicep, line 3)"
+            }
+        }
+
+        It 'anchors module-relative and repository-relative paths without concealing outside-workspace diagnostics' {
+            $workspace = Join-Path $TestDrive 'workspace'
+            $moduleRoot = Join-Path $workspace 'avm' 'res' 'sample'
+            $null = New-Item -ItemType Directory -Path $moduleRoot -Force
+            $null = New-Item -ItemType File -Path (Join-Path $moduleRoot 'main.bicep')
+            $null = New-Item -ItemType File -Path (Join-Path $workspace 'README.md')
+            $saved = $env:GITHUB_WORKSPACE
+            $env:GITHUB_WORKSPACE = $workspace
+            Push-Location -LiteralPath $moduleRoot
+            try {
+                InModuleScope 'Avm.Authoring' -Parameters @{ Workspace = $workspace } {
+                    param($Workspace)
+                    $records = @()
+                    Write-AvmLog 'ordinary' -Level Warning -File 'main.bicep' -Line 8 -InformationVariable records
+                    [string]$records[0].MessageData |
+                        Should -BeExactly '::warning file=avm/res/sample/main.bicep,line=8::ordinary (avm/res/sample/main.bicep, line 8)'
+                    ConvertTo-AvmAnnotationPath 'avm/res/sample/main.bicep' |
+                        Should -BeExactly 'avm/res/sample/main.bicep'
+                    ConvertTo-AvmAnnotationPath 'README.md' | Should -BeExactly 'README.md'
+                    ConvertTo-AvmAnnotationPath (Join-Path $Workspace 'avm' 'res' 'sample' 'main.bicep') |
+                        Should -BeExactly 'avm/res/sample/main.bicep'
+                    $outside = [IO.Path]::GetFullPath((Join-Path $Workspace '..' 'outside.bicep')).Replace('\', '/')
+                    ConvertTo-AvmAnnotationPath '../../../../outside.bicep' | Should -BeExactly $outside
+                    ConvertTo-AvmAnnotationPath $outside | Should -BeExactly $outside
+                    1..10 | ForEach-Object { Write-AvmLog "earlier $_" -Level Error 6>$null }
+                    Write-AvmLog 'overflow' -Level Error -File 'main.bicep' -Line 9 6>$null
+                    $script:AvmGitHubDiagnosticOverflow[0].File | Should -BeExactly 'avm/res/sample/main.bicep'
+                    $script:AvmGitHubDiagnosticOverflow[0].Message |
+                        Should -BeExactly 'overflow (avm/res/sample/main.bicep, line 9)'
+                }
+            }
+            finally {
+                Pop-Location
+                $env:GITHUB_WORKSPACE = $saved
+            }
+        }
+
         It 'emits group markers' {
             $messages = InModuleScope 'Avm.Authoring' {
                 $captured = @()
