@@ -1377,7 +1377,7 @@ rule "scope_rule" {
         $probe.Result.Issues | Should -HaveCount 1
         $probe.Result.Issues[0].Severity | Should -Be $Severity
         @($probe.Info | Where-Object { $_ -like '::error*' }) | Should -HaveCount 1
-        $probe.Info | Should -Contain "::error file=variables.tf,line=17,col=5::[$Code] Threshold diagnostic."
+        $probe.Info | Should -Contain "::error file=variables.tf,line=17,col=5::[$Code] Threshold diagnostic. (variables.tf, line 17, column 5)"
         @($probe.Info | Where-Object { $_ -like '*Threshold diagnostic.*' }) | Should -HaveCount 1
         ($probe.Lines -join "`n") | Should -Match ([regex]::Escape("[$Code] Threshold diagnostic."))
         $probe.Json | Should -Not -Match 'Presented|Inline|Reported'
@@ -1654,6 +1654,9 @@ rule "scope_rule" {
                     [pscustomobject]@{ ExitCode = 0; StdOut = $J; StdErr = '' }
                 }
 
+                $script:AvmGitHubDiagnosticCounts.Warning = 0
+                $script:AvmGitHubDiagnosticCounts.Error = 0
+                $script:AvmGitHubDiagnosticOverflow.Clear()
                 $captured = @()
                 $result = Invoke-AvmTerraformLint -Context $C -InformationVariable captured 3>$null
                 [pscustomobject]@{
@@ -1669,7 +1672,8 @@ rule "scope_rule" {
         $probe.Result.Status | Should -Be 'pass'
         @($probe.Info) | Should -Contain (
             '::warning file=variables.tf,line=21,col=7::' +
-            '[avm_interface_private_endpoints_deprecated] Use the canonical private endpoints interface.'
+            '[avm_interface_private_endpoints_deprecated] Use the canonical private endpoints interface. ' +
+            '(variables.tf, line 21, column 7)'
         )
     }
 

@@ -40,6 +40,7 @@ This reference is generated from the comment-based help on the public PowerShell
 | [Get-AvmBicepWorkflowModuleMatrix](Get-AvmBicepWorkflowModuleMatrix.md) |  | Build a deterministic Bicep module workflow matrix. |
 | [Get-AvmBicepWorkflowTestFiles](Get-AvmBicepWorkflowTestFiles.md) |  | Discover native Bicep test files and policy candidates for one module. |
 | [Get-AvmCatalogTelemetryPrefix](Get-AvmCatalogTelemetryPrefix.md) |  | Read current and historical telemetry prefixes from the public AVM catalog. |
+| [Get-AvmE2eScenarioSelection](Get-AvmE2eScenarioSelection.md) |  | Classify AVM E2E examples by module-specific requirements. |
 | [Initialize-AvmBicepReleaseMatrix](Initialize-AvmBicepReleaseMatrix.md) |  | Build a guarded top-level Bicep release matrix. |
 | [Initialize-AvmBicepWorkflowMatrix](Initialize-AvmBicepWorkflowMatrix.md) |  | Discover a checked-out Bicep workflow matrix for a push, pull request, or manual run. |
 | [Invoke-Avm](Invoke-Avm.md) | `avm` | Avm CLI dispatcher. The 'avm' alias is the user-facing entry point. |

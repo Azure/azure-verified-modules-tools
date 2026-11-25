@@ -157,8 +157,14 @@ jobs:
               -ModuleClientIds $validation.moduleClientIds -TenantId $validation.tenantId `
               -RandomSeed ([int](([long]$env:GITHUB_RUN_ID + [long]$env:GITHUB_RUN_ATTEMPT) % [int]::MaxValue)) `
               -DisplaySubscriptionNames:($validation.poolJson -ne '') -SkipModuleVersionCheck)
+          $moduleTypeMatch = [regex]::Match($env:MODULE_PATH, '^avm/(?<type>res|ptn|utl)/')
+          if (-not $moduleTypeMatch.Success) {
+            throw [System.IO.InvalidDataException]::new("Unsupported AVM module path: $env:MODULE_PATH")
+          }
+          $scenarioSelection = Get-AvmE2eScenarioSelection -ModuleType $moduleTypeMatch.Groups['type'].Value `
+              -Names @($matrix.Name) -SkipModuleVersionCheck
           foreach ($testCase in $matrix) {
-            $isRequired = $testCase.Name -cin @('default', 'defaults', 'waf-aligned')
+            $isRequired = $scenarioSelection.Required -ccontains $testCase.Name
             $testCase | Add-Member -NotePropertyName IsRequired -NotePropertyValue $isRequired -Force
           }
           Write-Host "Selected $($matrix.Count) E2E test case(s)."

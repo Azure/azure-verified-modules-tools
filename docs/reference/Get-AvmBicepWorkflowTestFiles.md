@@ -38,14 +38,14 @@ Exact repository-relative module path using forward slashes.
 ### -PsRuleFilterRegex
 
 Regular expression that selects policy test files. It defaults to
-defaults and waf-aligned test paths.
+the packaged defaults and waf-aligned scenario patterns.
 
 | Property | Value |
 | --- | --- |
 | Type | `String` |
 | Required | false |
 | Position | 3 |
-| Default value | (defaults\|waf-aligned) |
+| Default value |  |
 | Accept pipeline input | false |
 | Accept wildcard characters | false |
 

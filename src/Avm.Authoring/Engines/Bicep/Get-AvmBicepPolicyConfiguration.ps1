@@ -52,7 +52,11 @@ function Get-AvmBicepPolicyConfiguration {
     $selection = @($option.Input.PathIgnore)
     if (-not ($selection -ccontains '*') -or
         -not ($selection -ccontains '!avm/**/defaults/*.test.bicep') -or
+        -not ($selection -ccontains '!avm/**/defaults-*/*.test.bicep') -or
+        -not ($selection -ccontains '!avm/**/defaults.*/*.test.bicep') -or
         -not ($selection -ccontains '!avm/**/waf-aligned/*.test.bicep') -or
+        -not ($selection -ccontains '!avm/**/waf-aligned-*/*.test.bicep') -or
+        -not ($selection -ccontains '!avm/**/waf-aligned.*/*.test.bicep') -or
         -not ($selection -ccontains '!avm/**/*.defaults/*.test.bicep') -or
         -not ($selection -ccontains '!avm/**/*.waf-aligned/*.test.bicep') -or
         @($option.Include.Module).Count -ne 1 -or
@@ -62,7 +66,7 @@ function Get-AvmBicepPolicyConfiguration {
         [string]$option.Configuration['AZURE_BICEP_FILE_EXPANSION'] -ne 'true' -or
         [string]$option.Configuration['AZURE_PARAMETER_FILE_EXPANSION'] -ne 'false') {
         throw [AvmConfigurationException]::new(
-            'Bicep PSRule configuration must select defaults and waf-aligned tests, use only PSRule.Rules.Azure and packaged YAML rules, enable Bicep expansion, and disable parameter-file expansion.')
+            'Bicep PSRule configuration must select accepted defaults and waf-aligned examples, use only PSRule.Rules.Azure and packaged YAML rules, enable Bicep expansion, and disable parameter-file expansion.')
     }
     return [pscustomobject]@{
         OptionPath = $optionPath

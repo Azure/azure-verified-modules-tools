@@ -92,12 +92,12 @@ function Write-AvmModuleInitializationPlan {
                         [System.IO.File]::Delete($created.Path)
                     }
                     else {
-                        Write-Warning "Cannot roll back '$($created.Path)': content changed after initialization."
+                        Write-AvmLog "Cannot roll back '$($created.Path)': content changed after initialization." -Level Warning
                     }
                 }
             }
             catch {
-                Write-Warning "Cannot roll back '$($created.Path)': $($_.Exception.Message)"
+                Write-AvmLog "Cannot roll back '$($created.Path)': $($_.Exception.Message)" -Level Warning
             }
         }
         for ($i = $replacedFiles.Count - 1; $i -ge 0; $i--) {
@@ -109,11 +109,11 @@ function Write-AvmModuleInitializationPlan {
                     [System.IO.File]::SetLastWriteTimeUtc($replaced.Path, $replaced.OriginalWriteTime)
                 }
                 else {
-                    Write-Warning "Cannot restore '$($replaced.Path)': content changed after initialization."
+                    Write-AvmLog "Cannot restore '$($replaced.Path)': content changed after initialization." -Level Warning
                 }
             }
             catch {
-                Write-Warning "Cannot restore '$($replaced.Path)': $($_.Exception.Message)"
+                Write-AvmLog "Cannot restore '$($replaced.Path)': $($_.Exception.Message)" -Level Warning
             }
         }
         for ($i = $createdDirectories.Count - 1; $i -ge 0; $i--) {
@@ -124,12 +124,12 @@ function Write-AvmModuleInitializationPlan {
                         [System.IO.Directory]::Delete($directory)
                     }
                     else {
-                        Write-Warning "Cannot roll back '$directory': directory is no longer empty."
+                        Write-AvmLog "Cannot roll back '$directory': directory is no longer empty." -Level Warning
                     }
                 }
             }
             catch {
-                Write-Warning "Cannot roll back '$directory': $($_.Exception.Message)"
+                Write-AvmLog "Cannot roll back '$directory': $($_.Exception.Message)" -Level Warning
             }
         }
         throw

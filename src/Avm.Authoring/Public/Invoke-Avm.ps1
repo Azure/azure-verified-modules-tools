@@ -268,6 +268,9 @@ function Invoke-Avm {
     catch [AvmException] {
         Assert-AvmCleanFailure -Verb $verbPath -Exception $_.Exception
     }
+    finally {
+        Send-AvmGitHubDiagnosticOverflow
+    }
 
     $items = @($result | Where-Object { $null -ne $_ })
     $rendered = @($items | Where-Object { $null -ne $_.PSObject.Properties['Status'] })

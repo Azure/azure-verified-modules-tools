@@ -74,8 +74,8 @@ Describe 'Invoke-AvmCheckPolicy' {
         }
         $result.Status | Should -Be 'fail'
         $result.ToolSource | Should -Be 'not-run'
-        $result.RequiredBaselines.Count | Should -Be 2
-        $result.AdvisoryBaselines.Count | Should -Be 2
+        $result.RequiredBaselines.Count | Should -Be 0
+        $result.AdvisoryBaselines.Count | Should -Be 4
         $result.Issues.Code | Should -Contain 'avm.bicep.psrule-input-missing'
     }
 

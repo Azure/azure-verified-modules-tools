@@ -35,7 +35,7 @@ function Get-AvmWorkflowTestFiles {
     param(
         [Parameter(Mandatory)] [string] $Root,
         [Parameter(Mandatory)] [string] $ModulePath,
-        [string] $PsRuleFilterRegex = '(defaults|waf-aligned)'
+        [AllowEmptyString()] [string] $PsRuleFilterRegex = ''
     )
 
     return Invoke-AvmWorkflowPackagePrivate -Name Get-AvmBicepWorkflowTestFilesInternal -Parameters $PSBoundParameters

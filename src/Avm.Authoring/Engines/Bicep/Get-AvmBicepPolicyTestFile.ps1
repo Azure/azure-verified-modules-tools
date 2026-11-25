@@ -26,13 +26,12 @@ function Get-AvmBicepPolicyTestFile {
         }
     }
 
-    $pattern = if ($IncludeAllExamples) { '(?i)(?:^|/)main\.test\.bicep$' }
-    else { '(?i)(?:^|/)(?:[^/]+\.)?(?:defaults|waf-aligned)/main\.test\.bicep$' }
     $selected = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
     foreach ($file in @(Get-ChildItem -LiteralPath $testRoot -Recurse -File `
                 -Filter '*.test.bicep' -Force)) {
-        $relative = [System.IO.Path]::GetRelativePath($testRoot, $file.FullName).Replace('\', '/')
-        if ($relative -notmatch $pattern) {
+        if (-not $IncludeAllExamples -and
+            -not (Test-AvmE2eScenarioName -Name $file.Directory.Name -Scenario 'defaults') -and
+            -not (Test-AvmE2eScenarioName -Name $file.Directory.Name -Scenario 'waf-aligned')) {
             continue
         }
         if ($file.Name -cne 'main.test.bicep' -or

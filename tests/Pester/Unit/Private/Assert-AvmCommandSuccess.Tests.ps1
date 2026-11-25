@@ -47,7 +47,7 @@ Describe 'Assert-AvmCommandSuccess annotations' {
 
         $annotations = @($messages | Where-Object { $_ -like '::error*' })
         $annotations.Count | Should -Be 1
-        $annotations[0] | Should -BeExactly '::error file=tests/unit/a.tftest.hcl,line=17,col=21::error tests\unit\a.tftest.hcl:17:21 Test assertion failed'
+        $annotations[0] | Should -BeExactly '::error file=tests/unit/a.tftest.hcl,line=17,col=21::error tests\unit\a.tftest.hcl:17:21 Test assertion failed (tests/unit/a.tftest.hcl, line 17, column 21)'
         @($messages) | Should -Contain 'avm test unit failed (fail).'
     }
 

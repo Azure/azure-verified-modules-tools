@@ -403,7 +403,7 @@ $lintResult = [pscustomobject]@{ Status = 'fail'; Issues = @($issue) }
         $result.ExitCode | Should -Not -Be 0
         $annotations = @($result.Output -split "`n" | Where-Object { $_ -like '::error*' })
         $annotations.Count | Should -Be 1
-        $annotations[0] | Should -BeExactly '::error file=examples/default/variables.tf,line=11,col=3::[terraform_unused_declarations] unused location'
+        $annotations[0] | Should -BeExactly '::error file=examples/default/variables.tf,line=11,col=3::[terraform_unused_declarations] unused location (examples/default/variables.tf, line 11, column 3)'
         $result.Output | Should -Match 'avm spec-verb: fail'
         $result.Output | Should -Not -Match 'Assert-AvmCommandSuccess\.ps1:\d+'
 
@@ -437,7 +437,7 @@ try {
     }
 
     It 'retains a distinct <FailureKind> after an inline lint blocker' -ForEach @(
-        @{ FailureKind = 'issue'; ErrorExpression = '$null'; ResultExpression = "[pscustomobject]@{ Issues = @([pscustomobject]@{ Severity = 'error'; File = 'main.tf'; Line = 29; Column = 4; Message = 'distinct policy failure' }) }"; Annotation = "::error file=main.tf,line=29,col=4::Step 'check policy': error main.tf:29:4 distinct policy failure" }
+        @{ FailureKind = 'issue'; ErrorExpression = '$null'; ResultExpression = "[pscustomobject]@{ Issues = @([pscustomobject]@{ Severity = 'error'; File = 'main.tf'; Line = 29; Column = 4; Message = 'distinct policy failure' }) }"; Annotation = "::error file=main.tf,line=29,col=4::Step 'check policy': error main.tf:29:4 distinct policy failure (main.tf, line 29, column 4)" }
         @{ FailureKind = 'step error'; ErrorExpression = "'distinct policy failure'"; ResultExpression = '$lintResult'; Annotation = "::error::Step 'check policy': distinct policy failure" }
     ) {
         $suffix = @'
@@ -455,7 +455,7 @@ try {
         $result.ExitCode | Should -Not -Be 0
         $annotations = @($result.Output -split "`n" | Where-Object { $_ -like '::error*' })
         $annotations.Count | Should -Be 2
-        $annotations[0] | Should -BeExactly '::error file=examples/default/variables.tf,line=11,col=3::[terraform_unused_declarations] unused location'
+        $annotations[0] | Should -BeExactly '::error file=examples/default/variables.tf,line=11,col=3::[terraform_unused_declarations] unused location (examples/default/variables.tf, line 11, column 3)'
         $annotations[1] | Should -BeExactly $Annotation
     }
 }

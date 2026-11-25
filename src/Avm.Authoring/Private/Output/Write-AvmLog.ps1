@@ -1,3 +1,6 @@
+$script:AvmGitHubDiagnosticCounts = @{ Warning = 0; Error = 0 }
+$script:AvmGitHubDiagnosticOverflow = [System.Collections.Generic.List[object]]::new()
+
 function Test-AvmGitHubActionsContext {
     [CmdletBinding()]
     [OutputType([bool])]
@@ -258,7 +261,14 @@ function Write-AvmLog {
             }
             'Warning' {
                 if ($actions) {
-                    Write-Information ('::warning{0}::{1}' -f $position, (ConvertTo-AvmAnnotationText -Text $text)) -InformationAction Continue
+                    if ($script:AvmGitHubDiagnosticCounts.Warning -lt 10) {
+                        $script:AvmGitHubDiagnosticCounts.Warning++
+                        Write-Information ('::warning{0}::{1}' -f $position, (ConvertTo-AvmAnnotationText -Text $diagnosticText)) -InformationAction Continue
+                    }
+                    else {
+                        Add-AvmGitHubDiagnosticOverflow -Level Warning -Message $diagnosticText -File $File -Line $Line -Column $Column
+                        Write-Information ('Warning: {0}' -f $diagnosticText) -InformationAction Continue
+                    }
                 }
                 else {
                     Write-Warning $displayText
@@ -266,7 +276,14 @@ function Write-AvmLog {
             }
             'Error' {
                 if ($actions) {
-                    Write-Information ('::error{0}::{1}' -f $position, (ConvertTo-AvmAnnotationText -Text $text)) -InformationAction Continue
+                    if ($script:AvmGitHubDiagnosticCounts.Error -lt 10) {
+                        $script:AvmGitHubDiagnosticCounts.Error++
+                        Write-Information ('::error{0}::{1}' -f $position, (ConvertTo-AvmAnnotationText -Text $diagnosticText)) -InformationAction Continue
+                    }
+                    else {
+                        Add-AvmGitHubDiagnosticOverflow -Level Error -Message $diagnosticText -File $File -Line $Line -Column $Column
+                        Write-Information ('Error: {0}' -f $diagnosticText) -InformationAction Continue
+                    }
                 }
                 else {
                     Write-Information $displayText -InformationAction Continue
@@ -362,14 +379,18 @@ function Format-AvmDiagnosticText {
     )
 
     $path = ConvertTo-AvmAnnotationPath -Path $File
-    if ([string]::IsNullOrWhiteSpace($path) -or $Line -le 0) {
+    if ([string]::IsNullOrWhiteSpace($path) -and $Line -le 0) {
         return $Text
     }
 
     $location = [System.Collections.Generic.List[string]]::new()
-    $location.Add($path)
-    $location.Add('line {0}' -f $Line)
-    if ($Column -gt 0) {
+    if (-not [string]::IsNullOrWhiteSpace($path)) {
+        $location.Add($path)
+    }
+    if ($Line -gt 0) {
+        $location.Add('line {0}' -f $Line)
+    }
+    if ($Line -gt 0 -and $Column -gt 0) {
         $location.Add('column {0}' -f $Column)
     }
 
@@ -403,6 +424,189 @@ function Format-AvmAnnotationProperty {
     }
 
     return ' ' + ($parts -join ',')
+}
+
+function Add-AvmGitHubDiagnosticOverflow {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('Warning', 'Error')]
+        [string] $Level,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $Message,
+
+        [AllowEmptyString()]
+        [string] $File = '',
+
+        [int] $Line = 0,
+
+        [int] $Column = 0
+    )
+
+    $diagnostic = [pscustomobject]@{
+        Level   = $Level
+        Message = $Message
+        File    = ConvertTo-AvmAnnotationPath -Path $File
+        Line    = $Line
+        Column  = $Column
+    }
+    $script:AvmGitHubDiagnosticOverflow.Add($diagnostic)
+}
+
+function ConvertTo-AvmMarkdownText {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $Text
+    )
+
+    $singleLine = $Text.ReplaceLineEndings(' ')
+    return [regex]::Replace(
+        $singleLine,
+        '([\\`*_{}\[\]<>()#+\-.!|])',
+        {
+            param($match)
+            '\' + $match.Value
+        }
+    )
+}
+
+function Write-AvmGitHubDiagnosticSummary {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [object[]] $Diagnostics,
+
+        [Parameter(Mandatory)]
+        [string] $Reason
+    )
+
+    if ($Diagnostics.Count -eq 0) {
+        return
+    }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add('### Additional AVM diagnostics')
+    $lines.Add('')
+    $lines.Add((ConvertTo-AvmMarkdownText -Text $Reason))
+    $lines.Add('')
+    foreach ($diagnostic in $Diagnostics) {
+        $level = ([string]$diagnostic.Level).ToLowerInvariant()
+        $message = ConvertTo-AvmMarkdownText -Text ([string]$diagnostic.Message)
+        $lines.Add(('- **{0}:** {1}' -f $level, $message))
+    }
+
+    if ([string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+        return
+    }
+
+    Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ($lines -join "`n") -Encoding utf8 -ErrorAction Stop
+}
+
+function Send-AvmGitHubDiagnosticOverflow {
+    [CmdletBinding()]
+    param()
+
+    if (-not (Test-AvmGitHubActionsContext) -or $script:AvmGitHubDiagnosticOverflow.Count -eq 0) {
+        return
+    }
+
+    $diagnostics = @($script:AvmGitHubDiagnosticOverflow.ToArray())
+    $script:AvmGitHubDiagnosticOverflow.Clear()
+    $located = @(
+        $diagnostics | Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_.File) -and
+            $_.Line -gt 0 -and
+            $_.File -notmatch '^(?:[A-Za-z]:/|/|\.\./)'
+        }
+    )
+    $unlocated = @(
+        $diagnostics | Where-Object {
+            [string]::IsNullOrWhiteSpace($_.File) -or
+            $_.Line -le 0 -or
+            $_.File -match '^(?:[A-Za-z]:/|/|\.\./)'
+        }
+    )
+    $reason = ''
+    $published = $false
+
+    if (
+        $located.Count -gt 0 -and
+        -not [string]::IsNullOrWhiteSpace($env:GH_TOKEN) -and
+        $env:GITHUB_REPOSITORY -match '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -and
+        $env:AVM_GITHUB_CHECK_RUN_ID -match '^[1-9][0-9]*$'
+    ) {
+        try {
+            $endpoint = 'repos/{0}/check-runs/{1}' -f $env:GITHUB_REPOSITORY, $env:AVM_GITHUB_CHECK_RUN_ID
+            $checkRun = Invoke-AvmGitHubApi -Endpoint $endpoint
+            $output = if ($checkRun -is [System.Collections.IDictionary]) { $checkRun['output'] } else { $null }
+            $title = if ($output -is [System.Collections.IDictionary] -and $output['title']) {
+                [string]$output['title']
+            }
+            else {
+                'AVM diagnostics'
+            }
+            $summary = if ($output -is [System.Collections.IDictionary] -and $output['summary']) {
+                [string]$output['summary']
+            }
+            else {
+                'Additional diagnostics emitted by Avm.Authoring.'
+            }
+            $annotations = @(
+                foreach ($diagnostic in $located) {
+                    $annotation = [ordered]@{
+                        path             = [string]$diagnostic.File
+                        start_line       = [int]$diagnostic.Line
+                        end_line         = [int]$diagnostic.Line
+                        annotation_level = if ($diagnostic.Level -eq 'Warning') { 'warning' } else { 'failure' }
+                        message          = [string]$diagnostic.Message
+                    }
+                    if ($diagnostic.Column -gt 0) {
+                        $annotation.start_column = [int]$diagnostic.Column
+                        $annotation.end_column = [int]$diagnostic.Column
+                    }
+                    $annotation
+                }
+            )
+
+            for ($offset = 0; $offset -lt $annotations.Count; $offset += 50) {
+                $end = [Math]::Min($offset + 49, $annotations.Count - 1)
+                $batch = @($annotations[$offset..$end])
+                $body = @{
+                    output = @{
+                        title       = $title
+                        summary     = $summary
+                        annotations = $batch
+                    }
+                }
+                $null = Invoke-AvmGitHubApi -Endpoint $endpoint -Method PATCH -Body $body
+            }
+            $published = $true
+        }
+        catch {
+            $reason = if ($_.Exception -is [AvmGitHubException] -and $_.Exception.StatusCode -gt 0) {
+                'Checks API publishing failed with HTTP {0}; diagnostics are listed below.' -f $_.Exception.StatusCode
+            }
+            else {
+                'Checks API publishing failed; diagnostics are listed below.'
+            }
+        }
+    }
+    else {
+        $reason = 'Checks API access was unavailable; diagnostics are listed below.'
+    }
+
+    if ($published -and $unlocated.Count -gt 0) {
+        $reason = 'These diagnostics did not include a repository-relative file and line required for a Checks API annotation.'
+        Write-AvmGitHubDiagnosticSummary -Diagnostics $unlocated -Reason $reason
+    }
+    elseif (-not $published) {
+        Write-AvmGitHubDiagnosticSummary -Diagnostics $diagnostics -Reason $reason
+    }
 }
 
 function Enter-AvmLogGroup {

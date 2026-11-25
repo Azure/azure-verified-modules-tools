@@ -19,7 +19,11 @@ input:
   pathIgnore:
     - "*"
     - "!avm/**/defaults/*.test.bicep"
+    - "!avm/**/defaults-*/*.test.bicep"
+    - "!avm/**/defaults.*/*.test.bicep"
     - "!avm/**/waf-aligned/*.test.bicep"
+    - "!avm/**/waf-aligned-*/*.test.bicep"
+    - "!avm/**/waf-aligned.*/*.test.bicep"
     - "!avm/**/*.defaults/*.test.bicep"
     - "!avm/**/*.waf-aligned/*.test.bicep"
 configuration:

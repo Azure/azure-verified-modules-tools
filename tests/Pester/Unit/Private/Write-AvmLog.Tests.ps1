@@ -10,6 +10,10 @@ BeforeAll {
     $script:savedVerbose = $env:AVM_VERBOSE
     $script:savedNoColor = $env:NO_COLOR
     $script:savedColorForce = $env:CLICOLOR_FORCE
+    $script:savedDiagnosticEnvironment = @{}
+    foreach ($name in @('GH_TOKEN', 'GITHUB_REPOSITORY', 'AVM_GITHUB_CHECK_RUN_ID', 'GITHUB_STEP_SUMMARY')) {
+        $script:savedDiagnosticEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+    }
 }
 
 AfterAll {
@@ -18,6 +22,13 @@ AfterAll {
     $env:AVM_VERBOSE = $script:savedVerbose
     $env:NO_COLOR = $script:savedNoColor
     $env:CLICOLOR_FORCE = $script:savedColorForce
+    foreach ($name in $script:savedDiagnosticEnvironment.Keys) {
+        $value = $script:savedDiagnosticEnvironment[$name]
+        [Environment]::SetEnvironmentVariable(
+            $name,
+            $(if ($null -eq $value) { [NullString]::Value } else { $value }),
+            'Process')
+    }
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
@@ -28,8 +39,15 @@ Describe 'Write-AvmLog' {
         $env:AVM_VERBOSE = ''
         Remove-Item Env:\NO_COLOR -ErrorAction SilentlyContinue
         Remove-Item Env:\CLICOLOR_FORCE -ErrorAction SilentlyContinue
+        $env:GH_TOKEN = ''
+        $env:GITHUB_REPOSITORY = ''
+        $env:AVM_GITHUB_CHECK_RUN_ID = ''
+        $env:GITHUB_STEP_SUMMARY = ''
         InModuleScope 'Avm.Authoring' {
             $script:AvmNestedCommandDepth = 0
+            $script:AvmGitHubDiagnosticCounts.Warning = 0
+            $script:AvmGitHubDiagnosticCounts.Error = 0
+            $script:AvmGitHubDiagnosticOverflow.Clear()
         }
     }
 
@@ -115,7 +133,7 @@ Describe 'Write-AvmLog' {
             @($observed.Info) | Should -Contain 'boom (main.tf, line 12, column 3)'
         }
 
-        It 'leaves file-only diagnostics unchanged' {
+        It 'includes file-only diagnostics in the message' {
             $warnings = InModuleScope 'Avm.Authoring' {
                 $env:NO_COLOR = '1'
                 $captured = @()
@@ -126,7 +144,7 @@ Describe 'Write-AvmLog' {
                 @($captured | ForEach-Object { [string]$_ })
             }
 
-            @($warnings) | Should -Contain 'override warning'
+            @($warnings) | Should -Contain 'override warning (avm.tflint.override.hcl)'
         }
 
         It 'writes Error to the information stream so it is never swallowed' {
@@ -167,12 +185,12 @@ Describe 'Write-AvmLog' {
         It 'emits workflow command annotations for warning and error' {
             $messages = InModuleScope 'Avm.Authoring' {
                 $captured = @()
-                Write-AvmLog 'be careful' -Level Warning -InformationVariable captured
-                Write-AvmLog 'it broke' -Level Error -InformationVariable +captured
+                Write-AvmLog 'be careful' -Level Warning -File 'avm/main.bicep' -Line 8 -InformationVariable captured
+                Write-AvmLog 'it broke' -Level Error -File 'avm/main.bicep' -Line 12 -InformationVariable +captured
                 @($captured | ForEach-Object { [string]$_.MessageData })
             }
-            @($messages) | Should -Contain '::warning::be careful'
-            @($messages) | Should -Contain '::error::it broke'
+            @($messages) | Should -Contain '::warning file=avm/main.bicep,line=8::be careful (avm/main.bicep, line 8)'
+            @($messages) | Should -Contain '::error file=avm/main.bicep,line=12::it broke (avm/main.bicep, line 12)'
         }
 
         It 'renders Fail as plain text without creating an error annotation' {
@@ -250,7 +268,7 @@ Describe 'Write-AvmLog' {
                 Write-AvmLog 'assertion failed' -Level Error -File 'tests/unit/a.tftest.hcl' -Line 17 -Column 21 -InformationVariable captured
                 @($captured | ForEach-Object { [string]$_.MessageData })
             }
-            @($messages) | Should -Contain '::error file=tests/unit/a.tftest.hcl,line=17,col=21::assertion failed'
+            @($messages) | Should -Contain '::error file=tests/unit/a.tftest.hcl,line=17,col=21::assertion failed (tests/unit/a.tftest.hcl, line 17, column 21)'
         }
 
         It 'F41: normalises Windows separators so GitHub can match the diff' {
@@ -259,7 +277,7 @@ Describe 'Write-AvmLog' {
                 Write-AvmLog 'assertion failed' -Level Error -File 'tests\unit\a.tftest.hcl' -Line 4 -InformationVariable captured
                 @($captured | ForEach-Object { [string]$_.MessageData })
             }
-            @($messages) | Should -Contain '::error file=tests/unit/a.tftest.hcl,line=4::assertion failed'
+            @($messages) | Should -Contain '::error file=tests/unit/a.tftest.hcl,line=4::assertion failed (tests/unit/a.tftest.hcl, line 4)'
         }
 
         It 'F41: rebases an absolute path onto the workspace root' {
@@ -275,7 +293,7 @@ Describe 'Write-AvmLog' {
                     $env:GITHUB_WORKSPACE = $saved
                 }
             }
-            @($messages) | Should -Contain '::error file=tests/unit/a.tftest.hcl,line=2::boom'
+            @($messages) | Should -Contain '::error file=tests/unit/a.tftest.hcl,line=2::boom (tests/unit/a.tftest.hcl, line 2)'
         }
 
         It 'F41: falls back to an unanchored annotation when there is no position' {
@@ -293,7 +311,84 @@ Describe 'Write-AvmLog' {
                 Write-AvmLog 'file only' -Level Error -File 'main.tf' -Column 9 -InformationVariable captured
                 @($captured | ForEach-Object { [string]$_.MessageData })
             }
-            @($messages) | Should -Contain '::error file=main.tf::file only'
+            @($messages) | Should -Contain '::error file=main.tf::file only (main.tf)'
+        }
+
+        It 'publishes overflow diagnostics through the Checks API in batches of 50' {
+            $env:GH_TOKEN = 'fixture-token'
+            $env:GITHUB_REPOSITORY = 'Azure/example'
+            $env:AVM_GITHUB_CHECK_RUN_ID = '123'
+            $calls = InModuleScope 'Avm.Authoring' {
+                $script:AvmGitHubApiCalls = [System.Collections.Generic.List[object]]::new()
+                Mock Invoke-AvmGitHubApi {
+                    $script:AvmGitHubApiCalls.Add([pscustomobject]@{
+                        Endpoint = $Endpoint
+                        Method   = $Method
+                        Body     = $Body
+                    })
+                    return @{ output = @{ title = 'PR check'; summary = 'Existing check output.' } }
+                }
+
+                for ($index = 1; $index -le 71; $index++) {
+                    Write-AvmLog -Message "diagnostic $index" -Level Warning `
+                        -File "avm/tests/$index.ps1" -Line $index -Column 2 6>$null
+                }
+                Send-AvmGitHubDiagnosticOverflow
+                @($script:AvmGitHubApiCalls.ToArray())
+            }
+
+            $patches = @($calls | Where-Object Method -EQ 'PATCH')
+            @($patches).Count | Should -Be 2
+            @($patches[0].Body.output.annotations).Count | Should -Be 50
+            @($patches[1].Body.output.annotations).Count | Should -Be 11
+            $patches[0].Body.output.title | Should -BeExactly 'PR check'
+            $patches[0].Body.output.summary | Should -BeExactly 'Existing check output.'
+            $patches[0].Body.output.annotations[0].message |
+                Should -BeExactly 'diagnostic 11 (avm/tests/11.ps1, line 11, column 2)'
+            $patches[0].Body.output.annotations[0].path | Should -BeExactly 'avm/tests/11.ps1'
+            $patches[0].Body.output.annotations[0].start_column | Should -Be 2
+        }
+
+        It 'writes overflow diagnostics to the step summary when Checks API access is unavailable' {
+            $env:GITHUB_STEP_SUMMARY = Join-Path $TestDrive 'diagnostics.md'
+            InModuleScope 'Avm.Authoring' {
+                Mock Invoke-AvmGitHubApi { throw 'Checks API must not be called without a token.' }
+                for ($index = 1; $index -le 11; $index++) {
+                    Write-AvmLog -Message "diagnostic $index" -Level Error `
+                        -File 'avm/main.tf' -Line $index 6>$null
+                }
+                Send-AvmGitHubDiagnosticOverflow
+            }
+
+            $summary = Get-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Raw
+            $summary | Should -Match 'Additional AVM diagnostics'
+            $summary | Should -Match 'Checks API access was unavailable'
+            $summary | Should -Match 'diagnostic 11'
+            $summary | Should -Match 'avm/main\\\.tf'
+            $summary | Should -Match 'line 11'
+        }
+
+        It 'falls back to the step summary when the Checks API rejects the token' {
+            $env:GH_TOKEN = 'fixture-token'
+            $env:GITHUB_REPOSITORY = 'Azure/example'
+            $env:AVM_GITHUB_CHECK_RUN_ID = '123'
+            $env:GITHUB_STEP_SUMMARY = Join-Path $TestDrive 'forbidden-diagnostics.md'
+            InModuleScope 'Avm.Authoring' {
+                Mock Invoke-AvmGitHubApi {
+                    throw [AvmGitHubException]::new('Resource not accessible by integration', 403)
+                }
+                for ($index = 1; $index -le 11; $index++) {
+                    Write-AvmLog -Message "diagnostic $index" -Level Warning `
+                        -File 'avm/main.bicep' -Line $index 6>$null
+                }
+                Send-AvmGitHubDiagnosticOverflow
+            }
+
+            $summary = Get-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Raw
+            $summary | Should -Match 'HTTP 403'
+            $summary | Should -Match 'diagnostic 11'
+            $summary | Should -Match 'avm/main\\\.bicep'
+            $summary | Should -Match 'line 11'
         }
     }
 

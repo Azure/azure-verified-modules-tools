@@ -147,12 +147,21 @@ has drifted from `Avm.Authoring` / `Avm.Authoring.psd1` /
 
 ## 6. Build, test, lint
 
-The required Bicep baseline accepts `tests/e2e/default` or
-`tests/e2e/defaults`; both run as required if present, and a missing-baseline
-warning is emitted only when neither exists. `tests/e2e/waf-aligned` remains
-separately required when present. Optional Bicep scenarios may be excluded
-with `.e2eignore` entries that contain a nonempty UTF-8 explanation; required
-scenarios cannot be excluded.
+Required E2E scenarios are selected by module type for both Bicep and Terraform:
+resource modules require defaults and WAF-aligned examples; pattern and utility
+modules require defaults only. Scenario names accept `default`, `defaults`,
+`defaults.<suffix>`, and `defaults-<suffix>`. WAF-aligned names accept
+`waf-aligned`, `waf-aligned.<suffix>`, and `waf-aligned-<suffix>`. Scoped names
+ending in `.defaults` or `.waf-aligned` are also accepted, for example
+`linux.defaults`. Every discovered matching example is included in the required
+set; other examples are optional. Missing required scenarios are reported, but
+their absence does not yet block merging. Optional Bicep scenarios may be
+excluded with `.e2eignore` entries that contain a nonempty UTF-8 explanation;
+required scenarios cannot be excluded.
+
+The Reliability policy baseline remains required for every Bicep module type.
+The AVM WAF Security baseline is required for resource modules and warning-only
+for pattern and utility modules.
 
 The Invoke-Build task graph lives at `build/avm.build.ps1`; always invoke it through the `./build.ps1 <task>` forwarder from the repo root. Run the checks needed to validate your change locally; the pull-request workflows provide the broader validation.
 

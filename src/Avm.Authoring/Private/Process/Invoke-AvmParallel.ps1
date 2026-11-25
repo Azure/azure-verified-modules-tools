@@ -179,7 +179,7 @@ else {
                 -InformationAction Continue
         }
         foreach ($record in $result.Warnings) {
-            Write-Warning $record.Message
+            Write-AvmLog -Message $record.Message -Level Warning
         }
         foreach ($record in $result.Verbose) {
             Write-Verbose $record.Message -Verbose

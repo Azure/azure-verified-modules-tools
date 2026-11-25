@@ -5,6 +5,7 @@ BeforeAll {
     $script:root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..' '..')).Path
     . (Join-Path $script:root 'scripts' 'bicep-workflows' 'Common.ps1')
     Import-Module -FullyQualifiedName @{ ModuleName = 'powershell-yaml'; RequiredVersion = '0.4.12' }
+    Import-Module (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -Force
     $script:workflows = @{}
     foreach ($file in Get-ChildItem -LiteralPath (Join-Path $script:root '.github' 'workflows') -Filter 'bicep-module*.yml') {
         $script:workflows[$file.BaseName] = ConvertFrom-Yaml (Get-Content -LiteralPath $file.FullName -Raw)
@@ -30,6 +31,7 @@ BeforeAll {
             $_.Extent.Text -match '^if \(-not \(Get-Module -ListAvailable -Name Microsoft\.PowerShell\.PSResourceGet\)\)'
         })[0]
     $script:resourceBootstrap = [scriptblock]::Create($resourceBootstrap.Extent.Text)
+
     function Get-AvmBicepAzureDependency {
         [CmdletBinding()]
         param([switch] $SkipModuleVersionCheck)
@@ -50,6 +52,10 @@ BeforeAll {
         param([string] $Name, [string] $Scope, [switch] $Force, [switch] $AllowClobber)
         throw 'Package manager provisioning must be mocked.'
     }
+}
+
+AfterAll {
+    Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
 Describe 'Bicep prepared runtime package manager bootstrap' {
@@ -367,7 +373,13 @@ Describe 'Bicep reusable workflow ownership and syntax' {
             $job.permissions.Contains('id-token') | Should -BeFalse
             ($job | ConvertTo-Json -Depth 20) | Should -Not -Match '\bsecrets\b|AVM_CI_|azure/login|environment:'
         }
-        $runtime.jobs.'pr-check'.steps[-1].run | Should -Match 'avm -SkipModuleVersionCheck pr-check --passthru'
+        $runtime.jobs.'pr-check'.permissions.checks | Should -BeExactly 'write'
+        $runtime.jobs.'unit-test'.permissions.Contains('checks') | Should -BeFalse
+        $prCheckRun = $runtime.jobs.'pr-check'.steps[-1].run
+        $prCheckRun | Should -Match 'avm -SkipModuleVersionCheck pr-check --passthru'
+        $prCheckRun | Should -Not -Match 'Write-PrCheckIssues'
+        $runtime.jobs.'pr-check'.steps[-1].env.GH_TOKEN | Should -BeExactly '${{ github.token }}'
+        $runtime.jobs.'pr-check'.steps[-1].env.AVM_GITHUB_CHECK_RUN_ID | Should -BeExactly '${{ job.check_run_id }}'
         $unitResult = @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Unit tests')
         $unitResult | Should -HaveCount 1
         $unitResult[0].id | Should -BeExactly 'unit-result'
@@ -456,13 +468,13 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $deployment.jobs.deploy.name | Should -BeExactly "E2E test (`${{ fromJSON(inputs.testCase).IsRequired && 'required' || 'optional' }}): `${{ fromJSON(inputs.testCase).Name }} - `${{ fromJSON(inputs.testCase).SubscriptionName }}"
     }
 
-    It 'classifies exact scenario names case-sensitively for <ModulePath> in <Workflow>' -ForEach @(
+    It 'uses configured required scenarios for <ModulePath> in <Workflow>' -ForEach @(
         @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/res/example/widget'; Expected = @($true, $true, $true, $false, $false, $false, $false) }
         @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/res/example/widget'; Expected = @($true, $true, $true, $false, $false, $false, $false) }
-        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/utl/example/widget'; Expected = @($true, $true, $true, $false, $false, $false, $false) }
-        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/utl/example/widget'; Expected = @($true, $true, $true, $false, $false, $false, $false) }
-        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/ptn/example/widget'; Expected = @($true, $true, $true, $false, $false, $false, $false) }
-        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/ptn/example/widget'; Expected = @($true, $true, $true, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/utl/example/widget'; Expected = @($true, $true, $false, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/utl/example/widget'; Expected = @($true, $true, $false, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime'; Job = 'discover-examples'; ModulePath = 'avm/ptn/example/widget'; Expected = @($true, $true, $false, $false, $false, $false, $false) }
+        @{ Workflow = 'bicep-module-runtime-e2e'; Job = 'select-deployments'; ModulePath = 'avm/ptn/example/widget'; Expected = @($true, $true, $false, $false, $false, $false, $false) }
     ) {
         $step = $script:workflows[$Workflow].jobs[$Job].steps | Where-Object { $_['id'] -ceq 'select' }
         $tokens = $null
@@ -475,12 +487,16 @@ Describe 'Bicep reusable workflow ownership and syntax' {
                     $node.Extent.Text.StartsWith('foreach ($testCase in $matrix)')
                 }, $true))
         $loops | Should -HaveCount 1
+        $step.run | Should -Match 'Get-AvmE2eScenarioSelection'
         $matrix = @('default', 'defaults', 'waf-aligned', 'max', 'child-defaults', 'Defaults', 'WAF-aligned' | ForEach-Object {
                 [pscustomobject]@{ Name = $_; SubscriptionName = 'Configured subscription 1'; E2eIgnore = $false; ConcurrencyGroup = 'fixture-lock' }
             })
         $savedModulePath = $env:MODULE_PATH
         try {
             $env:MODULE_PATH = $ModulePath
+            $moduleType = [regex]::Match($ModulePath, '^avm/(?<type>res|ptn|utl)/').Groups['type'].Value
+            $scenarioSelection = Get-AvmE2eScenarioSelection -ModuleType $moduleType `
+                -Names @($matrix.Name) -SkipModuleVersionCheck
             & ([scriptblock]::Create($loops[0].Extent.Text))
         }
         finally {

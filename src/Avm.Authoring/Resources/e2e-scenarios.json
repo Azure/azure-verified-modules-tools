@@ -1,0 +1,24 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Azure/azure-verified-modules-tools/main/src/Avm.Authoring/Resources/Schemas/v1/e2e-scenarios.schema.json",
+  "scenarioPatterns": {
+    "defaults": "^(?:default|defaults(?:[-.].+)?|.+\\.defaults)$",
+    "waf-aligned": "^(?:waf-aligned(?:[-.].+)?|.+\\.waf-aligned)$"
+  },
+  "moduleTypes": {
+    "res": {
+      "displayName": "resource",
+      "requiredScenarios": ["defaults", "waf-aligned"],
+      "requiredPolicyBaselines": ["Azure.Pillar.Reliability", "CB.AVM.WAF.Security"]
+    },
+    "ptn": {
+      "displayName": "pattern",
+      "requiredScenarios": ["defaults"],
+      "requiredPolicyBaselines": []
+    },
+    "utl": {
+      "displayName": "utility",
+      "requiredScenarios": ["defaults"],
+      "requiredPolicyBaselines": []
+    }
+  }
+}

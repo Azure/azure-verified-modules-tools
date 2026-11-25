@@ -17,6 +17,7 @@
         'Get-AvmBicepWorkflowModuleMatrix',
         'Get-AvmBicepWorkflowTestFiles',
         'Get-AvmCatalogTelemetryPrefix',
+        'Get-AvmE2eScenarioSelection',
         'Get-AvmModuleContext',
         'Get-AvmTool',
         'Get-AvmVersion',

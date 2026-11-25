@@ -33,7 +33,6 @@ function Get-AvmWorkflowReportState {
         HasOptional = $false
         Authorized = $false
         OptionalSelected = $false
-        UtilityOnly = $false
         Failures = [Collections.Generic.List[string]]::new()
     }
     $jobs = if ($Ecosystem -ceq 'terraform') {
@@ -101,15 +100,6 @@ function Get-AvmWorkflowReportState {
             }
         }
         $state.Applicable = $hasModules -and $RequireE2e
-        if ($hasModules -and -not $state.HasRequired -and $RequireE2e) {
-            $matrix = ConvertFrom-Json -InputObject $outputs['moduleMatrix'] -AsHashtable -ErrorAction Stop
-            if ($matrix['include'] -isnot [array] -or $matrix['include'].Count -eq 0) {
-                throw [IO.InvalidDataException]::new('The Bicep module matrix must contain the selected modules.')
-            }
-            $state.UtilityOnly = @($matrix['include'] | Where-Object {
-                    $_['modulePath'] -isnot [string] -or -not $_['modulePath'].StartsWith('avm/utl/', [StringComparison]::Ordinal)
-                }).Count -eq 0
-        }
         if ($hasModules) {
             $checkJobs = @('check')
             if ($Results.Contains('check-fork')) { $checkJobs += 'check-fork' }
@@ -208,13 +198,8 @@ function Invoke-AvmWorkflowReport {
     }
     elseif ($noRequired) {
         $feedback.Add('## E2E scenario selection')
-        if ($state.UtilityOnly) {
-            $feedback.Add('Only utility modules changed. Utility modules are exempt from the required defaults and waf-aligned scenarios.')
-        }
-        else {
-            $feedback.Add('Warning: no runnable required `default`/`defaults` or `waf-aligned` scenarios were discovered. Their absence does not currently block merging.')
-            Write-AvmReportAnnotation -Level warning -Message 'No required E2E scenarios found; optional scenarios need the All E2E label.'
-        }
+        $feedback.Add('Warning: no runnable required E2E scenarios were discovered. Their absence does not currently block merging.')
+        Write-AvmReportAnnotation -Level warning -Message 'No required E2E scenarios found; optional scenarios need the All E2E label.'
         if (-not $state.HasOptional) {
             $feedback.Add('No runnable E2E examples were discovered. Labels cannot run examples that do not exist.')
         }
