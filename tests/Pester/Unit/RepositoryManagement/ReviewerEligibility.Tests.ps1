@@ -210,13 +210,15 @@ Describe 'Reviewer eligibility fallback decisions' {
         $routing.SkippedReviewers[0].Reason | Should -Match 'ineligible'
     }
 
-    It 'keeps eligible co-owners while replacing only the ineligible owner' {
+    It 'does not use the owners group when any co-owner has repository write access' {
         $script:eligibilityIndex['.'].owners += New-EligibilityOwner -Handle eligible-owner
         $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:eligibilityPr -Repository $script:eligibilityRepository `
             -CatalogIndex $script:eligibilityIndex -ChangedFilePaths @('main.tf') -Ecosystem terraform 3>$null
-        $routing.NewReviewers | Should -Be @($script:ownersGroup, 'eligible-owner')
+        $routing.NewReviewers | Should -Be @('eligible-owner')
         $routing.ReviewerModules['eligible-owner'] | Should -Be @('.')
         $routing.NewReviewers | Should -Not -Contain 'ineligible-owner'
+        $routing.NewReviewers | Should -Not -Contain $script:ownersGroup
+        $routing.Warnings | Should -BeNullOrEmpty
     }
 
     It 'uses the same fallback for an ineligible declared team owner' {
@@ -231,15 +233,16 @@ Describe 'Reviewer eligibility fallback decisions' {
         $routing.Warnings[0] | Should -Match ([regex]::Escape('Owner [Azure/missing-team] is ineligible'))
     }
 
-    It 'uses the group for a sole-owner author but does not call that owner ineligible' {
-        $script:eligibilityPr.author.login = 'ineligible-owner'
+    It 'does not fall back when the sole owner author has repository write access' {
+        $script:eligibilityPr.author.login = 'eligible-owner'
+        $script:eligibilityIndex['.'].owners = @((New-EligibilityOwner -Handle 'eligible-owner'))
         $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:eligibilityPr -Repository $script:eligibilityRepository `
             -CatalogIndex $script:eligibilityIndex -ChangedFilePaths @('main.tf') -Ecosystem terraform
-        $routing.NewReviewers | Should -Be @($script:ownersGroup)
+        $routing.NewReviewers | Should -BeNullOrEmpty
         $routing.AuthorOwnedModules | Should -Be @('.')
         $routing.Warnings | Should -HaveCount 0
         $routing.OrphanedModules | Should -HaveCount 0
-        Should -Invoke Get-AvmPrReviewerRoutingEligibility -Exactly 0 -ParameterFilter { $Handle -eq 'ineligible-owner' }
+        Should -Invoke Get-AvmPrReviewerRoutingEligibility -Exactly 1 -ParameterFilter { $Handle -eq 'eligible-owner' }
     }
 
     It 'does not add the group when a sole-owner author has an eligible co-owner' {
@@ -251,13 +254,13 @@ Describe 'Reviewer eligibility fallback decisions' {
         $routing.AuthorOwnedModules | Should -HaveCount 0
     }
 
-    It 'falls back when an author''s only co-owner is ineligible' {
+    It 'does not fall back when the author has write access and the only co-owner does not' {
         $script:eligibilityPr.author.login = 'eligible-owner'
         $script:eligibilityIndex['.'].owners += New-EligibilityOwner -Handle eligible-owner
         $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:eligibilityPr -Repository $script:eligibilityRepository `
             -CatalogIndex $script:eligibilityIndex -ChangedFilePaths @('main.tf') -Ecosystem terraform 3>$null
-        $routing.NewReviewers | Should -Be @($script:ownersGroup)
-        $routing.Warnings | Should -HaveCount 1
+        $routing.NewReviewers | Should -BeNullOrEmpty
+        $routing.Warnings | Should -HaveCount 0
         $routing.AuthorOwnedModules | Should -HaveCount 0
     }
 
@@ -268,7 +271,7 @@ Describe 'Reviewer eligibility fallback decisions' {
         $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:eligibilityPr -Repository $script:eligibilityRepository `
             -CatalogIndex $script:eligibilityIndex -ChangedFilePaths @('main.tf') -Ecosystem terraform
         $routing.NewReviewers | Should -HaveCount 0
-        Should -Invoke Get-AvmPrReviewerRoutingEligibility -Exactly 0
+        Should -Invoke Get-AvmPrReviewerRoutingEligibility -Exactly 2
     }
 
     It 'does not treat an unfinished review as a completed review' {
@@ -319,7 +322,7 @@ Describe 'Reviewer eligibility fallback decisions' {
                 'avm/res/key-vault/vault/main.bicep'
             ) 3>$null
         $routing.NewReviewers | Should -Be @($script:ownersGroup, 'eligible-owner')
-        $routing.ReviewerModules[$script:ownersGroup] | Should -Be @('avm/res/network/virtual-network', 'avm/res/storage/storage-account')
+            $routing.ReviewerModules[$script:ownersGroup] | Should -Be @('avm/res/storage/storage-account')
         $routing.ReviewerModules['eligible-owner'] | Should -Be @('avm/res/key-vault/vault')
         $routing.AuthorOwnedModules | Should -Be @('avm/res/network/virtual-network')
     }
