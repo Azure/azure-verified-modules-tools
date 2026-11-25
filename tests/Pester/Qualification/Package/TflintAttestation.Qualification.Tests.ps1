@@ -248,7 +248,7 @@ output "deprecated_lock" {
                 $_ -match '\[avm_interface_lock_deprecated\].*v0\.19\.0 migration window'
             }).Count | Should -Be 1
         @($run.DeprecatedWarnings | Where-Object {
-                $_ -ceq "TFLint override disables rule 'avm_output_resource_id_required'."
+                $_ -match "^TFLint override disables rule 'avm_output_resource_id_required'\. \(.*\)$"
             }).Count | Should -Be 1
         @($run.DeprecatedWarnings | Where-Object {
                 $_ -match 'TFLint inline ignore comment found for rule\(s\): terraform_unused_declarations\. \(manual-ignore\.tf, line 1\)'
@@ -268,7 +268,7 @@ output "deprecated_lock" {
             @($run.CanonicalWarnings | Where-Object { $_ -ceq $warning }) | Should -HaveCount 1
         }
         @($run.CanonicalWarnings | Where-Object {
-                $_ -ceq "TFLint override disables rule 'avm_output_resource_id_required'."
+                $_ -match "^TFLint override disables rule 'avm_output_resource_id_required'\. \(.*\)$"
             }).Count | Should -Be 1
         foreach ($rule in $businessInterfaceRules) {
             @($run.CanonicalWarnings | Where-Object {
