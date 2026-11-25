@@ -11,7 +11,7 @@ BeforeAll {
     $script:savedNoColor = $env:NO_COLOR
     $script:savedColorForce = $env:CLICOLOR_FORCE
     $script:savedDiagnosticEnvironment = @{}
-    foreach ($name in @('GH_TOKEN', 'GITHUB_REPOSITORY', 'AVM_GITHUB_CHECK_RUN_ID', 'GITHUB_STEP_SUMMARY')) {
+    foreach ($name in @('GH_TOKEN', 'GITHUB_REPOSITORY', 'AVM_GITHUB_CHECK_RUN_ID', 'GITHUB_STEP_SUMMARY', 'GITHUB_WORKSPACE')) {
         $script:savedDiagnosticEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
     }
 }
@@ -35,6 +35,7 @@ AfterAll {
 Describe 'Write-AvmLog' {
     BeforeEach {
         $env:GITHUB_ACTIONS = ''
+        $env:GITHUB_WORKSPACE = ''
         $env:RUNNER_DEBUG = ''
         $env:AVM_VERBOSE = ''
         Remove-Item Env:\NO_COLOR -ErrorAction SilentlyContinue
@@ -145,6 +146,24 @@ Describe 'Write-AvmLog' {
             }
 
             @($warnings) | Should -Contain 'override warning (avm.tflint.override.hcl)'
+        }
+
+        It 'ignores leftover GitHub workspace metadata for local <File> diagnostics' -ForEach @(
+            @{ File = 'main.tf' }
+            @{ File = 'main.bicep' }
+        ) {
+            $savedWorkspace = $env:GITHUB_WORKSPACE
+            try {
+                $env:GITHUB_WORKSPACE = $TestDrive
+                $observed = InModuleScope 'Avm.Authoring' -Parameters @{ File = $File } {
+                    param($File)
+                    $warnings = @()
+                    Write-AvmLog 'local diagnostic' -Level Warning -File $File -Line 4 -WarningVariable warnings
+                    @($warnings | ForEach-Object { [string]$_ })
+                }
+                $observed | Should -Contain "local diagnostic ($File, line 4)"
+            }
+            finally { $env:GITHUB_WORKSPACE = $savedWorkspace }
         }
 
         It 'writes Error to the information stream so it is never swallowed' {
@@ -322,6 +341,37 @@ Describe 'Write-AvmLog' {
             finally {
                 Pop-Location
                 $env:GITHUB_WORKSPACE = $saved
+            }
+        }
+
+        It 'anchors <File> step diagnostics to the checked module rather than the caller directory' -ForEach @(
+            @{ File = 'main.tf' }
+            @{ File = 'main.bicep' }
+        ) {
+            $workspace = Join-Path $TestDrive 'step-workspace'
+            $moduleRoot = Join-Path $workspace 'avm' 'res' 'sample'
+            $null = New-Item -ItemType Directory -Path $moduleRoot -Force
+            $savedWorkspace = $env:GITHUB_WORKSPACE
+            $env:GITHUB_WORKSPACE = $workspace
+            Push-Location -LiteralPath $workspace
+            try {
+                $records = InModuleScope 'Avm.Authoring' -Parameters @{ File = $File; Root = $moduleRoot } {
+                    param($File, $Root)
+                    $result = [pscustomobject]@{
+                        Issues = @([pscustomobject]@{
+                            File = $File; Line = 4; Severity = 'warning'; Message = 'step diagnostic'
+                        })
+                    }
+                    $presented = [Collections.Generic.HashSet[string]]::new()
+                    @(Write-AvmStepDiagnostic -Result $result -Name lint -Status pass `
+                        -Presented $presented -SourceRoot $Root 6>&1 |
+                        ForEach-Object { [string]$_.MessageData })
+                }
+                $records | Should -Contain "::warning file=avm/res/sample/$File,line=4::step diagnostic (avm/res/sample/$File, line 4)"
+            }
+            finally {
+                Pop-Location
+                $env:GITHUB_WORKSPACE = $savedWorkspace
             }
         }
 

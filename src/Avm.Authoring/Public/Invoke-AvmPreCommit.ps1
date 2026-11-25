@@ -330,7 +330,7 @@ function Invoke-AvmPreCommit {
             }
         }
         Write-AvmStepDiagnostic -Result $stepResult -Name $def.Name -Status $stepStatus `
-            -ErrorMessage $stepError -Presented $presentedDiagnostics
+            -ErrorMessage $stepError -Presented $presentedDiagnostics -SourceRoot $context.Root
         $stepSw.Stop()
         $stepEnd = $stepStart.AddMilliseconds($stepSw.Elapsed.TotalMilliseconds)
 

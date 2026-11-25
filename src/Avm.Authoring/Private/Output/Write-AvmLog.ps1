@@ -365,11 +365,12 @@ function ConvertTo-AvmAnnotationPath {
 
     $normalised = $Path.Trim().Replace('\', '/')
 
-    $root = if ([string]::IsNullOrWhiteSpace($env:GITHUB_WORKSPACE)) { $SourceRoot } else { $env:GITHUB_WORKSPACE }
+    $useWorkspace = $env:GITHUB_ACTIONS -eq 'true' -and -not [string]::IsNullOrWhiteSpace($env:GITHUB_WORKSPACE)
+    $root = if ($useWorkspace) { $env:GITHUB_WORKSPACE } else { $SourceRoot }
     $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
     $prefix = $root.Replace('\', '/').TrimEnd('/') + '/'
 
-    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_WORKSPACE) -and $normalised -notmatch '^(?:[A-Za-z]:/|/)') {
+    if ($useWorkspace -and $normalised -notmatch '^(?:[A-Za-z]:/|/)') {
         $sourcePrefix = [IO.Path]::GetRelativePath($root, $SourceRoot).Replace('\', '/').TrimEnd('/') + '/'
         $sourcePath = [IO.Path]::GetFullPath($normalised, $SourceRoot)
         $repositoryPath = [IO.Path]::GetFullPath($normalised, $root)

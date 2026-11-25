@@ -595,14 +595,16 @@ function Invoke-AvmTerraformLint {
         Write-AvmLog `
             -Message ("TFLint override disables rule '{0}'." -f $warning.Rule) `
             -Level Warning `
-            -File $warning.File
+            -File $warning.File `
+            -SourceRoot $Context.Root
     }
     foreach ($warning in (Get-AvmTflintInlineIgnoreWarning -Root $Context.Root)) {
         Write-AvmLog `
             -Message ("TFLint inline ignore comment found for rule(s): {0}." -f (@($warning.Rules) -join ', ')) `
             -Level Warning `
             -File $warning.File `
-            -Line $warning.Line
+            -Line $warning.Line `
+            -SourceRoot $Context.Root
     }
     $stageParent = Join-Path (Get-AvmFolder -Kind Cache) 'lint-stage'
     $stageRoot = Join-Path $stageParent ('avm-lint-' + [guid]::NewGuid().ToString('N'))
@@ -730,7 +732,8 @@ function Invoke-AvmTerraformLint {
                         -Level $presentationLevel `
                         -File $issue.File `
                         -Line $issue.Line `
-                        -Column $issue.Column
+                        -Column $issue.Column `
+                        -SourceRoot $Context.Root
                     Register-AvmPresentedIssue -Issue $issue
                 }
             }
