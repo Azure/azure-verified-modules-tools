@@ -304,11 +304,11 @@ Describe 'Resolve-AvmPrReviewerRouting' {
         $routing.CoreTeamPaths | Should -Be @('utilities/pipelines/e2e.ps1')
     }
 
-    It 'uses the owners group instead of requesting the sole owner as their own reviewer' {
+    It 'does not use the owners group when the sole owner author has repository write access' {
         $script:pr.author.login = 'storage-owner'
         $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
             -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/res/storage/storage-account/main.bicep')
-        $routing.NewReviewers | Should -Be @('Azure/azure-verified-modules-module-owners')
+        $routing.NewReviewers | Should -BeNullOrEmpty
         $routing.SkippedReviewers.Handle | Should -Contain 'storage-owner'
     }
 
@@ -348,13 +348,13 @@ Describe 'Resolve-AvmPrReviewerRouting' {
         $routing.NewReviewers | Should -BeNullOrEmpty
     }
 
-    It 'does not label an author-owned module as orphaned when using the owners group' {
-        # Regression: the sole owner must not be misread as "no owners" once
-        # filtered out, which would incorrectly apply the orphan label.
+    It 'does not route an accessible author-owned module to the owners group or label it orphaned' {
         $script:pr.author.login = 'storage-owner'
         $routing = Resolve-AvmPrReviewerRouting -PullRequest $script:pr -Repository 'Azure/bicep-registry-modules' `
             -CatalogIndex $script:catalogIndex -ChangedFilePaths @('avm/res/storage/storage-account/main.bicep')
-        $routing.NewReviewers | Should -Be @('Azure/azure-verified-modules-module-owners')
+        $routing.NewReviewers | Should -BeNullOrEmpty
+        $routing.OrphanedModules | Should -BeNullOrEmpty
+        $routing.AuthorOwnedModules | Should -Be @('avm/res/storage/storage-account')
     }
 
     It 'is a no-op when every declared owner already has a pending review request' {

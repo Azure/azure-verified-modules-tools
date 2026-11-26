@@ -91,12 +91,12 @@ the author, existing review requests, and people who already reviewed, and
 only add missing reviewers.
 
 Reviewers must have repository write access. Routing checks each user or team's
-effective permission and caches the result per repository for the run. An
-ineligible owner is replaced by `Azure/azure-verified-modules-module-owners`,
-with a workflow warning naming the owner, affected request, and reason.
-The same group reviews when the request author is a module's sole owner.
-Eligible co-owners are still requested, and the group is requested only once
-even when several changed modules need it. These fallbacks do not change any
+effective permission and caches the result per repository for the run. The
+`Azure/azure-verified-modules-module-owners` group is requested for a module
+only when none of its owners have write access, or when the module declares no
+owners. A PR author with write access counts as an owner with access but is
+never requested to review their own PR. The group is requested only once even
+when several changed modules need it. These fallbacks do not change any
 repository permissions.
 
 Completed reviews remain in review history rather than the pending-reviewer

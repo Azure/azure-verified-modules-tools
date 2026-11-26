@@ -184,6 +184,8 @@ function Resolve-AvmPrReviewerRouting {
     $reviewerModules = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $reviewerTypes = @{}
     $fallbackModules = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
+    $eligibleOwners = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $ineligibleOwners = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $authorOwnedModules = [System.Collections.Generic.List[string]]::new()
     $warnings = [System.Collections.Generic.List[string]]::new()
     $modules = [System.Collections.Generic.List[object]]::new()
@@ -201,7 +203,6 @@ function Resolve-AvmPrReviewerRouting {
             $owners = @([ordered]@{ Handle = $script:AvmPrReviewerRoutingFallbackTeam; Type = 'team' })
         }
         elseif ($owners.Count -eq 1 -and $owners[0].Type -ceq 'user' -and $owners[0].Handle -ieq $reviewState.Author) {
-            $null = $fallbackModules.Add($topLevelModulePath)
             $authorOwnedModules.Add($topLevelModulePath)
         }
         foreach ($owner in $owners) {
@@ -226,20 +227,17 @@ function Resolve-AvmPrReviewerRouting {
         elseif ($reviewState.RequestedUsers.Contains($owner.Handle)) { $reason = 'review already requested' }
         elseif ($reviewState.ReviewedUsers.Contains($owner.Handle)) { $reason = 'already reviewed' }
 
-        if ($null -eq $reason -or $reason -ceq 'review already requested') {
-            $eligibility = Get-AvmPrReviewerRoutingEligibility -Repository $Repository -Handle $owner.Handle -Type $owner.Type -Cache $EligibilityCache
-            if (-not $eligibility.Eligible) {
-                if ($owner.Handle -ieq $script:AvmPrReviewerRoutingFallbackTeam) {
-                    throw [System.InvalidOperationException]::new("Fallback owners group [$($owner.Handle)] cannot review [$Repository]: $($eligibility.Reason).")
-                }
+        $eligibility = Get-AvmPrReviewerRoutingEligibility -Repository $Repository -Handle $owner.Handle -Type $owner.Type -Cache $EligibilityCache
+        if ($eligibility.Eligible) {
+            $null = $eligibleOwners.Add($owner.Handle)
+        }
+        else {
+            if ($owner.Handle -ieq $script:AvmPrReviewerRoutingFallbackTeam) {
+                throw [System.InvalidOperationException]::new("Fallback owners group [$($owner.Handle)] cannot review [$Repository]: $($eligibility.Reason).")
+            }
+            $ineligibleOwners[$owner.Handle] = $eligibility.Reason
+            if ($null -eq $reason -or $reason -ceq 'review already requested') {
                 $reason = "ineligible: $($eligibility.Reason)"
-                foreach ($modulePath in $reviewerModules[$owner.Handle]) {
-                    $null = $fallbackModules.Add($modulePath)
-                }
-                $warning = "Owner [$($owner.Handle)] is ineligible to review pull request [$($PullRequest.url)] in [$Repository]: " +
-                    "$($eligibility.Reason). Using owners group [$script:AvmPrReviewerRoutingFallbackTeam] instead."
-                $warnings.Add($warning)
-                Write-AvmPrReviewerRoutingWarning -Message $warning
             }
         }
 
@@ -249,6 +247,32 @@ function Resolve-AvmPrReviewerRouting {
         else {
             $skippedReviewers.Add([ordered]@{ Handle = $owner.Handle; Reason = $reason })
         }
+    }
+    foreach ($module in $modules) {
+        if ($module.Owners.Count -eq 0) {
+            continue
+        }
+        $hasEligibleOwner = $false
+        foreach ($ownerHandle in $module.Owners) {
+            if ($eligibleOwners.Contains($ownerHandle)) {
+                $hasEligibleOwner = $true
+                break
+            }
+        }
+        if (-not $hasEligibleOwner) {
+            $null = $fallbackModules.Add($module.ModulePath)
+        }
+    }
+    foreach ($owner in $owningHandles.Values) {
+        if (-not $ineligibleOwners.ContainsKey($owner.Handle) -or
+            -not @($reviewerModules[$owner.Handle] | Where-Object { $fallbackModules.Contains($_) }).Count) {
+            continue
+        }
+        $warning = "Owner [$($owner.Handle)] is ineligible to review pull request [$($PullRequest.url)] in [$Repository]: " +
+            "$($ineligibleOwners[$owner.Handle]). No module owner has repository write access. " +
+            "Using owners group [$script:AvmPrReviewerRoutingFallbackTeam] instead."
+        $warnings.Add($warning)
+        Write-AvmPrReviewerRoutingWarning -Message $warning
     }
     if ($fallbackModules.Count -gt 0) {
         $fallback = $script:AvmPrReviewerRoutingFallbackTeam
@@ -326,7 +350,7 @@ function Write-AvmPrReviewerRoutingPlan {
         Write-Host "Core team review is needed for $($Routing.CoreTeamPaths.Count) changed file(s): $(Format-AvmRunSummaryList -Values $Routing.CoreTeamPaths -Limit 10)"
     }
     if ($Routing.AuthorOwnedModules.Count -gt 0) {
-        Write-Host "The author is the sole owner of $(Format-AvmRunSummaryList -Values $Routing.AuthorOwnedModules); requesting the owners group instead."
+        Write-Host "The author is the sole owner of $(Format-AvmRunSummaryList -Values $Routing.AuthorOwnedModules) and cannot review their own pull request."
     }
     if ($Routing.NewReviewers.Count -gt 0) {
         Write-Host 'Requesting reviews from:'
