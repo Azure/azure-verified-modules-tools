@@ -74,7 +74,7 @@ function Remove-AvmBicepResourceRemainder {
                             catch {
                                 if (-not $RequireCompleteRemoval -and
                                     $_.Exception.Message -match 'purge protection (?:is )?enabled|PurgeProtectionEnabled') {
-                                    Write-Warning ('Purge protection for key vault [{0}] enabled. Skipping. Scheduled purge date is [{1}]' -f $resourceName, $matchingKeyVault.ScheduledPurgeDate)
+                                    Write-AvmLog ('Purge protection for key vault [{0}] enabled. Skipping. Scheduled purge date is [{1}]' -f $resourceName, $matchingKeyVault.ScheduledPurgeDate) -Level Warning
                                 }
                                 else {
                                     throw $_

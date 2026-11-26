@@ -311,17 +311,30 @@ runs:
         $hasRequiredModules = $false
         $hasOptionalModules = $false
         $requiredErrors = [Collections.Generic.List[string]]::new()
-        $requiredScenarioNames = @('default', 'defaults', 'waf-aligned')
-        $defaultScenarioPaths = @('tests/e2e/default/main.test.bicep', 'tests/e2e/defaults/main.test.bicep')
         foreach ($entry in $outputs.ModuleMatrix.Include) {
           $tests = @($entry.TestFiles)
-          $requiredTests = @($tests | Where-Object { $_.name -cin $requiredScenarioNames })
-          $optionalTests = @($tests | Where-Object { $_.name -cnotin $requiredScenarioNames })
+          $rootTests = @($tests | Where-Object {
+              $_.path -cmatch '^tests/e2e/[^/]+/main\.test\.bicep$'
+            })
+          $moduleTypeMatch = [regex]::Match($entry.ModulePath, '^avm/(?<type>res|ptn|utl)/')
+          if (-not $moduleTypeMatch.Success) {
+            throw [System.IO.InvalidDataException]::new("Unsupported AVM module path: $($entry.ModulePath)")
+          }
+          $scenarioSelection = Get-AvmE2eScenarioSelection -ModuleType $moduleTypeMatch.Groups['type'].Value `
+            -Names @($rootTests | ForEach-Object name) -SkipModuleVersionCheck
+          $requiredScenarioNames = @($scenarioSelection.Required)
+          $requiredTests = @($rootTests | Where-Object {
+              $requiredScenarioNames -ccontains $_.name
+            })
+          $requiredTestPaths = @($requiredTests | ForEach-Object path)
+          $optionalTests = @($tests | Where-Object {
+              $requiredTestPaths -cnotcontains $_.path
+            })
           $selectedTests = @()
           if ($env:FORK -cne 'true' -and $outputs.WorkflowInput.deploymentValidation -ceq 'true') {
             $selectedTests = @($tests | Where-Object {
-                ($env:REQUIRED -ceq 'true' -and $_.name -cin $requiredScenarioNames) -or
-                ($env:OPTIONAL -ceq 'true' -and $_.name -cnotin $requiredScenarioNames)
+                ($env:REQUIRED -ceq 'true' -and $requiredTestPaths -ccontains $_.path) -or
+                ($env:OPTIONAL -ceq 'true' -and $requiredTestPaths -cnotcontains $_.path)
               })
           }
           $modules.Add([pscustomobject]@{
@@ -330,15 +343,8 @@ runs:
               psRuleModuleTestFilePaths = ConvertTo-Json -InputObject @($entry.PolicyTestFiles) -Depth 20 -Compress
               e2eRoute = if ($selectedTests.Count -gt 0) { 'native' } else { 'none' }
             })
-          $defaultScenarios = @($requiredTests | Where-Object { $_.path -cin $defaultScenarioPaths })
-          if ($defaultScenarios.Count -eq 0) {
-            $message = "$($entry.ModulePath): default/defaults E2E scenario is missing."
-            $message = $message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-            Write-Information "::warning::$message" -InformationAction Continue
-          }
-          $wafAlignedScenarios = @($requiredTests | Where-Object { $_.path -ceq 'tests/e2e/waf-aligned/main.test.bicep' })
-          if ($wafAlignedScenarios.Count -eq 0) {
-            $message = "$($entry.ModulePath): waf-aligned E2E scenario is missing."
+          foreach ($missingScenario in $scenarioSelection.MissingRequiredScenarios) {
+            $message = "$($entry.ModulePath): the $($scenarioSelection.ModuleTypeDisplayName) module is missing its required '$missingScenario' E2E scenario."
             $message = $message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
             Write-Information "::warning::$message" -InformationAction Continue
           }

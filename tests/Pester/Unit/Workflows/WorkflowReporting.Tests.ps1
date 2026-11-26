@@ -146,10 +146,15 @@ Describe 'Shared AVM workflow reporting' {
             @{ HasOptional = $true }, @{ HasOptional = $false }
         ) {
             Set-TestWorkflowSelection -Required $false -Authorized $false -HasOptional $HasOptional
+            if ($Ecosystem -ceq 'bicep') {
+                $script:results.initialize.outputs.moduleMatrix = '{"include":[{"modulePath":"avm/utl/test/utility"}]}'
+            }
             $report = Invoke-TestWorkflowReport
             $report.Passed | Should -BeTrue
             $body = $script:api.Calls[-1].Body.body
             $body | Should -Match 'absence does not currently block merging'
+            $body | Should -Match 'no runnable required E2E scenarios'
+            $body | Should -Not -Match 'exempt from the required defaults'
             if ($HasOptional) { $body | Should -Match 'selects no tests here' }
             else { $body | Should -Match 'Labels cannot run examples that do not exist' }
         }

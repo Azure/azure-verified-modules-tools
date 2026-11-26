@@ -24,7 +24,7 @@ function Test-AvmModuleVersion {
 
     if ($SkipModuleVersionCheck) {
         if (-not $SuppressSkipWarning -and -not $script:AvmModuleVersionSkipWarningWritten) {
-            Write-Warning 'The Avm.Authoring PowerShell repository version check was skipped. The current command may run with an outdated module.'
+            Write-AvmLog 'The Avm.Authoring PowerShell repository version check was skipped. The current command may run with an outdated module.' -Level Warning
             $script:AvmModuleVersionSkipWarningWritten = $true
         }
         return
@@ -44,7 +44,7 @@ function Test-AvmModuleVersion {
         else {
             'The MCR response was invalid.'
         }
-        Write-Warning "Unable to check MCR for the latest Avm.Authoring version. Continuing with configured PowerShell repositories. $detail"
+        Write-AvmLog "Unable to check MCR for the latest Avm.Authoring version. Continuing with configured PowerShell repositories. $detail" -Level Warning
         $mcrVersion = $null
     }
 
@@ -66,7 +66,7 @@ function Test-AvmModuleVersion {
         else {
             'The repository lookup failed unexpectedly.'
         }
-        Write-Warning "Unable to check configured PowerShell repositories for the latest Avm.Authoring version. Continuing with the installed module. $detail"
+        Write-AvmLog "Unable to check configured PowerShell repositories for the latest Avm.Authoring version. Continuing with the installed module. $detail" -Level Warning
         return
     }
 
@@ -74,7 +74,7 @@ function Test-AvmModuleVersion {
         Sort-Object Version -Descending |
         Select-Object -First 1
     if (-not $currentModule) {
-        Write-Warning 'Unable to determine the running Avm.Authoring version. Continuing without enforcing the repository version.'
+        Write-AvmLog 'Unable to determine the running Avm.Authoring version. Continuing without enforcing the repository version.' -Level Warning
         return
     }
 
@@ -106,7 +106,7 @@ function Test-AvmModuleVersion {
 
     if ($currentModule.Version -lt $latestVersion) {
         if ($WarnOnly) {
-            Write-Warning "Avm.Authoring $($currentModule.Version) has an update available: $latestVersion. Run 'avm upgrade' to update."
+            Write-AvmLog "Avm.Authoring $($currentModule.Version) has an update available: $latestVersion. Run 'avm upgrade' to update." -Level Warning
             return
         }
 

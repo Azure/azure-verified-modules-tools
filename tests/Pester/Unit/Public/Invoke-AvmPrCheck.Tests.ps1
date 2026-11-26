@@ -564,9 +564,9 @@ Describe 'Invoke-AvmPrCheck' {
             }
         }
         $observed.Result.Status | Should -Be 'fail'
-        @($observed.Messages | Where-Object { $_ -eq '::warning file=metadata.json,line=2,col=3::[metadata-warning] Metadata warning.' }).Count | Should -Be 1
-        @($observed.Messages | Where-Object { $_ -eq '::error file=main.bicep,line=4,col=5::[build-error] Build error.' }).Count | Should -Be 1
-        @($observed.Messages | Where-Object { $_ -eq '::warning file=README.md::[docs-warning] Documentation warning.' }).Count | Should -Be 1
+        @($observed.Messages | Where-Object { $_ -eq '::warning file=metadata.json,line=2,col=3::[metadata-warning] Metadata warning. (metadata.json, line 2, column 3)' }).Count | Should -Be 1
+        @($observed.Messages | Where-Object { $_ -eq '::error file=main.bicep,line=4,col=5::[build-error] Build error. (main.bicep, line 4, column 5)' }).Count | Should -Be 1
+        @($observed.Messages | Where-Object { $_ -eq '::warning file=README.md::[docs-warning] Documentation warning. (README.md)' }).Count | Should -Be 1
         ($observed.Messages -join "`n") | Should -Not -Match 'build-notice|2 runs'
         ($observed.Verbose -join "`n") | Should -Match 'build-notice'
         ($observed.Verbose -join "`n") | Should -Match '2 runs, 1 passed, 1 failed'

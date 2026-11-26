@@ -7,7 +7,7 @@ inputs:
   psRuleFilterRegex:
     description: Path filter for PSRule test cases.
     required: false
-    default: (defaults|waf-aligned)
+    default: ''
 outputs:
   moduleTestFilePaths:
     description: Module-relative deployment tests as a JSON array.

@@ -183,6 +183,40 @@ Describe 'Bicep PSRule policy checks' -Tag 'Component' {
         }
     }
 
+    It 'reports AVM WAF failures as warnings for patterns and utilities, but errors for resources' -ForEach @(
+        @{ ModuleType = 'res'; ExpectedSeverity = 'error'; ExpectedStatus = 'fail' }
+        @{ ModuleType = 'ptn'; ExpectedSeverity = 'warning'; ExpectedStatus = 'pass' }
+        @{ ModuleType = 'utl'; ExpectedSeverity = 'warning'; ExpectedStatus = 'pass' }
+    ) {
+        $target = $script:modulePath
+        if ($ModuleType -cne 'res') {
+            $target = Join-Path $script:workingRoot 'avm' $ModuleType 'mock' 'widget'
+            $null = New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force
+            Copy-Item -LiteralPath $script:modulePath -Destination $target -Recurse
+        }
+        InModuleScope Avm.Authoring {
+            Mock Invoke-AvmBicepPolicyBaseline {
+                $test = [System.IO.Path]::GetFullPath((Join-Path $StageRoot $InputPath))
+                [pscustomobject]@{
+                    Source     = @([pscustomobject]@{ File = $test })
+                    RuleName   = 'Azure.Sample.Rule'
+                    TargetType = 'Microsoft.Storage/storageAccounts'
+                    Outcome    = 'Fail'
+                    Error      = $null
+                }
+            }
+        }
+
+        $result = Invoke-AvmCheckPolicy -Path $target -Baseline CB.AVM.WAF.Security -SkipModuleVersionCheck
+        $result.Status | Should -BeExactly $ExpectedStatus
+        $result.Issues.Severity | Should -Contain $ExpectedSeverity
+        @($result.Issues | Where-Object Severity -EQ 'error').Count |
+            Should -Be $(if ($ExpectedSeverity -ceq 'error') { 2 } else { 0 })
+        $result.Evaluations.ModuleType | Select-Object -Unique | Should -BeExactly $ModuleType
+        $result.Evaluations.Required | Select-Object -Unique |
+            Should -BeExactly ($ExpectedSeverity -ceq 'error')
+    }
+
     It 'deduplicates repeated selectors without rerunning policy' {
         $result = Invoke-AvmCheckPolicy -Path $script:modulePath `
             -Example @('tests/e2e/defaults/main.test.bicep', 'tests/e2e/defaults/main.test.bicep') `

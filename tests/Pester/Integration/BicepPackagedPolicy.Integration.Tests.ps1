@@ -235,9 +235,11 @@ param serviceShort string = 'stgmin'
             $firewallIssues.Count | Should -BeGreaterThan 0
         }
         if ($InsecureTransport) {
-            $result.Status | Should -Be 'fail'
+            $result.Status | Should -Be 'pass'
             @($result.Issues | Where-Object {
-                    $_.RuleName -eq 'Azure.Storage.SecureTransfer' -and $_.Baseline -eq 'CB.AVM.WAF.Security'
+                    $_.RuleName -eq 'Azure.Storage.SecureTransfer' -and
+                    $_.Baseline -eq 'CB.AVM.WAF.Security' -and
+                    $_.Severity -eq 'warning'
                 }).Count | Should -BeGreaterThan 0
         }
         $result.TestsSelected | Should -Be 2

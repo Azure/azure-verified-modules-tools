@@ -16,7 +16,9 @@ function Write-AvmStepDiagnostic {
 
         [AllowNull()]
         [AllowEmptyString()]
-        [string] $ErrorMessage
+        [string] $ErrorMessage,
+
+        [string] $SourceRoot = (Get-Location).Path
     )
 
     Set-StrictMode -Version 3.0
@@ -53,7 +55,8 @@ function Write-AvmStepDiagnostic {
                 $code = [string]$fields.Code
                 if ($code) { $message = '[{0}] {1}' -f $code, $message }
                 Write-AvmLog -Message $message -Level $severity `
-                    -File ([string]$fields.File) -Line ([int]$fields.Line) -Column ([int]$fields.Column)
+                    -File ([string]$fields.File) -Line ([int]$fields.Line) -Column ([int]$fields.Column) `
+                    -SourceRoot $SourceRoot
             }
             Register-AvmPresentedIssue -Issue $issue
         }

@@ -216,7 +216,7 @@ function Remove-AvmBicepResource {
                 }
             }
             else {
-                Write-Warning "Unable to find CDN profile [$resourceName] in resource group [$resourceGroupName]"
+                Write-AvmLog "Unable to find CDN profile [$resourceName] in resource group [$resourceGroupName]" -Level Warning
             }
             break
         }
@@ -671,7 +671,7 @@ function Remove-AvmBicepResource {
                         }
                     }
                     else {
-                        Write-Warning "Unable to find API Management service [$resourceName] (active or soft-deleted)"
+                        Write-AvmLog "Unable to find API Management service [$resourceName] (active or soft-deleted)" -Level Warning
                     }
                 }
             }

@@ -5,9 +5,10 @@ function Invoke-AvmBicepCheckPolicy {
 
     .DESCRIPTION
         Uses the package's PSRule options and rule/suppression directory
-        to evaluate defaults and waf-aligned e2e tests with the required
-        Reliability and AVM WAF Security baselines and the advisory Default
-        and Security baselines. Files are tokenized in a temporary tree;
+        to evaluate defaults and waf-aligned e2e tests with baselines classified
+        by module type. Reliability and AVM WAF Security are required for
+        resources and advisory for patterns and utilities. Default and Security
+        remain advisory. Files are tokenized in a temporary tree;
         original module files are never changed. Missing custom tokens, tools,
         baselines, or uninspectable results fail the check.
 
@@ -68,26 +69,31 @@ function Invoke-AvmBicepCheckPolicy {
             "Invoke-AvmBicepCheckPolicy requires a bicep context (got Ecosystem='$($Context.Ecosystem)').")
     }
 
-    $required = @('Azure.Pillar.Reliability', 'CB.AVM.WAF.Security')
-    $advisory = @('Azure.Default', 'Azure.Pillar.Security')
+    $allBaselines = @(
+        'Azure.Pillar.Reliability',
+        'CB.AVM.WAF.Security',
+        'Azure.Default',
+        'Azure.Pillar.Security'
+    )
+    $selectedBaselines = $allBaselines
     if ($PSBoundParameters.ContainsKey('Baseline')) {
         foreach ($name in $Baseline) {
-            if (($required + $advisory) -cnotcontains $name) {
+            if ($allBaselines -cnotcontains $name) {
                 throw [AvmConfigurationException]::new(
                     '-Baseline must select exact supported Bicep policy baseline names.')
             }
         }
-        $required = @($required | Where-Object { $Baseline -ccontains $_ })
-        $advisory = @($advisory | Where-Object { $Baseline -ccontains $_ })
+        $selectedBaselines = @($allBaselines | Where-Object { $Baseline -ccontains $_ })
     }
-    $baselines = @(
-        foreach ($name in $required) { [pscustomobject]@{ Name = $name; Required = $true } }
-        foreach ($name in $advisory) { [pscustomobject]@{ Name = $name; Required = $false } }
-    )
+    $baselines = @($selectedBaselines | ForEach-Object {
+            [pscustomobject]@{ Name = $_ }
+        })
     $issues = [System.Collections.Generic.List[object]]::new()
     $evaluations = [System.Collections.Generic.List[object]]::new()
     $tests = [System.Collections.Generic.List[object]]::new()
     $testModulePaths = @{}
+    $testModuleTypes = @{}
+    $moduleTypeSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     $seen = [System.Collections.Generic.HashSet[string]]::new(
         $(if ($IsWindows) { [System.StringComparer]::OrdinalIgnoreCase }
             else { [System.StringComparer]::Ordinal }))
@@ -135,12 +141,14 @@ function Invoke-AvmBicepCheckPolicy {
             continue
         }
         $repositoryRoot = $scope.RepositoryRoot
+        $null = $moduleTypeSet.Add($scope.ModuleType)
         try {
             foreach ($file in @(Get-AvmBicepPolicyTestFile -ModulePath $scope.Path `
                         -IncludeAllExamples:($PSBoundParameters.ContainsKey('Example')))) {
                 if ($seen.Add($file.FullName)) {
                     $tests.Add($file)
                     $testModulePaths[$file.FullName] = $scope.ModuleRelativePath
+                    $testModuleTypes[$file.FullName] = $scope.ModuleType
                 }
             }
         }
@@ -149,6 +157,14 @@ function Invoke-AvmBicepCheckPolicy {
                 "PSRule could not select test sources ($($_.Exception.GetType().Name))."
         }
     }
+    $moduleTypes = @($moduleTypeSet | Sort-Object)
+    $required = @($selectedBaselines | Where-Object {
+            $baselineName = $_
+            @($moduleTypes | Where-Object {
+                    (Get-AvmRequiredPolicyBaseline -ModuleType $_) -cnotcontains $baselineName
+                }).Count -eq 0 -and $moduleTypes.Count -gt 0
+        })
+    $advisory = @($selectedBaselines | Where-Object { $required -cnotcontains $_ })
     if ($PSBoundParameters.ContainsKey('Example')) {
         $selected = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
         foreach ($path in $Example) {
@@ -172,9 +188,32 @@ function Invoke-AvmBicepCheckPolicy {
         $tests = [System.Collections.Generic.List[object]]@($tests | Where-Object { $selected.Contains($_.FullName) })
     }
     if ($tests.Count -eq 0) {
+        $message = 'No required Bicep E2E main.test.bicep sources were selected for PSRule.'
+        if ($moduleTypes.Count -gt 0) {
+            $configuration = Get-AvmE2eScenarioConfiguration
+            $displayNames = @($moduleTypes | ForEach-Object {
+                    [string]$configuration['moduleTypes'][$_]['displayName']
+                })
+            $scenarioNames = @($moduleTypes | ForEach-Object {
+                    Get-AvmRequiredE2eScenario -ModuleType $_
+                } | Sort-Object -Unique)
+            $requiredText = if ($scenarioNames.Count -eq 1) {
+                $scenarioNames[0]
+            }
+            else {
+                ($scenarioNames[0..($scenarioNames.Count - 2)] -join ', ') + " or $($scenarioNames[-1])"
+            }
+            $moduleText = if ($displayNames.Count -eq 1) {
+                "the $($displayNames[0]) module"
+            }
+            else {
+                "the $($displayNames -join ', ') modules"
+            }
+            $message = "No $requiredText main.test.bicep sources were selected for $moduleText."
+        }
         $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root -Path $Context.Root `
                     -Code 'avm.bicep.psrule-input-missing' `
-                    -Message 'No defaults or waf-aligned main.test.bicep sources were selected for PSRule.'))
+                    -Message $message))
     }
 
     $tool = $null
@@ -257,6 +296,8 @@ function Invoke-AvmBicepCheckPolicy {
                             'The selected PSRule input was not staged.')
                     }
                     foreach ($baselineDefinition in $baselines) {
+                        $baselineRequired = (Get-AvmRequiredPolicyBaseline `
+                                -ModuleType $testModuleTypes[$test.FullName]) -ccontains $baselineDefinition.Name
                         try {
                             $records = @(Invoke-AvmBicepPolicyBaseline `
                                     -StageRoot $stage.FullName -InputPath $relative `
@@ -276,15 +317,16 @@ function Invoke-AvmBicepCheckPolicy {
                             $evaluations.Add([pscustomobject]@{
                                     File            = [System.IO.Path]::GetRelativePath(
                                         $Context.Root, $test.FullName).Replace('\', '/')
+                                    ModuleType      = $testModuleTypes[$test.FullName]
                                     Baseline        = $baselineDefinition.Name
-                                    Required        = $baselineDefinition.Required
+                                    Required        = $baselineRequired
                                     Records         = $records.Count
                                     ExpandedRecords = $result.ExpandedRecords
                                     ProcessedRules  = $result.ProcessedRules
                                     FailedRules     = $result.Failures.Count
                                 })
                             foreach ($failure in $result.Failures) {
-                                $severity = if ($baselineDefinition.Required) { 'error' } else { 'warning' }
+                                $severity = if ($baselineRequired) { 'error' } else { 'warning' }
                                 $message = "PSRule baseline '$($baselineDefinition.Name)' failed rule '$($failure.RuleName)' for target type '$($failure.TargetType)'."
                                 $issues.Add((New-AvmBicepPolicyIssue -Root $Context.Root `
                                             -Path $test.FullName -Baseline $baselineDefinition.Name `

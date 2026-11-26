@@ -126,7 +126,7 @@ Describe 'Invoke-AvmPreCommit' {
             }
         }
         $observed.Result.Status | Should -Be 'fail'
-        @($observed.Messages | Where-Object { $_ -eq '::error file=main.bicep,line=4,col=5::[format-error] Format error.' }).Count | Should -Be 1
+        @($observed.Messages | Where-Object { $_ -eq '::error file=main.bicep,line=4,col=5::[format-error] Format error. (main.bicep, line 4, column 5)' }).Count | Should -Be 1
         ($observed.Messages -join "`n") | Should -Not -Match 'Additional detail|2 runs'
         ($observed.Summary -join "`n") | Should -Not -Match 'format-error|Additional detail|2 runs'
         ($observed.Full -join "`n") | Should -Match 'format-error|Additional detail|2 runs'

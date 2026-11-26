@@ -7,11 +7,16 @@ BeforeAll {
 
     $script:savedRunnerDebug = $env:RUNNER_DEBUG
     $script:savedAvmVerbose = $env:AVM_VERBOSE
+    $script:savedWorkspace = $env:GITHUB_WORKSPACE
 }
 
 AfterAll {
     $env:RUNNER_DEBUG = $script:savedRunnerDebug
     $env:AVM_VERBOSE = $script:savedAvmVerbose
+    [Environment]::SetEnvironmentVariable(
+        'GITHUB_WORKSPACE',
+        $(if ($null -eq $script:savedWorkspace) { [NullString]::Value } else { $script:savedWorkspace }),
+        'Process')
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
@@ -644,6 +649,7 @@ $ExtraLine
 
 Describe 'Invoke-AvmTerraformLint' {
     BeforeEach {
+        $env:GITHUB_WORKSPACE = ''
         $env:RUNNER_DEBUG = ''
         $env:AVM_VERBOSE = ''
         $script:moduleDir = Join-Path $TestDrive ("tf-mod-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -801,12 +807,14 @@ rule "$($entry.Value)" {
                 Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
                     $Level -eq 'Warning' -and
                     $File -ceq $entry.Key -and
+                    $SourceRoot -eq $C.Root -and
                     $Message -ceq $expectedMessage
                 }
             }
             Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
                 $Level -eq 'Warning' -and
                 $File -eq 'main.tf' -and
+                $SourceRoot -eq $C.Root -and
                 $Line -eq 2 -and
                 $Message -eq 'TFLint inline ignore comment found for rule(s): terraform_unused_declarations.'
             }
@@ -1377,7 +1385,7 @@ rule "scope_rule" {
         $probe.Result.Issues | Should -HaveCount 1
         $probe.Result.Issues[0].Severity | Should -Be $Severity
         @($probe.Info | Where-Object { $_ -like '::error*' }) | Should -HaveCount 1
-        $probe.Info | Should -Contain "::error file=variables.tf,line=17,col=5::[$Code] Threshold diagnostic."
+        $probe.Info | Should -Contain "::error file=variables.tf,line=17,col=5::[$Code] Threshold diagnostic. (variables.tf, line 17, column 5)"
         @($probe.Info | Where-Object { $_ -like '*Threshold diagnostic.*' }) | Should -HaveCount 1
         ($probe.Lines -join "`n") | Should -Match ([regex]::Escape("[$Code] Threshold diagnostic."))
         $probe.Json | Should -Not -Match 'Presented|Inline|Reported'
@@ -1559,6 +1567,7 @@ rule "scope_rule" {
             Should -Invoke Write-AvmLog -Exactly 1 -ParameterFilter {
                 $Level -eq 'Warning' -and
                 $File -eq 'variables.tf' -and
+                $SourceRoot -eq $C.Root -and
                 $Line -eq 17 -and
                 $Column -eq 5 -and
                 $Message -eq '[avm_interface_lock_deprecated] Replace the legacy lock input with the canonical lock interface.'
@@ -1634,7 +1643,7 @@ rule "scope_rule" {
         $result.Issues[0].Severity | Should -Be 'warning'
     }
 
-    It 'emits a GitHub warning annotation for a deprecated-interface notice without changing pass status' {
+    It 'anchors a GitHub deprecated-interface warning to the module when invoked from another directory' {
         $ctx = $script:context
         $json = @'
 { "issues": [ { "rule": { "name": "avm_interface_private_endpoints_deprecated", "severity": "notice" }, "message": "Use the canonical private endpoints interface.", "range": { "filename": "variables.tf", "start": { "line": 21, "column": 7 } } } ] }
@@ -1642,8 +1651,12 @@ rule "scope_rule" {
         $probe = InModuleScope 'Avm.Authoring' -Parameters @{ C = $ctx; J = $json } {
             param($C, $J)
             $savedActions = $env:GITHUB_ACTIONS
+            $savedWorkspace = $env:GITHUB_WORKSPACE
+            $workspace = [IO.Path]::GetDirectoryName($C.Root)
+            Push-Location -LiteralPath $workspace
             try {
                 $env:GITHUB_ACTIONS = 'true'
+                $env:GITHUB_WORKSPACE = $workspace
                 Mock Resolve-AvmTool {
                     [pscustomobject]@{ Name = $Name; Version = 'test'; Source = 'cache'; Path = "/fake/$Name" }
                 }
@@ -1654,6 +1667,9 @@ rule "scope_rule" {
                     [pscustomobject]@{ ExitCode = 0; StdOut = $J; StdErr = '' }
                 }
 
+                $script:AvmGitHubDiagnosticCounts.Warning = 0
+                $script:AvmGitHubDiagnosticCounts.Error = 0
+                $script:AvmGitHubDiagnosticOverflow.Clear()
                 $captured = @()
                 $result = Invoke-AvmTerraformLint -Context $C -InformationVariable captured 3>$null
                 [pscustomobject]@{
@@ -1662,14 +1678,18 @@ rule "scope_rule" {
                 }
             }
             finally {
+                Pop-Location
                 $env:GITHUB_ACTIONS = $savedActions
+                $env:GITHUB_WORKSPACE = $savedWorkspace
             }
         }
 
         $probe.Result.Status | Should -Be 'pass'
+        $file = ([IO.Path]::GetFileName($ctx.Root)) + '/variables.tf'
         @($probe.Info) | Should -Contain (
-            '::warning file=variables.tf,line=21,col=7::' +
-            '[avm_interface_private_endpoints_deprecated] Use the canonical private endpoints interface.'
+            "::warning file=$file,line=21,col=7::" +
+            '[avm_interface_private_endpoints_deprecated] Use the canonical private endpoints interface. ' +
+            "($file, line 21, column 7)"
         )
     }
 

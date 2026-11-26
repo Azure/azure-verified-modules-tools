@@ -15,6 +15,7 @@
 #       permissions:
 #         id-token: write
 #         contents: read
+#         checks: write
 #         pull-requests: write
 #       secrets: inherit
 #
@@ -288,6 +289,7 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      checks: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -402,6 +404,9 @@ jobs:
 
       - name: PR check
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AVM_GITHUB_CHECK_RUN_ID: ${{ job.check_run_id }}
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module (Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1') -ErrorAction Stop
@@ -566,15 +571,26 @@ jobs:
           if ($parsed -isnot [array] -or @($parsed | Where-Object { $_ -isnot [string] -or [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
               throw [System.IO.InvalidDataException]::new('E2E discovery must return an array of nonempty example names.')
           }
-          $defaultNames = @('default', 'defaults')
-          $requiredNames = @($defaultNames + 'waf-aligned')
-          foreach ($name in $requiredNames) {
-              if ((Test-Path -LiteralPath (Join-Path 'examples' $name) -PathType Container) -and $parsed -cnotcontains $name) {
+          $repositoryName = ($env:GITHUB_REPOSITORY -split '/')[-1]
+          $moduleTypeMatch = [regex]::Match($repositoryName, '^terraform-[a-z0-9]+-avm-(?<type>res|ptn|utl)-')
+          if (-not $moduleTypeMatch.Success) {
+              throw [System.IO.InvalidDataException]::new("Could not determine AVM module type from repository '$repositoryName'.")
+          }
+          $moduleType = $moduleTypeMatch.Groups['type'].Value
+          $selection = Get-AvmE2eScenarioSelection -ModuleType $moduleType -Names $parsed -SkipModuleVersionCheck
+          $existingNames = @()
+          if (Test-Path -LiteralPath 'examples' -PathType Container) {
+              $existingNames = @(Get-ChildItem -LiteralPath 'examples' -Directory -Force | ForEach-Object Name)
+          }
+          $existingSelection = Get-AvmE2eScenarioSelection -ModuleType $moduleType `
+              -Names $existingNames -SkipModuleVersionCheck
+          foreach ($name in $existingSelection.Required) {
+              if ($parsed -cnotcontains $name) {
                   throw [System.InvalidOperationException]::new("Required E2E example '$name' exists but is not runnable; remove its ignore marker or repair the example.")
               }
           }
-          $required = @($parsed | Where-Object { $_ -cin $requiredNames })
-          $optional = @($parsed | Where-Object { $_ -cnotin $requiredNames })
+          $required = @($selection.Required)
+          $optional = @($selection.Optional)
           $labels = @()
           if ($env:PR_LABELS -and $env:PR_LABELS -ne 'null') {
               $labels = @(ConvertFrom-Json -InputObject $env:PR_LABELS)
@@ -598,10 +614,9 @@ jobs:
           "runRequired=$($runRequired.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "runOptional=$($runOptional.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "Required E2E examples: $($required -join ', '); optional E2E examples: $($optional -join ', ')."
-          if (@($parsed | Where-Object { $_ -cin $defaultNames }).Count -eq 0) {
-              Write-Host "Required E2E examples 'default' or 'defaults' are absent; existence is not yet enforced."
+          foreach ($missingScenario in $selection.MissingRequiredScenarios) {
+              Write-Host "Required '$missingScenario' E2E scenario for the $($selection.ModuleTypeDisplayName) module is absent; existence is not yet enforced."
           }
-          if ($parsed -cnotcontains 'waf-aligned') { Write-Host "Required E2E example 'waf-aligned' is absent; existence is not yet enforced." }
 
   select-e2e-tests:
     name: Select E2E tests and subscriptions

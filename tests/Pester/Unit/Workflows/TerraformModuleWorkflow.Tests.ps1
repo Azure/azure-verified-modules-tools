@@ -103,7 +103,7 @@ Describe 'Terraform E2E label routing and merge gates' {
     BeforeEach {
         $script:gateEnvironment = @{}
         foreach ($name in @(
-            'EVENT_NAME', 'PR_LABELS', 'IS_FORK', 'RUNNER_TEMP', 'GITHUB_OUTPUT',
+            'EVENT_NAME', 'PR_LABELS', 'IS_FORK', 'RUNNER_TEMP', 'GITHUB_OUTPUT', 'GITHUB_REPOSITORY',
             'E2E_EXAMPLE', 'SUBSCRIPTIONS', 'SUBSCRIPTION_OVERRIDE', 'REQUIRED_EXAMPLES', 'OPTIONAL_EXAMPLES', 'RUN_OPTIONAL'
         )) {
             $script:gateEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
@@ -115,6 +115,7 @@ Describe 'Terraform E2E label routing and merge gates' {
         $fixture = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $null = New-Item -ItemType Directory -Path $fixture
         $env:GITHUB_OUTPUT = Join-Path $fixture 'gate-output'
+        $env:GITHUB_REPOSITORY = 'Azure/terraform-azurerm-avm-res-mock'
         $env:REPOSITORY_NAME = 'terraform-azurerm-avm-res-mock'
         $env:E2E_EXAMPLE = 'default'
         $env:SUBSCRIPTIONS = '[{"id":"10000000-0000-4000-8000-000000000001","name":"sub-one"},{"id":"10000000-0000-4000-8000-000000000002","name":"sub-two"}]'
@@ -200,7 +201,7 @@ Describe 'Terraform E2E label routing and merge gates' {
         $outputs.requiredExamples | Should -BeExactly $Expected
     }
 
-    It 'warns about the default baseline only when neither spelling is runnable: <Examples>' -ForEach @(
+    It 'warns about missing required scenarios only when their category is absent: <Examples>' -ForEach @(
         @{ Examples = '["default"]'; MissingBaselineWarnings = 0 }
         @{ Examples = '["defaults"]'; MissingBaselineWarnings = 0 }
         @{ Examples = '["default","defaults"]'; MissingBaselineWarnings = 0 }
@@ -209,8 +210,21 @@ Describe 'Terraform E2E label routing and merge gates' {
     ) {
         $script:examplesJson = $Examples
         & $script:listScript
-        @($script:writeHostMessages | Where-Object { $_ -like "*default*defaults*absent*" }) |
+        @($script:writeHostMessages | Where-Object { $_ -like "*Required 'defaults' E2E scenario*absent*" }) |
             Should -HaveCount $MissingBaselineWarnings
+    }
+
+    It 'uses configured name prefixes and module-specific requirements for <ModuleType>' -ForEach @(
+        @{ ModuleType = 'res'; ExpectedRequired = @('defaults.api', 'defaults-api', 'waf-aligned.api', 'waf-aligned-api'); ExpectedOptional = @('private') }
+        @{ ModuleType = 'ptn'; ExpectedRequired = @('defaults.api', 'defaults-api'); ExpectedOptional = @('waf-aligned.api', 'waf-aligned-api', 'private') }
+        @{ ModuleType = 'utl'; ExpectedRequired = @('defaults.api', 'defaults-api'); ExpectedOptional = @('waf-aligned.api', 'waf-aligned-api', 'private') }
+    ) {
+        $env:GITHUB_REPOSITORY = "Azure/terraform-azurerm-avm-$ModuleType-mock"
+        $script:examplesJson = '["defaults.api","defaults-api","waf-aligned.api","waf-aligned-api","private"]'
+        & $script:listScript
+        $outputs = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
+        @(ConvertFrom-Json $outputs.requiredExamples) | Should -Be $ExpectedRequired
+        @(ConvertFrom-Json $outputs.optionalExamples) | Should -Be $ExpectedOptional
     }
 
     It 'rejects empty or malformed discovery rather than reporting no required tests: <Json>' -ForEach @(
@@ -227,6 +241,8 @@ Describe 'Terraform E2E label routing and merge gates' {
     It 'rejects an existing required example omitted from runnable discovery: <ExampleName>' -ForEach @(
         @{ ExampleName = 'default' }
         @{ ExampleName = 'defaults' }
+        @{ ExampleName = 'defaults-api' }
+        @{ ExampleName = 'waf-aligned-westus' }
     ) {
         $null = New-Item -ItemType Directory -Path (Join-Path $PWD.Path 'examples' $ExampleName) -Force
         $script:examplesJson = '["private"]'
@@ -822,6 +838,16 @@ Describe 'terraform-module automatic checks and fork isolation' {
         $block | Should -Not -Match '\$\{\{\s*(?:secrets|vars)\.'
         @($script:definition.jobs[$Job].permissions.Keys) | Should -Be @('contents')
         $script:definition.jobs[$Job].permissions.contents | Should -BeExactly 'read'
+    }
+
+    It 'grants Checks API access only to the trusted PR check job' {
+        $trusted = $script:definition.jobs['pr-check']
+        $trusted.permissions.checks | Should -BeExactly 'write'
+        $trusted.permissions.contents | Should -BeExactly 'read'
+        $trusted.permissions.'id-token' | Should -BeExactly 'write'
+        $trusted.steps[-1].env.GH_TOKEN | Should -BeExactly '${{ github.token }}'
+        $trusted.steps[-1].env.AVM_GITHUB_CHECK_RUN_ID | Should -BeExactly '${{ job.check_run_id }}'
+        $script:definition.jobs['pr-check-fork'].permissions.Contains('checks') | Should -BeFalse
     }
 
     It 'overrides inherited credential contexts and disables OIDC in <Job>' -ForEach @(

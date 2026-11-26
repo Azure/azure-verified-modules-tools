@@ -387,7 +387,7 @@ function Invoke-AvmPrCheck {
             $stepError = "Terraform initialization prerequisite failed: $stepError"
         }
         Write-AvmStepDiagnostic -Result $stepResult -Name $def.Name -Status $stepStatus `
-            -ErrorMessage $stepError -Presented $presentedDiagnostics
+            -ErrorMessage $stepError -Presented $presentedDiagnostics -SourceRoot $context.Root
         $stepSw.Stop()
         $stepEnd = $stepStart.AddMilliseconds($stepSw.Elapsed.TotalMilliseconds)
 

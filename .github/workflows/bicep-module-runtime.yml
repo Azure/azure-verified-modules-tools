@@ -132,36 +132,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
-          function Write-PrCheckIssues {
-            param([AllowNull()][object] $Result)
-            if ($null -eq $Result -or $null -eq $Result.PSObject.Properties['Steps']) { return }
-            foreach ($step in @($Result.Steps)) {
-              if ($null -eq $step -or $null -eq $step.Result -or
-                  $null -eq $step.Result.PSObject.Properties['Issues']) { continue }
-              foreach ($issue in @($step.Result.Issues)) {
-                if ($null -eq $issue) { continue }
-                $fields = @{}
-                foreach ($name in @('Code', 'Severity', 'File', 'Message')) {
-                  $property = $issue.PSObject.Properties[$name]
-                  $fields[$name] = if ($null -ne $property) { [string]$property.Value } else { '' }
-                }
-                if ($fields.Severity -notin @('error', 'warning')) { continue }
-                $level = $fields.Severity.ToLowerInvariant()
-                $text = '[{0}] {1} {2}: {3}' -f $fields.Code, $fields.Severity, $fields.File, $fields.Message
-                $text = $text.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-                Write-Information ("::{0}::{1}" -f $level, $text) -InformationAction Continue
-              }
-            }
-          }
-          try {
-            $result = avm -SkipModuleVersionCheck pr-check --passthru
-          }
-          catch {
-            $property = $_.Exception.PSObject.Properties['Result']
-            if ($null -ne $property) { Write-PrCheckIssues -Result $property.Value }
-            throw
-          }
-          Write-PrCheckIssues -Result $result
+          $null = avm -SkipModuleVersionCheck pr-check --passthru
 
   unit-test:
     name: Unit tests
@@ -475,8 +446,14 @@ jobs:
               -ModuleClientIds $validation.moduleClientIds -TenantId $validation.tenantId `
               -RandomSeed ([int](([long]$env:GITHUB_RUN_ID + [long]$env:GITHUB_RUN_ATTEMPT) % [int]::MaxValue)) `
               -DisplaySubscriptionNames:($validation.poolJson -ne '') -SkipModuleVersionCheck)
+          $moduleTypeMatch = [regex]::Match($env:MODULE_PATH, '^avm/(?<type>res|ptn|utl)/')
+          if (-not $moduleTypeMatch.Success) {
+            throw [System.IO.InvalidDataException]::new("Unsupported AVM module path: $env:MODULE_PATH")
+          }
+          $scenarioSelection = Get-AvmE2eScenarioSelection -ModuleType $moduleTypeMatch.Groups['type'].Value `
+              -Names @($matrix.Name) -SkipModuleVersionCheck
           foreach ($testCase in $matrix) {
-            $isRequired = $testCase.Name -cin @('default', 'defaults', 'waf-aligned')
+            $isRequired = $scenarioSelection.Required -ccontains $testCase.Name
             $testCase | Add-Member -NotePropertyName IsRequired -NotePropertyValue $isRequired -Force
           }
           $value = ConvertTo-Json -InputObject $matrix -Depth 20 -Compress

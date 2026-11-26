@@ -68,7 +68,7 @@ function Get-AvmCatalogTelemetryPrefix {
         return Get-AvmTelemetryPrefixFromCatalog -Catalog $document -ExcludeBicepModulePath $ExcludeBicepModulePath
     }
     catch {
-        Write-Warning ("Could not resolve the module catalog at {0}; a generated telemetryIdPrefix cannot be checked against published identifiers. {1}" -f $CatalogUri, $_.Exception.Message)
+        Write-AvmLog ("Could not resolve the module catalog at {0}; a generated telemetryIdPrefix cannot be checked against published identifiers. {1}" -f $CatalogUri, $_.Exception.Message) -Level Warning
         return [string[]]@()
     }
 }

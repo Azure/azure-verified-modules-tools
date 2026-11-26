@@ -250,7 +250,7 @@ Describe 'Invoke-AvmBicepTest' {
                 $annotations = @($output | Where-Object { $_ -is [System.Management.Automation.InformationRecord] } |
                         ForEach-Object { [string]$_.MessageData } | Where-Object { $_ -like '::warning*' })
                 @($annotations).Count | Should -Be 1
-                $annotations[0] | Should -BeExactly '::warning file=main.bicep,line=3,col=5::[no-unused-params] Unused parameter.'
+                $annotations[0] | Should -BeExactly '::warning file=main.bicep,line=3,col=5::[no-unused-params] Unused parameter. (main.bicep, line 3, column 5)'
             }
             finally {
                 [System.Environment]::SetEnvironmentVariable('GITHUB_ACTIONS', $(if ($null -eq $savedActions) { [NullString]::Value } else { $savedActions }))

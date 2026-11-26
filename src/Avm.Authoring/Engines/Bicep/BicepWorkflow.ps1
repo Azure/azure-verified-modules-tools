@@ -144,7 +144,7 @@ function Invoke-AvmBicepWorkflowGit {
         }
         catch [TimeoutException] {
             if ($attempt -eq $maximum) { throw }
-            Write-Warning "Git $($Arguments[0]) timed out on attempt $attempt of $maximum; retrying the read."
+            Write-AvmLog "Git $($Arguments[0]) timed out on attempt $attempt of $maximum; retrying the read." -Level Warning
             Start-Sleep -Seconds (2 * $attempt)
             continue
         }
@@ -163,12 +163,14 @@ function Get-AvmBicepWorkflowTestFilesInternal {
     param(
         [Parameter(Mandatory)] [string] $Root,
         [Parameter(Mandatory)] [string] $ModulePath,
-        [string] $PsRuleFilterRegex = '(defaults|waf-aligned)'
+        [AllowEmptyString()] [string] $PsRuleFilterRegex = ''
     )
 
     $module = Resolve-AvmBicepWorkflowPath -Root $Root -RelativePath $ModulePath
-    $filter = [regex]::new($PsRuleFilterRegex, [Text.RegularExpressions.RegexOptions]::None,
-        [TimeSpan]::FromSeconds(1))
+    $filter = if (-not [string]::IsNullOrWhiteSpace($PsRuleFilterRegex)) {
+        [regex]::new($PsRuleFilterRegex, [Text.RegularExpressions.RegexOptions]::None,
+            [TimeSpan]::FromSeconds(1))
+    }
     $files = @(Get-ChildItem -LiteralPath $module -Recurse -File -Filter 'main.test.bicep' |
             Sort-Object FullName | ForEach-Object {
                 $relative = [IO.Path]::GetRelativePath($module, $_.FullName).Replace('\', '/')
@@ -179,8 +181,15 @@ function Get-AvmBicepWorkflowTestFilesInternal {
                     e2eIgnore = Test-Path -LiteralPath (Join-Path $_.Directory.FullName '.e2eignore')
                 }
             })
-    $policyFiles = @($files | Where-Object { $filter.IsMatch($_.path) } |
-            ForEach-Object { [ordered]@{ path = $_.path; name = $_.name } })
+    $policyFiles = @(
+        $files | Where-Object {
+            if ($null -ne $filter) { return $filter.IsMatch($_.path) }
+            $isDefaults = Test-AvmE2eScenarioName -Name $_.name -Scenario 'defaults'
+            $isWafAligned = Test-AvmE2eScenarioName -Name $_.name -Scenario 'waf-aligned'
+            return $isDefaults -or $isWafAligned
+        } |
+            ForEach-Object { [ordered]@{ path = $_.path; name = $_.name } }
+    )
     return @{
         moduleTestFilePaths = ConvertTo-Json -InputObject $files -Compress
         psRuleModuleTestFilePaths = ConvertTo-Json -InputObject $policyFiles -Compress
@@ -518,7 +527,7 @@ function Initialize-AvmBicepWorkflowMatrixInternal {
                 'diff', '--no-renames', '--name-only', '--diff-filter=ACMRTD', $BaseCommit, $TargetCommit, '--', 'avm')
         }
         else {
-            Write-Warning 'The push base is unavailable. Selecting all current modules for static validation and release preview only.'
+            Write-AvmLog 'The push base is unavailable. Selecting all current modules for static validation and release preview only.' -Level Warning
             $git = Invoke-AvmBicepWorkflowGit -Root $Root -Arguments @('ls-tree', '-r', '--name-only', $TargetCommit, '--', 'avm')
             $BaseCommit = ''
             $includeAll = $true
@@ -701,7 +710,7 @@ function Set-AvmBicepReleaseTagsInternal {
             $confirmed = $push.ExitCode -eq 0
         }
         catch [TimeoutException] {
-            Write-Warning "Publishing $($proposal.Tag) timed out; checking the remote result without replaying the push."
+            Write-AvmLog "Publishing $($proposal.Tag) timed out; checking the remote result without replaying the push." -Level Warning
         }
         if (-not $confirmed) {
             $reconciled = Get-AvmBicepWorkflowRemoteTags -Root $Root -Pattern "$($proposal.Tag)*"

@@ -10,6 +10,40 @@ AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
+Describe 'AVM E2E scenario configuration' {
+    It 'classifies accepted defaults and WAF names by module type' {
+        $names = @(
+            'default', 'defaults', 'defaults.aci', 'defaults-aci', 'linux.defaults',
+            'waf-aligned', 'waf-aligned.aci', 'waf-aligned-aci', 'linux.waf-aligned',
+            'max', 'Defaults'
+        )
+        $resource = Get-AvmE2eScenarioSelection -ModuleType res -Names $names -SkipModuleVersionCheck
+        $pattern = Get-AvmE2eScenarioSelection -ModuleType ptn -Names $names -SkipModuleVersionCheck
+        $utility = Get-AvmE2eScenarioSelection -ModuleType utl -Names @('waf-aligned') -SkipModuleVersionCheck
+
+        $resource.Required | Should -Be $names[0..8]
+        $resource.Optional | Should -Be @('max', 'Defaults')
+        $resource.MissingRequiredScenarios | Should -BeNullOrEmpty
+        $pattern.Required | Should -Be $names[0..4]
+        $pattern.Optional | Should -Be $names[5..10]
+        $pattern.MissingRequiredScenarios | Should -BeNullOrEmpty
+        $utility.Required | Should -BeNullOrEmpty
+        $utility.Optional | Should -Be @('waf-aligned')
+        $utility.MissingRequiredScenarios | Should -Be @('defaults')
+    }
+
+    It 'requires AVM and WAF security baselines only for resource modules' {
+        InModuleScope Avm.Authoring {
+            Get-AvmRequiredPolicyBaseline -ModuleType res |
+                Should -Be @('Azure.Pillar.Reliability', 'CB.AVM.WAF.Security')
+            Get-AvmRequiredPolicyBaseline -ModuleType ptn |
+                Should -BeNullOrEmpty
+            Get-AvmRequiredPolicyBaseline -ModuleType utl |
+                Should -BeNullOrEmpty
+        }
+    }
+}
+
 Describe 'Bicep PSRule token replacement' {
     It 'replaces exact tokens in source text without interpreting replacement metacharacters' {
         $text = InModuleScope 'Avm.Authoring' {
@@ -257,7 +291,9 @@ Describe 'Bicep PSRule configuration boundaries' {
             function New-PSRuleOption {
                 param($Option)
                 [pscustomobject]@{
-                    Input = @{ PathIgnore = @('*', '!avm/**/defaults/*.test.bicep', '!avm/**/waf-aligned/*.test.bicep',
+                    Input = @{ PathIgnore = @('*', '!avm/**/defaults/*.test.bicep', '!avm/**/defaults-*/*.test.bicep',
+                            '!avm/**/defaults.*/*.test.bicep', '!avm/**/waf-aligned/*.test.bicep',
+                            '!avm/**/waf-aligned-*/*.test.bicep', '!avm/**/waf-aligned.*/*.test.bicep',
                             '!avm/**/*.defaults/*.test.bicep', '!avm/**/*.waf-aligned/*.test.bicep') }
                     Include = @{ Module = @('PSRule.Rules.Azure'); Path = '' }
                     Rule = @{ IncludeLocal = $false }
@@ -308,7 +344,9 @@ Describe 'Bicep PSRule configuration boundaries' {
             function New-PSRuleOption {
                 param($Option)
                 [pscustomobject]@{
-                    Input = @{ PathIgnore = @('*', '!avm/**/defaults/*.test.bicep', '!avm/**/waf-aligned/*.test.bicep',
+                    Input = @{ PathIgnore = @('*', '!avm/**/defaults/*.test.bicep', '!avm/**/defaults-*/*.test.bicep',
+                            '!avm/**/defaults.*/*.test.bicep', '!avm/**/waf-aligned/*.test.bicep',
+                            '!avm/**/waf-aligned-*/*.test.bicep', '!avm/**/waf-aligned.*/*.test.bicep',
                             '!avm/**/*.defaults/*.test.bicep', '!avm/**/*.waf-aligned/*.test.bicep') }
                     Include = @{ Module = @('PSRule.Rules.Azure'); Path = '' }
                     Rule = @{ IncludeLocal = $false }
@@ -380,11 +418,13 @@ Describe 'Bicep PSRule configuration boundaries' {
 }
 
 Describe 'Bicep PSRule fixture selection' {
-    It 'includes scoped defaults and WAF fixtures without selecting max or lookalike names' {
+    It 'includes defaults-prefixed and scoped policy fixtures without selecting max or lookalike names' {
         $root = Join-Path $TestDrive 'module'
         $folders = @('defaults', 'waf-aligned', 'mg.defaults', 'rg.defaults', 'sub.defaults',
-            'linux.defaults', 'windows.defaults', 'windows.waf-aligned', 'max', 'mg.max',
-            'notdefaults', 'defaults.extra', '.defaults', 'windows.waf-aligned.extra')
+            'linux.defaults', 'windows.defaults', 'windows.waf-aligned', 'defaults.azuredevops.aci',
+            'defaults.github.aca', 'defaults.extra', 'defaults-azuredevops-aci', 'waf-aligned-westus',
+            'waf-aligned.azuredevops.aci', 'max', 'mg.max',
+            'notdefaults', '.defaults', 'windows.waf-aligned.extra')
         foreach ($folder in $folders) {
             $directory = Join-Path $root 'tests' 'e2e' $folder
             $null = New-Item -ItemType Directory -Path $directory -Force
@@ -393,10 +433,12 @@ Describe 'Bicep PSRule fixture selection' {
         InModuleScope Avm.Authoring -Parameters @{ Root = $root; Total = $folders.Count } {
             param($Root, $Total)
             $selected = @(Get-AvmBicepPolicyTestFile -ModulePath $Root)
-            $selected.Count | Should -Be 8
+            $selected.Count | Should -Be 14
             @($selected | ForEach-Object { $_.Directory.Name } | Sort-Object) |
-                Should -Be @('defaults', 'linux.defaults', 'mg.defaults', 'rg.defaults', 'sub.defaults',
-                    'waf-aligned', 'windows.defaults', 'windows.waf-aligned')
+                Should -Be @('defaults', 'defaults-azuredevops-aci', 'defaults.azuredevops.aci', 'defaults.extra',
+                    'defaults.github.aca', 'linux.defaults', 'mg.defaults', 'rg.defaults', 'sub.defaults',
+                    'waf-aligned', 'waf-aligned-westus', 'waf-aligned.azuredevops.aci',
+                    'windows.defaults', 'windows.waf-aligned')
             @(Get-AvmBicepPolicyTestFile -ModulePath $Root -IncludeAllExamples).Count | Should -Be $Total
         }
     }

@@ -18,7 +18,7 @@ function Get-AvmBicepWorkflowTestFiles {
 
     .PARAMETER PsRuleFilterRegex
         Regular expression that selects policy test files. It defaults to
-        defaults and waf-aligned test paths.
+        the packaged defaults and waf-aligned scenario patterns.
 
     .PARAMETER SkipModuleVersionCheck
         Skip the PowerShell Gallery version check for source or offline callers.
@@ -38,7 +38,7 @@ function Get-AvmBicepWorkflowTestFiles {
     param(
         [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $Root,
         [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $ModulePath,
-        [string] $PsRuleFilterRegex = '(defaults|waf-aligned)',
+        [AllowEmptyString()] [string] $PsRuleFilterRegex = '',
         [switch] $SkipModuleVersionCheck
     )
 
