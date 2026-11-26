@@ -58,6 +58,69 @@ AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
+Describe 'Bicep runtime resource retention' {
+    BeforeEach {
+        $saved = @{}
+        foreach ($name in @('TOOLS_REF', 'EVENT_NAME', 'REMOVE_DEPLOYMENT', 'ISOLATION_MODE')) {
+            $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+        }
+        $env:TOOLS_REF = 'a' * 40
+        $steps = $script:workflows['bicep-module-runtime-deployment'].jobs.deploy.steps
+    }
+
+    AfterEach {
+        foreach ($name in $saved.Keys) {
+            $value = $saved[$name]
+            [Environment]::SetEnvironmentVariable($name, $(if ($null -eq $value) { [NullString]::Value } else { $value }))
+        }
+    }
+
+    It 'validates removal <Remove> for <Event> in <Mode> mode before Azure login' -ForEach @(
+        @{ Remove = 'true'; Event = 'pull_request'; Mode = 'shared'; ExpectedError = '' }
+        @{ Remove = 'false'; Event = 'pull_request'; Mode = 'fallback'; ExpectedError = '*requires manual dispatch*' }
+        @{ Remove = 'false'; Event = 'workflow_dispatch'; Mode = 'shared'; ExpectedError = '*Shared-target execution requires cleanup*' }
+        @{ Remove = 'false'; Event = 'workflow_dispatch'; Mode = 'fallback'; ExpectedError = '' }
+        @{ Remove = 'false'; Event = 'workflow_dispatch'; Mode = 'isolated'; ExpectedError = '' }
+    ) {
+        $env:REMOVE_DEPLOYMENT = $Remove
+        $env:EVENT_NAME = $Event
+        $env:ISOLATION_MODE = $Mode
+        $validate = $steps | Where-Object name -EQ 'Validate tools revision'
+        $validate.env.EVENT_NAME | Should -BeExactly '${{ github.event_name }}'
+        $validate.env.REMOVE_DEPLOYMENT | Should -BeExactly '${{ fromJSON(inputs.workflowInput).removeDeployment }}'
+        $validate.env.ISOLATION_MODE | Should -BeExactly '${{ fromJSON(inputs.testCase).IsolationMode }}'
+        $script = [scriptblock]::Create($validate.run)
+        if ($ExpectedError) { { & $script } | Should -Throw $ExpectedError }
+        else { { & $script } | Should -Not -Throw }
+        $login = $steps | Where-Object name -EQ 'Sign in to Azure'
+        [array]::IndexOf(@($steps), $validate) | Should -BeLessThan ([array]::IndexOf(@($steps), $login))
+    }
+
+    It 'passes native retention <Keep> in both phases when removeDeployment is <Remove>' -ForEach @(
+        @{ Remove = 'true'; Keep = 'False' }
+        @{ Remove = 'false'; Keep = 'True' }
+        @{ Remove = ''; Keep = 'False' }
+    ) {
+        $env:REMOVE_DEPLOYMENT = $Remove
+        function Invoke-TestAvm {
+            param([switch] $SkipModuleVersionCheck)
+            $script:cliArguments = @($args)
+        }
+        Set-Alias -Name avm -Value Invoke-TestAvm -Scope Local
+        $deploy = $steps | Where-Object { $_['id'] -eq 'deploy' }
+        $complete = $steps | Where-Object name -EQ 'Run post-deployment tests, then clean up if enabled'
+        $commands = @(
+            $deploy.run.Substring($deploy.run.IndexOf('$arguments = @('))
+            $complete.run.Substring($complete.run.LastIndexOf("`navm -SkipModuleVersionCheck"))
+        )
+        foreach ($command in $commands) {
+            & ([scriptblock]::Create($command))
+            $script:cliArguments | Should -Contain "--keep-resources=$Keep"
+            $script:cliArguments | Should -Contain '--cleanup-state-path'
+        }
+    }
+}
+
 Describe 'Bicep prepared runtime package manager bootstrap' {
     BeforeEach {
         Mock Get-Module { [pscustomobject]@{ Name = 'Microsoft.PowerShell.PSResourceGet' } }
@@ -549,7 +612,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $leaf.concurrency.group | Should -BeExactly '${{ fromJSON(inputs.testCase).ConcurrencyGroup }}'
         $leaf.concurrency.queue | Should -BeExactly 'max'
         $leaf.environment | Should -BeExactly 'avm-validation'
-        foreach ($phase in @('Validate (What-If) and deploy test to Azure', 'Run post-deployment tests, then delete test resources', 'Retry deleting leftover test resources (only if an earlier step failed)')) {
+        foreach ($phase in @('Validate (What-If) and deploy test to Azure', 'Run post-deployment tests, then clean up if enabled', 'Retry deleting leftover test resources (only if an earlier step failed)')) {
             @($leaf.steps | Where-Object { $_['name'] -ceq $phase }).Count | Should -Be 1
         }
     }
@@ -569,7 +632,7 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $steps = $script:workflows['bicep-module-runtime-deployment'].jobs.deploy.steps
         $deploy = $steps | Where-Object { $_['id'] -eq 'deploy' }
         $renew = $steps | Where-Object { $_['id'] -eq 'renew_oidc' }
-        $complete = $steps | Where-Object { $_['name'] -eq 'Run post-deployment tests, then delete test resources' }
+        $complete = $steps | Where-Object { $_['name'] -eq 'Run post-deployment tests, then clean up if enabled' }
         $recover = $steps | Where-Object { $_['name'] -eq 'Retry deleting leftover test resources (only if an earlier step failed)' }
 
         $renew | Should -Not -BeNullOrEmpty
@@ -591,6 +654,13 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $complete.if | Should -Match 'steps\.renew_oidc\.outcome == ''success'''
         $recover.if | Should -Match 'steps\.renew_oidc\.outcome == ''success'''
         $recover.if | Should -Match "removeDeployment == 'true'"
+        foreach ($step in @($deploy, $complete)) {
+            $step.env.REMOVE_DEPLOYMENT | Should -BeExactly '${{ fromJSON(inputs.workflowInput).removeDeployment }}'
+            $step.run | Should -Match '--keep-resources='
+        }
+        $upload = $steps | Where-Object { $_['name'] -eq 'Upload clean-up state for later recovery' }
+        $upload.if | Should -BeExactly "always() && steps.context.outcome == 'success'"
+        $upload.with.path | Should -Match 'avm-bicep-state/\*\.json'
     }
 
     It 'keeps generic validation and nested deployment on the same explicit target commit' {
@@ -1057,26 +1127,27 @@ Describe 'Bicep required checks and deployment guards' {
         @{ Scenario = 'cancelled deployment'; Deploy = 'cancelled'; Renew = 'skipped'; Complete = 'skipped'; Remove = 'true'; Cancelled = $true; Expected = @($false, $false, $false) }
         @{ Scenario = 'cancellation after deployment'; Deploy = 'success'; Renew = 'skipped'; Complete = 'skipped'; Remove = 'true'; Cancelled = $true; Expected = @($false, $false, $false) }
     ) {
-        $steps = $script:actions['bicep-deployment'].runs.steps
-        $selected = @(
-            $steps | Where-Object { $_['id'] -eq 'renew_oidc' }
-            $steps | Where-Object { $_['id'] -eq 'complete' }
-            $steps | Where-Object name -EQ 'Retry deleting leftover test resources (only if an earlier step failed)'
-        )
-        $priorOutcomes = [Collections.Generic.List[string]]::new()
-        $priorOutcomes.Add($Deploy)
-        for ($index = 0; $index -lt $selected.Count; $index++) {
-            $Succeeded = -not $Cancelled -and -not $priorOutcomes.Contains('failure')
-            $Failed = -not $Cancelled -and $priorOutcomes.Contains('failure')
-            $condition = $selected[$index].if.Replace('${{', '').Replace('}}', '').
-                Replace('cancelled()', '$Cancelled').Replace('success()', '$Succeeded').Replace('failure()', '$Failed').
-                Replace('steps.deploy.outcome', '$Deploy').Replace('steps.renew_oidc.outcome', '$Renew').
-                Replace('fromJSON(inputs.workflowInput).removeDeployment', '$Remove').
-                Replace('!=', '-ne').Replace('&&', '-and').Replace('||', '-or').Replace('==', '-eq').Replace('!', '-not ')
-            & ([scriptblock]::Create($condition)) | Should -Be $Expected[$index]
-            $selected[$index].Contains('continue-on-error') | Should -BeFalse
-            if ($index -eq 0) { $priorOutcomes.Add($Renew) }
-            if ($index -eq 1) { $priorOutcomes.Add($Complete) }
+        foreach ($steps in $script:actions['bicep-deployment'].runs.steps, $script:workflows['bicep-module-runtime-deployment'].jobs.deploy.steps) {
+            $selected = @(
+                $steps | Where-Object { $_['id'] -eq 'renew_oidc' }
+                $steps | Where-Object { $_['id'] -eq 'complete' -or $_['name'] -eq 'Run post-deployment tests, then clean up if enabled' }
+                $steps | Where-Object name -EQ 'Retry deleting leftover test resources (only if an earlier step failed)'
+            )
+            $priorOutcomes = [Collections.Generic.List[string]]::new()
+            $priorOutcomes.Add($Deploy)
+            for ($index = 0; $index -lt $selected.Count; $index++) {
+                $Succeeded = -not $Cancelled -and -not $priorOutcomes.Contains('failure')
+                $Failed = -not $Cancelled -and $priorOutcomes.Contains('failure')
+                $condition = $selected[$index].if.Replace('${{', '').Replace('}}', '').
+                    Replace('cancelled()', '$Cancelled').Replace('success()', '$Succeeded').Replace('failure()', '$Failed').
+                    Replace('steps.deploy.outcome', '$Deploy').Replace('steps.renew_oidc.outcome', '$Renew').
+                    Replace('fromJSON(inputs.workflowInput).removeDeployment', '$Remove').
+                    Replace('!=', '-ne').Replace('&&', '-and').Replace('||', '-or').Replace('==', '-eq').Replace('!', '-not ')
+                & ([scriptblock]::Create($condition)) | Should -Be $Expected[$index]
+                $selected[$index].Contains('continue-on-error') | Should -BeFalse
+                if ($index -eq 0) { $priorOutcomes.Add($Renew) }
+                if ($index -eq 1) { $priorOutcomes.Add($Complete) }
+            }
         }
     }
 
