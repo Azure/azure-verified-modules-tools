@@ -192,10 +192,10 @@ Describe 'PR-check label rerun reusable workflow' {
         @($script:workflow.on.Keys) | Should -Be @('workflow_call')
         $job = $script:workflow.jobs.'rerun-pr-check'
         $job.if | Should -Match "github\.event_name == 'pull_request_target'"
-        $job.if | Should -Match "github\.event\.action == 'labeled'"
+        $job.if | Should -Match '"labeled","unlabeled"'
+        $job.if | Should -Match 'github\.event\.action'
         $job.if | Should -Match "'PR: Run Required E2E Tests'"
         $job.if | Should -Match "'PR: Run All E2E Tests'"
-        $job.if | Should -Not -Match 'unlabeled'
         $job.concurrency.group | Should -BeExactly 'pr-check-label-${{ github.event.pull_request.number }}'
         $job.concurrency.'cancel-in-progress' | Should -BeFalse
         $job.'timeout-minutes' | Should -Be 360
@@ -306,6 +306,27 @@ Describe 'PR-check label rerun action' {
         $result.ExitCode | Should -Be 0
         $output = $result.StdOut | ConvertFrom-Json
         $output.outputs.outcome | Should -BeExactly 'label-removed'
+        @($output.calls | Where-Object kind -EQ 'rerun') | Should -HaveCount 0
+    }
+
+    It 'reruns an E2E removal when another E2E label remains' {
+        $fixture = New-PrCheckRerunFixture
+        $fixture.labels = @([pscustomobject]@{ name = 'PR: Run Required E2E Tests' })
+        $result = Invoke-PrCheckRerunScript -Fixture $fixture
+        $result.ExitCode | Should -Be 0
+        $output = $result.StdOut | ConvertFrom-Json
+        $output.outputs.outcome | Should -BeExactly 'rerun-requested'
+        @($output.calls | Where-Object kind -EQ 'rerun') | Should -HaveCount 1
+    }
+
+    It 'skips an E2E removal when no E2E label remains' {
+        $fixture = New-PrCheckRerunFixture
+        $fixture.labelRemovedAt = 1
+        $result = Invoke-PrCheckRerunScript -Fixture $fixture
+        $result.ExitCode | Should -Be 0
+        $output = $result.StdOut | ConvertFrom-Json
+        $output.outputs.outcome | Should -BeExactly 'label-removed'
+        @($output.calls | Where-Object kind -EQ 'runs') | Should -HaveCount 0
         @($output.calls | Where-Object kind -EQ 'rerun') | Should -HaveCount 0
     }
 

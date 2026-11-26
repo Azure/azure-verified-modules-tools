@@ -17,7 +17,7 @@ jobs:
     name: Rerun PR check
     if: >-
       github.event_name == 'pull_request_target' &&
-      github.event.action == 'labeled' &&
+      contains(fromJSON('["labeled","unlabeled"]'), github.event.action) &&
       (
         github.event.label.name == 'PR: Run Required E2E Tests' ||
         github.event.label.name == 'PR: Run All E2E Tests'
