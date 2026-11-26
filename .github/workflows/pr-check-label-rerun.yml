@@ -1,0 +1,59 @@
+name: 'Reusable: PR check E2E label rerun'
+
+# Callers own the pull_request_target trigger and permissions because a reusable
+# workflow cannot declare caller events or elevate the caller token.
+on:
+  workflow_call:
+    inputs:
+      tools-ref:
+        description: Full tools commit SHA containing this reusable workflow and action.
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  rerun-pr-check:
+    name: Rerun PR check
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.action == 'labeled' &&
+      (
+        github.event.label.name == 'PR: Run Required E2E Tests' ||
+        github.event.label.name == 'PR: Run All E2E Tests'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    concurrency:
+      group: pr-check-label-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    permissions:
+      actions: write
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Validate tools revision
+        shell: pwsh
+        env:
+          TOOLS_REF: ${{ inputs.tools-ref }}
+        run: |
+          if ($env:TOOLS_REF -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'tools-ref must be the full immutable SHA used by the caller.'
+          }
+      - name: Check out trusted Tools revision
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: Azure/azure-verified-modules-tools
+          ref: ${{ inputs.tools-ref }}
+          path: .avm-tools
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Rerun the matching PR check
+        id: rerun
+        uses: ./.avm-tools/.github/actions/pr-check-rerun
+        with:
+          pullRequestNumber: ${{ github.event.pull_request.number }}
+          expectedHeadSha: ${{ github.event.pull_request.head.sha }}
+          expectedBaseSha: ${{ github.event.pull_request.base.sha }}
+          dispatcherRunId: ${{ github.run_id }}
