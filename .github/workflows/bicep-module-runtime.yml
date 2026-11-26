@@ -207,7 +207,9 @@ jobs:
           MODULE_PATH: ${{ inputs.modulePath }}
         run: |
           $ErrorActionPreference = 'Stop'
-          Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
+          $authoringModule = Import-Module $env:AVM_AUTHORING_MODULE -PassThru -ErrorAction Stop
+          $errorReporter = $authoringModule.ExportedCommands['Write-AvmError']
+          if ($null -eq $errorReporter) { throw 'The admitted Avm.Authoring package cannot report unit errors.' }
           $keyBytes = [System.Security.Cryptography.SHA256]::HashData(
               [System.Text.Encoding]::UTF8.GetBytes($env:MODULE_PATH))
           $key = [Convert]::ToHexString($keyBytes).ToLowerInvariant().Substring(0, 16)
@@ -285,6 +287,7 @@ jobs:
             }
           }
           catch {
+            & $errorReporter -ErrorRecord $_
             $failure = $true
             $document = [ordered]@{
                 schemaVersion = 1

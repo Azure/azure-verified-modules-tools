@@ -84,9 +84,9 @@ Describe 'Avm.Authoring module' {
                 Should -BeNullOrEmpty
         }
 
-        It 'adds SkipModuleVersionCheck to every exported function except self-update' {
+        It 'adds SkipModuleVersionCheck to exported commands other than self-update and error reporting' {
             $commands = Get-Command -Module 'Avm.Authoring' -CommandType Function |
-                Where-Object Name -cne 'Update-AvmAuthoring'
+                Where-Object Name -cnotin @('Update-AvmAuthoring', 'Write-AvmError')
             $commands.Count | Should -BeGreaterThan 0
             foreach ($command in $commands) {
                 $command.Parameters.ContainsKey('SkipModuleVersionCheck') |
@@ -96,6 +96,11 @@ Describe 'Avm.Authoring module' {
 
         It 'does not expose a redundant module-version opt-out on self-update' {
             $command = Get-Command -Module 'Avm.Authoring' -Name 'Update-AvmAuthoring'
+            $command.Parameters.ContainsKey('SkipModuleVersionCheck') | Should -BeFalse
+        }
+
+        It 'does not require a module-version opt-out when reporting errors' {
+            $command = Get-Command -Module 'Avm.Authoring' -Name 'Write-AvmError'
             $command.Parameters.ContainsKey('SkipModuleVersionCheck') | Should -BeFalse
         }
     }

@@ -27,6 +27,8 @@ Explicitly skipped Pester tests fail the tier.
 
 Warnings and errors are reported after the tests and remain available
 in the returned Issues. Bicep test values are redacted in diagnostics.
+Runtime failures are reported with values redacted and rethrown with
+their original exception.
 
 This is a standalone credential-free tier. The Terraform tier also
 runs in 'avm pr-check'. Bicep convention checks are separate; the

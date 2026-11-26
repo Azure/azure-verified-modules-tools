@@ -23,6 +23,8 @@ function Invoke-AvmTestUnit {
 
         Warnings and errors are reported after the tests and remain available
         in the returned Issues. Bicep test values are redacted in diagnostics.
+        Runtime failures are reported with values redacted and rethrown with
+        their original exception.
 
         This is a standalone credential-free tier. The Terraform tier also
         runs in 'avm pr-check'. Bicep convention checks are separate; the
@@ -132,37 +134,45 @@ function Invoke-AvmTestUnit {
     Set-StrictMode -Version 3.0
     $ErrorActionPreference = 'Stop'
 
-    Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
+    try {
+        Test-AvmModuleVersion -SkipModuleVersionCheck:$SkipModuleVersionCheck
 
-    $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
+        $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
 
-    $result = switch ($context.Ecosystem) {
-        'bicep' {
-            if ($NoInit) {
-                throw [AvmConfigurationException]::new('-NoInit is only supported for Terraform unit tests.')
+        $result = switch ($context.Ecosystem) {
+            'bicep' {
+                if ($NoInit) {
+                    throw [AvmConfigurationException]::new('-NoInit is only supported for Terraform unit tests.')
+                }
+                if ($PSBoundParameters.ContainsKey('CompliancePath') -and
+                    [string]::IsNullOrWhiteSpace($CompliancePath)) {
+                    throw [AvmConfigurationException]::new('-CompliancePath cannot be empty.')
+                }
+                Invoke-AvmBicepTestUnit -Context $context -AllowPathFallback:$AllowPathFallback `
+                    -Tag $Tag -TestName $TestName -Recurse:$Recurse `
+                    -IncludeCompliance:$IncludeCompliance -CompliancePath $CompliancePath `
+                    -RepositoryRoot $RepositoryRoot
             }
-            if ($PSBoundParameters.ContainsKey('CompliancePath') -and
-                [string]::IsNullOrWhiteSpace($CompliancePath)) {
-                throw [AvmConfigurationException]::new('-CompliancePath cannot be empty.')
+            'terraform' {
+                if ($Tag.Count -gt 0 -or $TestName.Count -gt 0 -or $Recurse -or
+                    $IncludeCompliance -or $PSBoundParameters.ContainsKey('CompliancePath') -or
+                    -not [string]::IsNullOrWhiteSpace($RepositoryRoot)) {
+                    throw [AvmConfigurationException]::new(
+                        '-Tag, -TestName, -Recurse, -IncludeCompliance, -CompliancePath and -RepositoryRoot are only supported for Bicep unit tests.')
+                }
+                Invoke-AvmTerraformTestSuite -Context $context -Tier 'unit' -AllowPathFallback:$AllowPathFallback -NoInit:$NoInit
             }
-            Invoke-AvmBicepTestUnit -Context $context -AllowPathFallback:$AllowPathFallback `
-                -Tag $Tag -TestName $TestName -Recurse:$Recurse `
-                -IncludeCompliance:$IncludeCompliance -CompliancePath $CompliancePath `
-                -RepositoryRoot $RepositoryRoot
-        }
-        'terraform' {
-            if ($Tag.Count -gt 0 -or $TestName.Count -gt 0 -or $Recurse -or
-                $IncludeCompliance -or $PSBoundParameters.ContainsKey('CompliancePath') -or
-                -not [string]::IsNullOrWhiteSpace($RepositoryRoot)) {
-                throw [AvmConfigurationException]::new(
-                    '-Tag, -TestName, -Recurse, -IncludeCompliance, -CompliancePath and -RepositoryRoot are only supported for Bicep unit tests.')
+            default {
+                throw [AvmContextException]::new(
+                    "Cannot run unit tests: unknown ecosystem '$($context.Ecosystem)'.")
             }
-            Invoke-AvmTerraformTestSuite -Context $context -Tier 'unit' -AllowPathFallback:$AllowPathFallback -NoInit:$NoInit
         }
-        default {
-            throw [AvmContextException]::new(
-                "Cannot run unit tests: unknown ecosystem '$($context.Ecosystem)'.")
-        }
+    }
+    catch {
+        Write-AvmError -ErrorRecord $_
+        $_.ErrorDetails = [System.Management.Automation.ErrorDetails]::new(
+            (ConvertTo-AvmSafeTestDiagnostic -Message $_.Exception.Message))
+        throw $_
     }
     Write-AvmStepDiagnostic -Result $result -Name 'test unit' -Status $result.Status `
         -Presented ([System.Collections.Generic.HashSet[string]]::new()) -SourceRoot $context.Root `

@@ -193,6 +193,26 @@ Describe 'Component: Bicep Pester unit tier' -Tag 'Component' {
             $missingArtifact.issues[0].code | Should -BeExactly 'avm.bicep.unit-runtime-error'
             $missingArtifact.issues[0].message |
                 Should -Match 'Authored unit tests did not return a validated child identity receipt'
+            Get-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Raw |
+                Should -Match 'Authored unit tests did not return a validated child identity receipt'
+
+            $env:MODULE_PATH = 'avm/res/mock/runtime-error'
+            Mock Invoke-AvmTestUnit { throw "Expected 'sensitive-runtime-value'." }
+            $runtimeOutput = @(. ([scriptblock]::Create($unitRun)) 6>&1 | ForEach-Object { [string]$_ })
+            @($runtimeOutput | Where-Object { $_ -match '^::error::' }) | Should -HaveCount 1
+            ($runtimeOutput -join "`n") | Should -Not -Match 'sensitive-runtime-value'
+            $summary = Get-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Raw
+            $summary | Should -Match 'Expected'
+            $summary | Should -Not -Match 'sensitive-runtime-value'
+
+            $env:MODULE_PATH = 'avm/res/mock/reported-runtime-error'
+            Mock Invoke-AvmTestUnit {
+                try { throw "Received 'sensitive-reported-value'." }
+                catch { Write-AvmError -ErrorRecord $_; throw $_ }
+            }
+            $runtimeOutput = @(. ([scriptblock]::Create($unitRun)) 6>&1 | ForEach-Object { [string]$_ })
+            @($runtimeOutput | Where-Object { $_ -match '^::error::' }) | Should -HaveCount 1
+            ($runtimeOutput -join "`n") | Should -Not -Match 'sensitive-reported-value'
         }
         finally {
             Set-Location $previousLocation

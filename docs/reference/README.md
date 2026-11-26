@@ -47,3 +47,4 @@ This reference is generated from the comment-based help on the public PowerShell
 | [New-AvmTelemetryIdPrefix](New-AvmTelemetryIdPrefix.md) |  | Generate a seven-character hexadecimal telemetry identifier. |
 | [Select-AvmTestSubscription](Select-AvmTestSubscription.md) |  | Select a Bicep test subscription using the repository's exact reservation map. |
 | [Set-AvmBicepReleaseTags](Set-AvmBicepReleaseTags.md) |  | Create guarded Bicep module release tags from a checked-out target. |
+| [Write-AvmError](Write-AvmError.md) |  | Report an error through the shared AVM diagnostic output. |

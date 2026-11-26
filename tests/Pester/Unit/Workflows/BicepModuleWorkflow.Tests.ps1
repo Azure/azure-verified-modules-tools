@@ -392,6 +392,8 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $unitResult[0].run | Should -Match 'ConvertTo-Json'
         $unitResult[0].run | Should -Match 'Normalize-UnitDiagnostic'
         $unitResult[0].run | Should -Not -Match 'Write-AvmLog|::(?:warning|error|notice)'
+        $unitResult[0].run | Should -Match '\$authoringModule\.ExportedCommands\[''Write-AvmError''\]'
+        $unitResult[0].run | Should -Match '& \$errorReporter -ErrorRecord \$_'
         $unitArtifact = @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Upload unit test result')
         $unitArtifact | Should -HaveCount 1
         $unitArtifact[0].if | Should -BeExactly 'always()'
