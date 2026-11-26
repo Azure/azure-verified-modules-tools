@@ -15,6 +15,7 @@
 #       permissions:
 #         id-token: write
 #         contents: read
+#         issues: read
 #         checks: write
 #         pull-requests: write
 #       secrets: inherit
@@ -533,6 +534,9 @@ jobs:
     if: github.event.repository.name != 'terraform-azurerm-avm-template'
     needs: bootstrap
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
     outputs:
       examples: ${{ steps.list.outputs.examples }}
       hasExamples: ${{ steps.list.outputs.hasExamples }}
@@ -541,6 +545,12 @@ jobs:
       runRequired: ${{ steps.list.outputs.runRequired }}
       runOptional: ${{ steps.list.outputs.runOptional }}
     steps:
+      - name: Read current pull request labels
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false
+        id: labels
+        uses: Azure/azure-verified-modules-tools/.github/actions/pull-request-labels@f336012d8b69f57ae65193f8a5c79141660078c5
+        with:
+          pullRequestNumber: ${{ github.event.pull_request.number }}
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -557,7 +567,7 @@ jobs:
         shell: pwsh
         env:
           EVENT_NAME: ${{ github.event_name }}
-          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_LABELS: ${{ steps.labels.outputs.names || '[]' }}
           IS_FORK: ${{ github.event.pull_request.head.repo.fork == true }}
         run: |
           $ErrorActionPreference = 'Stop'
