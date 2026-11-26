@@ -21,6 +21,9 @@ function Invoke-AvmTestUnit {
         matching no tests reports 'skipped' with zero runs, never a pass.
         Explicitly skipped Pester tests fail the tier.
 
+        Warnings and errors are reported after the tests and remain available
+        in the returned Issues. Bicep test values are redacted in diagnostics.
+
         This is a standalone credential-free tier. The Terraform tier also
         runs in 'avm pr-check'. Bicep convention checks are separate; the
         existing registry CI remains authoritative until that work is
@@ -133,7 +136,7 @@ function Invoke-AvmTestUnit {
 
     $context = Get-AvmModuleContextInternal -Path $Path -Ecosystem $Ecosystem
 
-    switch ($context.Ecosystem) {
+    $result = switch ($context.Ecosystem) {
         'bicep' {
             if ($NoInit) {
                 throw [AvmConfigurationException]::new('-NoInit is only supported for Terraform unit tests.')
@@ -161,4 +164,8 @@ function Invoke-AvmTestUnit {
                 "Cannot run unit tests: unknown ecosystem '$($context.Ecosystem)'.")
         }
     }
+    Write-AvmStepDiagnostic -Result $result -Name 'test unit' -Status $result.Status `
+        -Presented ([System.Collections.Generic.HashSet[string]]::new()) -SourceRoot $context.Root `
+        -RedactTestValues:($context.Ecosystem -eq 'bicep')
+    return $result
 }

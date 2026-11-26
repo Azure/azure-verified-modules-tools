@@ -299,19 +299,6 @@ jobs:
           }
 
           $document | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $resultPath -Encoding utf8NoBOM
-          foreach ($issue in @($document.issues)) {
-            if ($issue.severity -in @('error', 'warning')) {
-              & (Get-Module Avm.Authoring) {
-                param($diagnostic)
-                Write-AvmLog ('[{0}] {1}' -f $diagnostic.code, $diagnostic.message) `
-                  -Level $diagnostic.severity -File ([string]$diagnostic['file']) -Line ([int]$diagnostic['line'])
-              } $issue
-            }
-            else {
-              $text = ('[{0}] {1}' -f $issue.code, $issue.message).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-              Write-Information ("::notice::{0}" -f $text) -InformationAction Continue
-            }
-          }
           "artifactName=bicep-unit-result-$key-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" |
               Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "resultPath=$resultPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -331,10 +318,11 @@ jobs:
           UNIT_RESULT_PATH: ${{ steps.unit-result.outputs.resultPath }}
         run: |
           $result = Get-Content -LiteralPath $env:UNIT_RESULT_PATH -Raw | ConvertFrom-Json
-          foreach ($issue in @($result.issues)) {
-            Write-Output ('[{0}] {1} {2}: {3}' -f $issue.code, $issue.severity, $issue.file, $issue.message)
+          $runtimeError = @($result.issues | Where-Object code -EQ 'avm.bicep.unit-runtime-error')
+          if ($runtimeError.Count -gt 0) {
+            throw ('Bicep unit tests failed: {0}' -f $runtimeError[0].message)
           }
-          throw 'Bicep unit tests failed. See the diagnostics above and the uploaded unit result artifact.'
+          throw 'Bicep unit tests failed. See the diagnostics and the uploaded unit result artifact.'
 
   discover-examples:
     name: Select E2E tests and subscriptions

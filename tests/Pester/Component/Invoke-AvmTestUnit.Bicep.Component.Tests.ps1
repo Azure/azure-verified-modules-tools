@@ -161,26 +161,24 @@ Describe 'Component: Bicep Pester unit tier' -Tag 'Component' {
             $env:MODULE_PATH = 'avm/res/mock/reported-issues'
             Mock Invoke-AvmTestUnit { $script:reportedUnitResult }
             $information = @(. ([scriptblock]::Create($unitRun)) 6>&1 | ForEach-Object { [string]$_ })
-            $information | Should -Contain '::error file=main.json,line=1::[avm.bicep.json-stale] Expected <value>, but got <value>. (main.json, line 1)'
-            $information | Should -Contain '::warning file=main.bicep,line=2::[avm.bicep.example-warning] Quota is 20%25 full. (main.bicep, line 2)'
-            $information | Should -Contain '::notice::[avm.bicep.example-info] Advisory information.'
-            ($information -join "`n") | Should -Not -Match 'sensitive-expected|sensitive-actual'
-            $summary = Get-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Raw
-            $summary | Should -Match 'avm\\\.bicep\\\.json\\-stale'
-            $summary | Should -Match 'Quota is 20% full'
-            $summary | Should -Not -Match 'sensitive-expected|sensitive-actual'
+            ($information -join "`n") | Should -Not -Match '::(?:error|warning|notice)'
+            $reportedKey = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
+                    [Text.Encoding]::UTF8.GetBytes($env:MODULE_PATH))).ToLowerInvariant().Substring(0, 16)
+            $reportedArtifact = Get-Content -LiteralPath (
+                Join-Path $env:RUNNER_TEMP 'avm-bicep-unit-results' "$reportedKey.json") -Raw
+            $reportedArtifact | Should -Not -Match 'sensitive-expected|sensitive-actual'
+            $reportedArtifact | Should -Match 'Expected <value>, but got <value>'
 
             $env:MODULE_PATH = 'avm/res/mock/failed-unit'
             Mock Invoke-AvmTestUnit { $script:failedUnitResult }
             $information = @(. ([scriptblock]::Create($unitRun)) 6>&1 | ForEach-Object { [string]$_ })
-            ($information -join "`n") | Should -Match '::error.*::\[avm\.bicep\.pester-failed\].*Bicep module\.fails:'
-            ($information -join "`n") | Should -Match 'Expected'
+            ($information -join "`n") | Should -Not -Match '::error'
             $failedKey = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
                     [Text.Encoding]::UTF8.GetBytes($env:MODULE_PATH))).ToLowerInvariant().Substring(0, 16)
             $env:UNIT_RESULT_PATH = Join-Path $env:RUNNER_TEMP 'avm-bicep-unit-results' "$failedKey.json"
             $failure = $null
             $output = @(try { . ([scriptblock]::Create($failureRun)) } catch { $failure = $_ })
-            ($output -join "`n") | Should -Match '\[avm\.bicep\.pester-failed\].*Bicep module\.fails:'
+            ($output -join "`n") | Should -Not -Match '\[avm\.bicep\.pester-failed\]'
             $failure.Exception.Message | Should -Match 'Bicep unit tests failed'
 
             $script:missingReceiptResult = $script:realUnitResult | Select-Object * -ExcludeProperty Authoring

@@ -11,6 +11,80 @@ AfterAll {
 }
 
 Describe 'Invoke-AvmTestUnit' {
+    It 'reports <Ecosystem> diagnostics once in <HostName> without changing results' -ForEach @(
+        @{ Ecosystem = 'bicep'; HostName = 'local'; Actions = $false }
+        @{ Ecosystem = 'bicep'; HostName = 'Actions'; Actions = $true }
+        @{ Ecosystem = 'terraform'; HostName = 'local'; Actions = $false }
+        @{ Ecosystem = 'terraform'; HostName = 'Actions'; Actions = $true }
+    ) {
+        $savedActions = [Environment]::GetEnvironmentVariable('GITHUB_ACTIONS')
+        $savedSummary = [Environment]::GetEnvironmentVariable('GITHUB_STEP_SUMMARY')
+        try {
+            $env:GITHUB_ACTIONS = if ($Actions) { 'true' } else { '' }
+            $env:GITHUB_STEP_SUMMARY = Join-Path $TestDrive "$Ecosystem-$HostName.md"
+            InModuleScope 'Avm.Authoring' -Parameters @{ Eco = $Ecosystem; IsActions = $Actions; Root = $TestDrive } {
+                param($Eco, $IsActions, $Root)
+                Mock Test-AvmModuleVersion {}
+                Mock Get-AvmModuleContextInternal {
+                    [pscustomobject]@{ Root = $Root; Ecosystem = $Eco }
+                }
+                Mock Invoke-AvmBicepTestUnit {
+                    [pscustomobject]@{ Status = 'fail'; Issues = @(
+                            [pscustomobject]@{ Severity = 'warning'; Code = 'warn'; File = 'main.bicep'; Line = 2; Message = 'unit warning' }
+                            [pscustomobject]@{ Severity = 'error'; Code = 'err'; File = 'main.bicep'; Line = 3; Message = "Expected 'secret', got 'other'." }
+                            [pscustomobject]@{ Severity = 'info'; Code = 'info'; Message = "Expected 'secret'." }
+                        ) }
+                }
+                Mock Invoke-AvmTerraformTestSuite {
+                    [pscustomobject]@{ Status = 'fail'; Issues = @(
+                            [pscustomobject]@{ Severity = 'warning'; Code = 'warn'; File = 'main.tf'; Line = 2; Message = 'unit warning' }
+                            [pscustomobject]@{ Severity = 'error'; Code = 'err'; File = 'main.tf'; Line = 3; Message = 'unit error' }
+                        ) }
+                }
+                $output = @(Invoke-AvmTestUnit 3>&1 6>&1)
+                $result = @($output | Where-Object { $_.PSObject.Properties['Status'] })[0]
+                $result.Status | Should -Be 'fail'
+                $result.Issues | Should -HaveCount $(if ($Eco -eq 'bicep') { 3 } else { 2 })
+                $messages = @($output | Where-Object { $_ -is [System.Management.Automation.InformationRecord] -or
+                            $_ -is [System.Management.Automation.WarningRecord] } | ForEach-Object { [string]$_ })
+                @($messages | Where-Object { $_ -match '\[warn\] unit warning' }) | Should -HaveCount 1
+                @($messages | Where-Object { $_ -match '\[err\]' }) | Should -HaveCount 1
+                if ($Eco -eq 'bicep') {
+                    $result.Issues[1].Message | Should -Match 'secret'
+                    ($messages -join "`n") | Should -Not -Match 'secret|other'
+                    @($messages | Where-Object { $_ -match '\[info\] Expected <value>' }) | Should -HaveCount 1
+                }
+                if ($IsActions) {
+                    @($messages | Where-Object { $_ -match '^::warning file=.*line=2::' }) | Should -HaveCount 1
+                    @($messages | Where-Object { $_ -match '^::error file=.*line=3::' }) | Should -HaveCount 1
+                    $summary = Get-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Raw
+                    $summary | Should -Match 'unit warning'
+                    $summary | Should -Not -Match 'secret|other'
+                }
+            }
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('GITHUB_ACTIONS',
+                $(if ($null -eq $savedActions) { [NullString]::Value } else { $savedActions }))
+            [Environment]::SetEnvironmentVariable('GITHUB_STEP_SUMMARY',
+                $(if ($null -eq $savedSummary) { [NullString]::Value } else { $savedSummary }))
+        }
+    }
+
+    It 'does not repeat unit diagnostics in dispatcher output' {
+        InModuleScope 'Avm.Authoring' {
+            Mock Test-AvmModuleVersion {}
+            Mock Get-AvmModuleContextInternal { [pscustomobject]@{ Root = $PWD.Path; Ecosystem = 'terraform' } }
+            Mock Invoke-AvmTerraformTestSuite {
+                [pscustomobject]@{ Status = 'fail'; Issues = @(
+                        [pscustomobject]@{ Severity = 'error'; Code = 'unit-error'; Message = 'failed assertion' }
+                    ) }
+            }
+            $messages = @(& { try { avm test unit 6>&1 } catch { } } | ForEach-Object { [string]$_ })
+            @($messages | Where-Object { $_ -match 'failed assertion' }) | Should -HaveCount 1
+        }
+    }
+
     It 'is wired into the verb registry as "avm test unit"' {
         $reg = InModuleScope 'Avm.Authoring' { Get-AvmVerbRegistry }
         $entry = $reg | Where-Object { $_.Path.Count -eq 2 -and $_.Path[0] -eq 'test' -and $_.Path[1] -eq 'unit' }
