@@ -7,10 +7,12 @@ BeforeAll {
     $script:module = Import-Module (Join-Path $script:root 'src' 'Avm.Authoring' 'Avm.Authoring.psd1') -PassThru -Force
     $script:node = (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 
-    $script:action = ConvertFrom-Yaml (Get-Content -LiteralPath (
-            Join-Path $script:root '.github' 'actions' 'pr-check-rerun' 'action.yml') -Raw)
+    $script:observerWorkflow = ConvertFrom-Yaml (Get-Content -LiteralPath (
+            Join-Path $script:root '.github' 'workflows' 'pr-check-label-observer.yml') -Raw)
     $script:workflow = ConvertFrom-Yaml (Get-Content -LiteralPath (
             Join-Path $script:root '.github' 'workflows' 'pr-check-label-rerun.yml') -Raw)
+    $script:action = ConvertFrom-Yaml (Get-Content -LiteralPath (
+            Join-Path $script:root '.github' 'actions' 'pr-check-rerun' 'action.yml') -Raw)
     $script:actionScript = $script:action.runs.steps[0].with.script
 
     $script:harness = @'
@@ -24,6 +26,7 @@ let pullRequestCall = 0;
 let labelCall = 0;
 let runCall = 0;
 const labelsEndpoint = () => {};
+const jobsEndpoint = () => {};
 const runsEndpoint = () => {};
 
 function sleep(milliseconds) {
@@ -38,15 +41,9 @@ global.setTimeout = (callback, milliseconds) => {
 function currentPullRequest() {
   pullRequestCall++;
   const value = clone(fixture.pullRequest);
-  if (fixture.headChangeAt && pullRequestCall >= fixture.headChangeAt) {
-    value.head.sha = fixture.otherHeadSha;
-  }
-  if (fixture.baseChangeAt && pullRequestCall >= fixture.baseChangeAt) {
-    value.base.sha = fixture.otherBaseSha;
-  }
-  if (fixture.fork) {
-    value.head.repo.id += 1;
-  }
+  if (fixture.headChangeAt && pullRequestCall >= fixture.headChangeAt) value.head.sha = fixture.otherHeadSha;
+  if (fixture.baseChangeAt && pullRequestCall >= fixture.baseChangeAt) value.base.sha = fixture.otherBaseSha;
+  if (fixture.fork) value.head.repo.id += 1;
   return value;
 }
 
@@ -74,10 +71,11 @@ const github = {
     issues: { listLabelsOnIssue: labelsEndpoint },
     actions: {
       getWorkflowRun: async options => {
-        calls.push({ kind: 'dispatcher', options });
-        if (fixture.apiErrorStage === 'dispatcher') throw new Error('dispatcher unavailable');
-        return { data: clone(fixture.dispatcher) };
+        calls.push({ kind: 'observer', options });
+        if (fixture.apiErrorStage === 'observer') throw new Error('observer unavailable');
+        return { data: clone(fixture.observer) };
       },
+      listJobsForWorkflowRun: jobsEndpoint,
       listWorkflowRuns: runsEndpoint,
       reRunWorkflow: async options => {
         calls.push({ kind: 'rerun', options });
@@ -94,6 +92,11 @@ const github = {
       if (fixture.labelRemovedAt && labelCall >= fixture.labelRemovedAt) return [];
       return clone(fixture.labels);
     }
+    if (method === jobsEndpoint) {
+      calls.push({ kind: 'jobs', options });
+      if (fixture.apiErrorStage === 'jobs') throw new Error('jobs unavailable');
+      return clone(fixture.jobs);
+    }
     if (method === runsEndpoint) {
       calls.push({ kind: 'runs', options });
       if (fixture.apiErrorStage === 'runs') throw new Error('runs unavailable');
@@ -106,10 +109,8 @@ const core = {
   info: message => calls.push({ kind: 'info', message }),
   setOutput: (name, value) => { outputs[name] = value; }
 };
-process.env.PULL_REQUEST_NUMBER = String(fixture.pullRequestNumber);
-process.env.EXPECTED_HEAD_SHA = fixture.expectedHeadSha;
-process.env.EXPECTED_BASE_SHA = fixture.expectedBaseSha;
-process.env.DISPATCHER_RUN_ID = String(fixture.dispatcherRunId);
+process.env.OBSERVER_RUN_ID = String(fixture.observerRunId);
+process.env.OBSERVER_WORKFLOW_PATH = fixture.observerWorkflowPath;
 process.env.WORKFLOW_PATH = fixture.workflowPath;
 new AsyncFunction('github', 'core', 'context', script)(
   github,
@@ -122,6 +123,7 @@ new AsyncFunction('github', 'core', 'context', script)(
 
     function New-PrCheckRerunFixture {
         $pullRequest = [pscustomobject]@{
+            number = 42
             state = 'open'
             head = [pscustomobject]@{
                 sha = 'a' * 40
@@ -134,6 +136,23 @@ new AsyncFunction('github', 'core', 'context', script)(
                 repo = [pscustomobject]@{ id = 10 }
             }
         }
+        $observerPullRequest = ConvertFrom-Json (ConvertTo-Json $pullRequest -Depth 20 -Compress)
+        $runPullRequest = ConvertFrom-Json (ConvertTo-Json $pullRequest -Depth 20 -Compress)
+        $observer = [pscustomobject]@{
+            id = 9000
+            event = 'pull_request'
+            path = '.github/workflows/pr-check-label-observer.yml'
+            status = 'completed'
+            conclusion = 'success'
+            head_sha = $pullRequest.head.sha
+            head_branch = $pullRequest.head.ref
+            head_repository = [pscustomobject]@{
+                id = 10
+                full_name = 'Azure/example-module'
+            }
+            run_started_at = '2026-11-26T10:00:00Z'
+            pull_requests = @($observerPullRequest)
+        }
         $run = [pscustomobject]@{
             id = 100
             event = 'pull_request'
@@ -143,27 +162,21 @@ new AsyncFunction('github', 'core', 'context', script)(
             status = 'completed'
             created_at = '2026-11-26T09:30:00Z'
             run_started_at = '2026-11-26T09:00:00Z'
-            pull_requests = @(
-                [pscustomobject]@{
-                    number = 42
-                    head = $pullRequest.head
-                    base = $pullRequest.base
-                }
-            )
+            pull_requests = @($runPullRequest)
         }
         return @{
-            pullRequestNumber = 42
-            expectedHeadSha = $pullRequest.head.sha
-            expectedBaseSha = $pullRequest.base.sha
-            dispatcherRunId = 9000
+            observerRunId = 9000
+            observerWorkflowPath = '.github/workflows/pr-check-label-observer.yml'
             workflowPath = '.github/workflows/pr-check.yml'
             otherHeadSha = 'c' * 40
             otherBaseSha = 'd' * 40
+            observer = $observer
+            jobs = @([pscustomobject]@{
+                    name = 'observe / Observe E2E label event'
+                    status = 'completed'
+                    conclusion = 'success'
+                })
             pullRequest = $pullRequest
-            dispatcher = [pscustomobject]@{
-                event = 'pull_request_target'
-                run_started_at = '2026-11-26T10:00:00Z'
-            }
             labels = @([pscustomobject]@{ name = 'PR: Run Required E2E Tests' })
             runs = @($run)
         }
@@ -187,23 +200,37 @@ AfterAll {
     Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue
 }
 
-Describe 'PR-check label rerun reusable workflow' {
-    It 'keeps caller event wiring thin and owns all admitted rerun behavior' {
-        @($script:workflow.on.Keys) | Should -Be @('workflow_call')
-        $job = $script:workflow.jobs.'rerun-pr-check'
-        $job.if | Should -Match "github\.event_name == 'pull_request_target'"
+Describe 'PR-check label observer reusable workflow' {
+    It 'is read-only and admits only same-repository E2E label changes' {
+        @($script:observerWorkflow.on.Keys) | Should -Be @('workflow_call')
+        $script:observerWorkflow.permissions.Keys | Should -BeNullOrEmpty
+        $job = $script:observerWorkflow.jobs.observe
+        $job.name | Should -BeExactly 'Observe E2E label event'
+        $job.if | Should -Match "github\.event_name == 'pull_request'"
+        $job.if | Should -Match 'head\.repo\.id == github\.event\.pull_request\.base\.repo\.id'
         $job.if | Should -Match '"labeled","unlabeled"'
-        $job.if | Should -Match 'github\.event\.action'
         $job.if | Should -Match "'PR: Run Required E2E Tests'"
         $job.if | Should -Match "'PR: Run All E2E Tests'"
-        $job.concurrency.group | Should -BeExactly 'pr-check-label-${{ github.event.pull_request.number }}'
+        $job.permissions.Keys | Should -BeNullOrEmpty
+        $job.steps | Should -HaveCount 1
+        $job.steps[0].ContainsKey('uses') | Should -BeFalse
+    }
+}
+
+Describe 'PR-check label rerun reusable workflow' {
+    It 'accepts only a successful same-repository observer workflow_run' {
+        @($script:workflow.on.Keys) | Should -Be @('workflow_call')
+        $job = $script:workflow.jobs.'rerun-pr-check'
+        $job.if | Should -Match "github\.event_name == 'workflow_run'"
+        $job.if | Should -Match "github\.event\.workflow_run\.event == 'pull_request'"
+        $job.if | Should -Match "github\.event\.workflow_run\.conclusion == 'success'"
+        $job.if | Should -Match 'workflow_run\.path == inputs\.observer-workflow-path'
+        $job.if | Should -Match 'head_repository\.full_name == github\.repository'
+        $job.if | Should -Not -Match 'pull_request_target'
+        $job.concurrency.group | Should -BeExactly 'pr-check-label-${{ github.event.workflow_run.head_sha }}'
         $job.concurrency.'cancel-in-progress' | Should -BeFalse
         $job.'timeout-minutes' | Should -Be 360
         @($job.permissions.Keys | Sort-Object) | Should -Be @('actions', 'contents', 'issues', 'pull-requests')
-        $job.permissions.actions | Should -BeExactly 'write'
-        $job.permissions.contents | Should -BeExactly 'read'
-        $job.permissions.issues | Should -BeExactly 'read'
-        $job.permissions.'pull-requests' | Should -BeExactly 'read'
     }
 
     It 'checks out only an immutable trusted Tools revision before using the local action' {
@@ -218,25 +245,25 @@ Describe 'PR-check label rerun reusable workflow' {
         $checkout.with.'persist-credentials' | Should -BeFalse
         $checkout.with.ref | Should -Not -Match 'github\.event'
         $job.steps[2].uses | Should -BeExactly './.avm-tools/.github/actions/pr-check-rerun'
-        $job.steps[2].with.expectedHeadSha | Should -BeExactly '${{ github.event.pull_request.head.sha }}'
-        $job.steps[2].with.expectedBaseSha | Should -BeExactly '${{ github.event.pull_request.base.sha }}'
+        $job.steps[2].with.observerRunId | Should -BeExactly '${{ github.event.workflow_run.id }}'
+        $job.steps[2].with.observerWorkflowPath | Should -BeExactly '${{ inputs.observer-workflow-path }}'
     }
 }
 
 Describe 'PR-check label rerun action' {
-    It 'exposes a narrow immutable action contract' {
+    It 'uses a narrow observer contract and never consumes PR artifacts or code' {
         @($script:action.inputs.Keys | Sort-Object) | Should -Be @(
-            'dispatcherRunId'
-            'expectedBaseSha'
-            'expectedHeadSha'
-            'pullRequestNumber'
+            'observerRunId'
+            'observerWorkflowPath'
             'workflowPath'
         )
         @($script:action.outputs.Keys | Sort-Object) | Should -Be @('outcome', 'runId')
         $script:action.runs.steps[0].uses | Should -Match '^actions/github-script@[0-9a-f]{40}$'
-        $script:action.runs.steps[0].with.script | Should -Match 'github\.paginate'
-        $script:action.runs.steps[0].with.script | Should -Match 'per_page: 100'
-        $script:action.runs.steps[0].with.script | Should -Not -Match 'actions/checkout|github\.head_ref|github\.sha'
+        $script:actionScript | Should -Match 'listJobsForWorkflowRun'
+        $script:actionScript | Should -Match 'listLabelsOnIssue'
+        $script:actionScript | Should -Match 'listWorkflowRuns'
+        $script:actionScript | Should -Match 'per_page: 100'
+        $script:actionScript | Should -Not -Match 'artifact|checkout|pull_request_target|secrets'
     }
 
     It 'reruns the newest exactly matching completed pull_request run' {
@@ -245,10 +272,41 @@ Describe 'PR-check label rerun action' {
         $output = $result.StdOut | ConvertFrom-Json
         $output.outputs.outcome | Should -BeExactly 'rerun-requested'
         $output.outputs.runId | Should -BeExactly '100'
+        @($output.calls | Where-Object kind -EQ 'jobs') | Should -HaveCount 1
+        @($output.calls | Where-Object kind -EQ 'labels') | Should -HaveCount 2
         @($output.calls | Where-Object kind -EQ 'rerun') | Should -HaveCount 1
-        @($output.calls | Where-Object kind -EQ 'labels')[0].options.per_page | Should -Be 100
         @($output.calls | Where-Object kind -EQ 'runs')[0].options.per_page | Should -Be 100
-        @($output.calls | Where-Object kind -EQ 'runs')[0].options.workflow_id | Should -BeExactly 'pr-check.yml'
+    }
+
+    It 'skips a run whose observer marker job was skipped' {
+        $fixture = New-PrCheckRerunFixture
+        $fixture.jobs[0].conclusion = 'skipped'
+        $result = Invoke-PrCheckRerunScript -Fixture $fixture
+        $result.ExitCode | Should -Be 0
+        $output = $result.StdOut | ConvertFrom-Json
+        $output.outputs.outcome | Should -BeExactly 'observer-skipped'
+        @($output.calls | Where-Object kind -EQ 'labels') | Should -HaveCount 0
+        @($output.calls | Where-Object kind -EQ 'rerun') | Should -HaveCount 0
+    }
+
+    It 'reruns an E2E removal when another E2E label remains' {
+        $fixture = New-PrCheckRerunFixture
+        $fixture.labels = @([pscustomobject]@{ name = 'PR: Run Required E2E Tests' })
+        $result = Invoke-PrCheckRerunScript -Fixture $fixture
+        $result.ExitCode | Should -Be 0
+        $output = $result.StdOut | ConvertFrom-Json
+        $output.outputs.outcome | Should -BeExactly 'rerun-requested'
+    }
+
+    It 'skips a removal when no E2E label remains' {
+        $fixture = New-PrCheckRerunFixture
+        $fixture.labelRemovedAt = 1
+        $result = Invoke-PrCheckRerunScript -Fixture $fixture
+        $result.ExitCode | Should -Be 0
+        $output = $result.StdOut | ConvertFrom-Json
+        $output.outputs.outcome | Should -BeExactly 'label-removed'
+        @($output.calls | Where-Object kind -EQ 'runs') | Should -HaveCount 0
+        @($output.calls | Where-Object kind -EQ 'rerun') | Should -HaveCount 0
     }
 
     It 'waits for matching active runs before requesting a rerun' {
@@ -278,17 +336,6 @@ Describe 'PR-check label rerun action' {
         @($output.calls | Where-Object kind -EQ 'rerun') | Should -HaveCount 0
     }
 
-    It 'does not duplicate a run that already observed the label event' {
-        $fixture = New-PrCheckRerunFixture
-        $fixture.runs[0].run_started_at = '2026-11-26T10:00:01Z'
-        $fixture.runs[0].status = 'in_progress'
-        $result = Invoke-PrCheckRerunScript -Fixture $fixture
-        $result.ExitCode | Should -Be 0
-        $output = $result.StdOut | ConvertFrom-Json
-        $output.outputs.outcome | Should -BeExactly 'already-observed'
-        @($output.calls | Where-Object kind -EQ 'rerun') | Should -HaveCount 0
-    }
-
     It 'leaves a moved head to its synchronize run' {
         $fixture = New-PrCheckRerunFixture
         $fixture.headChangeAt = 1
@@ -309,32 +356,29 @@ Describe 'PR-check label rerun action' {
         @($output.calls | Where-Object kind -EQ 'rerun') | Should -HaveCount 0
     }
 
-    It 'reruns an E2E removal when another E2E label remains' {
+    It 'fails closed for untrusted observer metadata' -ForEach @(
+        @{ Case = 'event'; Change = { $fixture.observer.event = 'workflow_dispatch' }; Error = '.*not triggered by pull_request.*' }
+        @{ Case = 'path'; Change = { $fixture.observer.path = '.github/workflows/other.yml' }; Error = '.*came from.*not.*observer.*' }
+        @{ Case = 'conclusion'; Change = { $fixture.observer.conclusion = 'failure' }; Error = '.*did not complete successfully.*' }
+        @{ Case = 'fork repository'; Change = { $fixture.observer.head_repository.full_name = 'fork/example-module' }; Error = '.*did not originate.*' }
+        @{ Case = 'repository ID'; Change = { $fixture.observer.head_repository.id = 99 }; Error = '.*repository does not match.*' }
+        @{ Case = 'multiple PRs'; Change = { $fixture.observer.pull_requests += $fixture.observer.pull_requests[0] }; Error = '.*exactly one pull request.*' }
+        @{ Case = 'marker failure'; Change = { $fixture.jobs[0].conclusion = 'failure' }; Error = '.*marker job.*did not succeed.*' }
+        @{ Case = 'missing marker'; Change = { $fixture.jobs = @() }; Error = '.*one completed marker job.*' }
+    ) {
         $fixture = New-PrCheckRerunFixture
-        $fixture.labels = @([pscustomobject]@{ name = 'PR: Run Required E2E Tests' })
+        & $Change
         $result = Invoke-PrCheckRerunScript -Fixture $fixture
-        $result.ExitCode | Should -Be 0
-        $output = $result.StdOut | ConvertFrom-Json
-        $output.outputs.outcome | Should -BeExactly 'rerun-requested'
-        @($output.calls | Where-Object kind -EQ 'rerun') | Should -HaveCount 1
+        $result.ExitCode | Should -Not -Be 0
+        $result.StdErr | Should -Match $Error
     }
 
-    It 'skips an E2E removal when no E2E label remains' {
-        $fixture = New-PrCheckRerunFixture
-        $fixture.labelRemovedAt = 1
-        $result = Invoke-PrCheckRerunScript -Fixture $fixture
-        $result.ExitCode | Should -Be 0
-        $output = $result.StdOut | ConvertFrom-Json
-        $output.outputs.outcome | Should -BeExactly 'label-removed'
-        @($output.calls | Where-Object kind -EQ 'runs') | Should -HaveCount 0
-        @($output.calls | Where-Object kind -EQ 'rerun') | Should -HaveCount 0
-    }
-
-    It 'fails closed for forks, base changes, missing runs, and API errors' -ForEach @(
+    It 'fails closed for live forks, base changes, missing runs, and API errors' -ForEach @(
         @{ Case = 'fork'; Change = { $fixture.fork = $true }; Error = '.*from a fork.*' }
         @{ Case = 'base change'; Change = { $fixture.baseChangeAt = 1 }; Error = '.*base changed.*' }
         @{ Case = 'missing run'; Change = { $fixture.noRuns = $true }; Error = '.*No PR-check run matched.*' }
-        @{ Case = 'dispatcher API error'; Change = { $fixture.apiErrorStage = 'dispatcher' }; Error = '.*Failed to read dispatcher run.*dispatcher unavailable.*' }
+        @{ Case = 'observer API error'; Change = { $fixture.apiErrorStage = 'observer' }; Error = '.*Failed to read observer run.*observer unavailable.*' }
+        @{ Case = 'jobs API error'; Change = { $fixture.apiErrorStage = 'jobs' }; Error = '.*Failed to list jobs.*jobs unavailable.*' }
         @{ Case = 'label API error'; Change = { $fixture.apiErrorStage = 'labels' }; Error = '.*Failed to read current labels.*labels unavailable.*' }
         @{ Case = 'run API error'; Change = { $fixture.apiErrorStage = 'runs' }; Error = '.*Failed to list PR-check runs.*runs unavailable.*' }
         @{ Case = 'rerun API error'; Change = { $fixture.apiErrorStage = 'rerun' }; Error = '.*Failed to rerun PR-check run.*rerun denied.*' }
