@@ -1,0 +1,27 @@
+name: 'Reusable: PR check E2E label observer'
+
+# This unprivileged workflow is an untrusted signal. A same-repository pull
+# request can alter its caller admission; the workflow_run handler revalidates
+# all live PR, label, and run state before using a write token.
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  observe:
+    name: Observe E2E label event
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id &&
+      contains(fromJSON('["labeled","unlabeled"]'), github.event.action) &&
+      (
+        github.event.label.name == 'PR: Run Required E2E Tests' ||
+        github.event.label.name == 'PR: Run All E2E Tests'
+      )
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Emit E2E label signal
+        shell: pwsh
+        run: Write-Output 'Observed an E2E label change; the trusted handler will revalidate live state.'

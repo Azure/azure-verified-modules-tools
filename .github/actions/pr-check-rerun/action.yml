@@ -1,0 +1,364 @@
+name: Rerun PR check
+description: Validate a pull_request observer run and rerun its matching PR check.
+inputs:
+  observerRunId:
+    description: Pull-request observer workflow run ID from workflow_run.
+    required: true
+  observerWorkflowPath:
+    description: Exact observer workflow path allowed to request the rerun.
+    required: true
+  workflowPath:
+    description: Caller pull_request workflow path.
+    required: false
+    default: .github/workflows/pr-check.yml
+outputs:
+  outcome:
+    description: Requested rerun or the reason no rerun was needed.
+    value: ${{ steps.rerun.outputs.outcome }}
+  runId:
+    description: Selected pull_request workflow run ID, when selected.
+    value: ${{ steps.rerun.outputs.runId }}
+runs:
+  using: composite
+  steps:
+    - name: Rerun matching PR check
+      id: rerun
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+      env:
+        OBSERVER_RUN_ID: ${{ inputs.observerRunId }}
+        OBSERVER_WORKFLOW_PATH: ${{ inputs.observerWorkflowPath }}
+        WORKFLOW_PATH: ${{ inputs.workflowPath }}
+      with:
+        script: |
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
+          const observerRunId = parsePositiveInteger(process.env.OBSERVER_RUN_ID, 'observer run ID');
+          const observerWorkflowPath = parseWorkflowPath(
+            process.env.OBSERVER_WORKFLOW_PATH,
+            'observer workflow path'
+          );
+          const workflowPath = parseWorkflowPath(process.env.WORKFLOW_PATH, 'PR-check workflow path');
+          const workflowFile = workflowPath.split('/').at(-1);
+          const observerJobName = 'Observe E2E label event';
+          const requiredLabels = new Set([
+            'PR: Run Required E2E Tests',
+            'PR: Run All E2E Tests'
+          ]);
+          const maxUnavailableAttempts = 12;
+          const maxCompletionAttempts = 1080;
+          const pollIntervalMilliseconds = 10000;
+
+          function parsePositiveInteger(value, name) {
+            if (!/^[1-9]\d*$/.test(value)) throw new Error(`Invalid ${name} '${value}'.`);
+            const parsed = Number(value);
+            if (!Number.isSafeInteger(parsed)) throw new Error(`${name} '${value}' is out of range.`);
+            return parsed;
+          }
+
+          function parseWorkflowPath(value, name) {
+            if (!/^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/.test(value)) {
+              throw new Error(`Invalid ${name} '${value}'.`);
+            }
+            return value;
+          }
+
+          function parseDate(value, name) {
+            const parsed = Date.parse(value);
+            if (!Number.isFinite(parsed)) throw new Error(`Invalid ${name} '${value}'.`);
+            return parsed;
+          }
+
+          async function request(description, operation) {
+            try {
+              return await operation();
+            } catch (error) {
+              throw new Error(`${description}: ${error instanceof Error ? error.message : String(error)}`);
+            }
+          }
+
+          function requireAssociation(observerRun) {
+            if (observerRun.event !== 'pull_request') {
+              throw new Error(`Observer run ${observerRunId} was not triggered by pull_request.`);
+            }
+            if (observerRun.path !== observerWorkflowPath) {
+              throw new Error(
+                `Observer run ${observerRunId} came from '${observerRun.path}', not '${observerWorkflowPath}'.`
+              );
+            }
+            if (observerRun.status !== 'completed' || observerRun.conclusion !== 'success') {
+              throw new Error(`Observer run ${observerRunId} did not complete successfully.`);
+            }
+            if (observerRun.head_repository?.full_name !== `${owner}/${repo}` ||
+                !Number.isSafeInteger(Number(observerRun.head_repository?.id))) {
+              throw new Error(`Observer run ${observerRunId} did not originate in ${owner}/${repo}.`);
+            }
+            if (!Array.isArray(observerRun.pull_requests) || observerRun.pull_requests.length !== 1) {
+              throw new Error(`Observer run ${observerRunId} must identify exactly one pull request.`);
+            }
+            const pullRequest = observerRun.pull_requests[0];
+            const pullRequestNumber = parsePositiveInteger(String(pullRequest.number), 'pull request number');
+            for (const [side, value] of [['head', pullRequest.head], ['base', pullRequest.base]]) {
+              if (!value ||
+                  !/^[0-9a-f]{40}$/.test(value.sha) ||
+                  typeof value.ref !== 'string' ||
+                  !value.ref ||
+                  !Number.isSafeInteger(Number(value.repo?.id))) {
+                throw new Error(`Observer run ${observerRunId} has invalid pull request ${side} metadata.`);
+              }
+            }
+            if (Number(pullRequest.head.repo.id) !== Number(pullRequest.base.repo.id)) {
+              throw new Error(`Observer run ${observerRunId} came from a fork pull request.`);
+            }
+            if (Number(observerRun.head_repository.id) !== Number(pullRequest.head.repo.id)) {
+              throw new Error(`Observer run ${observerRunId} repository does not match its pull request head repository.`);
+            }
+            if (observerRun.head_sha !== pullRequest.head.sha ||
+                observerRun.head_branch !== pullRequest.head.ref) {
+              throw new Error(`Observer run ${observerRunId} does not match its pull request head.`);
+            }
+            return { pullRequest, pullRequestNumber };
+          }
+
+          async function verifyObserverJob() {
+            const jobs = await request(
+              `Failed to list jobs for observer run ${observerRunId}`,
+              () => github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+                owner,
+                repo,
+                run_id: observerRunId,
+                filter: 'latest',
+                per_page: 100
+              })
+            );
+            if (!Array.isArray(jobs)) {
+              throw new Error(`GitHub returned an invalid job collection for observer run ${observerRunId}.`);
+            }
+            const markerJobs = jobs.filter(job =>
+              job.name === observerJobName ||
+              (typeof job.name === 'string' && job.name.endsWith(` / ${observerJobName}`))
+            );
+            if (markerJobs.length !== 1 || markerJobs[0].status !== 'completed') {
+              throw new Error(`Observer run ${observerRunId} did not contain one completed marker job.`);
+            }
+            if (markerJobs[0].conclusion === 'skipped') return false;
+            if (markerJobs[0].conclusion !== 'success') {
+              throw new Error(`Observer marker job in run ${observerRunId} did not succeed.`);
+            }
+            return true;
+          }
+
+          async function getLivePullRequest(expected) {
+            const response = await request(
+              `Failed to read pull request #${expected.number}`,
+              () => github.rest.pulls.get({ owner, repo, pull_number: expected.number })
+            );
+            const pullRequest = response.data;
+            if (!pullRequest || pullRequest.state !== 'open') {
+              throw new Error(`Pull request #${expected.number} is not open.`);
+            }
+            if (!pullRequest.head?.repo || !pullRequest.base?.repo ||
+                !Number.isSafeInteger(Number(pullRequest.head.repo.id)) ||
+                !Number.isSafeInteger(Number(pullRequest.base.repo.id))) {
+              throw new Error(`Pull request #${expected.number} has invalid repository metadata.`);
+            }
+            if (Number(pullRequest.head.repo.id) !== Number(pullRequest.base.repo.id)) {
+              throw new Error(`Pull request #${expected.number} is from a fork; privileged reruns are disabled.`);
+            }
+            if (pullRequest.head.sha !== expected.head.sha ||
+                pullRequest.head.ref !== expected.head.ref ||
+                Number(pullRequest.head.repo.id) !== Number(expected.head.repo.id)) {
+              core.info('The pull request head changed after the observer run; its synchronize run will evaluate the live labels.');
+              return null;
+            }
+            if (pullRequest.base.sha !== expected.base.sha ||
+                pullRequest.base.ref !== expected.base.ref ||
+                Number(pullRequest.base.repo.id) !== Number(expected.base.repo.id)) {
+              throw new Error(
+                `The pull request base changed from ${expected.base.sha} to ${pullRequest.base.sha} after the observer run.`
+              );
+            }
+            return pullRequest;
+          }
+
+          async function getLiveLabels(pullRequestNumber) {
+            const labels = await request(
+              `Failed to read current labels for pull request #${pullRequestNumber}`,
+              () => github.paginate(github.rest.issues.listLabelsOnIssue, {
+                owner,
+                repo,
+                issue_number: pullRequestNumber,
+                per_page: 100
+              })
+            );
+            if (!Array.isArray(labels)) {
+              throw new Error(`GitHub returned an invalid label collection for pull request #${pullRequestNumber}.`);
+            }
+            return labels.map((label, index) => {
+              if (!label || typeof label.name !== 'string' || !label.name) {
+                throw new Error(
+                  `GitHub returned an invalid label at index ${index} for pull request #${pullRequestNumber}.`
+                );
+              }
+              return label.name;
+            });
+          }
+
+          async function getMatchingRuns(pullRequest) {
+            const runs = await request(
+              `Failed to list PR-check runs for pull request #${pullRequest.number}`,
+              () => github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner,
+                repo,
+                workflow_id: workflowFile,
+                event: 'pull_request',
+                head_sha: pullRequest.head.sha,
+                per_page: 100
+              })
+            );
+            if (!Array.isArray(runs)) {
+              throw new Error(`GitHub returned an invalid workflow run collection for pull request #${pullRequest.number}.`);
+            }
+            return runs.filter(run => matchesPullRequest(run, pullRequest)).sort(compareRuns);
+          }
+
+          function matchesPullRequest(run, pullRequest) {
+            if (run.event !== 'pull_request' ||
+                run.path !== workflowPath ||
+                run.head_sha !== pullRequest.head.sha ||
+                run.head_branch !== pullRequest.head.ref ||
+                !Array.isArray(run.pull_requests)) {
+              return false;
+            }
+            const matches = run.pull_requests.filter(candidate =>
+              candidate?.number === Number(pullRequest.number) &&
+              candidate.head?.sha === pullRequest.head.sha &&
+              candidate.head?.ref === pullRequest.head.ref &&
+              Number(candidate.head?.repo?.id) === Number(pullRequest.head.repo.id) &&
+              candidate.base?.sha === pullRequest.base.sha &&
+              candidate.base?.ref === pullRequest.base.ref &&
+              Number(candidate.base?.repo?.id) === Number(pullRequest.base.repo.id)
+            );
+            return matches.length === 1;
+          }
+
+          function compareRuns(left, right) {
+            const createdDifference =
+              parseDate(right.created_at, `workflow run ${right.id} creation time`) -
+              parseDate(left.created_at, `workflow run ${left.id} creation time`);
+            if (createdDifference !== 0) return createdDifference;
+            const leftId = BigInt(String(left.id));
+            const rightId = BigInt(String(right.id));
+            return leftId === rightId ? 0 : leftId < rightId ? 1 : -1;
+          }
+
+          function finish(outcome, runId = '') {
+            core.setOutput('outcome', outcome);
+            core.setOutput('runId', runId);
+          }
+
+          const observerResponse = await request(
+            `Failed to read observer run ${observerRunId}`,
+            () => github.rest.actions.getWorkflowRun({ owner, repo, run_id: observerRunId })
+          );
+          const observerRun = observerResponse.data;
+          const { pullRequest: expectedPullRequest, pullRequestNumber } = requireAssociation(observerRun);
+          expectedPullRequest.number = pullRequestNumber;
+          const observerStartedAt = parseDate(
+            observerRun.run_started_at,
+            `observer run ${observerRunId} start time`
+          );
+          if (!await verifyObserverJob()) {
+            core.info(`Observer marker job in run ${observerRunId} was skipped; no rerun is needed.`);
+            finish('observer-skipped');
+            return;
+          }
+
+          let unavailablePolls = 0;
+          for (let poll = 0; poll < maxCompletionAttempts; poll++) {
+            const pullRequest = await getLivePullRequest(expectedPullRequest);
+            if (!pullRequest) {
+              finish('head-changed');
+              return;
+            }
+            pullRequest.number = pullRequestNumber;
+
+            const labels = await getLiveLabels(pullRequestNumber);
+            if (!labels.some(label => requiredLabels.has(label))) {
+              core.info('No E2E label remains; no rerun is needed.');
+              finish('label-removed');
+              return;
+            }
+
+            const matchingRuns = await getMatchingRuns(pullRequest);
+            if (matchingRuns.length === 0) {
+              unavailablePolls++;
+              if (unavailablePolls >= maxUnavailableAttempts) {
+                throw new Error(
+                  `No PR-check run matched pull request #${pullRequestNumber} at head ` +
+                  `${expectedPullRequest.head.sha} and base ${expectedPullRequest.base.sha}.`
+                );
+              }
+              await new Promise(resolve => setTimeout(resolve, pollIntervalMilliseconds));
+              continue;
+            }
+
+            unavailablePolls = 0;
+            const latestRun = matchingRuns[0];
+            const latestRunStartedAt = parseDate(
+              latestRun.run_started_at,
+              `workflow run ${latestRun.id} start time`
+            );
+            const activeRuns = matchingRuns.filter(run => run.status !== 'completed');
+            const olderActiveRuns = activeRuns.filter(run =>
+              parseDate(run.run_started_at, `workflow run ${run.id} start time`) < observerStartedAt
+            );
+            if (latestRunStartedAt >= observerStartedAt && olderActiveRuns.length === 0) {
+              core.info(
+                `PR-check run ${latestRun.id} already started after the observer event at ` +
+                `${latestRun.run_started_at}; no additional rerun is needed.`
+              );
+              finish('already-observed', String(latestRun.id));
+              return;
+            }
+            if (activeRuns.length > 0) {
+              core.info(`Waiting for ${activeRuns.length} active PR-check run(s) for head ${expectedPullRequest.head.sha}.`);
+              await new Promise(resolve => setTimeout(resolve, pollIntervalMilliseconds));
+              continue;
+            }
+            if (latestRunStartedAt >= observerStartedAt) {
+              core.info(`PR-check run ${latestRun.id} completed after the observer event; no additional rerun is needed.`);
+              finish('already-observed', String(latestRun.id));
+              return;
+            }
+
+            const verifiedPullRequest = await getLivePullRequest(expectedPullRequest);
+            if (!verifiedPullRequest) {
+              finish('head-changed');
+              return;
+            }
+            verifiedPullRequest.number = pullRequestNumber;
+            const verifiedLabels = await getLiveLabels(pullRequestNumber);
+            if (!verifiedLabels.some(label => requiredLabels.has(label))) {
+              core.info('The last E2E label was removed before rerun; no rerun is needed.');
+              finish('label-removed');
+              return;
+            }
+            const verifiedRuns = await getMatchingRuns(verifiedPullRequest);
+            const verifiedLatestRun = verifiedRuns[0];
+            if (!verifiedLatestRun ||
+                String(verifiedLatestRun.id) !== String(latestRun.id) ||
+                verifiedLatestRun.status !== 'completed') {
+              core.info('The PR-check run set changed during verification; selecting it again.');
+              continue;
+            }
+
+            await request(
+              `Failed to rerun PR-check run ${latestRun.id}`,
+              () => github.rest.actions.reRunWorkflow({ owner, repo, run_id: Number(latestRun.id) })
+            );
+            core.info(`Requested a rerun of PR-check run ${latestRun.id} for pull request #${pullRequestNumber}.`);
+            finish('rerun-requested', String(latestRun.id));
+            return;
+          }
+
+          throw new Error(`Timed out waiting for PR-check runs for pull request #${pullRequestNumber}.`);
