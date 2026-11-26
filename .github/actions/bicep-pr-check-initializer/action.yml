@@ -15,6 +15,13 @@ inputs:
     description: Exact true or false override for workflow_dispatch deployment validation; ignored for pull requests.
     required: false
     default: 'true'
+  keepResources:
+    description: >-
+      Exact true or false; true requires workflow_dispatch. Run deployment assertions
+      but skip post hooks and cleanup, preserving state for later avm test cleanup.
+      Shared-target tests still require cleanup.
+    required: false
+    default: 'false'
 outputs:
   admitted:
     description: Whether the calling event is an admitted Bicep check event.
@@ -75,10 +82,17 @@ runs:
         EVENT_ACTION: ${{ github.event.action }}
         PR_LABELS: ${{ steps.labels.outputs.names || '[]' }}
         DEPLOYMENT_VALIDATION: ${{ inputs.deploymentValidation }}
+        KEEP_RESOURCES: ${{ inputs.keepResources }}
       run: |
         $ErrorActionPreference = 'Stop'
         if ($env:DEPLOYMENT_VALIDATION -cnotin @('true', 'false')) {
           throw [ArgumentException]::new('deploymentValidation must be exactly true or false.')
+        }
+        if ($env:KEEP_RESOURCES -cnotin @('true', 'false')) {
+          throw [ArgumentException]::new('keepResources must be exactly true or false.')
+        }
+        if ($env:KEEP_RESOURCES -ceq 'true' -and $env:EVENT_NAME -cne 'workflow_dispatch') {
+          throw [ArgumentException]::new('keepResources requires manual dispatch.')
         }
         $labels = @()
         if (-not [string]::IsNullOrWhiteSpace($env:PR_LABELS) -and $env:PR_LABELS -cne 'null') {
@@ -277,6 +291,7 @@ runs:
         DEPLOYMENT: ${{ steps.gate.outputs.deployment }}
         REQUIRED: ${{ steps.gate.outputs.required }}
         OPTIONAL: ${{ steps.gate.outputs.optional }}
+        KEEP_RESOURCES: ${{ inputs.keepResources }}
         TARGET_COMMIT: ${{ github.sha }}
         EVENT_NAME: ${{ github.event_name }}
         PULL_REQUEST_HEAD_COMMIT: ${{ github.event.pull_request.head.sha }}
@@ -313,7 +328,7 @@ runs:
           ModulePaths = $env:MODULE_PATHS
           StaticValidation = $true
           DeploymentValidation = $env:DEPLOYMENT -ceq 'true'
-          RemoveDeployment = $true
+          RemoveDeployment = $env:KEEP_RESOURCES -cne 'true'
           SkipModuleVersionCheck = $true
         }
         $outputs = Initialize-AvmBicepWorkflowMatrix @parameters

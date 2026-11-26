@@ -124,8 +124,19 @@ jobs:
         shell: pwsh
         env:
           TOOLS_REF: ${{ inputs.tools-ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          REMOVE_DEPLOYMENT: ${{ fromJSON(inputs.workflowInput).removeDeployment }}
+          ISOLATION_MODE: ${{ fromJSON(inputs.testCase).IsolationMode }}
         run: |
           if ($env:TOOLS_REF -cnotmatch '^[0-9a-f]{40}$') { throw 'tools-ref must be the full immutable SHA used by the caller.' }
+          if ($env:REMOVE_DEPLOYMENT -ceq 'false') {
+            if ($env:EVENT_NAME -cne 'workflow_dispatch') {
+              throw [ArgumentException]::new('Resource retention requires manual dispatch.')
+            }
+            if ($env:ISOLATION_MODE -ceq 'shared') {
+              throw [ArgumentException]::new('Shared-target execution requires cleanup before releasing the lifecycle lock.')
+            }
+          }
       - name: Check out workflow support
         if: ${{ !fromJSON(inputs.testCase).E2eIgnore }}
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -258,6 +269,7 @@ jobs:
           METADATA_LOCATION: WestEurope
           RESOURCE_GROUP_PREFIX: avm
           RESOURCE_LOCATION: ${{ fromJSON(inputs.workflowInput).customLocation }}
+          REMOVE_DEPLOYMENT: ${{ fromJSON(inputs.workflowInput).removeDeployment }}
           SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_ID: ${{ steps.context.outputs.SubscriptionCleanupManagementGroupId }}
           AVM_CI_VARIABLES: ${{ toJSON(vars) }}
           AVM_CI_SECRETS: ${{ toJSON(secrets) }}
@@ -279,7 +291,8 @@ jobs:
             '--subscription-id', $env:SUBSCRIPTION_ID, '--tenant-id', $env:TENANT_ID, '--phase', 'Deploy',
             '--cleanup-state-path', $env:STATE_PATH, '--location', $env:METADATA_LOCATION,
             '--resource-group-prefix', $env:RESOURCE_GROUP_PREFIX, '--use-ci-inputs',
-            "--require-resource-isolation=$($env:REQUIRE_ISOLATION)", '--confirm=false'
+            "--require-resource-isolation=$($env:REQUIRE_ISOLATION)",
+            "--keep-resources=$($env:REMOVE_DEPLOYMENT -ceq 'false')", '--confirm=false'
           )
           if (-not [string]::IsNullOrWhiteSpace($env:RESOURCE_LOCATION)) {
             $arguments += '--resource-location', $env:RESOURCE_LOCATION
@@ -298,21 +311,23 @@ jobs:
           tenant-id: ${{ steps.context.outputs.TenantId }}
           subscription-id: ${{ steps.context.outputs.SubscriptionId }}
           enable-AzPSSession: true
-      - name: Run post-deployment tests, then delete test resources
+      - name: Run post-deployment tests, then clean up if enabled
         if: ${{ !cancelled() && (success() || failure()) && (steps.deploy.outcome == 'success' || steps.deploy.outcome == 'failure') && steps.renew_oidc.outcome == 'success' }}
         shell: pwsh
         env:
           MODULE_PATH: ${{ steps.context.outputs.ModulePath }}
           SUBSCRIPTION_ID: ${{ steps.context.outputs.SubscriptionId }}
           TENANT_ID: ${{ steps.context.outputs.TenantId }}
+          REMOVE_DEPLOYMENT: ${{ fromJSON(inputs.workflowInput).removeDeployment }}
           STATE_PATH: ${{ runner.temp }}/avm-bicep-state/${{ steps.context.outputs.ArtifactKey }}.cleanup.json
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
           Set-Location (Join-Path $env:GITHUB_WORKSPACE $env:MODULE_PATH)
-          Write-Host "Running post-deployment tests and clean-up for '$env:MODULE_PATH' with avm test e2e --ecosystem bicep --phase Complete and the saved cleanup state."
+          Write-Host "Running post-deployment tests and optional clean-up for '$env:MODULE_PATH' with avm test e2e --ecosystem bicep --phase Complete and the saved cleanup state."
           avm -SkipModuleVersionCheck test e2e --ecosystem bicep --subscription-id $env:SUBSCRIPTION_ID `
-            --tenant-id $env:TENANT_ID --phase Complete --cleanup-state-path $env:STATE_PATH --confirm=false
+            --tenant-id $env:TENANT_ID --phase Complete --cleanup-state-path $env:STATE_PATH `
+            --keep-resources=$($env:REMOVE_DEPLOYMENT -ceq 'false') --confirm=false
       - name: Retry deleting leftover test resources (only if an earlier step failed)
         if: ${{ !cancelled() && failure() && steps.deploy.outcome != 'skipped' && fromJSON(inputs.workflowInput).removeDeployment == 'true' && steps.renew_oidc.outcome == 'success' }}
         shell: pwsh
