@@ -15,6 +15,8 @@ BeforeAll {
     $selection = [scriptblock]::Create(
         $initialize.Substring($start, $end - $start) +
         "`n[pscustomobject]@{ modules = @(`$modules); hasRequired = `$hasRequiredModules; hasOptional = `$hasOptionalModules; errors = @(`$requiredErrors) }")
+    $parametersStart = $initialize.IndexOf('$parameters = @{')
+    $configure = [scriptblock]::Create($initialize.Substring($parametersStart, $start - $parametersStart) + "`n`$outputs")
     $emit = [scriptblock]::Create($initialize.Substring($start))
 }
 
@@ -25,13 +27,18 @@ AfterAll {
 Describe 'Bicep PR scenario selection' {
     BeforeEach {
         $saved = @{}
-        foreach ($name in @('FORK', 'REQUIRED', 'OPTIONAL', 'ARTIFACT', 'GITHUB_OUTPUT')) {
+        foreach ($name in @('FORK', 'REQUIRED', 'OPTIONAL', 'ARTIFACT', 'GITHUB_OUTPUT', 'KEEP_RESOURCES',
+                'GITHUB_WORKSPACE', 'EVENT_NAME', 'TARGET_COMMIT')) {
             $saved[$name] = [Environment]::GetEnvironmentVariable($name)
         }
         $env:FORK = 'false'
         $env:REQUIRED = 'true'
         $env:OPTIONAL = 'true'
         $env:ARTIFACT = 'fixture-artifact'
+        $env:KEEP_RESOURCES = $action.inputs.keepResources.default
+        $env:GITHUB_WORKSPACE = $TestDrive
+        $env:EVENT_NAME = 'workflow_dispatch'
+        $env:TARGET_COMMIT = 'a' * 40
         $env:GITHUB_OUTPUT = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $outputs = [pscustomobject]@{
             BaseCommit = 'fixture-base'
@@ -57,7 +64,31 @@ Describe 'Bicep PR scenario selection' {
     }
 
     AfterEach {
-        foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+        foreach ($name in $saved.Keys) {
+            $value = $saved[$name]
+            [Environment]::SetEnvironmentVariable($name, $(if ($null -eq $value) { [NullString]::Value } else { $value }))
+        }
+    }
+
+    It 'propagates keepResources=<Keep> for <Event> through the existing cleanup control' -ForEach @(
+        @{ Keep = 'false'; Event = 'pull_request'; Remove = $true }
+        @{ Keep = 'false'; Event = 'workflow_dispatch'; Remove = $true }
+        @{ Keep = 'true'; Event = 'workflow_dispatch'; Remove = $false }
+    ) {
+        $env:KEEP_RESOURCES = $Keep
+        $env:EVENT_NAME = $Event
+        Mock Initialize-AvmBicepWorkflowMatrix {
+            [pscustomobject]@{ WorkflowInput = @{ removeDeployment = $RemoveDeployment.ToString().ToLowerInvariant() } }
+        }
+        $configured = & $configure
+        Should -Invoke Initialize-AvmBicepWorkflowMatrix -Exactly 1 -ParameterFilter {
+            $RemoveDeployment -eq $Remove
+        }
+        $outputs.WorkflowInput.removeDeployment = $configured.WorkflowInput.removeDeployment
+        & $emit
+        $values = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
+        ($values.workflowInput | ConvertFrom-Json).removeDeployment |
+            Should -BeExactly $Remove.ToString().ToLowerInvariant()
     }
 
     It 'selects <Description> into one shared module entry' -ForEach @(
@@ -266,7 +297,7 @@ Describe 'Bicep PR label admission' {
     BeforeEach {
         $saved = @{}
         foreach ($name in @('EVENT_NAME', 'REPOSITORY', 'HEAD_REPOSITORY', 'EVENT_ACTION', 'EVENT_LABEL',
-                'PR_LABELS', 'DEPLOYMENT_VALIDATION', 'GITHUB_OUTPUT', 'FORK', 'REQUIRED', 'OPTIONAL')) {
+                'PR_LABELS', 'DEPLOYMENT_VALIDATION', 'KEEP_RESOURCES', 'GITHUB_OUTPUT', 'FORK', 'REQUIRED', 'OPTIONAL')) {
             $saved[$name] = [Environment]::GetEnvironmentVariable($name)
         }
         $env:EVENT_NAME = 'pull_request'
@@ -275,11 +306,48 @@ Describe 'Bicep PR label admission' {
         $env:EVENT_ACTION = 'labeled'
         $env:EVENT_LABEL = 'PR: Run All E2E Tests'
         $env:DEPLOYMENT_VALIDATION = 'false'
+        $env:KEEP_RESOURCES = $action.inputs.keepResources.default
         $env:GITHUB_OUTPUT = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
     }
 
     AfterEach {
-        foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+        foreach ($name in $saved.Keys) {
+            $value = $saved[$name]
+            [Environment]::SetEnvironmentVariable($name, $(if ($null -eq $value) { [NullString]::Value } else { $value }))
+        }
+    }
+
+    It 'rejects malformed retention input <Value>' -ForEach @(
+        @{ Value = '' }
+        @{ Value = 'True' }
+        @{ Value = '1' }
+    ) {
+        $env:EVENT_NAME = 'workflow_dispatch'
+        $env:KEEP_RESOURCES = $Value
+        { & ([scriptblock]::Create($gate)) } | Should -Throw '*keepResources must be exactly true or false*'
+        Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
+    }
+
+    It 'rejects retention for non-manual event <Event>' -ForEach @(
+        @{ Event = 'pull_request' }
+        @{ Event = 'push' }
+    ) {
+        $env:EVENT_NAME = $Event
+        $env:KEEP_RESOURCES = 'true'
+        { & ([scriptblock]::Create($gate)) } | Should -Throw '*keepResources requires manual dispatch*'
+        Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
+    }
+
+    It 'admits manual retention without disabling deployment assertions' {
+        $env:EVENT_NAME = 'workflow_dispatch'
+        $env:DEPLOYMENT_VALIDATION = 'true'
+        $env:KEEP_RESOURCES = 'true'
+        & ([scriptblock]::Create($gate))
+        $result = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
+        $result.admitted | Should -BeExactly 'true'
+        $result.deployment | Should -BeExactly 'true'
+        $result.required | Should -BeExactly 'true'
+        $result.optional | Should -BeExactly 'true'
     }
 
     It 'selects the correct tests for <Labels>' -ForEach @(

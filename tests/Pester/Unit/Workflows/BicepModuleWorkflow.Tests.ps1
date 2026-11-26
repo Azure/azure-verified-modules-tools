@@ -629,13 +629,17 @@ Describe 'Bicep reusable workflow ownership and syntax' {
     It 'exposes a self-contained composite initializer for thin caller-owned module groups' {
         $initializer = $script:actions['bicep-pr-check-initializer']
         @($initializer.inputs.Keys | Sort-Object) |
-            Should -Be @('authoringRef', 'authoringSource', 'deploymentValidation', 'modulePaths')
+            Should -Be @('authoringRef', 'authoringSource', 'deploymentValidation', 'keepResources', 'modulePaths')
         $initializer.inputs.deploymentValidation.default | Should -BeExactly 'true'
+        $initializer.inputs.keepResources.default | Should -BeExactly 'false'
+        ($initializer.runs.steps | Where-Object { $_['id'] -eq 'gate' }).env.KEEP_RESOURCES |
+            Should -BeExactly '${{ inputs.keepResources }}'
         @($initializer.outputs.Keys | Sort-Object) |
             Should -Be @('admitted', 'authoringArtifact', 'baseCommit', 'hasModules', 'hasOptionalModules', 'hasRequiredModules', 'moduleMatrix', 'optionalRequested', 'requiredErrors', 'requiredRequested', 'targetCommit', 'workflowInput')
         $initialize = $initializer.runs.steps | Where-Object { $_['id'] -eq 'initialize' }
         $initialize.env.REQUIRED | Should -BeExactly '${{ steps.gate.outputs.required }}'
         $initialize.env.OPTIONAL | Should -BeExactly '${{ steps.gate.outputs.optional }}'
+        $initialize.env.KEEP_RESOURCES | Should -BeExactly '${{ inputs.keepResources }}'
         $text = Get-Content -LiteralPath (Join-Path $script:root '.github' 'actions' 'bicep-pr-check-initializer' 'action.yml') -Raw
         $text | Should -Match 'Initialize-AvmBicepWorkflowMatrix'
         $text | Should -Match 'BicepWorkflowOrchestration'
@@ -935,6 +939,11 @@ Describe 'Bicep required checks and deployment guards' {
         }
         $steps[-1].if | Should -Match 'always\(\)'
         $steps[-1].with.path | Should -Match 'avm-bicep-state'
+        foreach ($phase in @('deploy', 'complete')) {
+            $step = $steps | Where-Object { $_['id'] -eq $phase }
+            $step.env.WORKFLOW_INPUT | Should -BeExactly '${{ inputs.workflowInput }}'
+            $step.run | Should -Match 'RemoveDeployment = ConvertTo-AvmWorkflowBoolean \$workflowInput.removeDeployment'
+        }
         ($steps | Where-Object { $_['id'] -eq 'login_oidc' }).with.'subscription-id' |
             Should -BeExactly ($steps | Where-Object { $_['id'] -eq 'renew_oidc' }).with.'subscription-id'
         ($steps | Where-Object name -EQ 'Retry deleting leftover test resources (only if an earlier step failed)').if | Should -Match "removeDeployment == 'true'"
@@ -1038,11 +1047,13 @@ Describe 'Bicep required checks and deployment guards' {
 
     It 'executes renewal and recovery guards for <Scenario>' -ForEach @(
         @{ Scenario = 'success'; Deploy = 'success'; Renew = 'success'; Complete = 'success'; Remove = 'true'; Cancelled = $false; Expected = @($true, $true, $false) }
+        @{ Scenario = 'successful retained deployment'; Deploy = 'success'; Renew = 'success'; Complete = 'success'; Remove = 'false'; Cancelled = $false; Expected = @($true, $true, $false) }
         @{ Scenario = 'failed deployment'; Deploy = 'failure'; Renew = 'success'; Complete = 'failure'; Remove = 'true'; Cancelled = $false; Expected = @($true, $true, $true) }
         @{ Scenario = 'failed retained deployment'; Deploy = 'failure'; Renew = 'success'; Complete = 'failure'; Remove = 'false'; Cancelled = $false; Expected = @($true, $true, $false) }
         @{ Scenario = 'skipped deployment'; Deploy = 'skipped'; Renew = 'skipped'; Complete = 'skipped'; Remove = 'true'; Cancelled = $false; Expected = @($false, $false, $false) }
         @{ Scenario = 'failed renewal'; Deploy = 'failure'; Renew = 'failure'; Complete = 'skipped'; Remove = 'true'; Cancelled = $false; Expected = @($true, $false, $false) }
         @{ Scenario = 'failed completion'; Deploy = 'success'; Renew = 'success'; Complete = 'failure'; Remove = 'true'; Cancelled = $false; Expected = @($true, $true, $true) }
+        @{ Scenario = 'failed retained completion'; Deploy = 'success'; Renew = 'success'; Complete = 'failure'; Remove = 'false'; Cancelled = $false; Expected = @($true, $true, $false) }
         @{ Scenario = 'cancelled deployment'; Deploy = 'cancelled'; Renew = 'skipped'; Complete = 'skipped'; Remove = 'true'; Cancelled = $true; Expected = @($false, $false, $false) }
         @{ Scenario = 'cancellation after deployment'; Deploy = 'success'; Renew = 'skipped'; Complete = 'skipped'; Remove = 'true'; Cancelled = $true; Expected = @($false, $false, $false) }
     ) {

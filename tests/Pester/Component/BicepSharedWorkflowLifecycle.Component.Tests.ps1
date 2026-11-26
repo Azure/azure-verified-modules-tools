@@ -49,6 +49,37 @@ Describe 'Component: Bicep shared workflow native lifecycle' -Tag Component {
     }
     AfterEach { Remove-NativeBicepWorkflowFixture -Fixture $script:fixture }
 
+    It 'runs assertions with resource removal <Remove> and assertion result <Assertions>' -ForEach @(
+        @{ Remove = $true; Assertions = 'pass' }
+        @{ Remove = $false; Assertions = 'pass' }
+        @{ Remove = $false; Assertions = 'fail' }
+    ) {
+        $script:fixture.PesterMode = $Assertions
+        Invoke-AvmWorkflowE2e @script:parameters -Phase Deploy -Example 'tests/e2e/defaults/main.test.bicep' `
+            -RemoveDeployment $Remove -Confirm:$false
+        if ($Assertions -eq 'fail') {
+            { Invoke-AvmWorkflowE2e @script:parameters -Phase Complete -RemoveDeployment $Remove -Confirm:$false } |
+                Should -Throw '*did not pass*'
+        }
+        else {
+            Invoke-AvmWorkflowE2e @script:parameters -Phase Complete -RemoveDeployment $Remove -Confirm:$false
+        }
+        $script:fixture.Calls | Should -Contain 'pester'
+        $result = Get-Content -LiteralPath (Join-Path $script:parameters.ResultDirectory 'complete.json') -Raw | ConvertFrom-Json
+        $result.Status | Should -BeExactly $Assertions
+        $stored = Get-Content -LiteralPath $script:fixture.StatePath -Raw | ConvertFrom-Json
+        if ($Remove) {
+            $script:fixture.Calls | Should -Contain 'post'
+            $script:fixture.Calls | Should -Contain "remove:$($script:fixture.CreatedId)"
+            $stored.status | Should -Be 'Complete'
+        }
+        else {
+            @($script:fixture.Calls | Where-Object { $_ -match '^(post|remove:|purge:|delete-record:)' }) | Should -BeNullOrEmpty
+            $stored.status | Should -Not -Be 'Complete'
+            $stored.deployments | Should -Not -BeNullOrEmpty
+        }
+    }
+
     It 'publishes a passing completion and retained recovery state when cleanup is denied' {
         Invoke-AvmWorkflowE2e @script:parameters -Phase Deploy -Example 'tests/e2e/defaults/main.test.bicep' -Confirm:$false
         $script:fixture.OperationLookupDenied = $true
