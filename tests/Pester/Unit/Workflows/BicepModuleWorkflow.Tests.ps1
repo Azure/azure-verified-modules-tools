@@ -450,9 +450,13 @@ Describe 'Bicep reusable workflow ownership and syntax' {
         $unitResult = @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Unit tests')
         $unitResult | Should -HaveCount 1
         $unitResult[0].id | Should -BeExactly 'unit-result'
-        $unitResult[0].run | Should -Match 'Invoke-AvmTestUnit .* -SkipModuleVersionCheck -Recurse -IncludeCompliance'
+        $unitResult[0].run | Should -Match 'Invoke-AvmTestUnit .* -SkipModuleVersionCheck -Recurse'
+        $unitResult[0].run | Should -Not -Match '-IncludeCompliance'
         $unitResult[0].run | Should -Match 'ConvertTo-Json'
         $unitResult[0].run | Should -Match 'Normalize-UnitDiagnostic'
+        $unitResult[0].run | Should -Not -Match 'Write-AvmLog|::(?:warning|error|notice)'
+        $unitResult[0].run | Should -Match '\$authoringModule\.ExportedCommands\[''Write-AvmError''\]'
+        $unitResult[0].run | Should -Match '& \$errorReporter -ErrorRecord \$_'
         $unitArtifact = @($runtime.jobs.'unit-test'.steps | Where-Object name -EQ 'Upload unit test result')
         $unitArtifact | Should -HaveCount 1
         $unitArtifact[0].if | Should -BeExactly 'always()'

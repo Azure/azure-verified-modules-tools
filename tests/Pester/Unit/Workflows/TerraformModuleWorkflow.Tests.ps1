@@ -840,13 +840,12 @@ Describe 'terraform-module automatic checks and fork isolation' {
         $script:definition.jobs[$Job].permissions.contents | Should -BeExactly 'read'
     }
 
-    It 'grants Checks API access only to the trusted PR check job' {
+    It 'does not grant Checks API access to PR check jobs' {
         $trusted = $script:definition.jobs['pr-check']
-        $trusted.permissions.checks | Should -BeExactly 'write'
+        $trusted.permissions.Contains('checks') | Should -BeFalse
         $trusted.permissions.contents | Should -BeExactly 'read'
         $trusted.permissions.'id-token' | Should -BeExactly 'write'
-        $trusted.steps[-1].env.GH_TOKEN | Should -BeExactly '${{ github.token }}'
-        $trusted.steps[-1].env.AVM_GITHUB_CHECK_RUN_ID | Should -BeExactly '${{ job.check_run_id }}'
+        $trusted.steps[-1].Contains('env') | Should -BeFalse
         $script:definition.jobs['pr-check-fork'].permissions.Contains('checks') | Should -BeFalse
     }
 

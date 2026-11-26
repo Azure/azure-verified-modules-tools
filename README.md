@@ -101,9 +101,10 @@ terminating PowerShell error shows only the command summary instead of replaying
 the entire failure again. Local interactive colour and explicit `CLICOLOR_FORCE`
 remain available; `NO_COLOR` takes precedence.
 
-The reusable Bicep PR check needs only read access to repository contents.
-Diagnostics beyond GitHub's ten warning/error command limit use the step
-summary; this default runtime does not request Checks API write access.
+The reusable Bicep and Terraform PR checks emit warnings and errors as GitHub
+workflow commands and include them in the step summary. GitHub retains at
+most ten warning and ten error annotations per step. No Checks API write
+access is needed for diagnostic reporting.
 
 PR checks and integration pair the selected General test subscription with the
 standard `ARM_CLIENT_ID` and `ARM_TENANT_ID`; `ARM_*_OVERRIDE` inputs apply only

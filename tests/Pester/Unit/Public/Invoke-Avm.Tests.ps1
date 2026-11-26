@@ -241,7 +241,7 @@ Describe 'Invoke-Avm help listing' {
 }
 
 Describe 'Invoke-Avm diagnostic finalization' {
-    It 'flushes the eleventh terminal diagnostic after rendering and preserves the typed failure with passthru=<PassThru>' -ForEach @(
+    It 'records the terminal diagnostic and preserves the typed failure with passthru=<PassThru>' -ForEach @(
         @{ PassThru = $false }
         @{ PassThru = $true }
     ) {
@@ -255,8 +255,6 @@ Describe 'Invoke-Avm diagnostic finalization' {
         try {
             InModuleScope 'Avm.Authoring' -Parameters @{ PassThru = $PassThru } {
                 param($PassThru)
-                $script:AvmGitHubDiagnosticCounts.Error = 0
-                $script:AvmGitHubDiagnosticOverflow.Clear()
                 Mock Test-AvmModuleVersion
                 Mock Test-AvmDisableSentinel { $null }
                 Mock Write-AvmResult
@@ -271,7 +269,6 @@ Describe 'Invoke-Avm diagnostic finalization' {
                         })
                     }
                 }
-                Mock Write-AvmGitHubDiagnosticSummary { }
                 $tokens = @('doctor')
                 if ($PassThru) { $tokens += '--passthru' }
                 $exception = try { Invoke-Avm @tokens; $null } catch { $_.Exception }
@@ -279,14 +276,11 @@ Describe 'Invoke-Avm diagnostic finalization' {
                 $exception.Result.Status | Should -BeExactly 'fail'
                 $exception.Message | Should -Match 'terminal diagnostic'
                 Should -Invoke Write-AvmResult -Exactly 1
-                Should -Invoke Write-AvmGitHubDiagnosticSummary -Exactly 1 -ParameterFilter {
-                    $Diagnostics.Count -eq 1 -and $Diagnostics[0].Line -eq 11 -and
-                    $Diagnostics[0].Message -match 'terminal diagnostic' -and
-                    $Reason -match 'unavailable'
-                }
                 Should -Invoke Invoke-AvmGitHubApi -Exactly 0
-                $script:AvmGitHubDiagnosticOverflow.Count | Should -Be 0
             }
+            $summary = @(Get-Content -LiteralPath $env:GITHUB_STEP_SUMMARY)
+            $summary | Should -HaveCount 11
+            $summary[-1] | Should -Match 'terminal diagnostic'
         }
         finally {
             foreach ($name in $saved.Keys) {

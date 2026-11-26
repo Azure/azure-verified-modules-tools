@@ -1667,9 +1667,6 @@ rule "scope_rule" {
                     [pscustomobject]@{ ExitCode = 0; StdOut = $J; StdErr = '' }
                 }
 
-                $script:AvmGitHubDiagnosticCounts.Warning = 0
-                $script:AvmGitHubDiagnosticCounts.Error = 0
-                $script:AvmGitHubDiagnosticOverflow.Clear()
                 $captured = @()
                 $result = Invoke-AvmTerraformLint -Context $C -InformationVariable captured 3>$null
                 [pscustomobject]@{

@@ -49,7 +49,8 @@
         'Select-AvmTestSubscription',
         'Set-AvmBicepReleaseTags',
         'Test-AvmModuleMetadata',
-        'Update-AvmAuthoring'
+        'Update-AvmAuthoring',
+        'Write-AvmError'
     )
     CmdletsToExport      = @()
     VariablesToExport    = @()

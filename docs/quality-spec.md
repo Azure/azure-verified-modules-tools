@@ -45,6 +45,8 @@ boundary.
   external services.
 - Report failures clearly and preserve useful error context. Do not hide
   failures, silently ignore invalid input, or return success-shaped fallbacks.
+- Report the same warnings and errors locally and in CI. Keep their meaning
+  and ownership in shared code; adapt only the presentation to the host.
 - Use the shared bounded retry policy for idempotent network reads when
   transient transport or HTTP failures occur. Do not retry permanent failures,
   or mutations whose effects may be ambiguous.

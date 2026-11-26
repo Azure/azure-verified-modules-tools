@@ -1,3 +1,15 @@
+function ConvertTo-AvmSafeTestDiagnostic {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([AllowEmptyString()] [string] $Message)
+
+    $message = $Message.ReplaceLineEndings(' ').Trim()
+    $message = [regex]::Replace($message, "(['`"]).*?\1", '<value>')
+    $message = [regex]::Replace($message, '(?i)\b(expected|actual|got|received)\b\s+[^,.;]+', '$1 <value>')
+    if ($message.Length -gt 1024) { $message = $message.Substring(0, 1024) + [char]0x2026 }
+    return $message
+}
+
 function Write-AvmStepDiagnostic {
     [CmdletBinding()]
     param(
@@ -18,7 +30,9 @@ function Write-AvmStepDiagnostic {
         [AllowEmptyString()]
         [string] $ErrorMessage,
 
-        [string] $SourceRoot = (Get-Location).Path
+        [string] $SourceRoot = (Get-Location).Path,
+
+        [switch] $RedactTestValues
     )
 
     Set-StrictMode -Version 3.0
@@ -34,6 +48,16 @@ function Write-AvmStepDiagnostic {
             $severityProperty = $issue.PSObject.Properties['Severity']
             if ($null -eq $severityProperty -or $severityProperty.Value -isnot [string] -or
                 $severityProperty.Value -notin @('warning', 'error')) {
+                if ($RedactTestValues -and -not (Test-AvmIssuePresented -Issue $issue)) {
+                    $messageProperty = $issue.PSObject.Properties['Message']
+                    $codeProperty = $issue.PSObject.Properties['Code']
+                    $message = if ($null -ne $messageProperty) { [string]$messageProperty.Value } else { [string]$issue }
+                    $message = ConvertTo-AvmSafeTestDiagnostic -Message $message
+                    if ($null -ne $codeProperty -and $codeProperty.Value) { $message = '[{0}] {1}' -f $codeProperty.Value, $message }
+                    Write-AvmLog $message -Level Info
+                    Register-AvmPresentedIssue -Issue $issue
+                    continue
+                }
                 if ((Test-AvmVerboseEnabled) -and -not (Test-AvmIssuePresented -Issue $issue)) {
                     foreach ($line in @(ConvertTo-AvmIssueLine -Result ([pscustomobject]@{ Issues = @($issue) }) -Indent '  ')) {
                         Write-AvmLog $line -Level Verbose
@@ -52,6 +76,10 @@ function Write-AvmStepDiagnostic {
             ) -Compress
             if ($Presented.Add($key) -and -not (Test-AvmIssuePresented -Issue $issue)) {
                 $message = [string]$fields.Message
+                if ($RedactTestValues) {
+                    $message = ConvertTo-AvmSafeTestDiagnostic -Message $message
+                }
+
                 $code = [string]$fields.Code
                 if ($code) { $message = '[{0}] {1}' -f $code, $message }
                 Write-AvmLog -Message $message -Level $severity `

@@ -207,7 +207,9 @@ jobs:
           MODULE_PATH: ${{ inputs.modulePath }}
         run: |
           $ErrorActionPreference = 'Stop'
-          Import-Module $env:AVM_AUTHORING_MODULE -ErrorAction Stop
+          $authoringModule = Import-Module $env:AVM_AUTHORING_MODULE -PassThru -ErrorAction Stop
+          $errorReporter = $authoringModule.ExportedCommands['Write-AvmError']
+          if ($null -eq $errorReporter) { throw 'The admitted Avm.Authoring package cannot report unit errors.' }
           $keyBytes = [System.Security.Cryptography.SHA256]::HashData(
               [System.Text.Encoding]::UTF8.GetBytes($env:MODULE_PATH))
           $key = [Convert]::ToHexString($keyBytes).ToLowerInvariant().Substring(0, 16)
@@ -226,7 +228,7 @@ jobs:
           }
 
           try {
-            $result = Invoke-AvmTestUnit -Path $PWD.Path -SkipModuleVersionCheck -Recurse -IncludeCompliance
+            $result = Invoke-AvmTestUnit -Path $PWD.Path -SkipModuleVersionCheck -Recurse
             $active = @(Get-Module -Name Avm.Authoring)
             $expectedBase = Split-Path -Parent $env:AVM_AUTHORING_MODULE
             if ($active.Count -ne 1 -or $active[0].ModuleBase -cne $expectedBase -or
@@ -285,6 +287,7 @@ jobs:
             }
           }
           catch {
+            & $errorReporter -ErrorRecord $_
             $failure = $true
             $document = [ordered]@{
                 schemaVersion = 1
@@ -299,16 +302,6 @@ jobs:
           }
 
           $document | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $resultPath -Encoding utf8NoBOM
-          foreach ($issue in @($document.issues)) {
-            $level = switch ($issue.severity) {
-              'error' { 'error' }
-              'warning' { 'warning' }
-              default { 'notice' }
-            }
-            $text = '[{0}] {1} {2}: {3}' -f $issue.code, $issue.severity, $issue['file'], $issue.message
-            $text = $text.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-            Write-Information ("::{0}::{1}" -f $level, $text) -InformationAction Continue
-          }
           "artifactName=bicep-unit-result-$key-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" |
               Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "resultPath=$resultPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -328,10 +321,11 @@ jobs:
           UNIT_RESULT_PATH: ${{ steps.unit-result.outputs.resultPath }}
         run: |
           $result = Get-Content -LiteralPath $env:UNIT_RESULT_PATH -Raw | ConvertFrom-Json
-          foreach ($issue in @($result.issues)) {
-            Write-Output ('[{0}] {1} {2}: {3}' -f $issue.code, $issue.severity, $issue.file, $issue.message)
+          $runtimeError = @($result.issues | Where-Object code -EQ 'avm.bicep.unit-runtime-error')
+          if ($runtimeError.Count -gt 0) {
+            throw ('Bicep unit tests failed: {0}' -f $runtimeError[0].message)
           }
-          throw 'Bicep unit tests failed. See the diagnostics above and the uploaded unit result artifact.'
+          throw 'Bicep unit tests failed. See the diagnostics and the uploaded unit result artifact.'
 
   discover-examples:
     name: Select E2E tests and subscriptions

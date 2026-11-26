@@ -96,8 +96,8 @@ function Assert-AvmCleanFailure {
         F24/F89: every AvmException subclass carries an actionable message. The
         dispatcher attaches that message to an ErrorRecord whose exception stays
         typed for callers, then raises it from a source-free script block in the
-        current scope. Uncaught errors therefore render once without a module
-        source line and terminate the hosting process; caught errors emit nothing.
+        current         scope. Uncaught errors therefore render without a module source line
+        and terminate the hosting process.
     #>
     [CmdletBinding()]
     param(
@@ -113,13 +113,17 @@ function Assert-AvmCleanFailure {
 
     $isModuleVersionFailure = $Exception -is [AvmModuleVersionException]
     $detail = $Exception.Message.Replace("`r", ' ').Replace("`n", ' ')
-    $summary = if ($isModuleVersionFailure) {
+    $alreadyPresented = Test-AvmIssuePresented -Issue $Exception
+    $summary = if ($alreadyPresented) {
+        'avm {0} failed.' -f $Verb
+    }
+    elseif ($isModuleVersionFailure) {
         "Avm.Authoring $($Exception.CurrentVersion) is outdated. Version $($Exception.LatestVersion) is required to run 'avm $Verb'.`n`n$($Exception.Message)"
     }
     else {
         'avm {0} failed: {1}' -f $Verb, $detail
     }
-    if (Test-AvmGitHubActionsContext) {
+    if ((Test-AvmGitHubActionsContext) -and -not $alreadyPresented) {
         Write-AvmLog $summary.Replace("`r", ' ').Replace("`n", ' ') -Level Error
     }
 

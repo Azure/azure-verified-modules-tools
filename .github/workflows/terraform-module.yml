@@ -16,7 +16,6 @@
 #         id-token: write
 #         contents: read
 #         issues: read
-#         checks: write
 #         pull-requests: write
 #       secrets: inherit
 #
@@ -290,7 +289,6 @@ jobs:
     permissions:
       id-token: write
       contents: read
-      checks: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -405,9 +403,6 @@ jobs:
 
       - name: PR check
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          AVM_GITHUB_CHECK_RUN_ID: ${{ job.check_run_id }}
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module (Join-Path $env:RUNNER_TEMP 'avm-authoring' 'Avm.Authoring.psd1') -ErrorAction Stop
