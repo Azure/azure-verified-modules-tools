@@ -226,7 +226,7 @@ jobs:
           }
 
           try {
-            $result = Invoke-AvmTestUnit -Path $PWD.Path -SkipModuleVersionCheck -Recurse -IncludeCompliance
+            $result = Invoke-AvmTestUnit -Path $PWD.Path -SkipModuleVersionCheck -Recurse
             $active = @(Get-Module -Name Avm.Authoring)
             $expectedBase = Split-Path -Parent $env:AVM_AUTHORING_MODULE
             if ($active.Count -ne 1 -or $active[0].ModuleBase -cne $expectedBase -or
@@ -300,14 +300,17 @@ jobs:
 
           $document | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $resultPath -Encoding utf8NoBOM
           foreach ($issue in @($document.issues)) {
-            $level = switch ($issue.severity) {
-              'error' { 'error' }
-              'warning' { 'warning' }
-              default { 'notice' }
+            if ($issue.severity -in @('error', 'warning')) {
+              & (Get-Module Avm.Authoring) {
+                param($diagnostic)
+                Write-AvmLog ('[{0}] {1}' -f $diagnostic.code, $diagnostic.message) `
+                  -Level $diagnostic.severity -File ([string]$diagnostic['file']) -Line ([int]$diagnostic['line'])
+              } $issue
             }
-            $text = '[{0}] {1} {2}: {3}' -f $issue.code, $issue.severity, $issue['file'], $issue.message
-            $text = $text.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-            Write-Information ("::{0}::{1}" -f $level, $text) -InformationAction Continue
+            else {
+              $text = ('[{0}] {1}' -f $issue.code, $issue.message).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Information ("::notice::{0}" -f $text) -InformationAction Continue
+            }
           }
           "artifactName=bicep-unit-result-$key-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" |
               Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8

@@ -301,7 +301,4 @@ function Invoke-Avm {
         if ($dispatchCompleted) { throw }
         Assert-AvmCleanFailure -Verb $verbPath -Exception $_.Exception
     }
-    finally {
-        Send-AvmGitHubDiagnosticOverflow
-    }
 }

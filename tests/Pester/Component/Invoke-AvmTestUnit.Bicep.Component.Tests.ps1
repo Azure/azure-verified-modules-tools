@@ -90,7 +90,8 @@ Describe 'Component: Bicep Pester unit tier' -Tag 'Component' {
         $failureRun = @($workflow.jobs.'unit-test'.steps | Where-Object name -EQ 'Report failed unit tests')[0].run
         $saved = @{}
         foreach ($name in @('RUNNER_TEMP', 'GITHUB_OUTPUT', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT',
-                'MODULE_PATH', 'UNIT_RESULT_PATH', 'AVM_AUTHORING_MODULE', 'AVM_AUTHORING_ARTIFACT_MANIFEST_SHA256')) {
+                'MODULE_PATH', 'UNIT_RESULT_PATH', 'AVM_AUTHORING_MODULE', 'AVM_AUTHORING_ARTIFACT_MANIFEST_SHA256',
+                'GITHUB_ACTIONS', 'GITHUB_STEP_SUMMARY', 'GITHUB_WORKSPACE')) {
             $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
         }
         $previousLocation = $PWD.Path
@@ -99,6 +100,9 @@ Describe 'Component: Bicep Pester unit tier' -Tag 'Component' {
             $env:GITHUB_OUTPUT = Join-Path $TestDrive 'github-output'
             $env:GITHUB_RUN_ID = '123'
             $env:GITHUB_RUN_ATTEMPT = '1'
+            $env:GITHUB_ACTIONS = 'true'
+            $env:GITHUB_STEP_SUMMARY = Join-Path $TestDrive 'hosted-summary.md'
+            $env:GITHUB_WORKSPACE = $emptyRoot
             $env:MODULE_PATH = 'avm/res/mock/widget'
             $env:AVM_AUTHORING_MODULE = Join-Path (Get-Module Avm.Authoring).ModuleBase 'Avm.Authoring.psd1'
             $env:AVM_AUTHORING_ARTIFACT_MANIFEST_SHA256 = (
@@ -157,15 +161,19 @@ Describe 'Component: Bicep Pester unit tier' -Tag 'Component' {
             $env:MODULE_PATH = 'avm/res/mock/reported-issues'
             Mock Invoke-AvmTestUnit { $script:reportedUnitResult }
             $information = @(. ([scriptblock]::Create($unitRun)) 6>&1 | ForEach-Object { [string]$_ })
-            $information | Should -Contain '::error::[avm.bicep.json-stale] error main.json: Expected <value>, but got <value>.'
-            $information | Should -Contain '::warning::[avm.bicep.example-warning] warning main.bicep: Quota is 20%25 full.'
-            $information | Should -Contain '::notice::[avm.bicep.example-info] info main.bicep: Advisory information.'
+            $information | Should -Contain '::error file=main.json,line=1::[avm.bicep.json-stale] Expected <value>, but got <value>. (main.json, line 1)'
+            $information | Should -Contain '::warning file=main.bicep,line=2::[avm.bicep.example-warning] Quota is 20%25 full. (main.bicep, line 2)'
+            $information | Should -Contain '::notice::[avm.bicep.example-info] Advisory information.'
             ($information -join "`n") | Should -Not -Match 'sensitive-expected|sensitive-actual'
+            $summary = Get-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Raw
+            $summary | Should -Match 'avm\\\.bicep\\\.json\\-stale'
+            $summary | Should -Match 'Quota is 20% full'
+            $summary | Should -Not -Match 'sensitive-expected|sensitive-actual'
 
             $env:MODULE_PATH = 'avm/res/mock/failed-unit'
             Mock Invoke-AvmTestUnit { $script:failedUnitResult }
             $information = @(. ([scriptblock]::Create($unitRun)) 6>&1 | ForEach-Object { [string]$_ })
-            ($information -join "`n") | Should -Match '::error::\[avm\.bicep\.pester-failed\].*Bicep module\.fails:'
+            ($information -join "`n") | Should -Match '::error.*::\[avm\.bicep\.pester-failed\].*Bicep module\.fails:'
             ($information -join "`n") | Should -Match 'Expected'
             $failedKey = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
                     [Text.Encoding]::UTF8.GetBytes($env:MODULE_PATH))).ToLowerInvariant().Substring(0, 16)

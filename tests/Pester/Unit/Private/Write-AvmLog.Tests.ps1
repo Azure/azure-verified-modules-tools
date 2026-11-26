@@ -44,12 +44,7 @@ Describe 'Write-AvmLog' {
         $env:GITHUB_REPOSITORY = ''
         $env:AVM_GITHUB_CHECK_RUN_ID = ''
         $env:GITHUB_STEP_SUMMARY = ''
-        InModuleScope 'Avm.Authoring' {
-            $script:AvmNestedCommandDepth = 0
-            $script:AvmGitHubDiagnosticCounts.Warning = 0
-            $script:AvmGitHubDiagnosticCounts.Error = 0
-            $script:AvmGitHubDiagnosticOverflow.Clear()
-        }
+        InModuleScope 'Avm.Authoring' { $script:AvmNestedCommandDepth = 0 }
     }
 
     Context 'outside GitHub Actions' {
@@ -278,33 +273,28 @@ Describe 'Write-AvmLog' {
             }
         }
 
-        It 'keeps every overflow output line command-safe and retains the original API diagnostic for <Level>' -ForEach @(
+        It 'emits every <Level> as a command and records it in the summary' -ForEach @(
             @{ Level = 'Warning' }
             @{ Level = 'Error' }
         ) {
-            $env:GH_TOKEN = 'fixture-token'
-            $env:GITHUB_REPOSITORY = 'Azure/example'
-            $env:AVM_GITHUB_CHECK_RUN_ID = '123'
+            $env:GITHUB_STEP_SUMMARY = Join-Path $TestDrive "$Level-diagnostics.md"
             InModuleScope 'Avm.Authoring' -Parameters @{ Level = $Level } {
                 param($Level)
-                $script:overflowBody = $null
-                Mock Invoke-AvmGitHubApi {
-                    if ($Method -eq 'PATCH') { $script:overflowBody = $Body }
-                    return @{}
-                }
+                Mock Invoke-AvmGitHubApi { throw 'Checks API must not be called.' }
                 1..10 | ForEach-Object { Write-AvmLog "earlier $_" -Level $Level 6>$null }
                 $message = "first line %0A`r`n::error::injected command`r::warning::also injected ##[error]legacy"
                 $records = @()
                 Write-AvmLog $message -Level $Level -File 'main.bicep' -Line 3 -InformationVariable records
-                $lines = ([string]$records[0].MessageData) -split '\r\n|\r|\n'
-                $lines | Should -HaveCount 3
-                foreach ($line in $lines) { $line | Should -Match "^${Level}: " }
-                foreach ($line in $lines) { $line | Should -Not -Match '##\[' }
-                $script:AvmGitHubDiagnosticOverflow[0].Message | Should -BeExactly "$message (main.bicep, line 3)"
-                Send-AvmGitHubDiagnosticOverflow
-                $script:overflowBody.output.annotations[0].message |
-                    Should -BeExactly "$message (main.bicep, line 3)"
+                $command = [string]$records[0].MessageData
+                $command | Should -Match ("^::{0} file=main\.bicep,line=3::" -f $Level.ToLowerInvariant())
+                $command | Should -Not -Match "[`r`n]"
+                $command | Should -Match '%0A::error::injected command'
+                Should -Invoke Invoke-AvmGitHubApi -Exactly 0
             }
+            $summary = @(Get-Content -LiteralPath $env:GITHUB_STEP_SUMMARY)
+            $summary | Should -HaveCount 11
+            $summary[0] | Should -BeExactly "- **$($Level.ToLowerInvariant()):** earlier 1"
+            $summary[10] | Should -Match 'first line %0A.*injected command.*main\\\.bicep'
         }
 
         It 'anchors module-relative and repository-relative paths without concealing outside-workspace diagnostics' {
@@ -331,11 +321,9 @@ Describe 'Write-AvmLog' {
                     $outside = [IO.Path]::GetFullPath((Join-Path $Workspace '..' 'outside.bicep')).Replace('\', '/')
                     ConvertTo-AvmAnnotationPath '../../../../outside.bicep' | Should -BeExactly $outside
                     ConvertTo-AvmAnnotationPath $outside | Should -BeExactly $outside
-                    1..10 | ForEach-Object { Write-AvmLog "earlier $_" -Level Error 6>$null }
-                    Write-AvmLog 'overflow' -Level Error -File 'main.bicep' -Line 9 6>$null
-                    $script:AvmGitHubDiagnosticOverflow[0].File | Should -BeExactly 'avm/res/sample/main.bicep'
-                    $script:AvmGitHubDiagnosticOverflow[0].Message |
-                        Should -BeExactly 'overflow (avm/res/sample/main.bicep, line 9)'
+                    Write-AvmLog 'located' -Level Error -File 'main.bicep' -Line 9 -InformationVariable records
+                    [string]$records[-1].MessageData |
+                        Should -BeExactly '::error file=avm/res/sample/main.bicep,line=9::located (avm/res/sample/main.bicep, line 9)'
                 }
             }
             finally {
@@ -447,82 +435,6 @@ Describe 'Write-AvmLog' {
             @($messages) | Should -Contain '::error file=main.tf::file only (main.tf)'
         }
 
-        It 'publishes overflow diagnostics through the Checks API in batches of 50' {
-            $env:GH_TOKEN = 'fixture-token'
-            $env:GITHUB_REPOSITORY = 'Azure/example'
-            $env:AVM_GITHUB_CHECK_RUN_ID = '123'
-            $calls = InModuleScope 'Avm.Authoring' {
-                $script:AvmGitHubApiCalls = [System.Collections.Generic.List[object]]::new()
-                Mock Invoke-AvmGitHubApi {
-                    $script:AvmGitHubApiCalls.Add([pscustomobject]@{
-                        Endpoint = $Endpoint
-                        Method   = $Method
-                        Body     = $Body
-                    })
-                    return @{ output = @{ title = 'PR check'; summary = 'Existing check output.' } }
-                }
-
-                for ($index = 1; $index -le 71; $index++) {
-                    Write-AvmLog -Message "diagnostic $index" -Level Warning `
-                        -File "avm/tests/$index.ps1" -Line $index -Column 2 6>$null
-                }
-                Send-AvmGitHubDiagnosticOverflow
-                @($script:AvmGitHubApiCalls.ToArray())
-            }
-
-            $patches = @($calls | Where-Object Method -EQ 'PATCH')
-            @($patches).Count | Should -Be 2
-            @($patches[0].Body.output.annotations).Count | Should -Be 50
-            @($patches[1].Body.output.annotations).Count | Should -Be 11
-            $patches[0].Body.output.title | Should -BeExactly 'PR check'
-            $patches[0].Body.output.summary | Should -BeExactly 'Existing check output.'
-            $patches[0].Body.output.annotations[0].message |
-                Should -BeExactly 'diagnostic 11 (avm/tests/11.ps1, line 11, column 2)'
-            $patches[0].Body.output.annotations[0].path | Should -BeExactly 'avm/tests/11.ps1'
-            $patches[0].Body.output.annotations[0].start_column | Should -Be 2
-        }
-
-        It 'writes overflow diagnostics to the step summary when Checks API access is unavailable' {
-            $env:GITHUB_STEP_SUMMARY = Join-Path $TestDrive 'diagnostics.md'
-            InModuleScope 'Avm.Authoring' {
-                Mock Invoke-AvmGitHubApi { throw 'Checks API must not be called without a token.' }
-                for ($index = 1; $index -le 11; $index++) {
-                    Write-AvmLog -Message "diagnostic $index" -Level Error `
-                        -File 'avm/main.tf' -Line $index 6>$null
-                }
-                Send-AvmGitHubDiagnosticOverflow
-            }
-
-            $summary = Get-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Raw
-            $summary | Should -Match 'Additional AVM diagnostics'
-            $summary | Should -Match 'Checks API access was unavailable'
-            $summary | Should -Match 'diagnostic 11'
-            $summary | Should -Match 'avm/main\\\.tf'
-            $summary | Should -Match 'line 11'
-        }
-
-        It 'falls back to the step summary when the Checks API rejects the token' {
-            $env:GH_TOKEN = 'fixture-token'
-            $env:GITHUB_REPOSITORY = 'Azure/example'
-            $env:AVM_GITHUB_CHECK_RUN_ID = '123'
-            $env:GITHUB_STEP_SUMMARY = Join-Path $TestDrive 'forbidden-diagnostics.md'
-            InModuleScope 'Avm.Authoring' {
-                Mock Invoke-AvmGitHubApi {
-                    throw [AvmGitHubException]::new('Resource not accessible by integration', 403)
-                }
-                for ($index = 1; $index -le 11; $index++) {
-                    Write-AvmLog -Message "diagnostic $index" -Level Warning `
-                        -File 'avm/main.bicep' -Line $index 6>$null
-                }
-                Send-AvmGitHubDiagnosticOverflow
-            }
-
-            $summary = Get-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Raw
-            $summary | Should -Match 'HTTP 403'
-            $summary | Should -Match 'diagnostic 11'
-            $summary | Should -Match 'avm/main\\\.bicep'
-            $summary | Should -Match 'line 11'
-        }
     }
 
     Context 'group markers outside GitHub Actions' {
