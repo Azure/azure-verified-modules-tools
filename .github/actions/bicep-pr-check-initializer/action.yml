@@ -55,6 +55,16 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Read current pull request labels
+      if: >-
+        github.event_name == 'pull_request' &&
+        github.repository == 'Azure/bicep-registry-modules' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        contains(fromJSON('["opened","reopened","synchronize","edited","labeled","unlabeled"]'), github.event.action)
+      id: labels
+      uses: Azure/azure-verified-modules-tools/.github/actions/pull-request-labels@f336012d8b69f57ae65193f8a5c79141660078c5
+      with:
+        pullRequestNumber: ${{ github.event.pull_request.number }}
     - name: Gate Bicep check event
       id: gate
       shell: pwsh
@@ -63,7 +73,7 @@ runs:
         REPOSITORY: ${{ github.repository }}
         HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
         EVENT_ACTION: ${{ github.event.action }}
-        PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        PR_LABELS: ${{ steps.labels.outputs.names || '[]' }}
         DEPLOYMENT_VALIDATION: ${{ inputs.deploymentValidation }}
       run: |
         $ErrorActionPreference = 'Stop'

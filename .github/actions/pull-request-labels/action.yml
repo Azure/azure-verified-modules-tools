@@ -1,0 +1,43 @@
+name: Read pull request labels
+description: Read the current labels on a pull request.
+inputs:
+  pullRequestNumber:
+    description: Pull request number.
+    required: true
+outputs:
+  names:
+    description: JSON array containing all current label names.
+    value: ${{ steps.labels.outputs.names }}
+runs:
+  using: composite
+  steps:
+    - name: Read current pull request labels
+      id: labels
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+      env:
+        PR_NUMBER: ${{ inputs.pullRequestNumber }}
+      with:
+        script: |
+          const rawNumber = process.env.PR_NUMBER;
+          if (!/^[1-9]\d*$/.test(rawNumber)) throw new Error(`Invalid pull request number '${rawNumber}'.`);
+          const number = Number(rawNumber);
+          if (!Number.isSafeInteger(number)) throw new Error(`Pull request number '${rawNumber}' is out of range.`);
+          let labels;
+          try {
+            labels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: number,
+              per_page: 100
+            });
+          } catch (error) {
+            throw new Error(`Failed to read current labels for ${context.repo.owner}/${context.repo.repo}#${number}: ${error.message}`);
+          }
+          if (!Array.isArray(labels)) throw new Error(`GitHub returned an invalid label collection for pull request #${number}.`);
+          const names = labels.map((label, index) => {
+            if (!label || typeof label.name !== 'string' || !label.name) {
+              throw new Error(`GitHub returned an invalid label at index ${index} for pull request #${number}.`);
+            }
+            return label.name;
+          });
+          core.setOutput('names', JSON.stringify(names));
