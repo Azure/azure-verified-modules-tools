@@ -95,7 +95,7 @@ const github = {
     if (method === jobsEndpoint) {
       calls.push({ kind: 'jobs', options });
       if (fixture.apiErrorStage === 'jobs') throw new Error('jobs unavailable');
-      return clone(fixture.jobs);
+      return clone(options.run_id === fixture.observerRunId ? fixture.jobs : (fixture.runJobs ?? []));
     }
     if (method === runsEndpoint) {
       calls.push({ kind: 'runs', options });
@@ -115,7 +115,7 @@ process.env.WORKFLOW_PATH = fixture.workflowPath;
 new AsyncFunction('github', 'core', 'context', script)(
   github,
   core,
-  { repo: { owner: 'Azure', repo: 'example-module' } }
+  { repo: { owner: 'Azure', repo: fixture.repository ?? 'example-module' } }
 )
   .then(() => process.stdout.write(JSON.stringify({ outputs, calls })))
   .catch(error => { process.stderr.write(error.message); process.exitCode = 1; });
@@ -317,6 +317,56 @@ Describe 'PR-check label rerun action' {
         $output = $result.StdOut | ConvertFrom-Json
         @($output.calls | Where-Object kind -EQ 'sleep') | Should -HaveCount 1
         @($output.calls | Where-Object kind -EQ 'rerun') | Should -HaveCount 1
+    }
+
+    It 'keeps the active <Ecosystem> run when it read labels after the observer started' -ForEach @(
+        @{
+            Ecosystem = 'Bicep'; Repository = 'bicep-registry-modules'
+            JobName = 'Initialize module checks'; StepName = 'Prepare module checks'
+        }
+        @{
+            Ecosystem = 'Terraform'; Repository = 'terraform-azurerm-avm-res-example'
+            JobName = 'run managed workflow / Discover E2E tests'; StepName = 'Read current pull request labels'
+        }
+    ) {
+        $fixture = New-PrCheckRerunFixture
+        $fixture.repository = $Repository
+        $fixture.observer.head_repository.full_name = "Azure/$Repository"
+        $fixture.runs[0].status = 'in_progress'
+        $fixture.runJobs = @([pscustomobject]@{
+                name = $JobName
+                steps = @([pscustomobject]@{
+                        name = $StepName; status = 'completed'; conclusion = 'success'
+                        started_at = '2026-11-26T10:00:01Z'
+                    })
+            })
+        $result = Invoke-PrCheckRerunScript -Fixture $fixture
+        $result.ExitCode | Should -Be 0
+        $output = $result.StdOut | ConvertFrom-Json
+        $output.outputs.outcome | Should -BeExactly 'already-observed'
+        @($output.calls | Where-Object kind -EQ 'rerun') | Should -HaveCount 0
+        @($output.calls | Where-Object kind -EQ 'sleep') | Should -HaveCount 0
+    }
+
+    It 'reruns when the Bicep initializer cannot prove it read labels after the observer started' -ForEach @(
+        @{ StartedAt = '2026-11-26T09:59:59Z'; Conclusion = 'success' }
+        @{ StartedAt = '2026-11-26T10:00:00Z'; Conclusion = 'success' }
+        @{ StartedAt = '2026-11-26T10:00:01Z'; Conclusion = 'failure' }
+    ) {
+        $fixture = New-PrCheckRerunFixture
+        $fixture.repository = 'bicep-registry-modules'
+        $fixture.observer.head_repository.full_name = 'Azure/bicep-registry-modules'
+        $fixture.runJobs = @([pscustomobject]@{
+                name = 'Initialize module checks'
+                steps = @([pscustomobject]@{
+                        name = 'Prepare module checks'; status = 'completed'; conclusion = $Conclusion
+                        started_at = $StartedAt
+                    })
+            })
+        $result = Invoke-PrCheckRerunScript -Fixture $fixture
+        $result.ExitCode | Should -Be 0
+        $output = $result.StdOut | ConvertFrom-Json
+        $output.outputs.outcome | Should -BeExactly 'rerun-requested'
     }
 
     It 'waits for an older active run before accepting a newer observed attempt' {

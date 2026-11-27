@@ -301,7 +301,7 @@ The reporting job does not check out or execute PR code.
 
 Repository sync requires `run managed workflow / Report check status` from
 GitHub Actions on the default branch. The managed caller must retain the
-display name `run managed workflow` and the label-triggered events.
+display name `run managed workflow` and the label observer and rerun workflows.
 
 Terraform test environments do not require reviewers. Environment names,
 resource addresses, OIDC federation and pull-request review rules are unchanged.

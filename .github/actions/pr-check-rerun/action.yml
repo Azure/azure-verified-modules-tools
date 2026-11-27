@@ -221,6 +221,35 @@ runs:
             return runs.filter(run => matchesPullRequest(run, pullRequest)).sort(compareRuns);
           }
 
+          async function hasObservedLabels(run, observerStartedAt) {
+            const bicep = `${owner}/${repo}` === 'Azure/bicep-registry-modules';
+            const terraform = owner === 'Azure' && /^terraform-[a-z0-9]+-avm-(res|ptn|utl)-/.test(repo);
+            if (!bicep && !terraform) return false;
+            const jobs = await request(
+              `Failed to list jobs for PR-check run ${run.id}`,
+              () => github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+                owner,
+                repo,
+                run_id: Number(run.id),
+                filter: 'latest',
+                per_page: 100
+              })
+            );
+            if (!Array.isArray(jobs)) {
+              throw new Error(`GitHub returned an invalid job collection for PR-check run ${run.id}.`);
+            }
+            const initializers = jobs.filter(job =>
+              bicep ? job.name === 'Initialize module checks' : job.name.endsWith(' / Discover E2E tests')
+            );
+            if (initializers.length !== 1 || !Array.isArray(initializers[0].steps)) return false;
+            const stepName = bicep ? 'Prepare module checks' : 'Read current pull request labels';
+            const steps = initializers[0].steps.filter(step => step.name === stepName);
+            return steps.length === 1 &&
+              steps[0].status === 'completed' &&
+              steps[0].conclusion === 'success' &&
+              parseDate(steps[0].started_at, `PR-check run ${run.id} initializer start time`) > observerStartedAt;
+          }
+
           function matchesPullRequest(run, pullRequest) {
             if (run.event !== 'pull_request' ||
                 run.path !== workflowPath ||
@@ -310,12 +339,14 @@ runs:
             );
             const activeRuns = matchingRuns.filter(run => run.status !== 'completed');
             const olderActiveRuns = activeRuns.filter(run =>
+              String(run.id) !== String(latestRun.id) &&
               parseDate(run.run_started_at, `workflow run ${run.id} start time`) < observerStartedAt
             );
-            if (latestRunStartedAt >= observerStartedAt && olderActiveRuns.length === 0) {
+            const observedLabels = latestRunStartedAt >= observerStartedAt ||
+              await hasObservedLabels(latestRun, observerStartedAt);
+            if (observedLabels && olderActiveRuns.length === 0) {
               core.info(
-                `PR-check run ${latestRun.id} already started after the observer event at ` +
-                `${latestRun.run_started_at}; no additional rerun is needed.`
+                `PR-check run ${latestRun.id} already observed the label event; no additional rerun is needed.`
               );
               finish('already-observed', String(latestRun.id));
               return;
@@ -325,12 +356,6 @@ runs:
               await new Promise(resolve => setTimeout(resolve, pollIntervalMilliseconds));
               continue;
             }
-            if (latestRunStartedAt >= observerStartedAt) {
-              core.info(`PR-check run ${latestRun.id} completed after the observer event; no additional rerun is needed.`);
-              finish('already-observed', String(latestRun.id));
-              return;
-            }
-
             const verifiedPullRequest = await getLivePullRequest(expectedPullRequest);
             if (!verifiedPullRequest) {
               finish('head-changed');
