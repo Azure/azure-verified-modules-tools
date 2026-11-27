@@ -1203,12 +1203,12 @@ Describe 'Release workflow' {
         $script:release = Get-Content -LiteralPath $releasePath -Raw
     }
 
-    It 'runs on a schedule and has a required manual release-tag fallback' {
+    It 'runs on a schedule and allows manual runs without a release tag' {
         $script:release | Should -Match '(?m)^  schedule:\r?$'
         $script:release | Should -Match '(?m)^  workflow_dispatch:\r?$'
         $script:release | Should -Match '(?ms)^      release_tag:\r?\n' +
             '        description: .+\r?\n' +
-            '        required: true\r?\n' +
+            '        required: false\r?\n' +
             '        type: string\r?$'
     }
 
