@@ -163,7 +163,9 @@ function Invoke-AvmBicepNativeTestCase {
                         elseif ($pinned.Count -eq 1) { $selectedLocation = $pinned[0] }
                         else {
                             $selection = Get-AvmBicepResourceLocation -ResourceType $Item.ResourceType `
-                                -MetadataLocation $executionOptions.Location -UnavailableRegions $unavailableRegions
+                                -MetadataLocation $executionOptions.Location -UnavailableRegions $unavailableRegions `
+                                -AzPath $executionOptions.AzPath -SubscriptionId $Item.SubscriptionId `
+                                -WorkingDirectory $executionOptions.RepositoryRoot
                             $selectedLocation = $selection.Location
                             $groupCanRelocate = -not $selection.IsGlobal
                         }
@@ -179,6 +181,7 @@ function Invoke-AvmBicepNativeTestCase {
                     $validated = Test-AvmBicepNativeDeployment -DeploymentInput $options -SubscriptionId $Item.SubscriptionId `
                         -TemplateContent $attemptInput.TemplateContent -ResourceType $Item.ResourceType `
                         -ResourceLocation $selectedLocation -TokenResourceLocation $Item.TokenResourceLocation `
+                        -AzPath $executionOptions.AzPath -WorkingDirectory $executionOptions.RepositoryRoot `
                         -ParameterResourceLocationToken:($references.Contains('resourceLocation')) `
                         -UnavailableRegions $unavailableRegions -RetryLimit $executionOptions.ValidationRetryLimit
                     $validatingDeployment = $false

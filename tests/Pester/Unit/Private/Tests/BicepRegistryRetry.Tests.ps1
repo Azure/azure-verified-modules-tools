@@ -5,15 +5,6 @@ BeforeAll {
     $moduleRoot = Join-Path $PSScriptRoot '..' '..' '..' '..' '..' 'src' 'Avm.Authoring'
     & (Join-Path $PSScriptRoot '..' '..' '..' 'Import-AvmTestModule.ps1') `
         -SourceManifest (Join-Path $moduleRoot 'Avm.Authoring.psd1')
-    & (Get-Module Avm.Authoring) {
-        foreach ($name in @('Get-AzResourceProvider', 'Get-AzLocation')) {
-            Set-Item -Path "Function:script:$name" -Value {
-                [CmdletBinding()]
-                param($ProviderNamespace)
-                throw "Unexpected Azure call: $($MyInvocation.MyCommand.Name)"
-            }
-        }
-    }
 }
 AfterAll { Remove-Module Avm.Authoring -Force -ErrorAction SilentlyContinue }
 
@@ -98,21 +89,31 @@ Describe 'Bicep registry metadata timeout retries' {
             param($FailedRead)
             $script:providerReads = 0
             $script:locationReads = 0
-            Mock Get-AzResourceProvider {
-                $script:providerReads++
-                if ($script:providerReads -eq 1 -and $FailedRead -in @('provider', 'both')) {
-                    throw [TimeoutException]::new('Provider read timed out.')
+            Mock Invoke-AvmProcess {
+                if ($ArgumentList[0] -eq 'provider') {
+                    $script:providerReads++
+                    if ($script:providerReads -eq 1 -and $FailedRead -in @('provider', 'both')) {
+                        throw [TimeoutException]::new('Provider read timed out.')
+                    }
+                    $body = @{
+                        ProviderNamespace = 'Microsoft.Storage'
+                        ResourceTypes = @(@{ ResourceTypeName = 'storageAccounts'; Locations = @('East US') })
+                    }
                 }
-                @{ ProviderNamespace = 'Microsoft.Storage'; ResourceTypes = @(@{ ResourceTypeName = 'storageAccounts'; Locations = @('East US') }) }
-            }
-            Mock Get-AzLocation {
-                $script:locationReads++
-                if ($script:locationReads -eq 1 -and $FailedRead -in @('location', 'both')) {
-                    throw [TimeoutException]::new('Location read timed out.')
+                else {
+                    $script:locationReads++
+                    if ($script:locationReads -eq 1 -and $FailedRead -in @('location', 'both')) {
+                        throw [TimeoutException]::new('Location read timed out.')
+                    }
+                    $body = @(
+                        @{ Location = 'eastus'; DisplayName = 'East US'; RegionCategory = 'Recommended'; PairedRegion = 'westus' }
+                    )
                 }
-                @{ Location = 'eastus'; DisplayName = 'East US'; RegionCategory = 'Recommended'; PairedRegion = 'westus' }
+                [pscustomobject]@{ ExitCode = 0; StdOut = (ConvertTo-Json -InputObject $body -Depth 10); StdErr = '' }
             }
-            (Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Storage/storageAccounts' -MetadataLocation 'westus').Location |
+            (Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Storage/storageAccounts' `
+                    -MetadataLocation 'westus' -AzPath 'fake-az' `
+                    -SubscriptionId '00000000-0000-0000-0000-000000000001' -WorkingDirectory '.').Location |
                 Should -BeExactly 'eastus'
             $script:providerReads | Should -Be $(if ($FailedRead -in @('provider', 'both')) { 2 } else { 1 })
             $script:locationReads | Should -Be $(if ($FailedRead -in @('location', 'both')) { 2 } else { 1 })

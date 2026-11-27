@@ -21,8 +21,6 @@ function Get-AvmBicepAzureRequirement {
                 'Remove-AzResource'                    = @('ResourceId', 'Force')
                 'Get-AzResourceGroup'                  = @('Name')
                 'New-AzResourceGroup'                  = @('Name', 'Location', 'Tag')
-                'Get-AzResourceProvider'               = @('ProviderNamespace')
-                'Get-AzLocation'                       = @()
                 'Test-AzResourceGroupDeployment'       = @('ResourceGroupName', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt', 'Mode')
                 'Test-AzSubscriptionDeployment'        = @('Name', 'Location', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt')
                 'Test-AzManagementGroupDeployment'     = @('Name', 'Location', 'ManagementGroupId', 'TemplateFile', 'TemplateParameterObject', 'SkipTemplateParameterPrompt')
