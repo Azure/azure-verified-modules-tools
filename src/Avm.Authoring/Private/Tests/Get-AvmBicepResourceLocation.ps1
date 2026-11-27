@@ -10,7 +10,13 @@ function Get-AvmBicepResourceLocation {
 
         [string[]] $AllowedRegions,
 
-        [string[]] $ExcludedRegions
+        [string[]] $ExcludedRegions,
+
+        [string] $AzPath,
+
+        [string] $SubscriptionId,
+
+        [string] $WorkingDirectory
     )
 
     Set-StrictMode -Version 3.0
@@ -24,23 +30,62 @@ function Get-AvmBicepResourceLocation {
     $allowed = @($AllowedRegions | ForEach-Object { ($_ -replace '\s', '').ToLowerInvariant() })
     $candidates = @($allowed | Where-Object { $_ -notin $excluded -and -not [string]::IsNullOrWhiteSpace($_) })
     if (-not [string]::IsNullOrWhiteSpace($ResourceType)) {
+        if ([string]::IsNullOrWhiteSpace($AzPath) -or [string]::IsNullOrWhiteSpace($SubscriptionId) -or
+            [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+            throw [AvmConfigurationException]::new(
+                'Azure CLI resource-location discovery requires an executable, subscription and working directory.')
+        }
         if (-not (Test-AvmMetadataResourceType -CanonicalType $ResourceType)) {
             throw [AvmConfigurationException]::new('Automatic resource location selection requires a canonical ARM resource type.')
         }
         $providerName, $typeName = $ResourceType -split '/', 2
-        $providers = @(Invoke-AvmBicepRead -Activity "Read provider locations for $providerName" -Read {
-                Get-AzResourceProvider -ProviderNamespace $providerName -ErrorAction Stop
-            })
+        $provider = Invoke-AvmBicepRead -Activity "Read provider locations for $providerName" -Read {
+            $result = Invoke-AvmProcess -FilePath $AzPath -ArgumentList @(
+                'provider', 'show', '--namespace', $providerName,
+                '--subscription', $SubscriptionId,
+                '--query', '{ProviderNamespace:namespace,ResourceTypes:resourceTypes[].{ResourceTypeName:resourceType,Locations:locations}}',
+                '--output', 'json'
+            ) -WorkingDirectory $WorkingDirectory -TimeoutSec 60 -IgnoreExitCode
+            if ($result.ExitCode -ne 0) {
+                throw [AvmProcessException]::new((Add-AvmProcessFailureDetail `
+                            -Message "Cannot read provider locations for '$providerName'." `
+                            -StdOut ([string]$result.StdOut) -StdErr ([string]$result.StdErr)))
+            }
+            try {
+                ConvertFrom-AvmStrictJson -Json ([string]$result.StdOut) `
+                    -Description 'Azure CLI provider-location response' -RejectCaseInsensitiveDuplicates
+            }
+            catch [System.ArgumentException] {
+                throw [AvmProcessException]::new(
+                    "Azure CLI returned invalid provider-location JSON: $($_.Exception.Message)")
+            }
+        }
+        $providers = @($provider)
         $resourceTypes = @(
             foreach ($provider in $providers) {
+                if ($provider -isnot [System.Collections.IDictionary]) {
+                    throw [AvmProcessException]::new('Azure CLI returned a malformed provider metadata object.')
+                }
                 $namespace = Get-AvmPropertyValue -InputObject $provider -Name 'ProviderNamespace' -NoEnumerate
                 if ($namespace -isnot [string] -or $namespace -ine $providerName) {
                     throw [AvmProcessException]::new(
                         "Location metadata returned an unexpected provider namespace for '$providerName'.")
                 }
-                Get-AvmPropertyValue -InputObject $provider -Name 'ResourceTypes'
+                $types = Get-AvmPropertyValue -InputObject $provider -Name 'ResourceTypes' -NoEnumerate
+                if (-not $provider.Contains('ResourceTypes') -or $types -isnot [array]) {
+                    throw [AvmProcessException]::new('Azure CLI returned a malformed provider resource-type collection.')
+                }
+                $types
             }
         )
+        foreach ($type in $resourceTypes) {
+            if ($type -isnot [System.Collections.IDictionary] -or
+                -not $type.Contains('ResourceTypeName') -or
+                $type['ResourceTypeName'] -isnot [string] -or
+                -not $type.Contains('Locations') -or $type['Locations'] -isnot [array]) {
+                throw [AvmProcessException]::new('Azure CLI returned a malformed provider resource-type row.')
+            }
+        }
         $matchingTypes = @($resourceTypes | Where-Object {
                 (Get-AvmPropertyValue -InputObject $_ -Name 'ResourceTypeName') -eq $typeName
             })
@@ -72,10 +117,40 @@ function Get-AvmBicepResourceLocation {
         }
         if ($providerLocations.Count -gt 0) {
             $locations = Invoke-AvmBicepRead -Activity 'Read Azure location metadata' -Read {
-                Get-AzLocation -ErrorAction Stop
+                $result = Invoke-AvmProcess -FilePath $AzPath -ArgumentList @(
+                    'rest', '--method', 'get',
+                    '--url', "/subscriptions/$SubscriptionId/locations?api-version=2022-12-01",
+                    '--query', 'value[].{Location:name,DisplayName:displayName,PairedRegion:metadata.pairedRegion,RegionCategory:metadata.regionCategory}',
+                    '--output', 'json'
+                ) -WorkingDirectory $WorkingDirectory -TimeoutSec 60 -IgnoreExitCode
+                if ($result.ExitCode -ne 0) {
+                    throw [AvmProcessException]::new((Add-AvmProcessFailureDetail `
+                                -Message 'Cannot read Azure location metadata.' `
+                                -StdOut ([string]$result.StdOut) -StdErr ([string]$result.StdErr)))
+                }
+                try {
+                    $value = ConvertFrom-AvmStrictJson -Json ([string]$result.StdOut) `
+                        -Description 'Azure CLI location response' -AllowArray -RejectCaseInsensitiveDuplicates
+                    if ($value -isnot [array]) {
+                        throw [System.ArgumentException]::new(
+                            'Azure CLI location response must be a JSON array.')
+                    }
+                    return , $value
+                }
+                catch [System.ArgumentException] {
+                    throw [AvmProcessException]::new(
+                        "Azure CLI returned invalid location-metadata JSON: $($_.Exception.Message)")
+                }
             }
             $candidates = @(
                 foreach ($entry in $locations) {
+                    if ($entry -isnot [System.Collections.IDictionary] -or
+                        -not $entry.Contains('Location') -or $entry['Location'] -isnot [string] -or
+                        -not $entry.Contains('DisplayName') -or $entry['DisplayName'] -isnot [string] -or
+                        -not $entry.Contains('PairedRegion') -or
+                        -not $entry.Contains('RegionCategory') -or $entry['RegionCategory'] -isnot [string]) {
+                        throw [AvmProcessException]::new('Azure CLI returned a malformed location metadata row.')
+                    }
                     $location = [string](Get-AvmPropertyValue -InputObject $entry -Name 'Location')
                     $displayName = [string](Get-AvmPropertyValue -InputObject $entry -Name 'DisplayName')
                     $pairedRegion = Get-AvmPropertyValue -InputObject $entry -Name 'PairedRegion'

@@ -11,16 +11,6 @@ BeforeAll {
             param($VaultName, $Name)
             throw 'Unexpected Key Vault call.'
         }
-        function script:Get-AzResourceProvider {
-            [CmdletBinding()]
-            param($ProviderNamespace)
-            throw 'Unexpected provider call.'
-        }
-        function script:Get-AzLocation {
-            [CmdletBinding()]
-            param()
-            throw 'Unexpected location call.'
-        }
     }
 }
 
@@ -289,95 +279,156 @@ Describe 'Bicep workflow subscription pool' {
 Describe 'Bicep workflow resource location selection' {
     It 'selects deployment metadata without requiring resource metadata or an explicit location' {
         InModuleScope Avm.Authoring {
-            Mock Get-AzResourceProvider { throw 'Metadata selection must not inspect providers.' }
-            Mock Get-AzLocation { throw 'Metadata selection must not inspect locations.' }
+            Mock Invoke-AvmProcess { throw 'Metadata selection must not invoke Azure CLI.' }
 
             $actual = Get-AvmBicepResourceLocation -AllowedRegions @('centralus')
 
             $actual.Location | Should -Be 'centralus'
             $actual.IsGlobal | Should -BeFalse
-            Should -Invoke Get-AzResourceProvider -Exactly 0
-            Should -Invoke Get-AzLocation -Exactly 0
+            Should -Invoke Invoke-AvmProcess -Exactly 0
         }
     }
 
-    It 'queries the canonical provider explicitly and uses only supported allowed recommended paired regions' {
+    It 'queries the canonical provider and locations with exact CLI arguments and projected shape' {
         InModuleScope Avm.Authoring {
-            Mock Get-AzResourceProvider {
-                @{ ProviderNamespace = 'Microsoft.Storage'; ResourceTypes = @(@{
-                            ResourceTypeName = 'storageAccounts'
-                            Locations = @('East US', 'West Europe', 'Central US', 'Korea Central', 'Sweden Central')
-                        }) }
-            }
-            Mock Get-AzLocation {
-                @(
-                    @{ Location = 'eastus'; DisplayName = 'East US'; PairedRegion = '{}'; RegionCategory = 'Recommended' }
-                    @{ Location = 'westeurope'; DisplayName = 'West Europe'; PairedRegion = 'North Europe'; RegionCategory = 'Recommended' }
-                    @{ Location = 'centralus'; DisplayName = 'Central US'; PairedRegion = 'East US'; RegionCategory = 'Recommended' }
-                    @{ Location = 'koreacentral'; DisplayName = 'Korea Central'; PairedRegion = 'Korea South'; RegionCategory = 'Other' }
-                    @{ Location = 'swedencentral'; DisplayName = 'Sweden Central'; PairedRegion = 'Sweden South'; RegionCategory = 'Recommended' }
-                )
+            Mock Invoke-AvmProcess {
+                $body = if ($ArgumentList[0] -eq 'provider') {
+                    @{
+                        ProviderNamespace = 'Microsoft.Storage'
+                        ResourceTypes = @(@{
+                                ResourceTypeName = 'storageAccounts'
+                                Locations = @('East US', 'West Europe', 'Central US', 'Korea Central', 'Sweden Central')
+                            })
+                    }
+                }
+                elseif ($ArgumentList[0] -eq 'rest') {
+                    @(
+                        @{ Location = 'eastus'; DisplayName = 'East US'; PairedRegion = '{}'; RegionCategory = 'Recommended' }
+                        @{ Location = 'westeurope'; DisplayName = 'West Europe'; PairedRegion = 'North Europe'; RegionCategory = 'Recommended' }
+                        @{ Location = 'centralus'; DisplayName = 'Central US'; PairedRegion = 'East US'; RegionCategory = 'Recommended' }
+                        @{ Location = 'koreacentral'; DisplayName = 'Korea Central'; PairedRegion = 'Korea South'; RegionCategory = 'Other' }
+                        @{ Location = 'swedencentral'; DisplayName = 'Sweden Central'; PairedRegion = 'Sweden South'; RegionCategory = 'Recommended' }
+                    )
+                }
+                else {
+                    throw "Unexpected CLI command '$($ArgumentList -join ' ')'."
+                }
+                [pscustomobject]@{
+                    ExitCode = 0; StdOut = (ConvertTo-Json -InputObject $body -Depth 10); StdErr = ''
+                }
             }
             $actual = Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Storage/storageAccounts' `
-                -MetadataLocation 'westus' -UnavailableRegions 'Central US'
+                -MetadataLocation 'westus' -UnavailableRegions 'Central US' -AzPath 'fake-az' `
+                -SubscriptionId '00000000-0000-0000-0000-000000000001' -WorkingDirectory 'workspace'
             $actual.Location | Should -Be 'swedencentral'
             $actual.IsGlobal | Should -BeFalse
-            Should -Invoke Get-AzResourceProvider -Exactly 1 -ParameterFilter { $ProviderNamespace -eq 'Microsoft.Storage' }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $FilePath -ceq 'fake-az' -and $WorkingDirectory -ceq 'workspace' -and $TimeoutSec -eq 60 -and
+                $IgnoreExitCode -and ($ArgumentList -join '|') -ceq (
+                    'provider|show|--namespace|Microsoft.Storage|--subscription|' +
+                    '00000000-0000-0000-0000-000000000001|--query|' +
+                    '{ProviderNamespace:namespace,ResourceTypes:resourceTypes[].{ResourceTypeName:resourceType,Locations:locations}}' +
+                    '|--output|json')
+            }
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter {
+                $FilePath -ceq 'fake-az' -and $WorkingDirectory -ceq 'workspace' -and $TimeoutSec -eq 60 -and
+                $IgnoreExitCode -and ($ArgumentList -join '|') -ceq (
+                    'rest|--method|get|--url|' +
+                    '/subscriptions/00000000-0000-0000-0000-000000000001/locations?api-version=2022-12-01|--query|' +
+                    'value[].{Location:name,DisplayName:displayName,PairedRegion:metadata.pairedRegion,RegionCategory:metadata.regionCategory}' +
+                    '|--output|json')
+            }
         }
     }
 
     It 'uses the fixed metadata location for explicit global availability' {
         InModuleScope Avm.Authoring {
-            Mock Get-AzResourceProvider {
-                @{ ProviderNamespace = 'Microsoft.Authorization'; ResourceTypes = @(@{ ResourceTypeName = 'policyAssignments'; Locations = @('Global') }) }
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{
+                    ExitCode = 0
+                    StdOut = '{"ProviderNamespace":"Microsoft.Authorization","ResourceTypes":[{"ResourceTypeName":"policyAssignments","Locations":["Global"]}]}'
+                    StdErr = ''
+                }
             }
-            Mock Get-AzLocation { throw 'Global resources must not select another region.' }
             $actual = Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Authorization/policyAssignments' `
-                -MetadataLocation 'West US'
+                -MetadataLocation 'West US' -AzPath 'fake-az' `
+                -SubscriptionId '00000000-0000-0000-0000-000000000001' -WorkingDirectory '.'
             $actual.Location | Should -Be 'westus'
             $actual.IsGlobal | Should -BeTrue
-            Should -Invoke Get-AzLocation -Exactly 0
+            Should -Invoke Invoke-AvmProcess -Exactly 1 -ParameterFilter { $ArgumentList[0] -eq 'provider' }
+            Should -Invoke Invoke-AvmProcess -Exactly 0 -ParameterFilter { $ArgumentList[0] -eq 'rest' }
         }
     }
 
     It 'selects an allowed available region for an explicitly empty location list' {
         InModuleScope Avm.Authoring {
-            Mock Get-AzResourceProvider {
-                @{ ProviderNamespace = 'Microsoft.Authorization'; ResourceTypes = @(@{ ResourceTypeName = 'policyAssignments'; Locations = @() }) }
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{
+                    ExitCode = 0
+                    StdOut = '{"ProviderNamespace":"Microsoft.Authorization","ResourceTypes":[{"ResourceTypeName":"policyAssignments","Locations":[]}]}'
+                    StdErr = ''
+                }
             }
-            Mock Get-AzLocation { throw 'Empty provider locations must use the configured region list.' }
             $actual = Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Authorization/policyAssignments' `
                 -MetadataLocation 'West Europe' -AllowedRegions @('centralus', 'westeurope', 'swedencentral') `
-                -UnavailableRegions 'Sweden Central'
+                -UnavailableRegions 'Sweden Central' -AzPath 'fake-az' `
+                -SubscriptionId '00000000-0000-0000-0000-000000000001' -WorkingDirectory '.'
             $actual.Location | Should -BeExactly 'centralus'
             $actual.IsGlobal | Should -BeFalse
-            Should -Invoke Get-AzLocation -Exactly 0
+            Should -Invoke Invoke-AvmProcess -Exactly 1
             { Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Authorization/policyAssignments' `
                     -MetadataLocation 'West Europe' -AllowedRegions @('westeurope', 'swedencentral') `
-                    -UnavailableRegions 'swedencentral' } | Should -Throw -ExpectedMessage '*No supported*'
+                    -UnavailableRegions 'swedencentral' -AzPath 'fake-az' `
+                    -SubscriptionId '00000000-0000-0000-0000-000000000001' -WorkingDirectory '.' } |
+                Should -Throw -ExpectedMessage '*No supported*'
         }
     }
 
     It 'rejects absent provider location metadata rather than treating it as global' {
         InModuleScope Avm.Authoring {
-            Mock Get-AzResourceProvider { @{ ProviderNamespace = 'Microsoft.Storage'; ResourceTypes = @() } }
-            { Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Storage/storageAccounts' -MetadataLocation 'westus' } |
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{ ExitCode = 0; StdOut = '{"ProviderNamespace":"Microsoft.Storage","ResourceTypes":[]}'; StdErr = '' }
+            }
+            { Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Storage/storageAccounts' `
+                    -MetadataLocation 'westus' -AzPath 'fake-az' `
+                    -SubscriptionId '00000000-0000-0000-0000-000000000001' -WorkingDirectory '.' } |
                 Should -Throw -ExpectedMessage '*No location metadata*'
         }
     }
 
     It 'rejects malformed or missing provider locations rather than treating them as empty' {
         InModuleScope Avm.Authoring {
-            Mock Get-AzResourceProvider {
-                @{ ProviderNamespace = 'Microsoft.Authorization'; ResourceTypes = @(@{ ResourceTypeName = 'policyAssignments'; Locations = @(' ') }) }
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{
+                    ExitCode = 0
+                    StdOut = '{"ProviderNamespace":"Microsoft.Authorization","ResourceTypes":[{"ResourceTypeName":"policyAssignments","Locations":[" "]}]}'
+                    StdErr = ''
+                }
             }
             { Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Authorization/policyAssignments' -MetadataLocation 'westus' } |
-                Should -Throw -ExpectedMessage '*No location metadata*'
-            Mock Get-AzResourceProvider {
-                @{ ProviderNamespace = 'Microsoft.Authorization'; ResourceTypes = @(@{ ResourceTypeName = 'policyAssignments' }) }
+                Should -Throw -ExpectedMessage '*requires an executable*'
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{
+                    ExitCode = 0
+                    StdOut = '{"ProviderNamespace":"Microsoft.Authorization","ResourceTypes":[{"ResourceTypeName":"policyAssignments","Locations":[" "]}]}'
+                    StdErr = ''
+                }
             }
-            { Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Authorization/policyAssignments' -MetadataLocation 'westus' } |
+            { Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Authorization/policyAssignments' `
+                    -MetadataLocation 'westus' -AzPath 'fake-az' `
+                    -SubscriptionId '00000000-0000-0000-0000-000000000001' -WorkingDirectory '.' } |
                 Should -Throw -ExpectedMessage '*No location metadata*'
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{
+                    ExitCode = 0
+                    StdOut = '{"ProviderNamespace":"Microsoft.Authorization","ResourceTypes":[{"ResourceTypeName":"policyAssignments"}]}'
+                    StdErr = ''
+                }
+            }
+            { Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Authorization/policyAssignments' `
+                    -MetadataLocation 'westus' -AzPath 'fake-az' `
+                    -SubscriptionId '00000000-0000-0000-0000-000000000001' -WorkingDirectory '.' } |
+                Should -Throw -ExpectedMessage '*malformed provider resource-type row*'
         }
     }
 
@@ -397,33 +448,34 @@ Describe 'Bicep workflow resource location selection' {
     ) {
         InModuleScope Avm.Authoring -Parameters @{ Rows = $Rows } {
             param($Rows)
-            Mock Get-AzResourceProvider {
+            Mock Invoke-AvmProcess {
+                $resourceTypes = [System.Collections.Generic.List[object]]::new()
                 for ($index = 1; $index -lt $Rows; $index++) {
-                    [pscustomobject]@{
-                        ProviderNamespace = 'Microsoft.Storage'
-                        RegistrationState = 'Registered'
-                        ResourceTypes = @([pscustomobject]@{
-                                ResourceTypeName = "unrelatedType$index"; Locations = @('Global')
-                            })
-                    }
+                    $resourceTypes.Add(@{ ResourceTypeName = "unrelatedType$index"; Locations = @('Global') })
                 }
-                [pscustomobject]@{
-                    ProviderNamespace = 'microsoft.storage'
-                    RegistrationState = 'Registered'
-                    ResourceTypes = @([pscustomobject]@{
-                            ResourceTypeName = 'storageAccounts'; Locations = @('East US', 'Central US')
-                        })
+                $resourceTypes.Add(@{ ResourceTypeName = 'storageAccounts'; Locations = @('East US', 'Central US') })
+                $body = if ($ArgumentList[0] -eq 'provider') {
+                    @{ ProviderNamespace = 'microsoft.storage'; ResourceTypes = $resourceTypes.ToArray() }
                 }
-            }
-            Mock Get-AzLocation {
-                @{ Location = 'eastus'; DisplayName = 'East US'; PairedRegion = 'westus'; RegionCategory = 'Recommended' }
+                else {
+                    @(
+                        @{ Location = 'eastus'; DisplayName = 'East US'; PairedRegion = 'westus'; RegionCategory = 'Recommended' }
+                    )
+                }
+                $json = if ($ArgumentList[0] -eq 'rest') {
+                    ConvertTo-Json -InputObject $body -Depth 10 -AsArray
+                }
+                else {
+                    ConvertTo-Json -InputObject $body -Depth 10
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = $json; StdErr = '' }
             }
             $actual = Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Storage/storageAccounts' `
-                -MetadataLocation 'westus' -AllowedRegions @('eastus') -ExcludedRegions @()
+                -MetadataLocation 'westus' -AllowedRegions @('eastus') -ExcludedRegions @() `
+                -AzPath 'fake-az' -SubscriptionId '00000000-0000-0000-0000-000000000001' -WorkingDirectory '.'
             $actual.Location | Should -BeExactly 'eastus'
             $actual.IsGlobal | Should -BeFalse
-            Should -Invoke Get-AzResourceProvider -Exactly 1 -ParameterFilter { $ProviderNamespace -ceq 'Microsoft.Storage' }
-            Should -Invoke Get-AzLocation -Exactly 1
+            Should -Invoke Invoke-AvmProcess -Exactly 2
         }
     }
 
@@ -434,20 +486,122 @@ Describe 'Bicep workflow resource location selection' {
     ) {
         InModuleScope Avm.Authoring -Parameters @{ Namespace = $Namespace } {
             param($Namespace)
-            Mock Get-AzResourceProvider {
-                [pscustomobject]@{
-                    ProviderNamespace = 'Microsoft.Storage'
-                    ResourceTypes = @(@{ ResourceTypeName = 'storageAccounts'; Locations = @('East US') })
-                }
-                [pscustomobject]@{
+            Mock Invoke-AvmProcess {
+                $body = [ordered]@{
                     ProviderNamespace = $Namespace
                     ResourceTypes = @(@{ ResourceTypeName = 'storageAccounts'; Locations = @('East US') })
                 }
+                [pscustomobject]@{ ExitCode = 0; StdOut = (ConvertTo-Json -InputObject $body -Depth 10); StdErr = '' }
             }
-            Mock Get-AzLocation { throw 'Malformed provider rows must fail before another metadata read.' }
-            { Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Storage/storageAccounts' -MetadataLocation 'westus' } |
+            { Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Storage/storageAccounts' `
+                    -MetadataLocation 'westus' -AzPath 'fake-az' `
+                    -SubscriptionId '00000000-0000-0000-0000-000000000001' -WorkingDirectory '.' } |
                 Should -Throw '*unexpected provider namespace*'
-            Should -Invoke Get-AzLocation -Exactly 0
+            Should -Invoke Invoke-AvmProcess -Exactly 1
+        }
+    }
+
+    It 'rejects missing CLI discovery inputs for provider metadata' -ForEach @(
+        @{ Missing = 'executable'; Path = ''; Subscription = '00000000-0000-0000-0000-000000000001'; Root = '.' }
+        @{ Missing = 'subscription'; Path = 'fake-az'; Subscription = ''; Root = '.' }
+        @{ Missing = 'working directory'; Path = 'fake-az'; Subscription = '00000000-0000-0000-0000-000000000001'; Root = '' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{
+            Path = $Path; Subscription = $Subscription; Root = $Root
+        } {
+            param($Path, $Subscription, $Root)
+            Mock Invoke-AvmProcess { throw 'Invalid discovery inputs must fail before invoking Azure CLI.' }
+            {
+                Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Storage/storageAccounts' `
+                    -MetadataLocation 'westus' -AzPath $Path -SubscriptionId $Subscription -WorkingDirectory $Root
+            } | Should -Throw '*requires an executable*'
+            Should -Invoke Invoke-AvmProcess -Exactly 0
+        }
+    }
+
+    It 'rejects a <Kind> provider response' -ForEach @(
+        @{ Kind = 'empty'; Json = '' }
+        @{ Kind = 'malformed'; Json = '{"ProviderNamespace":' }
+        @{ Kind = 'array'; Json = '[]' }
+        @{ Kind = 'wrong shape'; Json = '{}' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Json = $Json } {
+            param($Json)
+            Mock Invoke-AvmProcess {
+                [pscustomobject]@{ ExitCode = 0; StdOut = $Json; StdErr = '' }
+            }
+            {
+                Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Storage/storageAccounts' `
+                    -MetadataLocation 'westus' -AzPath 'fake-az' `
+                    -SubscriptionId '00000000-0000-0000-0000-000000000001' -WorkingDirectory '.'
+            } | Should -Throw
+            Should -Invoke Invoke-AvmProcess -Exactly 1
+        }
+    }
+
+    It 'surfaces a nonzero <Operation> read with CLI diagnostics' -ForEach @(
+        @{ Operation = 'provider' }
+        @{ Operation = 'location' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Operation = $Operation } {
+            param($Operation)
+            Mock Invoke-AvmProcess {
+                $current = if ($ArgumentList[0] -eq 'provider') { 'provider' } else { 'location' }
+                if ($current -eq $Operation) {
+                    return [pscustomobject]@{ ExitCode = 23; StdOut = ''; StdErr = 'fixture CLI failure' }
+                }
+                $body = @{ ProviderNamespace = 'Microsoft.Storage'; ResourceTypes = @(
+                        @{ ResourceTypeName = 'storageAccounts'; Locations = @('East US') }) }
+                [pscustomobject]@{ ExitCode = 0; StdOut = (ConvertTo-Json -InputObject $body -Depth 10); StdErr = '' }
+            }
+            {
+                Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Storage/storageAccounts' `
+                    -MetadataLocation 'westus' -AzPath 'fake-az' `
+                    -SubscriptionId '00000000-0000-0000-0000-000000000001' -WorkingDirectory '.'
+            } | Should -Throw '*fixture CLI failure*'
+        }
+    }
+
+    It 'rejects a <Kind> location response' -ForEach @(
+        @{ Kind = 'empty'; Json = '' }
+        @{ Kind = 'malformed'; Json = '[{"Location":' }
+        @{ Kind = 'object'; Json = '{}' }
+        @{ Kind = 'scalar row'; Json = '[1]' }
+        @{ Kind = 'missing fields'; Json = '[{}]' }
+    ) {
+        InModuleScope Avm.Authoring -Parameters @{ Json = $Json } {
+            param($Json)
+            Mock Invoke-AvmProcess {
+                if ($ArgumentList[0] -eq 'provider') {
+                    return [pscustomobject]@{
+                        ExitCode = 0
+                        StdOut = '{"ProviderNamespace":"Microsoft.Storage","ResourceTypes":[{"ResourceTypeName":"storageAccounts","Locations":["East US"]}]}'
+                        StdErr = ''
+                    }
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = $Json; StdErr = '' }
+            }
+            {
+                Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Storage/storageAccounts' `
+                    -MetadataLocation 'westus' -AllowedRegions @('eastus') -ExcludedRegions @() `
+                    -AzPath 'fake-az' -SubscriptionId '00000000-0000-0000-0000-000000000001' `
+                    -WorkingDirectory '.'
+            } | Should -Throw
+            Should -Invoke Invoke-AvmProcess -Exactly 2
+        }
+    }
+
+    It 'does not retry cancellation during CLI metadata discovery' {
+        InModuleScope Avm.Authoring {
+            Mock Invoke-AvmProcess { throw [System.OperationCanceledException]::new('Metadata read cancelled.') }
+            Mock Wait-AvmRetryDelay {}
+            {
+                Get-AvmBicepResourceLocation -ResourceType 'Microsoft.Storage/storageAccounts' `
+                    -MetadataLocation 'westus' -AzPath 'fake-az' `
+                    -SubscriptionId '00000000-0000-0000-0000-000000000001' -WorkingDirectory '.'
+            } | Should -Throw '*cancelled*'
+            Should -Invoke Invoke-AvmProcess -Exactly 1
+            Should -Invoke Wait-AvmRetryDelay -Exactly 0
         }
     }
 }

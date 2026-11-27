@@ -16,6 +16,10 @@ function Test-AvmBicepNativeDeployment {
 
         [string] $TokenResourceLocation,
 
+        [string] $AzPath,
+
+        [string] $WorkingDirectory,
+
         [switch] $ParameterResourceLocationToken,
 
         # Regions already rejected for this case. They count towards RetryLimit and are never selected again.
@@ -50,7 +54,8 @@ function Test-AvmBicepNativeDeployment {
         }
         else {
             Get-AvmBicepResourceLocation -ResourceType $ResourceType `
-                -MetadataLocation $DeploymentInput.MetadataLocation -UnavailableRegions $attempted.ToArray()
+                -MetadataLocation $DeploymentInput.MetadataLocation -UnavailableRegions $attempted.ToArray() `
+                -AzPath $AzPath -SubscriptionId $SubscriptionId -WorkingDirectory $WorkingDirectory
         }
         if ($selection.Location -in $attempted) {
             throw [AvmProcessException]::new('Resource location selection repeated a rejected region.')
