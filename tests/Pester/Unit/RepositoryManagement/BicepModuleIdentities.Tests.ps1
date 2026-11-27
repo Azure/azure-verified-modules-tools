@@ -294,26 +294,44 @@ Describe 'Bicep module additions in open pull requests' {
     BeforeEach {
         $script:pullRequests = @()
         $script:pullRequestFiles = @{}
+        $script:pullRequestDetails = @{}
+        $script:detailCalls = 0
+        $script:changedHead = $false
         $script:pullRequestApiCalls = [System.Collections.Generic.List[string]]::new()
         Mock Invoke-RepositoryGitHubApi {
             param($Endpoint)
             $script:pullRequestApiCalls.Add($Endpoint)
             if ($Endpoint -ceq 'repos/Azure/bicep-registry-modules/pulls?state=open&per_page=100&page=1') {
-                return $script:pullRequests
+                return ($script:pullRequests | ConvertTo-Json -Depth 20 | ConvertFrom-Json)
+            }
+            $detailMatch = [regex]::Match($Endpoint, 'pulls/([0-9]+)$')
+            if ($detailMatch.Success) {
+                $script:detailCalls++
+                $details = $script:pullRequestDetails[[int]$detailMatch.Groups[1].Value]
+                if ($script:detailCalls -eq 2 -and $script:changedHead) {
+                    $details = $details.Clone()
+                    $details.head = $details.head.Clone()
+                    $details.head.sha = 'b' * 40
+                }
+                return ($details | ConvertTo-Json -Depth 20 | ConvertFrom-Json)
             }
             $match = [regex]::Match($Endpoint, 'pulls/([0-9]+)/files\?')
             if (-not $match.Success) { throw "Unexpected GitHub endpoint: $Endpoint" }
-            return $script:pullRequestFiles[[int]$match.Groups[1].Value]
+            return ($script:pullRequestFiles[[int]$match.Groups[1].Value] | ConvertTo-Json -Depth 20 | ConvertFrom-Json)
         }
     }
 
     It 'collects new module roots from open same-repository PRs and excludes forks and main modules' {
         $head = @{ repo = @{ full_name = 'Azure/bicep-registry-modules'; id = '447791597'; fork = $false }; sha = 'a' * 40; ref = 'add-module' }
+        $base = @{ repo = @{ full_name = 'Azure/bicep-registry-modules'; id = '447791597' }; sha = 'c' * 40 }
         $script:pullRequests = @(
-            @{ number = 12; state = 'open'; base = @{ repo = @{ full_name = 'Azure/bicep-registry-modules'; id = '447791597' } }; head = $head; changed_files = 1 }
-            @{ number = 14; state = 'open'; base = @{ repo = @{ full_name = 'Azure/bicep-registry-modules'; id = '447791597' } }; head = $head; changed_files = 1 }
-            @{ number = 15; state = 'open'; base = @{ repo = @{ full_name = 'Azure/bicep-registry-modules'; id = '447791597' } }; head = @{ repo = @{ full_name = 'contributor/bicep-registry-modules'; id = '900'; fork = $true } }; changed_files = 1 }
+            @{ number = 12; state = 'open'; base = $base; head = $head }
+            @{ number = 14; state = 'open'; base = $base; head = $head; draft = $true }
+            @{ number = 15; state = 'open'; base = $base; head = @{ repo = @{ full_name = 'contributor/bicep-registry-modules'; id = '900'; fork = $true } } }
         )
+        foreach ($number in @(12, 14)) {
+            $script:pullRequestDetails[$number] = @{ number = $number; state = 'open'; base = $base; head = $head; changed_files = 1 }
+        }
         $script:pullRequestFiles[12] = @(@{ filename = 'avm/res/new/service/main.bicep'; status = 'added' })
         $script:pullRequestFiles[14] = @(@{ filename = 'avm/res/new/service/main.bicep'; status = 'added' })
 
@@ -321,16 +339,30 @@ Describe 'Bicep module additions in open pull requests' {
 
         $result.Count | Should -Be 1
         $result['avm/res/new/service'] | Should -Be @('12', '14')
-        @($script:pullRequestApiCalls | Where-Object { $_ -match '/pulls/15/files' }) | Should -HaveCount 0
+        @($script:pullRequestApiCalls | Where-Object { $_ -match '/pulls/15(?:/|$)' }) | Should -HaveCount 0
     }
 
     It 'rejects incomplete changed-file pagination rather than silently omitting modules' {
+        $head = @{ repo = @{ full_name = 'Azure/bicep-registry-modules'; id = '447791597'; fork = $false }; sha = 'a' * 40; ref = 'add-module' }
+        $base = @{ repo = @{ full_name = 'Azure/bicep-registry-modules'; id = '447791597' }; sha = 'c' * 40 }
         $script:pullRequests = @(
-            @{ number = 21; state = 'open'; base = @{ repo = @{ full_name = 'Azure/bicep-registry-modules'; id = '447791597' } }; head = @{ repo = @{ full_name = 'Azure/bicep-registry-modules'; id = '447791597'; fork = $false }; sha = 'a' * 40; ref = 'add-module' }; changed_files = 2 }
+            @{ number = 21; state = 'open'; base = $base; head = $head }
         )
+        $script:pullRequestDetails[21] = @{ number = 21; state = 'open'; base = $base; head = $head; changed_files = 2 }
         $script:pullRequestFiles[21] = @(@{ filename = 'avm/res/new/service/main.bicep'; status = 'added' })
         { Get-AvmBicepOpenPullRequestModuleNumbers -MainModulePaths @('avm/res/storage/storage-account') -RepositoryId '447791597' } |
             Should -Throw '*incomplete pull-request file list*'
+    }
+
+    It 'rejects a head change during file discovery' {
+        $script:changedHead = $true
+        $head = @{ repo = @{ full_name = 'Azure/bicep-registry-modules'; id = '447791597'; fork = $false }; sha = 'a' * 40; ref = 'add-module' }
+        $base = @{ repo = @{ full_name = 'Azure/bicep-registry-modules'; id = '447791597' }; sha = 'c' * 40 }
+        $script:pullRequests = @(@{ number = 21; state = 'open'; base = $base; head = $head })
+        $script:pullRequestDetails[21] = @{ number = 21; state = 'open'; base = $base; head = $head; changed_files = 1 }
+        $script:pullRequestFiles[21] = @(@{ filename = 'avm/res/new/service/main.bicep'; status = 'added' })
+        { Get-AvmBicepOpenPullRequestModuleNumbers -MainModulePaths @('avm/res/storage/storage-account') -RepositoryId '447791597' } |
+            Should -Throw '*changed pull-request metadata*'
     }
 }
 
