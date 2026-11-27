@@ -13,11 +13,10 @@ function Invoke-AvmReleaseBranch {
         Using the installed GitHub CLI and its existing github.com authentication,
         this command creates a release branch from upstream main, retargets the
         fork pull request, merges the captured head, and opens a follow-up pull
-        request to main. The follow-up links to the original pull request, thanks
-        its author, and preserves its description. For Azure/bicep-registry-modules,
-        it adds the PR: Run Required E2E Tests label to the follow-up. It does not
-        approve reviews or bypass protections. Ordinary checks do not require
-        this handoff.
+        request to main. The follow-up retains the original title, links to the
+        original pull request, thanks its author, and preserves its description.
+        It does not add labels, approve reviews, or bypass protections. Ordinary
+        checks do not require this handoff.
 
         A failure can leave a branch or retargeted or merged pull request behind.
         Inspect their state before recovering manually; do not blindly rerun.
@@ -176,7 +175,7 @@ function Invoke-AvmReleaseBranch {
             $followUpBody += "`n`n$originalBody"
         }
         $followUp = Invoke-AvmGitHubApi -Endpoint "repos/$Repository/pulls" -Method POST -Body @{
-            title = "E2E: $($pr['title'])"
+            title = $pr['title']
             head  = $branch
             base  = 'main'
             body  = $followUpBody
@@ -185,15 +184,6 @@ function Invoke-AvmReleaseBranch {
             throw [System.InvalidOperationException]::new('GitHub did not return the follow-up pull request URL.')
         }
         $followUpUrl = [string]$followUp['html_url']
-        if ($Repository -ieq 'Azure/bicep-registry-modules') {
-            $number = $followUp['number']
-            if ($number -isnot [int] -and $number -isnot [long] -or $number -lt 1) {
-                throw [System.InvalidOperationException]::new('GitHub did not return a valid follow-up pull request number.')
-            }
-            $stage = "adding the E2E label to $followUpUrl"
-            $null = Invoke-AvmGitHubApi -Endpoint "repos/$Repository/issues/$number/labels" -Method POST `
-                -Body @{ labels = @('PR: Run Required E2E Tests') }
-        }
         return [pscustomobject]@{
             Repository             = $Repository
             OriginalPullRequest    = $PullRequest

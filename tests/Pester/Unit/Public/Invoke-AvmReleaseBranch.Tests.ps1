@@ -17,7 +17,7 @@ Describe 'Invoke-AvmReleaseBranch' {
                     allow_squash_merge = $true; allow_merge_commit = $false; allow_rebase_merge = $false
                 }
                 Pr = @{
-                    state = 'open'; draft = $false; title = 'Example'
+                    state = 'open'; draft = $false; title = 'feat: add example'
                     html_url = 'https://github.com/Azure/bicep-registry-modules/pull/123'
                     user = @{ login = 'contributor' }
                     body = 'Original description.'
@@ -68,21 +68,21 @@ Describe 'Invoke-AvmReleaseBranch' {
                     '^POST repos/[^/]+/[^/]+/pulls$' {
                         return @{ number = 456; html_url = 'https://github.com/Azure/example/pull/456' }
                     }
-                    '^POST repos/[^/]+/[^/]+/(git/refs|issues/456/labels)$' { return @{} }
+                    '^POST repos/[^/]+/[^/]+/git/refs$' { return @{} }
                     default { throw "Unexpected API call: $Method $Endpoint" }
                 }
             }
         }
     }
 
-    It 'creates the Bicep handoff in order and labels the follow-up for E2E' {
+    It 'creates the Bicep handoff in order without changing its title or adding labels' {
         InModuleScope Avm.Authoring {
             $result = Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
                 -PullRequest 123
             $result.ReleaseBranch | Should -BeExactly 'release/fork-pr-123-aaaaaaaaaaaa'
             $result.FollowUpPullRequestUrl | Should -BeExactly 'https://github.com/Azure/example/pull/456'
             $writes = @($script:scenario.Calls | Where-Object Method -NE 'GET')
-            ($writes.Method -join ',') | Should -BeExactly 'POST,PATCH,PUT,POST,POST'
+            ($writes.Method -join ',') | Should -BeExactly 'POST,PATCH,PUT,POST'
             $writes[0].Body.sha | Should -BeExactly 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
             $writes[0].Body.ref | Should -BeExactly 'refs/heads/release/fork-pr-123-aaaaaaaaaaaa'
             $writes[1].Body.base | Should -BeExactly $result.ReleaseBranch
@@ -91,17 +91,19 @@ Describe 'Invoke-AvmReleaseBranch' {
             $writes[2].Body.merge_method | Should -BeExactly 'squash'
             $writes[3].Body.head | Should -BeExactly $result.ReleaseBranch
             $writes[3].Body.base | Should -BeExactly 'main'
-            $writes[4].Body.labels | Should -Contain 'PR: Run Required E2E Tests'
+            $writes[3].Body.title | Should -BeExactly 'feat: add example'
         }
     }
 
-    It 'creates a Terraform handoff without applying the Bicep-specific label' {
+    It 'creates a Terraform handoff without adding labels' {
         InModuleScope Avm.Authoring {
             $script:scenario.Pr.base.repo.full_name = 'Azure/terraform-azurerm-avm-res-example'
             $script:scenario.Pr.html_url = 'https://github.com/Azure/terraform-azurerm-avm-res-example/pull/123'
             $null = Invoke-AvmReleaseBranch -Repository 'Azure/terraform-azurerm-avm-res-example' `
                 -PullRequest 123
             @($script:scenario.Calls | Where-Object Endpoint -Match '/labels$').Count | Should -Be 0
+            @($script:scenario.Calls | Where-Object { $_.Method -eq 'POST' -and $_.Endpoint -match '/pulls$' })[0].Body.title |
+                Should -BeExactly 'feat: add example'
         }
     }
 
@@ -278,13 +280,4 @@ Describe 'Invoke-AvmReleaseBranch' {
         }
     }
 
-    It 'surfaces label failure with the follow-up URL and does not retry' {
-        InModuleScope Avm.Authoring {
-            $script:scenario.Failure = 'POST repos/Azure/bicep-registry-modules/issues/456/labels'
-            { Invoke-AvmReleaseBranch -Repository 'Azure/bicep-registry-modules' `
-                    -PullRequest 123 } |
-                Should -Throw '*https://github.com/Azure/example/pull/456*injected failure*'
-            @($script:scenario.Calls | Where-Object Endpoint -Match '/labels$').Count | Should -Be 1
-        }
-    }
 }
