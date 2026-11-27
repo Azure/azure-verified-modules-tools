@@ -143,7 +143,9 @@ runs its case-local Pester assertions, runs `post.ps1` if present, and cleans
 up through the native Azure PowerShell handlers. The reaper is a fallback.
 
 Use explicitly authorized test targets and existing matching Azure CLI and
-Azure PowerShell sign-ins. Required Az modules are checked, not installed.
+Azure PowerShell sign-ins. Required individual Az modules are resolved from
+verified pins on demand. `AVM_OFFLINE` and `AVM_NO_AUTO_INSTALL` prevent
+implicit downloads; compatible modules already in the session remain usable.
 Cleanup follows deployment operations and can remove resources updated by
 a test as well as resources created by it. Resource-group entry points
 additionally require `--resource-group-prefix`; management-group entry

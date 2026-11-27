@@ -344,6 +344,7 @@ Describe 'Bicep cleanup dependency preflight' {
             }
             Mock Import-Module { throw 'Unexpected module import.' }
             Mock Get-Command { throw 'Unexpected command lookup.' }
+            Mock Resolve-AvmTool { throw 'Unexpected on-demand resolution.' }
         }
     }
 
@@ -405,6 +406,49 @@ Describe 'Bicep cleanup dependency preflight' {
         }
     }
 
+    It 'preserves an eligible loaded Accounts version from the authenticated session' {
+        InModuleScope Avm.Authoring {
+            Mock Get-Module {
+                param($ListAvailable)
+                if ($ListAvailable) {
+                    [pscustomobject]@{ Name = 'Az.Accounts'; Version = [version]'5.4.0'; Path = 'newest.psd1' }
+                }
+                else {
+                    [pscustomobject]@{ Name = 'Az.Accounts'; Version = [version]'5.3.4'; Path = 'loaded.psd1' }
+                }
+            }
+            Mock Import-Module {}
+            Mock Get-Command {
+                [pscustomobject]@{ ModuleName = 'Az.Accounts'; Version = [version]'5.3.4'; Parameters = @{} }
+            }
+            Assert-AvmBicepAzureDependency
+            Should -Invoke Import-Module -Exactly 1 -ParameterFilter {
+                $Name -ceq 'loaded.psd1' -and $Global
+            }
+            Should -Invoke Resolve-AvmTool -Exactly 0
+        }
+    }
+
+    It 'resolves a missing module from the verified pin before importing dependencies' {
+        InModuleScope Avm.Authoring {
+            Mock Get-Module {}
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'Az.Accounts'; Version = [version]'5.3.4'; Path = 'resolved-accounts.psd1'
+                }
+            }
+            Mock Import-Module {}
+            Mock Get-Command {
+                [pscustomobject]@{ ModuleName = 'Az.Accounts'; Version = [version]'5.3.4'; Parameters = @{} }
+            }
+            Assert-AvmBicepAzureDependency
+            Should -Invoke Resolve-AvmTool -Exactly 1 -ParameterFilter { $Name -ceq 'Az.Accounts' }
+            Should -Invoke Import-Module -Exactly 1 -ParameterFilter {
+                $Name -ceq 'resolved-accounts.psd1' -and $Global
+            }
+        }
+    }
+
     It 'keeps other dependency imports local to the module' {
         InModuleScope Avm.Authoring {
             Mock Get-AvmBicepAzureRequirement {
@@ -430,18 +474,39 @@ Describe 'Bicep cleanup dependency preflight' {
 }
 
 Describe 'Bicep cleanup native requirements' {
-    It 'requires the separately installed subscription module before importing the Az bundle' {
+    It 'resolves a missing Subscription module alongside installed dependencies' {
         InModuleScope Avm.Authoring {
+            Mock Get-AvmBicepAzureRequirement {
+                [pscustomobject]@{
+                    Name = 'Az.Accounts'; MinimumVersion = '5.3.4'
+                    Commands = @{ 'Get-AzContext' = @() }
+                }
+                [pscustomobject]@{
+                    Name = 'Az.Subscription'; MinimumVersion = '0.12.0'
+                    Commands = @{ 'Disable-AzSubscription' = @() }
+                }
+            }
             Mock Get-Module {
                 param($Name, $ListAvailable)
                 if ($ListAvailable -and $Name -ne 'Az.Subscription') {
-                    [pscustomobject]@{ Name = $Name; Version = [version]'99.0.0'; Path = "$Name.psd1" }
+                    [pscustomobject]@{ Name = $Name; Version = [version]'5.3.4'; Path = "$Name.psd1" }
                 }
             }
-            Mock Import-Module { throw 'No modules may be imported with an incomplete dependency set.' }
-            { Assert-AvmBicepAzureDependency } | Should -Throw -ExpectedMessage '*Az.Subscription*'
+            Mock Resolve-AvmTool {
+                [pscustomobject]@{
+                    Name = 'Az.Subscription'; Version = [version]'0.12.0'; Path = 'subscription.psd1'
+                }
+            }
+            Mock Import-Module {}
+            Mock Get-Command {
+                $module = if ($Name -ceq 'Get-AzContext') { 'Az.Accounts' } else { 'Az.Subscription' }
+                $version = if ($module -ceq 'Az.Accounts') { [version]'5.3.4' } else { [version]'0.12.0' }
+                [pscustomobject]@{ ModuleName = $module; Version = $version; Parameters = @{} }
+            }
+            Assert-AvmBicepAzureDependency
             Should -Invoke Get-Module -Exactly 1 -ParameterFilter { $Name -eq 'Az.Subscription' -and $ListAvailable }
-            Should -Invoke Import-Module -Exactly 0
+            Should -Invoke Resolve-AvmTool -Exactly 1 -ParameterFilter { $Name -eq 'Az.Subscription' }
+            Should -Invoke Import-Module -Exactly 2
         }
     }
 }

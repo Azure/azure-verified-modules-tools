@@ -156,10 +156,8 @@ Describe 'Bicep prepared runtime package manager bootstrap' {
     }
 }
 
-Describe 'Bicep runtime dependency bootstrap behavior' {
+Describe 'Bicep runtime dependency qualification' {
     BeforeEach {
-        $script:savedOffline = [Environment]::GetEnvironmentVariable('AVM_OFFLINE')
-        [Environment]::SetEnvironmentVariable('AVM_OFFLINE', [NullString]::Value)
         $script:runtimeCapability = 1
         $script:dependencyCapability = 1
         Mock Get-Module {
@@ -168,38 +166,17 @@ Describe 'Bicep runtime dependency bootstrap behavior' {
                         BicepAzureDependencyInventory = $script:dependencyCapability
                     } } }
         } -ParameterFilter { $Name -eq 'Avm.Authoring' }
-        $global:AvmRuntimeDependencyFixture = @{}
-        Mock Get-AvmBicepAzureDependency {
-            [pscustomobject]@{ Name = 'Az.Accounts'; MinimumVersion = [version]'5.3.4' }
-            [pscustomobject]@{ Name = 'Az.Subscription'; MinimumVersion = [version]'0.12.0' }
-        }
-        Mock Get-Module {
-            $key = [string]$Name
-            if ($global:AvmRuntimeDependencyFixture.ContainsKey($key)) {
-                [pscustomobject]@{ Version = $global:AvmRuntimeDependencyFixture[$key] }
-            }
-        } -ParameterFilter { $ListAvailable }
-        Mock Get-PSResourceRepository { [pscustomobject]@{ Name = 'UserFeed'; Priority = 10; Uri = 'https://example.invalid/gallery' } }
-        Mock Install-PSResource { $global:AvmRuntimeDependencyFixture[$Name] = [version]$Version }
-        Mock Start-Sleep {}
-        Mock Write-Warning {}
+        Mock Get-AvmBicepAzureDependency { throw 'Runtime qualification must not enumerate Azure modules eagerly.' }
+        Mock Install-PSResource { throw 'Runtime qualification must not install Azure modules eagerly.' }
     }
 
-    AfterEach {
-        $offline = if ($null -eq $script:savedOffline) { [NullString]::Value } else { $script:savedOffline }
-        [Environment]::SetEnvironmentVariable('AVM_OFFLINE', $offline)
-        Remove-Variable AvmRuntimeDependencyFixture -Scope Global -ErrorAction SilentlyContinue
-    }
-
-    It 'reuses compatible dependencies and provisions missing Subscription after qualification' {
-        $global:AvmRuntimeDependencyFixture['Az.Accounts'] = [version]'6.0.0'
+    It 'defers Azure module resolution until Bicep deployment' {
         & $script:dependencyBootstrap
-        Should -Invoke Install-PSResource -Exactly 1 -ParameterFilter {
-            $Name -ceq 'Az.Subscription' -and $Version -ceq '0.12.0' -and $Scope -ceq 'CurrentUser' -and $Repository -ceq 'UserFeed'
-        }
+        Should -Invoke Get-AvmBicepAzureDependency -Exactly 0
+        Should -Invoke Install-PSResource -Exactly 0
     }
 
-    It 'rejects <Label> bootstrap capability without provisioning' -ForEach @(
+    It 'rejects <Label> dependency inventory capability without provisioning' -ForEach @(
         @{ Label = 'missing'; Value = $null }
         @{ Label = 'string'; Value = '1' }
         @{ Label = 'boolean'; Value = $true }
@@ -210,66 +187,10 @@ Describe 'Bicep runtime dependency bootstrap behavior' {
         Should -Invoke Install-PSResource -Exactly 0
     }
 
-    It 'stops before provisioning when runtime capability is not an integer' {
+    It 'stops before Azure work when runtime capability is not an integer' {
         $script:runtimeCapability = '1'
         { & $script:dependencyBootstrap } | Should -Throw '*BicepWorkflowE2eRuntime*'
         Should -Invoke Install-PSResource -Exactly 0
-    }
-
-    It 'reconciles an installed dependency after a transient failure without repeating installation' {
-        $global:AvmRuntimeDependencyFixture['Az.Accounts'] = [version]'5.3.4'
-        Mock Install-PSResource {
-            $global:AvmRuntimeDependencyFixture[$Name] = [version]$Version
-            throw [Net.Http.HttpRequestException]::new('HTTP 504')
-        }
-        & $script:dependencyBootstrap
-        Should -Invoke Install-PSResource -Exactly 1
-        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 5 }
-    }
-
-    It 'tries configured repositories in priority order when a dependency is missing' {
-        Mock Get-PSResourceRepository {
-            [pscustomobject]@{ Name = 'Backup'; Priority = 20 }
-            [pscustomobject]@{ Name = 'Preferred'; Priority = 10 }
-        }
-        $script:repositoryAttemptOrder = [Collections.Generic.List[string]]::new()
-        Mock Install-PSResource {
-            $script:repositoryAttemptOrder.Add("$Name/$Repository")
-            if ($Repository -eq 'Preferred') { throw [InvalidOperationException]::new('Package not found') }
-            $global:AvmRuntimeDependencyFixture[$Name] = [version]$Version
-        }
-        & $script:dependencyBootstrap
-        $script:repositoryAttemptOrder.ToArray() | Should -Be @(
-            'Az.Accounts/Preferred', 'Az.Accounts/Backup',
-            'Az.Subscription/Preferred', 'Az.Subscription/Backup'
-        )
-    }
-
-    It 'fails explicitly without configured repositories' {
-        Mock Get-PSResourceRepository {}
-        { & $script:dependencyBootstrap } | Should -Throw '*No PowerShell repositories are configured*'
-        Should -Invoke Install-PSResource -Exactly 0
-    }
-
-    It 'fails if the installer does not provide the required module' {
-        Mock Install-PSResource {}
-        { & $script:dependencyBootstrap } | Should -Throw '*did not provide Az.Accounts*'
-    }
-
-    It 'does not contact the gallery offline and fails when a dependency is missing' {
-        $env:AVM_OFFLINE = '1'
-        $global:AvmRuntimeDependencyFixture['Az.Accounts'] = [version]'5.3.4'
-        { & $script:dependencyBootstrap } | Should -Throw '*AVM_OFFLINE=1*Az.Subscription*'
-        Should -Invoke Get-PSResourceRepository -Exactly 0
-        Should -Invoke Install-PSResource -Exactly 0
-    }
-
-    It 'bounds transient installation failures to three attempts' {
-        Mock Install-PSResource { throw [Net.Http.HttpRequestException]::new('HTTP 503') }
-        { & $script:dependencyBootstrap } | Should -Throw '*503*'
-        Should -Invoke Install-PSResource -Exactly 3
-        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 5 }
-        Should -Invoke Start-Sleep -Exactly 1 -ParameterFilter { $Seconds -eq 10 }
     }
 }
 

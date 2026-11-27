@@ -3,9 +3,10 @@ function Get-AvmBicepAzureRequirement {
     [OutputType([pscustomobject])]
     param()
 
+    $pins = (Read-AvmPins).powerShellModules
     $requirements = @(
         @{
-            Name = 'Az.Accounts'; MinimumVersion = '5.3.4'
+            Name     = 'Az.Accounts'
             Commands = @{
                 'Get-AzContext'       = @()
                 'Set-AzContext'       = @('Context', 'Subscription', 'Tenant', 'Scope')
@@ -14,7 +15,7 @@ function Get-AvmBicepAzureRequirement {
             }
         }
         @{
-            Name = 'Az.Resources'; MinimumVersion = '9.0.3'
+            Name     = 'Az.Resources'
             Commands = @{
                 'Get-AzResource'                       = @('ResourceId', 'ResourceGroupName', 'ExpandProperties')
                 'Remove-AzResource'                    = @('ResourceId', 'Force')
@@ -48,11 +49,11 @@ function Get-AvmBicepAzureRequirement {
             }
         }
         @{
-            Name = 'Az.Compute'; MinimumVersion = '11.4.0'
+            Name     = 'Az.Compute'
             Commands = @{ 'Get-AzDiskEncryptionSet' = @('Name', 'ResourceGroupName') }
         }
         @{
-            Name = 'Az.KeyVault'; MinimumVersion = '6.4.3'
+            Name     = 'Az.KeyVault'
             Commands = @{
                 'Remove-AzKeyVaultAccessPolicy' = @('VaultName', 'ObjectId')
                 'Get-AzKeyVault'                = @('InRemovedState')
@@ -61,7 +62,7 @@ function Get-AvmBicepAzureRequirement {
             }
         }
         @{
-            Name = 'Az.RecoveryServices'; MinimumVersion = '7.11.2'
+            Name     = 'Az.RecoveryServices'
             Commands = @{
                 'Get-AzRecoveryServicesVaultProperty'        = @('VaultId')
                 'Set-AzRecoveryServicesVaultProperty'        = @('VaultId', 'SoftDeleteFeatureState')
@@ -71,33 +72,33 @@ function Get-AvmBicepAzureRequirement {
             }
         }
         @{
-            Name = 'Az.Monitor'; MinimumVersion = '7.0.0'
+            Name     = 'Az.Monitor'
             Commands = @{ 'Remove-AzDiagnosticSetting' = @('ResourceId', 'Name') }
         }
         @{
-            Name = 'Az.CognitiveServices'; MinimumVersion = '1.16.0'
+            Name     = 'Az.CognitiveServices'
             Commands = @{
                 'Get-AzCognitiveServicesAccount'    = @('InRemovedState')
                 'Remove-AzCognitiveServicesAccount' = @('InRemovedState', 'Force', 'Location', 'ResourceGroupName', 'Name')
             }
         }
         @{
-            Name = 'Az.OperationalInsights'; MinimumVersion = '3.3.0'
+            Name     = 'Az.OperationalInsights'
             Commands = @{ 'Remove-AzOperationalInsightsWorkspace' = @('ResourceGroupName', 'Name', 'Force', 'ForceDelete') }
         }
         @{
-            Name = 'Az.MachineLearningServices'; MinimumVersion = '1.3.0'
+            Name     = 'Az.MachineLearningServices'
             Commands = @{ 'Get-AzMLWorkspace' = @('Name', 'ResourceGroupName', 'SubscriptionId') }
         }
         @{
-            Name = 'Az.Network'; MinimumVersion = '7.26.0'
+            Name     = 'Az.Network'
             Commands = @{
                 'Get-AzExpressRouteGateway'    = @('Name', 'ResourceGroupName')
                 'Remove-AzExpressRouteGateway' = @('Name', 'ResourceGroupName', 'Force')
             }
         }
         @{
-            Name = 'Az.DataProtection'; MinimumVersion = '2.9.1'
+            Name     = 'Az.DataProtection'
             Commands = @{
                 'Get-AzDataProtectionBackupVault'               = @('ResourceGroupName', 'VaultName')
                 'Update-AzDataProtectionBackupVault'            = @('ResourceGroupName', 'VaultName', 'ImmutabilityState', 'SoftDeleteState')
@@ -111,11 +112,15 @@ function Get-AvmBicepAzureRequirement {
             }
         }
         @{
-            Name = 'Az.Subscription'; MinimumVersion = '0.12.0'
+            Name     = 'Az.Subscription'
             Commands = @{ 'Disable-AzSubscription' = @('SubscriptionId') }
         }
     )
     foreach ($requirement in $requirements) {
+        if (-not $pins.ContainsKey($requirement.Name)) {
+            throw [AvmConfigurationException]::new("No PowerShell module pin for '$($requirement.Name)'.")
+        }
+        $requirement.MinimumVersion = $pins[$requirement.Name].version
         [pscustomobject]$requirement
     }
 }

@@ -248,6 +248,54 @@
   // Exact installed versions can be reused; downloads are checksum-verified.
   // Refresh with scripts/Update-AvmPins.ps1 -PowerShellModule @{ Name = 'x.y.z' }.
   "powerShellModules": {
+    "Az.Accounts": {
+      "version": "5.3.4",
+      "sha256": "ebf368adb10f46ac4b33c96b784bc83e390232d2dcad39c0decb8525e3c41c60"
+    },
+    "Az.CognitiveServices": {
+      "version": "1.16.0",
+      "sha256": "79a61d73f9a311faf282157c1f8a9c6442da68029d07b041e68a0237eca15738"
+    },
+    "Az.Compute": {
+      "version": "11.4.0",
+      "sha256": "00a07e698c929beda556d1c64dbc4a4e80808a1f8d3f9c91003148eaae54f894"
+    },
+    "Az.DataProtection": {
+      "version": "2.9.1",
+      "sha256": "dce2c84ef4563e2f917cc494c3dbe6bc867b324b3a6745cb694e2683c648bdc2"
+    },
+    "Az.KeyVault": {
+      "version": "6.4.3",
+      "sha256": "bc09c96d9c08dc771381a27e54f16102fef35f1c29086bff6b0a38fb0e9a828f"
+    },
+    "Az.MachineLearningServices": {
+      "version": "1.3.0",
+      "sha256": "d5375aa5a9c12c77000807676f41b8e929a7f00da523b45c3d046d7162019925"
+    },
+    "Az.Monitor": {
+      "version": "7.0.0",
+      "sha256": "363332e8431f6d19516a266903aba5ec249aef90b57812a336cacbad86285034"
+    },
+    "Az.Network": {
+      "version": "7.26.0",
+      "sha256": "a978c0abb98bdd8f535dd594e861b7d00bd85e758379d65eba656431a6a7abea"
+    },
+    "Az.OperationalInsights": {
+      "version": "3.3.0",
+      "sha256": "0feb865c2c4aba64247c5f1d929026c550cb60bc421603f5bc08e6c7fb475520"
+    },
+    "Az.RecoveryServices": {
+      "version": "7.11.2",
+      "sha256": "2c6590261e3e47cd9dd74aeb27983a0c2510fb16ae84d244954c18ee6c89d025"
+    },
+    "Az.Resources": {
+      "version": "9.0.3",
+      "sha256": "5410263840c3cd81d1d8154ee2d1e0056e65e8ab5aae41ba5770c52e33d55b48"
+    },
+    "Az.Subscription": {
+      "version": "0.12.0",
+      "sha256": "79ea8b7f0dff9f0a6d23b1729022f840884c8f8d93b92d83e07d878de5f43102"
+    },
     "Pester": {
       "version": "5.7.1",
       "sha256": "4a27904c6814a5fbe4758f8e49861f6a1994aee77b71165a5c43c0371ba6c580"

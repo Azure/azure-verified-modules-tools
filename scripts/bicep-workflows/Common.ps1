@@ -383,15 +383,6 @@ function Initialize-AvmWorkflow {
                 throw [InvalidOperationException]::new("The selected package lacks native Bicep $parameter support.")
             }
         }
-        foreach ($dependency in Get-AvmBicepAzureDependency -SkipModuleVersionCheck) {
-            if ($env:AVM_OFFLINE -eq '1' -and @(
-                    Get-Module -ListAvailable -Name $dependency.Name |
-                        Where-Object { $_.Version -ge $dependency.MinimumVersion }
-                ).Count -eq 0) {
-                throw [InvalidOperationException]::new("AVM_OFFLINE=1 prevents installing $($dependency.Name).")
-            }
-            $null = Install-AvmWorkflowModule -Name $dependency.Name -Version $dependency.MinimumVersion -Minimum -Confirm:$false
-        }
     }
     if ($Profile -notin @('Package', 'Matrix')) {
         $null = Install-AvmTool -Name bicep -Path $Path -SkipModuleVersionCheck

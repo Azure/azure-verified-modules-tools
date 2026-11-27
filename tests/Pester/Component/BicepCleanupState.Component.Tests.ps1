@@ -501,8 +501,12 @@ Describe 'Component: Bicep cleanup state and context' -Tag Component {
                 }
             }
             Mock Get-Module { @() }
+            Mock Resolve-AvmTool {
+                throw [AvmToolException]::new('Bicep dependencies are missing and automatic installation is disabled.', 'AVM1014')
+            }
             Mock Import-Module {}
             { Assert-AvmBicepAzureDependency } | Should -Throw -ExpectedMessage '*dependencies are missing*'
+            Should -Invoke Resolve-AvmTool -Exactly 1 -ParameterFilter { $Name -ceq 'Az.Accounts' }
             Should -Invoke Import-Module -Exactly 0
             Should -Invoke Get-AzContext -Exactly 0
         }
