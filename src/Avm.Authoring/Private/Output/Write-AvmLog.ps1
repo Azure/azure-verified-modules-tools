@@ -5,7 +5,7 @@ function Test-AvmGitHubActionsContext {
     [OutputType([bool])]
     param()
 
-    return -not [string]::IsNullOrWhiteSpace($env:GITHUB_ACTIONS)
+    return $env:GITHUB_ACTIONS -eq 'true'
 }
 
 function Test-AvmEnvironmentFlag {
@@ -350,7 +350,7 @@ function ConvertTo-AvmAnnotationPath {
 
     $normalised = $Path.Trim().Replace('\', '/')
 
-    $useWorkspace = $env:GITHUB_ACTIONS -eq 'true' -and -not [string]::IsNullOrWhiteSpace($env:GITHUB_WORKSPACE)
+    $useWorkspace = (Test-AvmGitHubActionsContext) -and -not [string]::IsNullOrWhiteSpace($env:GITHUB_WORKSPACE)
     $root = if ($useWorkspace) { $env:GITHUB_WORKSPACE } else { $SourceRoot }
     $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
     $prefix = $root.Replace('\', '/').TrimEnd('/') + '/'

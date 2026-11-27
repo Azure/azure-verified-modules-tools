@@ -47,6 +47,16 @@ Describe 'Write-AvmLog' {
         InModuleScope 'Avm.Authoring' { $script:AvmNestedCommandDepth = 0 }
     }
 
+    It 'recognizes GitHub Actions only when its environment flag is true: <Value>' -ForEach @(
+        @{ Value = 'true'; Expected = $true }
+        @{ Value = 'false'; Expected = $false }
+        @{ Value = ''; Expected = $false }
+    ) {
+        $env:GITHUB_ACTIONS = $Value
+        $actual = InModuleScope 'Avm.Authoring' { Test-AvmGitHubActionsContext }
+        $actual | Should -Be $Expected
+    }
+
     Context 'outside GitHub Actions' {
         It 'writes Info to the information stream' {
             $messages = InModuleScope 'Avm.Authoring' {

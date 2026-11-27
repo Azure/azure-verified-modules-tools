@@ -23,7 +23,8 @@ function Test-AvmModuleVersion {
     }
 
     if ($SkipModuleVersionCheck) {
-        if (-not $SuppressSkipWarning -and -not $script:AvmModuleVersionSkipWarningWritten) {
+        if (-not $SuppressSkipWarning -and -not $script:AvmModuleVersionSkipWarningWritten -and
+            -not (Test-AvmGitHubActionsContext)) {
             Write-AvmLog 'The Avm.Authoring PowerShell repository version check was skipped. The current command may run with an outdated module.' -Level Warning
             $script:AvmModuleVersionSkipWarningWritten = $true
         }
