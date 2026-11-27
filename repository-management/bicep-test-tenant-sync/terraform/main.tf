@@ -3,8 +3,10 @@ module "bicep" {
   source   = "../../repository-sync/terraform/modules/azure"
 
   identity_name                       = local.identity_names[each.key]
+  identity_tags                       = contains(keys(var.pull_request_numbers), each.key) ? { "avm-bicep-identity-scope" = "pull-request" } : {}
   existing_identity                   = try(var.existing_identities[each.key], null)
   bicep_registry_federation_enabled   = true
+  github_module_federation_enabled    = !contains(keys(var.pull_request_numbers), each.key)
   identity_resource_group_name        = var.bami_test_settings.identity_resource_group_name
   github_repository_owner             = "Azure"
   github_repository_name              = "bicep-registry-modules"
@@ -14,6 +16,7 @@ module "bicep" {
   repository_sync_repository_id       = var.repository_sync_repository_id
   github_job_workflow_path            = var.github_job_workflow_path
   github_workflow_ref                 = "Azure/bicep-registry-modules/.github/workflows/${replace(each.key, "/", ".")}.yml@refs/heads/main"
+  github_pull_request_numbers         = lookup(var.pull_request_numbers, each.key, [])
   location                            = var.location
   is_protected_repo                   = true
   entra_group_names                   = each.value

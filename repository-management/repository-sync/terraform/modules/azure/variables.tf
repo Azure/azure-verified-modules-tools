@@ -70,6 +70,12 @@ variable "existing_identity" {
   }
 }
 
+variable "identity_tags" {
+  type        = map(string)
+  description = "Tags to set on a dedicated user-assigned identity."
+  default     = {}
+}
+
 variable "github_workflow_ref" {
   type        = string
   description = "Optional exact trusted-main caller in this repository, matched by bounded repository and complete workflow-path subject clauses."
@@ -83,6 +89,37 @@ variable "github_workflow_ref" {
       length("*:workflow_ref:*/.github/workflows/${try(split("/.github/workflows/", var.github_workflow_ref)[1], "")}") <= 128
     )
     error_message = "The caller workflow must be an exact fully qualified trusted-main workflow in this repository; each subject comparand must be at most 128 characters."
+  }
+}
+
+variable "github_module_federation_enabled" {
+  type        = bool
+  description = "Create the configured caller's trusted-main module federation credential."
+  default     = true
+  nullable    = false
+}
+
+variable "github_pull_request_numbers" {
+  type        = set(string)
+  description = "Same-repository pull request numbers allowed to call the exact module workflow."
+  default     = []
+
+  validation {
+    condition = length(var.github_pull_request_numbers) == 0 || (
+      var.bicep_registry_federation_enabled &&
+      var.github_repository_owner == "Azure" &&
+      var.github_repository_name == "bicep-registry-modules" &&
+      var.github_repository_environment_names == toset(["avm-validation"]) &&
+      !var.github_module_federation_enabled &&
+      var.github_workflow_ref != null &&
+      alltrue([
+        for number in var.github_pull_request_numbers :
+        can(regex("^[1-9][0-9]{0,9}$", number)) &&
+        length("${local.federation_identity_name}-fic-m-avm-validation-pr-${number}") <= 120 &&
+        length("*:workflow_ref:*/${replace(try(split("/.github/workflows/", var.github_workflow_ref)[1], ""), "@refs/heads/main", "@refs/pull/${number}/merge")}") <= 128
+      ])
+    )
+    error_message = "Pull request federation is limited to the Bicep Registry avm-validation environment and exact workflow paths, with bounded PR IDs and Azure credential names."
   }
 }
 

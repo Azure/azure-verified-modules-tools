@@ -28,7 +28,7 @@ resource "azapi_resource" "identity" {
   parent_id = "/subscriptions/${data.azapi_client_config.current.subscription_id}/resourceGroups/${var.identity_resource_group_name}"
   name      = local.owner_repo_name
   location  = var.location
-  body      = {} # empty body as HCL object is reqired to force output to be HCL and not JSON string.
+  body      = length(var.identity_tags) == 0 ? {} : { tags = var.identity_tags }
   response_export_values = [
     "properties.principalId",
     "properties.clientId",

@@ -29,6 +29,22 @@ variable "existing_identities" {
   default     = {}
 }
 
+variable "pull_request_numbers" {
+  type        = map(set(string))
+  description = "Open same-repository pull requests that add each preview module."
+  default     = {}
+
+  validation {
+    condition = alltrue([
+      for path, numbers in var.pull_request_numbers :
+      contains(keys(var.modules), path) &&
+      length(numbers) > 0 &&
+      alltrue([for number in numbers : can(regex("^[1-9][0-9]{0,9}$", number))])
+    ])
+    error_message = "Preview module metadata must reference configured modules and contain valid open pull request numbers."
+  }
+}
+
 variable "bami_test_settings" {
   type = object({
     tenant_id                    = string

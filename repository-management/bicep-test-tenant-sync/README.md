@@ -4,8 +4,11 @@ The existing [Bicep Sync workflow](../../.github/workflows/repository-management
 provisions one dedicated user-assigned managed identity per source-backed
 root Bicep module. It discovers `avm/{res,ptn,utl}/{namespace}/{module}/main.bicep`
 from the registry's trusted `main` checkout, including roots without their own
-workflow. Child modules share their root identity. Registry source is inventory
-data only; the provisioning job never executes its scripts or actions.
+workflow. It also inventories all open same-repository pull requests and
+provisions identities for added module roots not yet present on `main`; fork
+pull requests are excluded. Child modules share their root identity. Registry
+source is inventory data only; the provisioning job never executes its scripts
+or actions.
 
 Identity resources and individual Entra membership edges use the same
 [Azure Terraform module](../repository-sync/terraform/modules/azure) as Terraform
@@ -14,6 +17,14 @@ the existing backend. The job uses the five `ARM_BACKEND_*` settings for the
 state-only identity and the existing eight-field BAMI bundle for provisioning.
 Only the identity job can request OpenID Connect (OIDC) tokens; the mapping
 publisher uses a separate, target-scoped Actions Variables token.
+
+Preview identities are tagged as pull-request-owned and receive federation
+only for the matching `refs/pull/<number>/merge` module workflow. Multiple open
+pull requests adding the same module share one identity. When the last
+qualifying pull request closes without merging, the next successful scheduled
+or manual sync removes its identity and federation, then removes only its
+verified client-ID mapping entry. A merged module keeps its identity and
+promotes it to the trusted `main` workflow.
 
 ## Identity names
 

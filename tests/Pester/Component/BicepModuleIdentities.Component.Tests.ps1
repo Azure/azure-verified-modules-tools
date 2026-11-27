@@ -88,6 +88,7 @@ Describe 'Bicep module identity entry points with real files and mocked services
             Events = [System.Collections.Generic.List[string]]::new()
             Writes = [System.Collections.Generic.List[string]]::new()
             Variables = [ordered]@{}
+            PullRequests = @()
             RequestPaths = [System.Collections.Generic.List[string]]::new()
             FailOperation = ''
             BadRepository = $false
@@ -133,6 +134,12 @@ Describe 'Bicep module identity entry points with real files and mocked services
                 }
                 elseif ($ArgumentList[-1] -ceq 'repos/Azure/bicep-registry-modules') {
                     $body = @{ full_name = 'Azure/bicep-registry-modules'; fork = $state.BadRepository; id = 447791597; owner = @{ login = 'Azure'; id = 6844498 } }
+                }
+                elseif ($ArgumentList[-1] -like 'repos/Azure/bicep-registry-modules/pulls?*') {
+                    $body = $state.PullRequests
+                }
+                elseif ($ArgumentList[-1] -match '^repos/Azure/bicep-registry-modules/pulls/([0-9]+)/files\?') {
+                    $body = $state.PullRequestFiles[[int]$Matches[1]]
                 }
                 elseif ($ArgumentList[4] -ceq 'GET') {
                     $ArgumentList[11] | Should -BeLike 'repos/Azure/bicep-registry-modules/actions/variables?*'

@@ -51,6 +51,104 @@ function Get-AvmBicepModulePath {
     return ,([string[]]@($paths | Sort-Object -CaseSensitive))
 }
 
+function Get-AvmBicepOpenPullRequestModuleNumbers {
+    [CmdletBinding()]
+    [OutputType([System.Collections.IDictionary])]
+    param(
+        [Parameter(Mandatory)] [string[]] $MainModulePaths,
+        [Parameter(Mandatory)] [ValidatePattern('^[1-9][0-9]*$')] [string] $RepositoryId
+    )
+
+    Set-StrictMode -Version 3.0
+    $ErrorActionPreference = 'Stop'
+    $mainModules = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($path in $MainModulePaths) {
+        Assert-AvmBicepModulePath -Path $path
+        $null = $mainModules.Add($path)
+    }
+
+    $result = [ordered]@{}
+    $seenPullRequests = [System.Collections.Generic.HashSet[int]]::new()
+    $page = 1
+    do {
+        $pullRequests = @(Invoke-RepositoryGitHubApi -Endpoint "repos/Azure/bicep-registry-modules/pulls?state=open&per_page=100&page=$page")
+        if ($pullRequests.Count -gt 100) {
+            throw [System.IO.InvalidDataException]::new('GitHub returned an oversized open pull-request page.')
+        }
+        foreach ($pullRequest in $pullRequests) {
+            if ($pullRequest -isnot [System.Collections.IDictionary] -or
+                ($pullRequest['number'] -isnot [int] -and $pullRequest['number'] -isnot [long]) -or
+                $pullRequest['number'] -lt 1 -or -not $seenPullRequests.Add([int]$pullRequest['number']) -or
+                $pullRequest['state'] -cne 'open' -or
+                $pullRequest['base'] -isnot [System.Collections.IDictionary] -or
+                $pullRequest['base']['repo'] -isnot [System.Collections.IDictionary] -or
+                $pullRequest['head'] -isnot [System.Collections.IDictionary] -or
+                $pullRequest['base']['repo']['full_name'] -cne 'Azure/bicep-registry-modules' -or
+                [string]$pullRequest['base']['repo']['id'] -cne $RepositoryId) {
+                throw [System.IO.InvalidDataException]::new('GitHub returned an invalid or duplicate Bicep pull request.')
+            }
+
+            $headRepository = $pullRequest['head']['repo']
+            if ($null -eq $headRepository -or
+                $headRepository -isnot [System.Collections.IDictionary] -or
+                $headRepository['full_name'] -cne 'Azure/bicep-registry-modules' -or
+                [string]$headRepository['id'] -cne $RepositoryId -or
+                $headRepository['fork'] -ne $false) {
+                continue
+            }
+            if ($pullRequest['head']['sha'] -isnot [string] -or
+                $pullRequest['head']['sha'] -cnotmatch '^[0-9a-f]{40}$' -or
+                $pullRequest['head']['ref'] -isnot [string] -or
+                [string]::IsNullOrWhiteSpace($pullRequest['head']['ref']) -or
+                ($pullRequest['changed_files'] -isnot [int] -and $pullRequest['changed_files'] -isnot [long]) -or
+                $pullRequest['changed_files'] -lt 0) {
+                throw [System.IO.InvalidDataException]::new('GitHub returned incomplete Bicep pull-request metadata.')
+            }
+
+            $files = [System.Collections.Generic.List[object]]::new()
+            $seenFiles = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            $filePage = 1
+            do {
+                $batch = @(Invoke-RepositoryGitHubApi -Endpoint "repos/Azure/bicep-registry-modules/pulls/$($pullRequest['number'])/files?per_page=100&page=$filePage")
+                if ($batch.Count -gt 100) {
+                    throw [System.IO.InvalidDataException]::new('GitHub returned an oversized pull-request file page.')
+                }
+                foreach ($file in $batch) {
+                    if ($file -isnot [System.Collections.IDictionary] -or
+                        $file['filename'] -isnot [string] -or
+                        $file['status'] -isnot [string] -or
+                        -not $seenFiles.Add($file['filename'])) {
+                        throw [System.IO.InvalidDataException]::new('GitHub returned a malformed or duplicate pull-request file.')
+                    }
+                    $files.Add($file)
+                }
+                $filePage++
+            } while ($batch.Count -eq 100)
+
+            if ($files.Count -ne $pullRequest['changed_files']) {
+                throw [System.IO.InvalidDataException]::new('GitHub returned an incomplete pull-request file list.')
+            }
+            foreach ($file in $files) {
+                $match = [regex]::Match(
+                    $file['filename'],
+                    '\A(avm/(?:res|ptn|utl)/[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*)/main\.bicep\z'
+                )
+                if ($file['status'] -cne 'added' -or -not $match.Success) { continue }
+                $modulePath = $match.Groups[1].Value
+                if ($mainModules.Contains($modulePath)) { continue }
+                if (-not $result.Contains($modulePath)) { $result[$modulePath] = [System.Collections.Generic.List[string]]::new() }
+                $result[$modulePath].Add([string]$pullRequest['number'])
+            }
+        }
+        $page++
+    } while ($pullRequests.Count -eq 100)
+
+    foreach ($path in @($result.Keys)) {
+        $result[$path] = @($result[$path] | Sort-Object { [int]$_ } -Unique)
+    }
+    return $result
+}
+
 function Resolve-AvmBicepModuleSettings {
     [CmdletBinding()]
     [OutputType([System.Collections.IDictionary])]
@@ -309,16 +407,34 @@ function ConvertFrom-AvmBicepIdentityMigration {
     )
 
     $context = Get-AvmBicepIdentityPublicationContext
-    if ($Migration.Count -ne 4 -or ($Migration['schemaVersion'] -isnot [int] -and $Migration['schemaVersion'] -isnot [long]) -or
+    $hasRetirements = $Migration.Contains('retired')
+    if (($Migration.Count -ne 4 -and -not ($hasRetirements -and $Migration.Count -eq 5)) -or
+        @($Migration.Keys | Where-Object { $_ -cnotin @('schemaVersion', 'context', 'before', 'after', 'retired') }).Count -gt 0 -or
+        ($Migration['schemaVersion'] -isnot [int] -and $Migration['schemaVersion'] -isnot [long]) -or
         $Migration['schemaVersion'] -ne 1 -or
         $Migration['context'] -isnot [System.Collections.IDictionary] -or $Migration['context'].Count -ne $context.Count -or
         $Migration['before'] -isnot [System.Collections.IDictionary] -or
-        $Migration['after'] -isnot [System.Collections.IDictionary] -or $Migration['before'].Count -ne $Migration['after'].Count) {
-        throw [System.IO.InvalidDataException]::new('Identity rename evidence must contain the complete current-run before and after identity records.')
+        $Migration['after'] -isnot [System.Collections.IDictionary] -or $Migration['before'].Count -ne $Migration['after'].Count -or
+        ($hasRetirements -and $Migration['retired'] -isnot [System.Collections.IDictionary])) {
+        throw [System.IO.InvalidDataException]::new('Identity evidence must contain complete current-run rename and optional preview-retirement records.')
     }
     foreach ($key in $context.Keys) {
         if ($Migration['context'][$key] -isnot [string] -or $Migration['context'][$key] -cne $context[$key]) {
             throw [System.InvalidOperationException]::new('Identity rename evidence belongs to a different run, attempt, repository or commit.')
+        }
+    }
+    if ($hasRetirements) {
+        $retiredClients = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($path in $Migration['retired'].Keys) {
+            Assert-AvmBicepModulePath -Path $path
+            $clientId = [guid]::Empty
+            if ($Migration['retired'][$path] -isnot [string] -or
+                -not [guid]::TryParseExact($Migration['retired'][$path], 'D', [ref]$clientId) -or
+                $clientId -eq [guid]::Empty -or $clientId.ToString() -in @(
+                    $Settings.TEST_BAMI_CONTROLLER_CLIENT_ID, $Settings.TEST_BAMI_BICEP_CLIENT_ID
+                ) -or -not $retiredClients.Add($clientId.ToString()) -or $ClientIds.Contains($path)) {
+                throw [System.InvalidOperationException]::new('Preview retirement evidence must identify unique removed module clients absent from the proposed mapping.')
+            }
         }
     }
     if ($Migration['before'].Count -eq 0) { return [ordered]@{} }
@@ -349,13 +465,26 @@ function Assert-AvmBicepModuleMappingExtension {
     if ($existing -isnot [System.Collections.IDictionary]) {
         throw [System.IO.InvalidDataException]::new('The existing module client-ID mapping must be a JSON object.')
     }
-    $null = ConvertTo-AvmBicepModuleClientIdJson -ClientIds $existing -ForbiddenClientIds $ForbiddenClientIds
+    if ($existing.Count -gt 0) {
+        $null = ConvertTo-AvmBicepModuleClientIdJson -ClientIds $existing -ForbiddenClientIds $ForbiddenClientIds
+    }
     $previous = if ($null -ne $IdentityMigration) {
         ConvertFrom-AvmBicepIdentityMigration -Migration $IdentityMigration -ClientIds $ClientIds -Settings $Settings
     }
     else { @{} }
+    $retired = if ($null -ne $IdentityMigration -and $IdentityMigration.Contains('retired')) {
+        $IdentityMigration['retired']
+    }
+    else { @{} }
+    foreach ($path in $retired.Keys) {
+        if (-not $existing.Contains($path) -or $existing[$path] -ine $retired[$path]) {
+            throw [System.InvalidOperationException]::new("Preview retirement evidence does not match the previously published client ID for '$path'.")
+        }
+    }
     foreach ($path in $existing.Keys) {
-        if (-not $ClientIds.Contains($path) -or ($ClientIds[$path] -ine $existing[$path] -and
+        if ((-not $ClientIds.Contains($path) -and
+                (-not $retired.Contains($path) -or $retired[$path] -ine $existing[$path])) -or
+            ($ClientIds.Contains($path) -and $ClientIds[$path] -ine $existing[$path] -and
             (-not $previous.Contains($path) -or $previous[$path] -ine $existing[$path]) -and
             -not ($ExistingIdentityClientIds.Contains($path) -and $ClientIds[$path] -ieq $ExistingIdentityClientIds[$path]))) {
             throw [System.InvalidOperationException]::new("The existing client ID for '$path' cannot be removed or retargeted by routine synchronization.")

@@ -187,6 +187,19 @@ run "one_apply_returns_the_complete_module_mapping" {
     )
     error_message = "One apply must produce both dedicated client IDs without changing the retained shared identity."
   }
+
+}
+
+run "invalid_pull_request_number_is_rejected" {
+  command = plan
+
+  variables {
+    pull_request_numbers = {
+      "avm/res/fabric/capacity" = ["0"]
+    }
+  }
+
+  expect_failures = [var.pull_request_numbers]
 }
 
 run "subsequent_plan_keeps_the_same_names_and_client_ids" {

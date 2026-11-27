@@ -16,6 +16,7 @@ function New-AvmTestBicepIdentityPlan {
         [switch] $KnownClient,
         [switch] $NamingMigration,
         [System.Collections.IDictionary] $Modules = (New-AvmTestBicepIdentityModules),
+        [System.Collections.IDictionary] $PullRequestNumbers = @{},
         [string] $JobWorkflowPath = 'Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml'
     )
 
@@ -28,6 +29,8 @@ function New-AvmTestBicepIdentityPlan {
     }
     $number = 0
     foreach ($path in $Modules.Keys) {
+        $isPreview = $PullRequestNumbers.Contains($path)
+        $modulePullRequestNumbers = if ($isPreview) { @($PullRequestNumbers[$path]) } else { @() }
         $slice = New-AvmTestBamiPlan -KnownClient:$KnownClient -GroupNames $Modules[$path] `
             -NamingMigration:$NamingMigration -PreviousIdentityName (Get-AvmTestIdentityName -ModulePath $path -Legacy) `
             -PreviousClientId ('10000000-0000-4000-8000-{0:d12}' -f (106 + $number)) `
@@ -38,6 +41,8 @@ function New-AvmTestBicepIdentityPlan {
             -PrincipalId ('10000000-0000-4000-8000-{0:d12}' -f (7 + $number)) `
             -JobWorkflowPath $JobWorkflowPath `
             -WorkflowRef "Azure/bicep-registry-modules/.github/workflows/$($path.Replace('/', '.')).yml@refs/heads/main" `
+            -PullRequestNumbers $modulePullRequestNumbers -IncludeMainWorkflow:(-not $isPreview) `
+            -IdentityTags $(if ($isPreview) { @{ 'avm-bicep-identity-scope' = 'pull-request' } } else { @{} }) `
             -BicepRegistryFederation
         $plan.resource_changes += $slice.resource_changes
         $plan.planned_values.root_module.child_modules += $slice.planned_values.root_module.child_modules

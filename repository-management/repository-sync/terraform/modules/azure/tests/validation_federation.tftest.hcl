@@ -74,6 +74,42 @@ run "execution_federation_uses_the_configured_workflow_path" {
   }
 }
 
+run "preview_identity_trusts_only_its_open_pull_request_workflow" {
+  command = plan
+
+  variables {
+    identity_name                       = "id-test-bicep-avm-res-preview"
+    identity_tags                       = { "avm-bicep-identity-scope" = "pull-request" }
+    github_repository_owner             = "Azure"
+    github_repository_name              = "bicep-registry-modules"
+    github_repository_id                = "447791597"
+    github_organization_id              = "6844498"
+    repository_sync_repository_id       = "1239632211"
+    github_repository_environment_names = ["avm-validation"]
+    github_job_workflow_path            = "Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml"
+    github_workflow_ref                 = "Azure/bicep-registry-modules/.github/workflows/avm.res.fabric.capacity.yml@refs/heads/main"
+    github_module_federation_enabled    = false
+    github_pull_request_numbers         = ["120"]
+    bicep_registry_federation_enabled   = true
+  }
+
+  assert {
+    condition = (
+      toset(keys(azapi_resource.federated_credentials)) ==
+      toset(["module-avm-validation-pr-120", "validation", "bicep-registry"])
+    )
+    error_message = "A preview identity must retain validation and registry federation and only add its exact PR credential."
+  }
+
+  assert {
+    condition = (
+      azapi_resource.federated_credentials["module-avm-validation-pr-120"].body.properties.claimsMatchingExpression.value ==
+      "claims['sub'] matches 'repository_owner_id:6844498:repository_id:447791597:environment:avm-validation:*' and claims['job_workflow_ref'] matches 'Azure/bicep-registry-modules/.github/workflows/avm.template.module.deployment.yml@*' and claims['sub'] matches '*:workflow_ref:Azure/bicep-registry-modules/.github/workflows/*' and claims['sub'] matches '*:workflow_ref:*/avm.res.fabric.capacity.yml@refs/pull/120/merge' and claims['repository_id'] eq '447791597'"
+    )
+    error_message = "The PR credential must bind the module workflow to refs/pull/120/merge."
+  }
+}
+
 run "validation_trust_stays_on_the_same_test_identity" {
   command = plan
 
