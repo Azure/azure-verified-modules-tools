@@ -1,0 +1,42 @@
+[
+  {
+    "date": "2026-08-28",
+    "repoCount": 188,
+    "unreleasedWork": 39,
+    "aged": 21,
+    "neverReleased": 46,
+    "nothingToRelease": 103,
+    "unreleasedPrs": 93,
+    "awaitingIssues": 5
+  },
+  {
+    "date": "2026-08-29",
+    "repoCount": 188,
+    "unreleasedWork": 38,
+    "aged": 21,
+    "neverReleased": 46,
+    "nothingToRelease": 104,
+    "unreleasedPrs": 95,
+    "awaitingIssues": 5
+  },
+  {
+    "date": "2026-08-30",
+    "repoCount": 188,
+    "unreleasedWork": 38,
+    "aged": 21,
+    "neverReleased": 46,
+    "nothingToRelease": 104,
+    "unreleasedPrs": 95,
+    "awaitingIssues": 5
+  },
+  {
+    "date": "2026-08-31",
+    "repoCount": 188,
+    "unreleasedWork": 38,
+    "aged": 21,
+    "neverReleased": 46,
+    "nothingToRelease": 104,
+    "unreleasedPrs": 96,
+    "awaitingIssues": 6
+  }
+]

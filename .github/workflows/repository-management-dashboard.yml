@@ -1,0 +1,98 @@
+name: Repository Management - Release Dashboard
+
+on:
+  schedule:
+    # Daily at 13:17 UTC, about 6am US Pacific, so the data is fresh at the start of
+    # the workday. The offset avoids the top-of-hour queue that delays scheduled runs.
+    - cron: '17 13 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    # site/data is deliberately absent. The run commits history back into it, and a
+    # workflow may not combine paths with paths-ignore, so this lists only the
+    # hand-edited files. Pushes made with GITHUB_TOKEN do not start new runs either.
+    paths:
+      - 'repository-management/release-dashboard/site/*.html'
+      - 'repository-management/release-dashboard/site/*.css'
+      - 'repository-management/release-dashboard/site/*.js'
+      - 'repository-management/release-dashboard/scripts/**'
+      - '.github/workflows/repository-management-dashboard.yml'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+# Never let two publishes race. A queued run waits rather than cancelling, so a sweep
+# that is already collecting data is allowed to finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: repository-management/release-dashboard
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      # The history commit is rebased onto the branch tip, which a shallow clone
+      # cannot do.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Report API budget before the sweep
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh api rate_limit --jq '.resources.core | "core limit=\(.limit) remaining=\(.remaining)"'
+
+      - name: Collect release status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pwsh -File scripts/Get-AvmReleaseStatus.ps1 -OutputPath site/data/release-status.json
+
+      - name: Report API budget after the sweep
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh api rate_limit --jq '.resources.core | "core limit=\(.limit) remaining=\(.remaining)"'
+
+      # The snapshot is rebuilt every run and stays uncommitted. History cannot be
+      # rebuilt, because the API only reports the present, so it is committed.
+      - name: Record today in the history
+        run: pwsh -File scripts/Update-AvmReleaseHistory.ps1
+
+      - name: Commit the history
+        run: |
+          if git diff --quiet -- site/data/history.json; then
+            echo "History already current for today, nothing to commit."
+            exit 0
+          fi
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add site/data/history.json
+          git commit -m 'chore: record release status for the day [skip ci]'
+          # A run that starts while another has just pushed would otherwise fail here.
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Stage the site
+        run: |
+          cp -r site "${RUNNER_TEMP}/_site"
+          rm -f "${RUNNER_TEMP}/_site/serve.js"
+
+      # Pages must already be enabled with build type "workflow". GITHUB_TOKEN cannot
+      # create the site itself, so a repository admin runs this once:
+      #   gh api -X POST repos/Azure/azure-verified-modules-tools/pages -f build_type=workflow
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ runner.temp }}/_site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
