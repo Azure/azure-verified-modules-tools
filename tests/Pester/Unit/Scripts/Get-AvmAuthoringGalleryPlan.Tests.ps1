@@ -38,7 +38,7 @@ Describe 'Get-AvmAuthoringGalleryPlan' {
     It 'treats a Gallery package-not-found response as unpublished' {
         Mock Find-PSResource {
             if ($Version -eq '1.1.0') {
-                Write-Error 'Package does not exist on the server.'
+                Write-Error "Package with name 'Avm.Authoring', version '1.1.0' could not be found in repository 'PSGallery'."
             } else {
                 [pscustomobject]@{ Version = [version]'1.0.0' }
             }

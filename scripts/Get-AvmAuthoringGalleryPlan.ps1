@@ -47,7 +47,9 @@ if ($ready.Count -gt 0) {
                     if ((Get-AvmNetworkFailureKind -ErrorRecord $findError) -eq 'Transient') {
                         throw $findError
                     }
-                    if ($findError.Exception.Message -notmatch '(?i)\bPackage does not exist on the server\b') {
+                    $notFound = $findError.Exception.Message -match '(?i)\bPackage does not exist on the server\b' -or
+                        $findError.Exception.Message -eq "Package with name 'Avm.Authoring', version '$version' could not be found in repository 'PSGallery'."
+                    if (-not $notFound) {
                         throw $findError
                     }
                 }
