@@ -76,50 +76,50 @@ function Get-AvmBicepOpenPullRequestModuleNumbers {
             throw [System.IO.InvalidDataException]::new('GitHub returned an oversized open pull-request page.')
         }
         foreach ($pullRequest in $pullRequests) {
-            if ($pullRequest -isnot [System.Collections.IDictionary] -or
-                ($pullRequest['number'] -isnot [int] -and $pullRequest['number'] -isnot [long]) -or
-                $pullRequest['number'] -lt 1 -or -not $seenPullRequests.Add([int]$pullRequest['number']) -or
-                $pullRequest['state'] -cne 'open' -or
-                $pullRequest['base'] -isnot [System.Collections.IDictionary] -or
-                $pullRequest['base']['repo'] -isnot [System.Collections.IDictionary] -or
-                $pullRequest['head'] -isnot [System.Collections.IDictionary] -or
-                $pullRequest['base']['repo']['full_name'] -cne 'Azure/bicep-registry-modules' -or
-                [string]$pullRequest['base']['repo']['id'] -cne $RepositoryId) {
+            if ($pullRequest -isnot [pscustomobject] -or
+                ($pullRequest.number -isnot [int] -and $pullRequest.number -isnot [long]) -or
+                $pullRequest.number -lt 1 -or -not $seenPullRequests.Add([int]$pullRequest.number) -or
+                $pullRequest.state -cne 'open' -or
+                $pullRequest.base -isnot [pscustomobject] -or
+                $pullRequest.base.repo -isnot [pscustomobject] -or
+                $pullRequest.head -isnot [pscustomobject] -or
+                $pullRequest.base.repo.full_name -cne 'Azure/bicep-registry-modules' -or
+                [string]$pullRequest.base.repo.id -cne $RepositoryId) {
                 throw [System.IO.InvalidDataException]::new('GitHub returned an invalid or duplicate Bicep pull request.')
             }
 
-            $headRepository = $pullRequest['head']['repo']
+            $headRepository = $pullRequest.head.repo
             if ($null -eq $headRepository -or
-                $headRepository -isnot [System.Collections.IDictionary] -or
-                $headRepository['full_name'] -cne 'Azure/bicep-registry-modules' -or
-                [string]$headRepository['id'] -cne $RepositoryId -or
-                $headRepository['fork'] -ne $false) {
+                $headRepository -isnot [pscustomobject] -or
+                $headRepository.full_name -cne 'Azure/bicep-registry-modules' -or
+                [string]$headRepository.id -cne $RepositoryId -or
+                $headRepository.fork -ne $false) {
                 continue
             }
-            if ($pullRequest['head']['sha'] -isnot [string] -or
-                $pullRequest['head']['sha'] -cnotmatch '^[0-9a-f]{40}$' -or
-                $pullRequest['head']['ref'] -isnot [string] -or
-                [string]::IsNullOrWhiteSpace($pullRequest['head']['ref']) -or
-                $pullRequest['base']['sha'] -isnot [string] -or
-                $pullRequest['base']['sha'] -cnotmatch '^[0-9a-f]{40}$') {
+            if ($pullRequest.head.sha -isnot [string] -or
+                $pullRequest.head.sha -cnotmatch '^[0-9a-f]{40}$' -or
+                $pullRequest.head.ref -isnot [string] -or
+                [string]::IsNullOrWhiteSpace($pullRequest.head.ref) -or
+                $pullRequest.base.sha -isnot [string] -or
+                $pullRequest.base.sha -cnotmatch '^[0-9a-f]{40}$') {
                 throw [System.IO.InvalidDataException]::new('GitHub returned incomplete Bicep pull-request metadata.')
             }
 
-            $detailEndpoint = "repos/Azure/bicep-registry-modules/pulls/$($pullRequest['number'])"
+            $detailEndpoint = "repos/Azure/bicep-registry-modules/pulls/$($pullRequest.number)"
             $detailsBefore = Invoke-RepositoryGitHubApi -Endpoint $detailEndpoint
             $files = [System.Collections.Generic.List[object]]::new()
             $seenFiles = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
             $filePage = 1
             do {
-                $batch = @(Invoke-RepositoryGitHubApi -Endpoint "repos/Azure/bicep-registry-modules/pulls/$($pullRequest['number'])/files?per_page=100&page=$filePage")
+                $batch = @(Invoke-RepositoryGitHubApi -Endpoint "repos/Azure/bicep-registry-modules/pulls/$($pullRequest.number)/files?per_page=100&page=$filePage")
                 if ($batch.Count -gt 100) {
                     throw [System.IO.InvalidDataException]::new('GitHub returned an oversized pull-request file page.')
                 }
                 foreach ($file in $batch) {
-                    if ($file -isnot [System.Collections.IDictionary] -or
-                        $file['filename'] -isnot [string] -or
-                        $file['status'] -isnot [string] -or
-                        -not $seenFiles.Add($file['filename'])) {
+                    if ($file -isnot [pscustomobject] -or
+                        $file.filename -isnot [string] -or
+                        $file.status -isnot [string] -or
+                        -not $seenFiles.Add($file.filename)) {
                         throw [System.IO.InvalidDataException]::new('GitHub returned a malformed or duplicate pull-request file.')
                     }
                     $files.Add($file)
@@ -129,33 +129,33 @@ function Get-AvmBicepOpenPullRequestModuleNumbers {
 
             $detailsAfter = Invoke-RepositoryGitHubApi -Endpoint $detailEndpoint
             foreach ($details in @($detailsBefore, $detailsAfter)) {
-                if ($details -isnot [System.Collections.IDictionary] -or
-                    $details['number'] -ne $pullRequest['number'] -or $details['state'] -cne 'open' -or
-                    $details['head'] -isnot [System.Collections.IDictionary] -or
-                    $details['base'] -isnot [System.Collections.IDictionary] -or
-                    $details['head']['repo'] -isnot [System.Collections.IDictionary] -or
-                    $details['base']['repo'] -isnot [System.Collections.IDictionary] -or
-                    [string]$details['head']['repo']['id'] -cne $RepositoryId -or
-                    $details['head']['repo']['fork'] -ne $false -or
-                    [string]$details['base']['repo']['id'] -cne $RepositoryId -or
-                    $details['head']['sha'] -cne $pullRequest['head']['sha'] -or
-                    $details['head']['ref'] -cne $pullRequest['head']['ref'] -or
-                    $details['base']['sha'] -cne $pullRequest['base']['sha'] -or
-                    ($details['changed_files'] -isnot [int] -and $details['changed_files'] -isnot [long]) -or
-                    $details['changed_files'] -lt 0 -or $details['changed_files'] -ne $files.Count) {
+                if ($details -isnot [pscustomobject] -or
+                    $details.number -ne $pullRequest.number -or $details.state -cne 'open' -or
+                    $details.head -isnot [pscustomobject] -or
+                    $details.base -isnot [pscustomobject] -or
+                    $details.head.repo -isnot [pscustomobject] -or
+                    $details.base.repo -isnot [pscustomobject] -or
+                    [string]$details.head.repo.id -cne $RepositoryId -or
+                    $details.head.repo.fork -ne $false -or
+                    [string]$details.base.repo.id -cne $RepositoryId -or
+                    $details.head.sha -cne $pullRequest.head.sha -or
+                    $details.head.ref -cne $pullRequest.head.ref -or
+                    $details.base.sha -cne $pullRequest.base.sha -or
+                    ($details.changed_files -isnot [int] -and $details.changed_files -isnot [long]) -or
+                    $details.changed_files -lt 0 -or $details.changed_files -ne $files.Count) {
                     throw [System.IO.InvalidDataException]::new('GitHub returned incomplete pull-request file list or changed pull-request metadata.')
                 }
             }
             foreach ($file in $files) {
                 $match = [regex]::Match(
-                    $file['filename'],
+                    $file.filename,
                     '\A(avm/(?:res|ptn|utl)/[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*)/main\.bicep\z'
                 )
-                if ($file['status'] -cne 'added' -or -not $match.Success) { continue }
+                if ($file.status -cne 'added' -or -not $match.Success) { continue }
                 $modulePath = $match.Groups[1].Value
                 if ($mainModules.Contains($modulePath)) { continue }
                 if (-not $result.Contains($modulePath)) { $result[$modulePath] = [System.Collections.Generic.List[string]]::new() }
-                $result[$modulePath].Add([string]$pullRequest['number'])
+                $result[$modulePath].Add([string]$pullRequest.number)
             }
         }
         $page++

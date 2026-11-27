@@ -302,7 +302,7 @@ Describe 'Bicep module additions in open pull requests' {
             param($Endpoint)
             $script:pullRequestApiCalls.Add($Endpoint)
             if ($Endpoint -ceq 'repos/Azure/bicep-registry-modules/pulls?state=open&per_page=100&page=1') {
-                return $script:pullRequests
+                return ($script:pullRequests | ConvertTo-Json -Depth 20 | ConvertFrom-Json)
             }
             $detailMatch = [regex]::Match($Endpoint, 'pulls/([0-9]+)$')
             if ($detailMatch.Success) {
@@ -313,11 +313,11 @@ Describe 'Bicep module additions in open pull requests' {
                     $details.head = $details.head.Clone()
                     $details.head.sha = 'b' * 40
                 }
-                return $details
+                return ($details | ConvertTo-Json -Depth 20 | ConvertFrom-Json)
             }
             $match = [regex]::Match($Endpoint, 'pulls/([0-9]+)/files\?')
             if (-not $match.Success) { throw "Unexpected GitHub endpoint: $Endpoint" }
-            return $script:pullRequestFiles[[int]$match.Groups[1].Value]
+            return ($script:pullRequestFiles[[int]$match.Groups[1].Value] | ConvertTo-Json -Depth 20 | ConvertFrom-Json)
         }
     }
 
