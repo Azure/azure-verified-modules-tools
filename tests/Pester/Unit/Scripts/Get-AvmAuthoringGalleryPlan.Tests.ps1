@@ -12,7 +12,11 @@ Describe 'Get-AvmAuthoringGalleryPlan' {
         Mock Invoke-RestMethod {
             @{ name = 'psresource/avm.authoring'; tags = @('1.0.0', '1.1.0', '1.3.0', '1.4.0', '1.5.0') }
         }
-        Mock Find-PSResource { [pscustomobject]@{ Version = [version]'1.0.0' } }
+        Mock Find-PSResource {
+            if ($Version -eq '1.0.0') {
+                [pscustomobject]@{ Version = [version]'1.0.0' }
+            }
+        }
     }
 
     AfterEach {
@@ -23,6 +27,7 @@ Describe 'Get-AvmAuthoringGalleryPlan' {
     It 'plans only a full stable release that is in MCR and missing from Gallery' {
         & $script:planner
         Get-Content -LiteralPath $env:GITHUB_OUTPUT | Should -BeExactly 'tags=v1.1.0'
+        Should -Invoke Find-PSResource -Exactly 1 -ParameterFilter { $Version -eq '1.1.0' }
     }
 
     It 'does not publish an already-published manual selection' {
@@ -30,11 +35,9 @@ Describe 'Get-AvmAuthoringGalleryPlan' {
         Get-Content -LiteralPath $env:GITHUB_OUTPUT | Should -BeExactly 'tags='
     }
 
-    It 'retries a Gallery package-not-found response' {
-        $global:AvmAuthoringGalleryFindAttempts = 0
+    It 'treats a Gallery package-not-found response as unpublished' {
         Mock Find-PSResource {
-            $global:AvmAuthoringGalleryFindAttempts++
-            if ($global:AvmAuthoringGalleryFindAttempts -eq 1) {
+            if ($Version -eq '1.1.0') {
                 Write-Error 'Package does not exist on the server.'
             } else {
                 [pscustomobject]@{ Version = [version]'1.0.0' }
@@ -44,7 +47,35 @@ Describe 'Get-AvmAuthoringGalleryPlan' {
         & $script:planner
 
         Get-Content -LiteralPath $env:GITHUB_OUTPUT | Should -BeExactly 'tags=v1.1.0'
-        Should -Invoke Find-PSResource -Exactly 2
+        Should -Invoke Find-PSResource -Exactly 1 -ParameterFilter { $Version -eq '1.1.0' }
+    }
+
+    It 'fails closed for other permanent Gallery lookup errors' {
+        Mock Find-PSResource { Write-Error 'HTTP 403 Forbidden' }
+
+        { & $script:planner } | Should -Throw '*HTTP 403 Forbidden*'
+        Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
+    }
+
+    It 'retries transient Gallery lookup failures before deciding whether to publish' {
+        $global:AvmAuthoringGalleryFindAttempts = 0
+        Mock Find-PSResource {
+            if ($Version -eq '1.1.0') {
+                $global:AvmAuthoringGalleryFindAttempts++
+                if ($global:AvmAuthoringGalleryFindAttempts -eq 1) {
+                    Write-Error 'HTTP 503 Service Unavailable'
+                } else {
+                    [pscustomobject]@{ Version = [version]'1.1.0' }
+                }
+            } else {
+                [pscustomobject]@{ Version = [version]'1.0.0' }
+            }
+        }
+
+        & $script:planner
+
+        Get-Content -LiteralPath $env:GITHUB_OUTPUT | Should -BeExactly 'tags='
+        Should -Invoke Find-PSResource -Exactly 2 -ParameterFilter { $Version -eq '1.1.0' }
     }
 
     It 'rejects a manual tag that is not ready: <Tag>' -TestCases @(

@@ -35,20 +35,28 @@ if ($ReleaseTag -and $ready.Count -eq 0) {
 $pending = @()
 if ($ready.Count -gt 0) {
     . (Join-Path $PSScriptRoot 'Import-AvmNetworkRetry.ps1')
-    $published = @(Invoke-AvmRetry -RetryActivity 'Listing Avm.Authoring versions on PSGallery' -RetryAction {
-        $findErrors = $null
-        $found = Find-PSResource -Name Avm.Authoring -Version '*' -Repository PSGallery `
-            -ErrorAction SilentlyContinue -ErrorVariable findErrors
-        foreach ($findError in @($findErrors)) {
-            throw $findError
+    foreach ($tag in $ready | Select-Object -Unique) {
+        $version = $tag.Substring(1)
+        $existing = Invoke-AvmRetry `
+            -RetryActivity "Checking whether Avm.Authoring $version is published on PSGallery" `
+            -RetryAction {
+                $findErrors = $null
+                $found = Find-PSResource -Name Avm.Authoring -Version $version -Repository PSGallery `
+                    -ErrorAction SilentlyContinue -ErrorVariable findErrors
+                foreach ($findError in @($findErrors)) {
+                    if ((Get-AvmNetworkFailureKind -ErrorRecord $findError) -eq 'Transient') {
+                        throw $findError
+                    }
+                    if ($findError.Exception.Message -notmatch '(?i)\bPackage does not exist on the server\b') {
+                        throw $findError
+                    }
+                }
+                $found
+            }
+        if (-not $existing) {
+            $pending += $tag
         }
-        $found |
-            ForEach-Object { $_.Version.ToString() }
-    } -RetryOnPermanentFailure {
-        param($ErrorRecord)
-        $ErrorRecord.Exception.Message -match '(?i)\bPackage does not exist on the server\b'
-    })
-    $pending = @($ready | Where-Object { $published -cnotcontains $_.Substring(1) } | Select-Object -Unique)
+    }
 }
 
 Write-Host "Found $($pending.Count) full release(s) in MCR not yet on PSGallery."
