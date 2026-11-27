@@ -59,6 +59,22 @@ param tags = {
         $result.JsonParameters | Should -Not -Match 'Required parameters'
     }
 
+    It 'converts parameter names containing digits and underscores without converting nested properties' {
+        $result = InModuleScope 'Avm.Authoring' {
+            ConvertTo-AvmBicepDocsExampleParameter -Parameters @{
+                v1LegacyMode = @{ value = $false }
+                legacy_mode = @{ value = $false }
+                settings = @{ value = @{ nested_v1Mode = $false } }
+            }
+        }
+
+        $result.BicepParameterFile | Should -Match '(?m)^param v1LegacyMode = false$'
+        $result.BicepParameterFile | Should -Match '(?m)^param legacy_mode = false$'
+        $result.BicepParameterFile | Should -Match '(?m)^param settings = \{$'
+        $result.BicepParameterFile | Should -Match '(?m)^  nested_v1Mode: false$'
+        $result.BicepParameterFile | Should -Not -Match '(?m)^param nested_v1Mode = false$'
+    }
+
     It 'enumerates a parameter and nested property named keys' {
         $parameters = @{
             keys = @{ value = @(@{ keys = @('a'); name = 'demo' }) }

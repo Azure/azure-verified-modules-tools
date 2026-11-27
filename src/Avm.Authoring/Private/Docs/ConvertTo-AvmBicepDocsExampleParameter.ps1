@@ -99,7 +99,7 @@ function ConvertTo-AvmBicepDocsExampleParameter {
         if ([string]::IsNullOrEmpty($line)) {
             continue
         }
-        $text = $line -creplace '^ {4}([a-zA-Z]*):(.*)$', 'param $1 =$2'
+        $text = $line -creplace '^ {4}([A-Za-z_][A-Za-z0-9_]*):(.*)$', 'param $1 =$2'
         $fileLines.Add(($text -creplace '^ {4}', ''))
     }
 
