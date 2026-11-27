@@ -100,11 +100,13 @@ function Get-AvmBicepOpenPullRequestModuleNumbers {
                 $pullRequest['head']['sha'] -cnotmatch '^[0-9a-f]{40}$' -or
                 $pullRequest['head']['ref'] -isnot [string] -or
                 [string]::IsNullOrWhiteSpace($pullRequest['head']['ref']) -or
-                ($pullRequest['changed_files'] -isnot [int] -and $pullRequest['changed_files'] -isnot [long]) -or
-                $pullRequest['changed_files'] -lt 0) {
+                $pullRequest['base']['sha'] -isnot [string] -or
+                $pullRequest['base']['sha'] -cnotmatch '^[0-9a-f]{40}$') {
                 throw [System.IO.InvalidDataException]::new('GitHub returned incomplete Bicep pull-request metadata.')
             }
 
+            $detailEndpoint = "repos/Azure/bicep-registry-modules/pulls/$($pullRequest['number'])"
+            $detailsBefore = Invoke-RepositoryGitHubApi -Endpoint $detailEndpoint
             $files = [System.Collections.Generic.List[object]]::new()
             $seenFiles = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
             $filePage = 1
@@ -125,8 +127,24 @@ function Get-AvmBicepOpenPullRequestModuleNumbers {
                 $filePage++
             } while ($batch.Count -eq 100)
 
-            if ($files.Count -ne $pullRequest['changed_files']) {
-                throw [System.IO.InvalidDataException]::new('GitHub returned an incomplete pull-request file list.')
+            $detailsAfter = Invoke-RepositoryGitHubApi -Endpoint $detailEndpoint
+            foreach ($details in @($detailsBefore, $detailsAfter)) {
+                if ($details -isnot [System.Collections.IDictionary] -or
+                    $details['number'] -ne $pullRequest['number'] -or $details['state'] -cne 'open' -or
+                    $details['head'] -isnot [System.Collections.IDictionary] -or
+                    $details['base'] -isnot [System.Collections.IDictionary] -or
+                    $details['head']['repo'] -isnot [System.Collections.IDictionary] -or
+                    $details['base']['repo'] -isnot [System.Collections.IDictionary] -or
+                    [string]$details['head']['repo']['id'] -cne $RepositoryId -or
+                    $details['head']['repo']['fork'] -ne $false -or
+                    [string]$details['base']['repo']['id'] -cne $RepositoryId -or
+                    $details['head']['sha'] -cne $pullRequest['head']['sha'] -or
+                    $details['head']['ref'] -cne $pullRequest['head']['ref'] -or
+                    $details['base']['sha'] -cne $pullRequest['base']['sha'] -or
+                    ($details['changed_files'] -isnot [int] -and $details['changed_files'] -isnot [long]) -or
+                    $details['changed_files'] -lt 0 -or $details['changed_files'] -ne $files.Count) {
+                    throw [System.IO.InvalidDataException]::new('GitHub returned incomplete pull-request file list or changed pull-request metadata.')
+                }
             }
             foreach ($file in $files) {
                 $match = [regex]::Match(
