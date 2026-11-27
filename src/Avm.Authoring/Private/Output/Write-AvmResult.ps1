@@ -39,7 +39,7 @@ function Write-AvmResult {
         Write-AvmLog $lines[$index] -Level $currentLevel
     }
 
-    if ([string]::IsNullOrWhiteSpace($env:GITHUB_ACTIONS)) {
+    if (-not (Test-AvmGitHubActionsContext)) {
         return
     }
     if ([string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {

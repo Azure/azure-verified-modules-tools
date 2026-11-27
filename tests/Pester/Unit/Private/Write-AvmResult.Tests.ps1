@@ -11,6 +11,23 @@ AfterAll {
 }
 
 Describe 'Write-AvmResult GitHub summary' {
+    It 'does not write a GitHub summary when GitHub Actions is false' {
+        $oldActions = $env:GITHUB_ACTIONS
+        $oldSummary = $env:GITHUB_STEP_SUMMARY
+        try {
+            $env:GITHUB_ACTIONS = 'false'
+            $env:GITHUB_STEP_SUMMARY = Join-Path $TestDrive 'false-summary.md'
+            InModuleScope 'Avm.Authoring' {
+                Write-AvmResult -Result @([pscustomobject]@{ Status = 'pass' }) -Verb 'lint'
+            } 6>$null
+            Test-Path -LiteralPath $env:GITHUB_STEP_SUMMARY | Should -BeFalse
+        }
+        finally {
+            $env:GITHUB_ACTIONS = $oldActions
+            $env:GITHUB_STEP_SUMMARY = $oldSummary
+        }
+    }
+
     It 'appends the rendered result when GitHub Actions is active' {
         $summaryPath = Join-Path $TestDrive 'summary.md'
         $oldActions = $env:GITHUB_ACTIONS

@@ -367,17 +367,97 @@ Describe 'Test-AvmModuleVersion' {
     }
 
     It 'warns once and never queries the Gallery when the check is explicitly skipped' {
-        InModuleScope 'Avm.Authoring' {
-            Mock Find-PSResource
+        $saved = @{}
+        foreach ($name in @('CI', 'GITHUB_ACTIONS', 'TF_BUILD')) {
+            $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+            [Environment]::SetEnvironmentVariable($name, [NullString]::Value)
+        }
+        try {
+            InModuleScope 'Avm.Authoring' {
+                Mock Find-PSResource
 
-            $warnings = @(
-                Test-AvmModuleVersion -SkipModuleVersionCheck 3>&1
-                Test-AvmModuleVersion -SkipModuleVersionCheck 3>&1
-            )
+                $warnings = @(
+                    Test-AvmModuleVersion -SkipModuleVersionCheck 3>&1
+                    Test-AvmModuleVersion -SkipModuleVersionCheck 3>&1
+                )
 
-            $warnings.Count | Should -Be 1
-            [string]$warnings[0] | Should -Match 'version check was skipped'
-            Should -Invoke Find-PSResource -Times 0 -Exactly
+                $warnings.Count | Should -Be 1
+                [string]$warnings[0] | Should -Match 'version check was skipped'
+                Should -Invoke Find-PSResource -Times 0 -Exactly
+            }
+        }
+        finally {
+            foreach ($name in $saved.Keys) {
+                [Environment]::SetEnvironmentVariable($name, $(if ($null -eq $saved[$name]) { [NullString]::Value } else { $saved[$name] }))
+            }
+        }
+    }
+
+    It 'suppresses only the skipped-check warning in GitHub Actions' {
+        $saved = @{}
+        foreach ($name in @('CI', 'GITHUB_ACTIONS', 'TF_BUILD')) {
+            $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+            [Environment]::SetEnvironmentVariable($name, [NullString]::Value)
+        }
+        try {
+            $env:GITHUB_ACTIONS = 'true'
+            InModuleScope 'Avm.Authoring' {
+                Mock Find-PSResource
+
+                @(Test-AvmModuleVersion -SkipModuleVersionCheck 3>&1 6>&1).Count | Should -Be 0
+                Should -Invoke Find-PSResource -Times 0 -Exactly
+                $script:AvmModuleVersionSkipWarningWritten | Should -BeFalse
+            }
+        }
+        finally {
+            foreach ($name in $saved.Keys) {
+                [Environment]::SetEnvironmentVariable($name, $(if ($null -eq $saved[$name]) { [NullString]::Value } else { $saved[$name] }))
+            }
+        }
+    }
+
+    It 'warns when other CI indicators are set without GitHub Actions' {
+        $saved = @{}
+        foreach ($name in @('CI', 'GITHUB_ACTIONS', 'TF_BUILD')) {
+            $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+        }
+        try {
+            $env:CI = 'true'
+            $env:TF_BUILD = 'true'
+            $env:GITHUB_ACTIONS = 'false'
+            InModuleScope 'Avm.Authoring' {
+                Mock Find-PSResource
+
+                $warnings = @(Test-AvmModuleVersion -SkipModuleVersionCheck 3>&1)
+                $warnings.Count | Should -Be 1
+                [string]$warnings[0] | Should -Match 'version check was skipped'
+                Should -Invoke Find-PSResource -Times 0 -Exactly
+            }
+        }
+        finally {
+            foreach ($name in $saved.Keys) {
+                [Environment]::SetEnvironmentVariable($name, $(if ($null -eq $saved[$name]) { [NullString]::Value } else { $saved[$name] }))
+            }
+        }
+    }
+
+    It 'still reports version lookup failures in GitHub Actions' {
+        $saved = [Environment]::GetEnvironmentVariable('GITHUB_ACTIONS')
+        try {
+            $env:GITHUB_ACTIONS = 'true'
+            InModuleScope 'Avm.Authoring' {
+                Mock Find-PSResource { throw [System.Net.Http.HttpRequestException]::new('Unavailable') }
+                Mock Wait-AvmRetryDelay {}
+                Mock Write-AvmLog {}
+
+                Test-AvmModuleVersion
+                Should -Invoke Write-AvmLog -Times 1 -Exactly -ParameterFilter {
+                    $Level -eq 'Warning' -and $Message -match 'Unable to check configured PowerShell repositories'
+                }
+            }
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('GITHUB_ACTIONS', $(if ($null -eq $saved) { [NullString]::Value } else { $saved }))
         }
     }
 
