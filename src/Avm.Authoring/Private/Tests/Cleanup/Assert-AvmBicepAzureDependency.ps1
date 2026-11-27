@@ -6,27 +6,38 @@ function Assert-AvmBicepAzureDependency {
     $ErrorActionPreference = 'Stop'
 
     $selected = [System.Collections.Generic.List[object]]::new()
-    $missing = [System.Collections.Generic.List[string]]::new()
     foreach ($requirement in Get-AvmBicepAzureRequirement) {
         $minimum = [version]$requirement.MinimumVersion
-        $available = @(Get-Module -ListAvailable -Name $requirement.Name |
-                Where-Object { $_.Version -ge $minimum } |
-                Sort-Object -Property Version -Descending)
-        if ($available.Count -eq 0) {
-            $missing.Add("$($requirement.Name) >= $minimum")
-            continue
-        }
-        $loadedOlder = @(Get-Module -Name $requirement.Name |
+        $loaded = @(Get-Module -Name $requirement.Name)
+        $loadedOlder = @($loaded |
                 Where-Object { $_.Version -lt $minimum })
         if ($loadedOlder.Count -gt 0) {
             throw [AvmConfigurationException]::new(
                 "An older $($requirement.Name) is loaded. Start a fresh PowerShell session with version $minimum or newer before running Bicep deployment tests.")
         }
-        $selected.Add(@{ Module = $available[0]; Requirement = $requirement })
-    }
-    if ($missing.Count -gt 0) {
-        throw [AvmConfigurationException]::new(
-            "Bicep cleanup dependencies are missing: $($missing -join ', '). Install the Az 15.5.0 bundle (or newer) and Az.Subscription 0.12.0 (or newer) in CurrentUser scope, then start a fresh PowerShell session. No modules were installed and no deployment was submitted.")
+        $loadedEligible = @($loaded |
+                Where-Object { $_.Version -ge $minimum } |
+                Sort-Object -Property Version -Descending)
+        if ($loadedEligible.Count -gt 0) {
+            $selected.Add(@{ Module = $loadedEligible[0]; Requirement = $requirement })
+        }
+        else {
+            $available = @(Get-Module -ListAvailable -Name $requirement.Name |
+                    Where-Object { $_.Version -ge $minimum } |
+                    Sort-Object -Property Version -Descending)
+            if ($available.Count -gt 0) {
+                $selected.Add(@{ Module = $available[0]; Requirement = $requirement })
+            }
+            else {
+                $resolved = Resolve-AvmTool -Name $requirement.Name
+                $selected.Add(@{
+                        Module      = [pscustomobject]@{
+                            Name = $resolved.Name; Version = $resolved.Version; Path = $resolved.Path
+                        }
+                        Requirement = $requirement
+                    })
+            }
+        }
     }
 
     foreach ($entry in $selected) {

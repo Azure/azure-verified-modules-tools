@@ -9,10 +9,12 @@ function Invoke-AvmTestE2e {
         Azure CLI sign-ins must identify the same account, tenant, cloud and
         selected subscription. Azure CLI remains required for independent
         identity checks and deployment/resource discovery used by safe cleanup;
-        deployments use Az.Resources. Required Az modules are checked, not
-        installed. Missing Bicep target IDs use opted-in CI values first, then
-        the authenticated Azure PowerShell context when no pool selects the
-        subscription.
+        deployments use Az.Resources. Required individual Az modules are
+        resolved from verified pins on demand. Existing compatible installed
+        modules remain usable, while offline and no-auto-install settings
+        prevent implicit downloads. Missing Bicep target IDs use opted-in CI
+        values first, then the authenticated Azure PowerShell context when no
+        pool selects the subscription.
         Native ARM validation and deployment support resource-group,
         subscription, management-group and tenant scope, including nested
         and cross-scope module deployments. Select authorized test targets:

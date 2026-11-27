@@ -388,8 +388,9 @@ Describe 'Test-AvmPins' {
                 Get-AvmPowerShellModulePin -Name 'PSRule.Rules.Azure' | Should -Be ([version]'1.47.0')
                 Get-AvmPowerShellModulePin -Name 'powershell-yaml' | Should -Be ([version]'0.4.12')
                 Get-AvmPowerShellModulePin -Name 'Pester' | Should -Be ([version]'5.7.1')
-                { Get-AvmPowerShellModulePin -Name 'Az.Accounts' } |
-                    Should -Throw -ExceptionType ([System.Data.DataException]) -ExpectedMessage "*no powerShellModules pin for 'Az.Accounts'*"
+                Get-AvmPowerShellModulePin -Name 'Az.Accounts' | Should -Be ([version]'5.3.4')
+                { Get-AvmPowerShellModulePin -Name 'Az.Unpinned' } |
+                    Should -Throw -ExceptionType ([System.Data.DataException]) -ExpectedMessage "*no powerShellModules pin for 'Az.Unpinned'*"
             }
         }
     }
@@ -407,6 +408,8 @@ Describe 'Test-AvmPins' {
             @($pins.tools).Count | Should -BeGreaterThan 0
             $pins.ContainsKey('policyLibrary') | Should -BeTrue
             $pins.ContainsKey('tflintPlugins') | Should -BeTrue
+            $pins.powerShellModules.ContainsKey('Az.Accounts') | Should -BeTrue
+            $pins.powerShellModules.ContainsKey('Az.Resources') | Should -BeTrue
 
             $pins.policyLibrary.repository | Should -Be 'Azure/policy-library-avm'
             $pins.policyLibrary.ref        | Should -Match '^v[0-9]'

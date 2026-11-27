@@ -16,6 +16,10 @@ Describe 'Get-AvmBicepAzureDependency' {
             Mock Install-PSResource { throw 'Inventory must not install modules.' }
             $inventory = @(Get-AvmBicepAzureDependency)
             $inventory.Count | Should -Be $requirements.Count
+            $inventory.Name | Should -Not -Contain 'Az'
+            foreach ($dependency in $inventory) {
+                $dependency.Name | Should -Match '^Az\.'
+            }
             foreach ($requirement in $requirements) {
                 $entry = @($inventory | Where-Object Name -CEQ $requirement.Name)
                 $entry.Count | Should -Be 1

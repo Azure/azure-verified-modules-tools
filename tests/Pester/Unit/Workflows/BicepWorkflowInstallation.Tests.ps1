@@ -140,12 +140,11 @@ Describe 'Bicep workflow packaged-compliance qualification' {
         Should -Invoke Write-AvmWorkflowOutput -Exactly 0
     }
 
-    It 'requires native provider capability before preparing deployment dependencies' {
+    It 'prepares deployment runtime without eagerly provisioning Azure modules' {
         Initialize-AvmWorkflow -Profile Deployment -Confirm:$false
         Should -Invoke Install-AvmWorkflowModule -Exactly 1 -ParameterFilter { $Name -eq 'Pester' -and $Version -eq [version]'5.7.1' }
-        Should -Invoke Install-AvmWorkflowModule -Exactly 1 -ParameterFilter {
-            $Name -ceq 'Az.Subscription' -and $Version -eq [version]'0.12.0' -and $Minimum
-        }
+        Should -Invoke Get-AvmBicepAzureDependency -Exactly 0
+        Should -Invoke Install-AvmWorkflowModule -Exactly 0 -ParameterFilter { $Name -like 'Az.*' }
         Should -Invoke Install-AvmTool -Exactly 1 -ParameterFilter { $Name -eq 'bicep' }
     }
 
