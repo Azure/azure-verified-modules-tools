@@ -95,6 +95,9 @@ function New-AvmTestBamiPlan {
         [string] $ClientId = '10000000-0000-4000-8000-000000000006',
         [string] $PrincipalId = '10000000-0000-4000-8000-000000000007',
         [string] $WorkflowRef,
+        [AllowEmptyCollection()] [string[]] $PullRequestNumbers = @(),
+        [switch] $IncludeMainWorkflow = $true,
+        [System.Collections.IDictionary] $IdentityTags = @{},
         [switch] $BicepRegistryFederation,
         [string[]] $Environments = @('pr-check', 'integration-test', 'examples-test-execution')
     )
@@ -139,6 +142,7 @@ AND
                 output = if ($KnownClient) {
                     @{ properties = @{ tenantId = $identity.tenant_id; clientId = $identity.client_id; principalId = $principalId } }
                 } else { $null }
+                body = if ($IdentityTags.Count -gt 0) { @{ tags = $IdentityTags } } else { @{} }
             }
         }
 
@@ -168,12 +172,25 @@ AND
                     -RepositoryOwnerId $RepositoryOwnerId -RepositoryId $RepositoryId
             }
         }
-        foreach ($environment in $Environments) {
-            @{
-                Address = 'module.azure.azapi_resource.federated_credentials["module-' + $environment + '"]'
-                Name = "$IdentityName-fic-m-$environment"
-                Expression = Get-AvmBamiModuleFederationExpression -RepositoryOwnerId $RepositoryOwnerId `
-                    -RepositoryId $RepositoryId -Environment $environment -JobWorkflowPath $JobWorkflowPath -WorkflowRef $WorkflowRef
+        if ($IncludeMainWorkflow) {
+            foreach ($environment in $Environments) {
+                @{
+                    Address = 'module.azure.azapi_resource.federated_credentials["module-' + $environment + '"]'
+                    Name = "$IdentityName-fic-m-$environment"
+                    Expression = Get-AvmBamiModuleFederationExpression -RepositoryOwnerId $RepositoryOwnerId `
+                        -RepositoryId $RepositoryId -Environment $environment -JobWorkflowPath $JobWorkflowPath -WorkflowRef $WorkflowRef
+                }
+            }
+        }
+        foreach ($number in $PullRequestNumbers) {
+            $pullRequestWorkflowRef = [regex]::Replace($WorkflowRef, '@refs/heads/main$', "@refs/pull/$number/merge")
+            foreach ($environment in $Environments) {
+                @{
+                    Address = "module.azure.azapi_resource.federated_credentials[`"module-$environment-pr-$number`"]"
+                    Name = "$IdentityName-fic-m-$environment-pr-$number"
+                    Expression = Get-AvmBamiModuleFederationExpression -RepositoryOwnerId $RepositoryOwnerId `
+                        -RepositoryId $RepositoryId -Environment $environment -JobWorkflowPath $JobWorkflowPath -WorkflowRef $pullRequestWorkflowRef
+                }
             }
         }
         @{
@@ -192,6 +209,7 @@ AND
             values = @{
                 type = 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview'
                 name = $credential.Name
+                id = if ($KnownClient) { "$($identity.identity_resource_id)/federatedIdentityCredentials/$($credential.Name)" } else { $null }
                 parent_id = if ($KnownClient) { $identity.identity_resource_id } else { $null }
                 body = @{
                     properties = @{
@@ -291,7 +309,8 @@ AND
         $previous = New-AvmTestBamiPlan -KnownClient -IdentityName $PreviousIdentityName -ModuleAddress $ModuleAddress `
             -ClientId $PreviousClientId -PrincipalId $PreviousPrincipalId -GroupNames $GroupNames `
             -RepositoryOwnerId $RepositoryOwnerId -RepositoryId $RepositoryId -RepositorySyncRepositoryId $RepositorySyncRepositoryId `
-            -JobWorkflowPath $JobWorkflowPath -WorkflowRef $WorkflowRef -Environments $Environments -BicepRegistryFederation:$BicepRegistryFederation `
+            -JobWorkflowPath $JobWorkflowPath -WorkflowRef $WorkflowRef -PullRequestNumbers $PullRequestNumbers `
+            -IncludeMainWorkflow:$IncludeMainWorkflow -IdentityTags $IdentityTags -Environments $Environments -BicepRegistryFederation:$BicepRegistryFederation `
             -OwnerMigration:$OwnerMigration -LegacyMembershipMigration:$LegacyMembershipMigration -RemovedGroup $RemovedGroup
         foreach ($change in $changes) {
             $old = @($previous.resource_changes | Where-Object { $_.address -ceq $change.address })[0]

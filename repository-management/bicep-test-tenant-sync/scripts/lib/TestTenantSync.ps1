@@ -215,11 +215,13 @@ function Invoke-AvmBicepTestTenantSync {
     }
     if ($PSBoundParameters.ContainsKey('ModuleClientIds')) {
         $projection['VALIDATE_MODULE_CLIENT_IDS'] = $moduleJson
-        if ($null -ne $snapshot['VALIDATE_MODULE_CLIENT_IDS']) {
-            Assert-AvmBicepModuleMappingExtension -ExistingJson $snapshot['VALIDATE_MODULE_CLIENT_IDS'].Value `
-                -ClientIds $ModuleClientIds -ForbiddenClientIds $forbidden -IdentityMigration $IdentityMigration -Settings $bundle `
-                -ExistingIdentityClientIds $ExistingIdentityClientIds
+        $existingMapping = if ($null -ne $snapshot['VALIDATE_MODULE_CLIENT_IDS']) {
+            $snapshot['VALIDATE_MODULE_CLIENT_IDS'].Value
         }
+        else { '{}' }
+        Assert-AvmBicepModuleMappingExtension -ExistingJson $existingMapping `
+            -ClientIds $ModuleClientIds -ForbiddenClientIds $forbidden -IdentityMigration $IdentityMigration -Settings $bundle `
+            -ExistingIdentityClientIds $ExistingIdentityClientIds
     }
     $cleanupTargetName = 'VALIDATE_MODULE_SUBSCRIPTION_CLEANUP_MANAGEMENT_GROUP_IDS'
     if ($projection.Contains($cleanupTargetName) -and $null -ne $snapshot[$cleanupTargetName] -and

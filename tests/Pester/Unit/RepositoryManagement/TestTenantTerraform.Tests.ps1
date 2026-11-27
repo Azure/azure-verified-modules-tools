@@ -541,6 +541,7 @@ Describe 'Candidate plan and output safety' {
         $retired.change.after = $null
         $retired.change.before.parent_id = $identityId
         $retired.change.before.name = 'id-avm-subscription-vending-terraform-sub-vending-fic-m-examples-test'
+        $retired.change.before.id = "$identityId/federatedIdentityCredentials/$($retired.change.before.name)"
         $plan.resource_changes += $retired
         { Assert-AvmBamiIdentityPlan -Plan $plan -ExistingIdentity $identity @script:planArguments } | Should -Not -Throw
         Test-AvmRetiredExamplesTestFederationChange -Change $retired -ModuleAddress 'module.azure' `

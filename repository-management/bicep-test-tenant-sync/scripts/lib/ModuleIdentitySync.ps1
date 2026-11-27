@@ -18,6 +18,183 @@ function Resolve-AvmBicepIdentitySyncContext {
     }
 }
 
+function Get-AvmBicepPreviewModuleRetirements {
+    [CmdletBinding()]
+    [OutputType([System.Collections.IDictionary])]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Plan,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Settings,
+        [Parameter(Mandatory)] [object] $Context,
+        [Parameter(Mandatory)] [string] $JobWorkflowPath,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Modules,
+        [Parameter(Mandatory)] [string[]] $MainModulePaths
+    )
+
+    $currentPaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($path in $Modules.Keys) { $null = $currentPaths.Add($path) }
+    $mainPaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($path in $MainModulePaths) {
+        Assert-AvmBicepModulePath -Path $path
+        if (-not $mainPaths.Add($path)) {
+            throw [System.InvalidOperationException]::new('The Bicep main module inventory contains duplicate paths.')
+        }
+    }
+    $removed = [ordered]@{}
+    foreach ($change in $Plan['resource_changes']) {
+        if ($change -isnot [System.Collections.IDictionary] -or $change['address'] -isnot [string]) {
+            throw [System.InvalidOperationException]::new('Bicep plan resources must have explicit addresses.')
+        }
+        $match = [regex]::Match($change['address'], '^module\.bicep\["(avm/(?:res|ptn|utl)/[a-z0-9-]+/[a-z0-9-]+)"\]\.')
+        if ($match.Success -and -not $currentPaths.Contains($match.Groups[1].Value)) {
+            if ($mainPaths.Contains($match.Groups[1].Value)) {
+                throw [System.InvalidOperationException]::new('A Bicep main module cannot be retired from the identity inventory.')
+            }
+            if (-not $removed.Contains($match.Groups[1].Value)) {
+                $removed[$match.Groups[1].Value] = [System.Collections.Generic.List[object]]::new()
+            }
+            $removed[$match.Groups[1].Value].Add($change)
+        }
+    }
+
+    $retirements = [ordered]@{}
+    foreach ($path in $removed.Keys) {
+        Assert-AvmBicepModulePath -Path $path
+        $identityName = Get-AvmBicepModuleIdentityName -ModulePath $path
+        $moduleAddress = "module.bicep[`"$path`"]"
+        $identityAddress = "$moduleAddress.azapi_resource.identity[0]"
+        $identityChanges = @($removed[$path] | Where-Object address -CEQ $identityAddress)
+        if ($identityChanges.Count -ne 1) {
+            throw [System.InvalidOperationException]::new('Preview identity retirement requires exactly one dedicated identity deletion.')
+        }
+        $identityChange = $identityChanges[0]
+        $identity = $identityChange['change']['before']
+        $parentId = "/subscriptions/$($Settings.TEST_BAMI_ADMIN_SUBSCRIPTION_ID)/resourceGroups/$($Settings.TEST_BAMI_IDENTITY_RESOURCE_GROUP_NAME)"
+        $identityId = "$parentId/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$identityName"
+        $tags = if ($identity -is [System.Collections.IDictionary] -and $identity['body'] -is [System.Collections.IDictionary]) {
+            $identity['body']['tags']
+        }
+        else { $null }
+        $identityProperties = if ($identity -is [System.Collections.IDictionary] -and
+            $identity['output'] -is [System.Collections.IDictionary]) { $identity['output']['properties'] } else { $null }
+        $principal = [guid]::Empty
+        $client = [guid]::Empty
+        if ($identityChange['mode'] -cne 'managed' -or $identityChange['type'] -cne 'azapi_resource' -or
+            $identityChange['provider_name'] -cne 'registry.terraform.io/azure/azapi' -or
+            (@($identityChange['change']['actions']) -join ',') -cne 'delete' -or
+            $null -ne $identityChange['change']['after'] -or
+            $identity -isnot [System.Collections.IDictionary] -or
+            $identity['type'] -cne 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-07-31-preview' -or
+            $identity['name'] -cne $identityName -or $identity['parent_id'] -cne $parentId -or
+            $identity['id'] -ine $identityId -or
+            $tags -isnot [System.Collections.IDictionary] -or $tags.Count -ne 1 -or
+            $tags['avm-bicep-identity-scope'] -cne 'pull-request' -or
+            $identityProperties -isnot [System.Collections.IDictionary] -or
+            $identityProperties['tenantId'] -ine $Settings.TEST_BAMI_TENANT_ID -or
+            $identityProperties['principalId'] -isnot [string] -or
+            -not [guid]::TryParseExact($identityProperties['principalId'], 'D', [ref]$principal) -or
+            $principal -eq [guid]::Empty -or
+            $identityProperties['clientId'] -isnot [string] -or
+            -not [guid]::TryParseExact($identityProperties['clientId'], 'D', [ref]$client) -or
+            $client -eq [guid]::Empty -or
+            $client.ToString() -in @($Settings.TEST_BAMI_CONTROLLER_CLIENT_ID, $Settings.TEST_BAMI_BICEP_CLIENT_ID)) {
+            throw [System.InvalidOperationException]::new('Preview identity retirement requires a verified BAMI-owned preview identity and dedicated principal.')
+        }
+
+        $seenIdentity = $false
+        $seenValidation = $false
+        $seenRegistry = $false
+        $seenPullRequestNumbers = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($resourceChange in $removed[$path]) {
+            $addressMatch = [regex]::Match($resourceChange['address'], '^' + [regex]::Escape($moduleAddress) + '\.(.+)$')
+            if (-not $addressMatch.Success) {
+                throw [System.InvalidOperationException]::new('Preview identity retirement cannot include resources outside the exact module instance.')
+            }
+            $suffix = $addressMatch.Groups[1].Value
+            $actions = @($resourceChange['change']['actions'])
+            if ($resourceChange['mode'] -ceq 'data') {
+                if ($actions.Count -ne 1 -or $actions[0] -cnotin @('read', 'no-op')) {
+                    throw [System.InvalidOperationException]::new('Preview identity retirement cannot mutate Terraform data resources.')
+                }
+                continue
+            }
+            $before = $resourceChange['change']['before']
+            if ($resourceChange['mode'] -cne 'managed' -or $actions.Count -ne 1 -or $actions[0] -cne 'delete' -or
+                $null -ne $resourceChange['change']['after'] -or
+                ($resourceChange.Contains('previous_address') -and $resourceChange['previous_address'] -cne $resourceChange['address']) -or
+                $null -ne $resourceChange['change']['importing'] -or
+                $before -isnot [System.Collections.IDictionary]) {
+                throw [System.InvalidOperationException]::new('Preview identity retirement may only delete verified resources owned by its dedicated identity.')
+            }
+
+            if ($suffix -ceq 'azapi_resource.identity[0]') {
+                if ($seenIdentity) {
+                    throw [System.InvalidOperationException]::new('Preview identity retirement contains an ambiguous identity resource.')
+                }
+                $seenIdentity = $true
+                continue
+            }
+
+            if ($resourceChange['type'] -ceq 'azapi_resource' -and
+                $resourceChange['provider_name'] -ceq 'registry.terraform.io/azure/azapi') {
+                $credentialName = $null
+                $expression = $null
+                $workflowRef = $null
+                $credentialMatch = [regex]::Match($suffix, '^azapi_resource\.federated_credentials\["module-avm-validation-pr-([1-9][0-9]{0,9})"\]$')
+                if ($credentialMatch.Success) {
+                    $number = $credentialMatch.Groups[1].Value
+                    if (-not $seenPullRequestNumbers.Add($number)) {
+                        throw [System.InvalidOperationException]::new('Preview identity retirement contains duplicate pull-request federation.')
+                    }
+                    $credentialName = "$identityName-fic-m-avm-validation-pr-$number"
+                    $workflowRef = "Azure/bicep-registry-modules/.github/workflows/$($path.Replace('/', '.')).yml@refs/pull/$number/merge"
+                    $expression = Get-AvmBamiModuleFederationExpression -RepositoryOwnerId $Context.OrganizationId `
+                        -RepositoryId $Context.RepositoryId -Environment 'avm-validation' `
+                        -JobWorkflowPath $JobWorkflowPath -WorkflowRef $workflowRef
+                }
+                elseif ($suffix -ceq 'azapi_resource.federated_credentials["validation"]') {
+                    $credentialName = "$identityName-fic-v-avm-validation"
+                    $seenValidation = $true
+                    $expression = Get-AvmBamiFederationExpression `
+                        -SubjectPattern "repository_owner_id:$($Context.OrganizationId):repository_id:$($Context.ToolsRepositoryId):environment:avm-validation" `
+                        -RepositoryOwnerId $Context.OrganizationId -RepositoryId $Context.ToolsRepositoryId
+                }
+                elseif ($suffix -ceq 'azapi_resource.federated_credentials["bicep-registry"]') {
+                    $credentialName = "$identityName-fic-r-avm-validation"
+                    $seenRegistry = $true
+                    $expression = Get-AvmBamiFederationExpression `
+                        -SubjectPattern "repository_owner_id:$($Context.OrganizationId):repository_id:$($Context.RepositoryId):environment:avm-validation" `
+                        -RepositoryOwnerId $Context.OrganizationId -RepositoryId $Context.RepositoryId
+                }
+                if ($null -eq $credentialName -or $before['type'] -cne 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview' -or
+                    $before['name'] -cne $credentialName -or $before['parent_id'] -ine $identityId -or
+                    $before['id'] -ine "$identityId/federatedIdentityCredentials/$credentialName" -or
+                    -not (Test-AvmBamiModuleFederation -Values $before -Expression $expression -WorkflowRef $workflowRef)) {
+                    throw [System.InvalidOperationException]::new('Preview identity retirement contains foreign or widened federation.')
+                }
+                continue
+            }
+
+            if ($resourceChange['type'] -ceq 'azuread_group_member' -and
+                $resourceChange['provider_name'] -ceq 'registry.terraform.io/hashicorp/azuread' -and
+                $suffix -cmatch '^azuread_group_member\.test_permissions\["(?:[^"\\]|\\.)+"\]$') {
+                $groupId = [guid]::Empty
+                if ($before['member_object_id'] -isnot [string] -or $before['member_object_id'] -ine $principal.ToString() -or
+                    $before['group_object_id'] -isnot [string] -or
+                    -not [guid]::TryParseExact($before['group_object_id'], 'D', [ref]$groupId) -or $groupId -eq [guid]::Empty) {
+                    throw [System.InvalidOperationException]::new('Preview identity retirement may remove only valid group edges for its dedicated principal.')
+                }
+                continue
+            }
+            throw [System.InvalidOperationException]::new('Preview identity retirement contains an unsupported managed resource.')
+        }
+        if (-not $seenIdentity -or -not $seenValidation -or -not $seenRegistry -or $seenPullRequestNumbers.Count -eq 0) {
+            throw [System.InvalidOperationException]::new('Preview identity retirement requires its full identity, federation and pull-request resource set.')
+        }
+        $retirements[$path] = $client.ToString()
+    }
+    return $retirements
+}
+
 function Assert-AvmBicepIdentityPlan {
     [CmdletBinding()]
     param(
@@ -27,6 +204,8 @@ function Assert-AvmBicepIdentityPlan {
         [AllowEmptyCollection()] [System.Collections.IDictionary] $ExistingIdentities = @{},
         [Parameter(Mandatory)] [object] $Context,
         [Parameter(Mandatory)] [string] $JobWorkflowPath,
+        [AllowEmptyCollection()] [string[]] $MainModulePaths = @(),
+        [AllowEmptyCollection()] [System.Collections.IDictionary] $PullRequestNumbers = @{},
         [switch] $PassThru
     )
 
@@ -37,20 +216,58 @@ function Assert-AvmBicepIdentityPlan {
         $Plan['planned_values']['root_module'] -isnot [System.Collections.IDictionary]) {
         throw [System.InvalidOperationException]::new('Bicep provisioning requires a complete, nonempty Terraform plan and module inventory.')
     }
+    if ($MainModulePaths.Count -eq 0 -and $PullRequestNumbers.Count -eq 0) {
+        $MainModulePaths = @($Modules.Keys)
+    }
+    $identityNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($path in $Modules.Keys) {
+        Assert-AvmBicepModulePath -Path $path
+        $identityName = if ($ExistingIdentities.Contains($path)) {
+            $ExistingIdentities[$path]['name']
+        }
+        else {
+            Get-AvmBicepModuleIdentityName -ModulePath $path
+        }
+        if (-not $identityNames.Add($identityName)) {
+            throw [System.InvalidOperationException]::new('Bicep module paths must produce unique identity names before provisioning.')
+        }
+    }
+    $retiredPreviewModules = Get-AvmBicepPreviewModuleRetirements -Plan $Plan -Settings $Settings -Context $Context `
+        -JobWorkflowPath $JobWorkflowPath -Modules $Modules -MainModulePaths $MainModulePaths
+    $mainPaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($path in $MainModulePaths) {
+        Assert-AvmBicepModulePath -Path $path
+        if (-not $mainPaths.Add($path) -or -not $Modules.Contains($path)) {
+            throw [System.InvalidOperationException]::new('Every main Bicep module must remain in the identity inventory.')
+        }
+    }
+    foreach ($path in $PullRequestNumbers.Keys) {
+        if (-not $Modules.Contains($path) -or $mainPaths.Contains($path) -or
+            @($PullRequestNumbers[$path] | Where-Object { $_ -isnot [string] -or $_ -cnotmatch '^[1-9][0-9]{0,9}$' } | Select-Object -Unique).Count -gt 0) {
+            throw [System.InvalidOperationException]::new('Preview identity metadata must be limited to valid non-main modules and open pull requests.')
+        }
+    }
+    foreach ($path in $Modules.Keys) {
+        if (-not $mainPaths.Contains($path) -and -not $PullRequestNumbers.Contains($path)) {
+            throw [System.InvalidOperationException]::new('Every non-main identity must be owned by at least one open same-repository pull request.')
+        }
+    }
+    $retiredPrefixes = @($retiredPreviewModules.Keys | ForEach-Object { "module.bicep[`"$_`"]." })
+    $activePlan = [ordered]@{}
+    foreach ($key in $Plan.Keys) { $activePlan[$key] = $Plan[$key] }
+    $activePlan['resource_changes'] = @($Plan['resource_changes'] | Where-Object {
+            $address = $_['address']
+            -not ($address -is [string] -and @($retiredPrefixes | Where-Object { $address.StartsWith($_, [StringComparison]::Ordinal) }).Count -gt 0)
+        })
     $resources = @(Get-AvmTerraformPlannedResource -Module $Plan['planned_values']['root_module'])
     $moduleAddresses = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $rejectedPlanResources = [System.Collections.Generic.List[object]]::new()
     $rejectionSignatures = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    $identityNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($path in $Modules.Keys) {
         Assert-AvmBicepModulePath -Path $path
-        $identityName = if ($ExistingIdentities.Contains($path)) { $ExistingIdentities[$path]['name'] } else { Get-AvmBicepModuleIdentityName -ModulePath $path }
-        if (-not $identityNames.Add($identityName)) {
-            throw [System.InvalidOperationException]::new('Bicep module paths must produce unique identity names before provisioning.')
-        }
         $null = $moduleAddresses.Add("module.bicep[`"$path`"]")
     }
-    foreach ($resource in @($Plan['resource_changes']) + $resources) {
+    foreach ($resource in @($activePlan['resource_changes']) + $resources) {
         if ($resource -isnot [System.Collections.IDictionary] -or $resource['address'] -isnot [string]) {
             throw [System.InvalidOperationException]::new('Bicep plan resources must have explicit addresses.')
         }
@@ -62,6 +279,10 @@ function Assert-AvmBicepIdentityPlan {
         $modulePath = $match.Groups[2].Value
         $suffix = $match.Groups[3].Value
         $expectedProvider = $null
+        $pullRequestCredential = [regex]::Match(
+            $suffix,
+            '^azapi_resource\.federated_credentials\["module-avm-validation-pr-([1-9][0-9]{0,9})"\]$'
+        )
         if ($resource['mode'] -ceq 'managed' -and $resource['type'] -ceq 'azapi_resource' -and
             $suffix -cin @(
                 'azapi_resource.identity[0]', 'azapi_resource.federated_credentials["module-avm-validation"]',
@@ -69,7 +290,7 @@ function Assert-AvmBicepIdentityPlan {
                 'azapi_resource.identity_federated_credentials["avm-validation"]',
                 'azapi_resource.validation_federated_credential[0]', 'azapi_resource.validation_federated_credential',
                 'azapi_resource.bicep_registry_federated_credential[0]'
-            )) {
+            ) -or ($resource['mode'] -ceq 'managed' -and $resource['type'] -ceq 'azapi_resource' -and $pullRequestCredential.Success)) {
             $expectedProvider = 'registry.terraform.io/azure/azapi'
         }
         elseif ($resource['mode'] -ceq 'managed' -and $resource['type'] -ceq 'azuread_group_member' -and
@@ -152,7 +373,7 @@ function Assert-AvmBicepIdentityPlan {
     foreach ($path in $Modules.Keys) {
         $address = "module.bicep[`"$path`"]"
         $prefix = "$address."
-        $resourceChanges = @($Plan['resource_changes'] | Where-Object {
+        $resourceChanges = @($activePlan['resource_changes'] | Where-Object {
                 $_['address'].StartsWith($prefix, [StringComparison]::Ordinal)
             })
         $slice = @{
@@ -163,12 +384,50 @@ function Assert-AvmBicepIdentityPlan {
         }
         $existingIdentity = if ($ExistingIdentities.Contains($path)) { $ExistingIdentities[$path] } else { $null }
         $name = if ($null -ne $existingIdentity) { $existingIdentity['name'] } else { Get-AvmBicepModuleIdentityName -ModulePath $path }
+        $isPreview = $PullRequestNumbers.Contains($path)
+        if ($isPreview -and $null -ne $existingIdentity) {
+            throw [System.InvalidOperationException]::new('Preview modules cannot reuse bootstrap-owned identities.')
+        }
+        $modulePullRequestNumbers = if ($isPreview) { @($PullRequestNumbers[$path] | Sort-Object { [long]$_ }) } else { @() }
+        if ($null -eq $existingIdentity) {
+            $plannedIdentityResources = @($slice.planned_values.root_module.resources |
+                Where-Object { $_['address'] -ceq "${prefix}azapi_resource.identity[0]" })
+            if ($plannedIdentityResources.Count -ne 1 -or $plannedIdentityResources[0]['values'] -isnot [System.Collections.IDictionary]) {
+                throw [System.InvalidOperationException]::new('Every dedicated Bicep module identity must appear exactly once in planned values.')
+            }
+            $plannedIdentity = $plannedIdentityResources[0]['values']
+            $expectedTags = if ($isPreview) { @{ 'avm-bicep-identity-scope' = 'pull-request' } } else { @{} }
+            $actualTags = if ($plannedIdentity['body'] -is [System.Collections.IDictionary]) { $plannedIdentity['body']['tags'] } else { $null }
+            if (($expectedTags.Count -eq 0 -and $null -ne $actualTags -and
+                    ($actualTags -isnot [System.Collections.IDictionary] -or $actualTags.Count -gt 0)) -or
+                ($expectedTags.Count -gt 0 -and
+                    ($actualTags -isnot [System.Collections.IDictionary] -or $actualTags.Count -ne 1 -or
+                        $actualTags['avm-bicep-identity-scope'] -cne 'pull-request'))) {
+                throw [System.InvalidOperationException]::new('Bicep identity tags must exactly distinguish temporary pull-request identities from main modules.')
+            }
+            $identityChange = @($slice.resource_changes | Where-Object { $_['address'] -ceq "${prefix}azapi_resource.identity[0]" })[0]
+            $beforeTags = if ($null -ne $identityChange -and $identityChange['change']['before'] -is [System.Collections.IDictionary] -and
+                $identityChange['change']['before']['body'] -is [System.Collections.IDictionary]) {
+                $identityChange['change']['before']['body']['tags']
+            }
+            else { $null }
+            if ($null -ne $identityChange -and $null -ne $identityChange['change']['before']) {
+                $hasPreviewTag = $beforeTags -is [System.Collections.IDictionary] -and
+                    $beforeTags.Count -eq 1 -and $beforeTags['avm-bicep-identity-scope'] -ceq 'pull-request'
+                $hasNoTags = $null -eq $beforeTags -or
+                    ($beforeTags -is [System.Collections.IDictionary] -and $beforeTags.Count -eq 0)
+                if (($isPreview -and -not $hasPreviewTag) -or (-not $isPreview -and -not $hasPreviewTag -and -not $hasNoTags)) {
+                    throw [System.InvalidOperationException]::new('Existing Bicep identity tags are not owned by the module identity synchronizer.')
+                }
+            }
+        }
         $previous = Assert-AvmBamiIdentityPlan -Plan $slice -Settings $Settings -Repository 'Azure/bicep-registry-modules' `
             -RepositoryId $Context.RepositoryId -RepositoryOwnerId $Context.OrganizationId `
             -RepositorySyncRepositoryId $Context.ToolsRepositoryId -EntraGroupNames $Modules[$path] `
             -ModuleAddress $address -IdentityName $name -Environments @('avm-validation') `
             -JobWorkflowPath $JobWorkflowPath `
-            -WorkflowRef "Azure/bicep-registry-modules/.github/workflows/$($path.Replace('/', '.')).yml@refs/heads/main" -ExistingIdentity $existingIdentity `
+            -WorkflowRef "Azure/bicep-registry-modules/.github/workflows/$($path.Replace('/', '.')).yml@refs/heads/main" `
+            -PullRequestNumbers $modulePullRequestNumbers -IncludeMainWorkflow:(-not $isPreview) -ExistingIdentity $existingIdentity `
             -BicepRegistryFederation -PassThru
         if ($null -ne $previous) {
             $renames[$path] = $previous
@@ -223,9 +482,36 @@ function Invoke-AvmBicepModuleIdentitySync {
     if ($state.ClientId -in @($settings.TEST_BAMI_CONTROLLER_CLIENT_ID, $settings.TEST_BAMI_BICEP_CLIENT_ID)) {
         throw [System.ArgumentException]::new('The state backend identity must be separate from BAMI controller and execution identities.')
     }
-    $paths = Get-AvmBicepModulePath -BicepRoot $BicepRoot
-    $modules = Resolve-AvmBicepModuleSettings -ModulePaths $paths -Configuration $Configuration
+    $mainPaths = Get-AvmBicepModulePath -BicepRoot $BicepRoot
+    $modules = Resolve-AvmBicepModuleSettings -ModulePaths $mainPaths -Configuration $Configuration
     $jobWorkflowPath = Resolve-AvmBicepModuleJobWorkflowPath -Configuration $Configuration
+    $configuredExistingIdentities = Resolve-AvmBicepModuleExistingIdentities -ModulePaths $mainPaths -Configuration $Configuration
+    foreach ($path in $configuredExistingIdentities.Keys) {
+        $null = Resolve-AvmSubscriptionVendingIdentity -ExistingIdentity $configuredExistingIdentities[$path] -Values $Values
+    }
+    $sizeProjection = [ordered]@{}
+    foreach ($path in $mainPaths) { $sizeProjection[$path] = [guid]::Empty.ToString() }
+    if ([System.Text.Encoding]::UTF8.GetByteCount((ConvertTo-Json -InputObject $sizeProjection -Compress)) -gt 48KB) {
+        throw [System.InvalidOperationException]::new('The discovered module mapping would exceed the 48 KB Actions variable limit.')
+    }
+    $applying = $PSCmdlet.ParameterSetName -ceq 'Apply' -and $Apply.IsPresent
+    $result = [ordered]@{ Status = 'Planned'; PlanOnly = -not $applying; ModuleCount = $mainPaths.Count }
+    if (-not $PSCmdlet.ShouldProcess('BAMI Bicep module identities', 'Prepare a verified saved Terraform plan')) {
+        $result.Status = 'Preview'
+        $result.PlanOnly = $true
+        return [pscustomobject]$result
+    }
+    $publicationContext = $null
+    if ($applying -and $IdentityMigrationPath) {
+        $publicationContext = Get-AvmBicepIdentityPublicationContext
+        if ([IO.Path]::GetFullPath($IdentityMigrationPath) -ieq [IO.Path]::GetFullPath($MappingPath)) {
+            throw [System.ArgumentException]::new('Identity migration evidence and the client-ID mapping require different output paths.')
+        }
+    }
+    $context = Resolve-AvmBicepIdentitySyncContext
+    $pullRequestNumbers = Get-AvmBicepOpenPullRequestModuleNumbers -MainModulePaths $mainPaths -RepositoryId $context.RepositoryId
+    $paths = @(@($mainPaths) + @($pullRequestNumbers.Keys) | Sort-Object -CaseSensitive -Unique)
+    $modules = Resolve-AvmBicepModuleSettings -ModulePaths $paths -Configuration $Configuration
     $configuredExistingIdentities = Resolve-AvmBicepModuleExistingIdentities -ModulePaths $paths -Configuration $Configuration
     $existingIdentities = [ordered]@{}
     foreach ($path in $configuredExistingIdentities.Keys) {
@@ -237,26 +523,12 @@ function Invoke-AvmBicepModuleIdentitySync {
     if ([System.Text.Encoding]::UTF8.GetByteCount((ConvertTo-Json -InputObject $sizeProjection -Compress)) -gt 48KB) {
         throw [System.InvalidOperationException]::new('The discovered module mapping would exceed the 48 KB Actions variable limit.')
     }
-    $applying = $PSCmdlet.ParameterSetName -ceq 'Apply' -and $Apply.IsPresent
-    $result = [ordered]@{ Status = 'Planned'; PlanOnly = -not $applying; ModuleCount = $paths.Count }
-    if (-not $PSCmdlet.ShouldProcess('BAMI Bicep module identities', 'Prepare a verified saved Terraform plan')) {
-        $result.Status = 'Preview'
-        $result.PlanOnly = $true
-        return [pscustomobject]$result
-    }
-    $publicationContext = $null
-    if ($IdentityMigrationPath) {
-        $publicationContext = Get-AvmBicepIdentityPublicationContext
-        if ([IO.Path]::GetFullPath($IdentityMigrationPath) -ieq [IO.Path]::GetFullPath($MappingPath)) {
-            throw [System.ArgumentException]::new('Identity migration evidence and the client-ID mapping require different output paths.')
-        }
-    }
+    $result.ModuleCount = $paths.Count
     foreach ($path in @($MappingPath, $IdentityMigrationPath)) {
         if ($path -and (Test-Path -LiteralPath $path)) {
             throw [System.IO.IOException]::new('An identity publication output path already exists; preserve it and choose an unused path.')
         }
     }
-    $context = Resolve-AvmBicepIdentitySyncContext
     $environment = Get-RepositorySyncTerraformEnvironment -Root $TerraformRoot -Settings $settings
     $lockRecovery = @{
         storageAccountName = $state.StorageAccountName
@@ -272,6 +544,7 @@ function Invoke-AvmBicepModuleIdentitySync {
     $planPath = Join-Path $TerraformRoot "$runId.tfplan"
     $parameters = @{
         modules = $modules
+        pull_request_numbers = $pullRequestNumbers
         existing_identities = $existingIdentities
         bami_test_settings = ConvertTo-AvmRepositoryTerraformSettings -Settings $settings
         github_repository_id = $context.RepositoryId
@@ -290,7 +563,11 @@ function Invoke-AvmBicepModuleIdentitySync {
         )
         $plan = Invoke-RepositorySyncTerraform -Root $TerraformRoot -Environment $environment `
             -Arguments @('show', '-json', $planPath) -Json
-        $previousIdentities = Assert-AvmBicepIdentityPlan -Plan $plan -Settings $settings -Modules $modules -ExistingIdentities $existingIdentities -Context $context -JobWorkflowPath $jobWorkflowPath -PassThru
+        $previousIdentities = Assert-AvmBicepIdentityPlan -Plan $plan -Settings $settings -Modules $modules `
+            -ExistingIdentities $existingIdentities -Context $context -JobWorkflowPath $jobWorkflowPath `
+            -MainModulePaths $mainPaths -PullRequestNumbers $pullRequestNumbers -PassThru
+        $retiredPreviewIdentities = Get-AvmBicepPreviewModuleRetirements -Plan $plan -Settings $settings -Context $context `
+            -JobWorkflowPath $jobWorkflowPath -Modules $modules -MainModulePaths $mainPaths
         $changes = @($plan['resource_changes'] | Where-Object { $_['mode'] -ceq 'managed' })
         $creates = @($changes | Where-Object { $_['change']['actions'] -contains 'create' }).Count
         $updates = @($changes | Where-Object { $_['change']['actions'] -contains 'update' }).Count
@@ -299,8 +576,8 @@ function Invoke-AvmBicepModuleIdentitySync {
         Invoke-RepositorySyncTerraform -Root $TerraformRoot -Environment $environment -StreamOutput `
             -Arguments @('show', '-no-color', $planPath)
         if (-not $applying) { return [pscustomobject]$result }
-        if ($previousIdentities.Count -gt 0 -and -not $IdentityMigrationPath) {
-            throw [System.InvalidOperationException]::new('Identity renames require an IdentityMigrationPath for verified mapping publication before applying.')
+        if (($previousIdentities.Count -gt 0 -or $retiredPreviewIdentities.Count -gt 0) -and -not $IdentityMigrationPath) {
+            throw [System.InvalidOperationException]::new('Identity changes require an IdentityMigrationPath for verified mapping publication before applying.')
         }
         if (-not $PSCmdlet.ShouldProcess('BAMI Bicep module identities', 'Apply the verified saved plan and write its client-ID mapping')) {
             $result.Status = 'Preview'
@@ -322,6 +599,7 @@ function Invoke-AvmBicepModuleIdentitySync {
                 context = $publicationContext
                 before = $previousIdentities
                 after = $replacements
+                retired = $retiredPreviewIdentities
             }
             $null = ConvertFrom-AvmBicepIdentityMigration -Migration $migration -ClientIds $mapping -Settings $settings
             [IO.File]::WriteAllText($IdentityMigrationPath, (ConvertTo-Json -InputObject $migration -Depth 8 -Compress), [Text.UTF8Encoding]::new($false))

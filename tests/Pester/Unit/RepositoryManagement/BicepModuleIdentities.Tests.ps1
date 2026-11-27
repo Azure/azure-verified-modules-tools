@@ -290,6 +290,50 @@ Describe 'Bicep module identity configuration' {
     }
 }
 
+Describe 'Bicep module additions in open pull requests' {
+    BeforeEach {
+        $script:pullRequests = @()
+        $script:pullRequestFiles = @{}
+        $script:pullRequestApiCalls = [System.Collections.Generic.List[string]]::new()
+        Mock Invoke-RepositoryGitHubApi {
+            param($Endpoint)
+            $script:pullRequestApiCalls.Add($Endpoint)
+            if ($Endpoint -ceq 'repos/Azure/bicep-registry-modules/pulls?state=open&per_page=100&page=1') {
+                return $script:pullRequests
+            }
+            $match = [regex]::Match($Endpoint, 'pulls/([0-9]+)/files\?')
+            if (-not $match.Success) { throw "Unexpected GitHub endpoint: $Endpoint" }
+            return $script:pullRequestFiles[[int]$match.Groups[1].Value]
+        }
+    }
+
+    It 'collects new module roots from open same-repository PRs and excludes forks and main modules' {
+        $head = @{ repo = @{ full_name = 'Azure/bicep-registry-modules'; id = '447791597'; fork = $false }; sha = 'a' * 40; ref = 'add-module' }
+        $script:pullRequests = @(
+            @{ number = 12; state = 'open'; base = @{ repo = @{ full_name = 'Azure/bicep-registry-modules'; id = '447791597' } }; head = $head; changed_files = 1 }
+            @{ number = 14; state = 'open'; base = @{ repo = @{ full_name = 'Azure/bicep-registry-modules'; id = '447791597' } }; head = $head; changed_files = 1 }
+            @{ number = 15; state = 'open'; base = @{ repo = @{ full_name = 'Azure/bicep-registry-modules'; id = '447791597' } }; head = @{ repo = @{ full_name = 'contributor/bicep-registry-modules'; id = '900'; fork = $true } }; changed_files = 1 }
+        )
+        $script:pullRequestFiles[12] = @(@{ filename = 'avm/res/new/service/main.bicep'; status = 'added' })
+        $script:pullRequestFiles[14] = @(@{ filename = 'avm/res/new/service/main.bicep'; status = 'added' })
+
+        $result = Get-AvmBicepOpenPullRequestModuleNumbers -MainModulePaths @('avm/res/storage/storage-account') -RepositoryId '447791597'
+
+        $result.Count | Should -Be 1
+        $result['avm/res/new/service'] | Should -Be @('12', '14')
+        @($script:pullRequestApiCalls | Where-Object { $_ -match '/pulls/15/files' }) | Should -HaveCount 0
+    }
+
+    It 'rejects incomplete changed-file pagination rather than silently omitting modules' {
+        $script:pullRequests = @(
+            @{ number = 21; state = 'open'; base = @{ repo = @{ full_name = 'Azure/bicep-registry-modules'; id = '447791597' } }; head = @{ repo = @{ full_name = 'Azure/bicep-registry-modules'; id = '447791597'; fork = $false }; sha = 'a' * 40; ref = 'add-module' }; changed_files = 2 }
+        )
+        $script:pullRequestFiles[21] = @(@{ filename = 'avm/res/new/service/main.bicep'; status = 'added' })
+        { Get-AvmBicepOpenPullRequestModuleNumbers -MainModulePaths @('avm/res/storage/storage-account') -RepositoryId '447791597' } |
+            Should -Throw '*incomplete pull-request file list*'
+    }
+}
+
 Describe 'Bicep module client-ID mapping' {
     BeforeEach {
         $script:settings = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)
@@ -354,8 +398,13 @@ Describe 'Bicep module client-ID mapping' {
                 -ExistingIdentityClientIds @{ 'avm/ptn/lz/sub-vending' = $shared } } | Should -Throw '*removed or retargeted*'
     }
 
+    It 'accepts an empty existing mapping for first publication' {
+        { Assert-AvmBicepModuleMappingExtension -ExistingJson '{}' -ClientIds @{
+                'avm/res/fabric/capacity' = '10000000-0000-4000-8000-000000000006'
+            } } | Should -Not -Throw
+    }
+
     It 'does not overwrite malformed or duplicate existing JSON: <Existing>' -ForEach @(
-        @{ Existing = '{}' }
         @{ Existing = '[]' }
         @{ Existing = '{"avm/res/fabric/capacity":"invalid"}' }
         @{ Existing = '{"avm/res/fabric/capacity":"10000000-0000-4000-8000-000000000006","avm/res/fabric/capacity":"10000000-0000-4000-8000-000000000016"}' }
@@ -416,6 +465,61 @@ Describe 'Bicep module identity rename evidence' {
     }
 }
 
+Describe 'Bicep preview identity retirement evidence' {
+    BeforeEach {
+        Mock Get-AvmBicepIdentityPublicationContext {
+            [ordered]@{
+                repositoryId = '1239632211'
+                workflowRef = 'Azure/azure-verified-modules-tools/.github/workflows/repository-management-bicep-sync.yml@refs/heads/main'
+                commit = '0123456789012345678901234567890123456789'
+                runId = '123456789'
+                runAttempt = '1'
+            }
+        }
+        $script:settings = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)
+        $script:retirement = [ordered]@{
+            schemaVersion = 1
+            context = Get-AvmBicepIdentityPublicationContext
+            before = [ordered]@{}
+            after = [ordered]@{}
+            retired = [ordered]@{ 'avm/res/new/service' = '10000000-0000-4000-8000-000000000116' }
+        }
+        $script:clientIds = [ordered]@{ 'avm/res/fabric/capacity' = '10000000-0000-4000-8000-000000000006' }
+    }
+
+    It 'allows removal only when run-bound evidence matches the previously published preview client' {
+        $existing = '{"avm/res/new/service":"10000000-0000-4000-8000-000000000116","avm/res/fabric/capacity":"10000000-0000-4000-8000-000000000006"}'
+        {
+            Assert-AvmBicepModuleMappingExtension -ExistingJson $existing -ClientIds $script:clientIds `
+                -IdentityMigration $script:retirement -Settings $script:settings
+        } | Should -Not -Throw
+    }
+
+    It 'rejects missing, mismatched, or still-published retirement bindings' {
+        $existing = '{"avm/res/new/service":"10000000-0000-4000-8000-000000000116"}'
+        {
+            Assert-AvmBicepModuleMappingExtension -ExistingJson $existing -ClientIds $script:clientIds `
+                -IdentityMigration $script:retirement -Settings $script:settings
+        } | Should -Not -Throw
+        {
+            Assert-AvmBicepModuleMappingExtension `
+                -ExistingJson '{"avm/res/fabric/capacity":"10000000-0000-4000-8000-000000000006"}' `
+                -ClientIds $script:clientIds `
+                -IdentityMigration $script:retirement -Settings $script:settings
+        } | Should -Throw '*previously published client ID*'
+        $wrongExisting = '{"avm/res/new/service":"10000000-0000-4000-8000-000000000117"}'
+        {
+            Assert-AvmBicepModuleMappingExtension -ExistingJson $wrongExisting -ClientIds $script:clientIds `
+                -IdentityMigration $script:retirement -Settings $script:settings
+        } | Should -Throw '*previously published client ID*'
+        $script:clientIds['avm/res/new/service'] = $script:retirement.retired['avm/res/new/service']
+        {
+            Assert-AvmBicepModuleMappingExtension -ExistingJson $existing -ClientIds $script:clientIds `
+                -IdentityMigration $script:retirement -Settings $script:settings
+        } | Should -Throw '*absent from the proposed mapping*'
+    }
+}
+
 Describe 'Bicep identity saved-plan ownership guard' {
     BeforeEach {
         $script:settings = Get-AvmBamiSettings -Values (New-AvmTestBamiSettings)
@@ -431,6 +535,85 @@ Describe 'Bicep identity saved-plan ownership guard' {
     It 'accepts both existing identities and new identities with explicitly unknown outputs' -ForEach @($true, $false) {
         $script:guard.Plan = New-AvmTestBicepIdentityPlan -KnownClient:$_
         { Assert-AvmBicepIdentityPlan @script:guard } | Should -Not -Throw
+    }
+
+    It 'accepts a tagged preview identity with only its exact pull-request workflow federation' {
+        $previewPath = 'avm/res/new/service'
+        $modules = [ordered]@{}
+        foreach ($path in $script:modules.Keys) { $modules[$path] = $script:modules[$path] }
+        $modules[$previewPath] = @('avm-test-entra-readers', 'avm-test-management-group-owners')
+        $pullRequestNumbers = [ordered]@{ $previewPath = @('120') }
+        $script:guard.Modules = $modules
+        $script:guard.MainModulePaths = @($script:modules.Keys)
+        $script:guard.PullRequestNumbers = $pullRequestNumbers
+        $script:guard.Plan = New-AvmTestBicepIdentityPlan -KnownClient -Modules $modules -PullRequestNumbers $pullRequestNumbers
+
+        { Assert-AvmBicepIdentityPlan @script:guard } | Should -Not -Throw
+
+        $credential = @($script:guard.Plan.resource_changes | Where-Object {
+                $_.address -ceq "module.bicep[`"$previewPath`"].azapi_resource.federated_credentials[`"module-avm-validation-pr-120`"]"
+            })[0]
+        $credential.change.after.body.properties.claimsMatchingExpression.value |
+            Should -Match ([regex]::Escape("@refs/pull/120/merge"))
+    }
+
+    It 'rejects an untagged preview identity and a broadened pull-request workflow reference' {
+        $previewPath = 'avm/res/new/service'
+        $modules = [ordered]@{}
+        foreach ($path in $script:modules.Keys) { $modules[$path] = $script:modules[$path] }
+        $modules[$previewPath] = @('avm-test-entra-readers')
+        $pullRequestNumbers = [ordered]@{ $previewPath = @('120') }
+        $script:guard.Modules = $modules
+        $script:guard.MainModulePaths = @($script:modules.Keys)
+        $script:guard.PullRequestNumbers = $pullRequestNumbers
+        $script:guard.Plan = New-AvmTestBicepIdentityPlan -KnownClient -Modules $modules -PullRequestNumbers $pullRequestNumbers
+        $previewAddress = "module.bicep[`"$previewPath`"]"
+        $identity = @($script:guard.Plan.planned_values.root_module.child_modules |
+            Where-Object address -CEQ $previewAddress)[0].resources |
+            Where-Object address -CEQ "$previewAddress.azapi_resource.identity[0]"
+        $identity.values.body.tags.Remove('avm-bicep-identity-scope')
+        { Assert-AvmBicepIdentityPlan @script:guard } | Should -Throw '*identity tags*'
+
+        $script:guard.Plan = New-AvmTestBicepIdentityPlan -KnownClient -Modules $modules -PullRequestNumbers $pullRequestNumbers
+        $credential = @($script:guard.Plan.resource_changes | Where-Object {
+                $_.address -ceq "$previewAddress.azapi_resource.federated_credentials[`"module-avm-validation-pr-120`"]"
+            })[0]
+        $credential.change.after.body.properties.claimsMatchingExpression.value =
+            $credential.change.after.body.properties.claimsMatchingExpression.value.Replace('@refs/pull/120/merge', '@refs/pull/121/merge')
+        { Assert-AvmBicepIdentityPlan @script:guard } | Should -Throw '*Candidate federation*'
+    }
+
+    It 'retires only a tagged preview module after its exact identity, federation and group edges are deleted' {
+        $previewPath = 'avm/res/new/service'
+        $modules = [ordered]@{}
+        foreach ($path in $script:modules.Keys) { $modules[$path] = $script:modules[$path] }
+        $modules[$previewPath] = @('avm-test-entra-readers')
+        $pullRequestNumbers = [ordered]@{ $previewPath = @('120') }
+        $plan = New-AvmTestBicepIdentityPlan -KnownClient -Modules $modules -PullRequestNumbers $pullRequestNumbers
+        $previewAddress = "module.bicep[`"$previewPath`"]"
+        foreach ($change in $plan.resource_changes | Where-Object { $_.address.StartsWith("$previewAddress.", [StringComparison]::Ordinal) }) {
+            $change.change.before = $change.change.after
+            $change.change.after = $null
+            $change.change.actions = @('delete')
+        }
+        $plan.planned_values.root_module.child_modules = @(
+            $plan.planned_values.root_module.child_modules | Where-Object address -CNE $previewAddress
+        )
+        $script:guard.Plan = $plan
+        $script:guard.Modules = $script:modules
+        $script:guard.MainModulePaths = @($script:modules.Keys)
+        $script:guard.PullRequestNumbers = @{}
+
+        $retired = Get-AvmBicepPreviewModuleRetirements -Plan $plan -Settings $script:settings -Context $script:context `
+            -JobWorkflowPath $script:guard.JobWorkflowPath -Modules $script:modules -MainModulePaths $script:guard.MainModulePaths
+        $retired[$previewPath] | Should -BeExactly '10000000-0000-4000-8000-000000000026'
+        { Assert-AvmBicepIdentityPlan @script:guard } | Should -Not -Throw
+
+        $identity = @($plan.resource_changes | Where-Object address -CEQ "$previewAddress.azapi_resource.identity[0]")[0]
+        $identity.change.before.body.tags['avm-bicep-identity-scope'] = 'main'
+        { Get-AvmBicepPreviewModuleRetirements -Plan $plan -Settings $script:settings -Context $script:context `
+                -JobWorkflowPath $script:guard.JobWorkflowPath -Modules $script:modules -MainModulePaths $script:guard.MainModulePaths } |
+            Should -Throw '*verified BAMI-owned preview identity*'
     }
 
     It 'accepts only the verified legacy hashed module identity transition: known outputs <_>' -ForEach @($true, $false) {

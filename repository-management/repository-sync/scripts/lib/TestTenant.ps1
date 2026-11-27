@@ -179,14 +179,22 @@ function Get-AvmBamiModuleFederationExpression {
     )
     if ($WorkflowRef) {
         $caller = [regex]::Match($WorkflowRef,
-            '\A([A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+)/\.github/workflows/([A-Za-z0-9][A-Za-z0-9_.-]*\.ya?ml@refs/heads/main)\z')
+            '\A([A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+)/\.github/workflows/([A-Za-z0-9][A-Za-z0-9_.-]*\.ya?ml)@(refs/heads/main|refs/pull/([1-9][0-9]{0,9})/merge)\z')
         if (-not $caller.Success) {
-            throw [System.ArgumentException]::new('Caller federation requires an exact fully qualified trusted-main workflow.')
+            throw [System.ArgumentException]::new('Caller federation requires an exact trusted-main or pull-request workflow.')
         }
-        $patterns = @(
-            "*:workflow_ref:$($caller.Groups[1].Value)/.github/workflows/*"
-            "*:workflow_ref:*/.github/workflows/$($caller.Groups[2].Value)"
-        )
+        $patterns = if ($caller.Groups[4].Success) {
+            @(
+                "*:workflow_ref:$($caller.Groups[1].Value)/.github/workflows/*"
+                "*:workflow_ref:*/$($caller.Groups[2].Value)@$($caller.Groups[3].Value)"
+            )
+        }
+        else {
+            @(
+                "*:workflow_ref:$($caller.Groups[1].Value)/.github/workflows/*"
+                "*:workflow_ref:*/.github/workflows/$($caller.Groups[2].Value)@$($caller.Groups[3].Value)"
+            )
+        }
         foreach ($pattern in $patterns) {
             if ($pattern.Length -gt 128) {
                 throw [System.ArgumentException]::new('Caller federation subject comparands must be at most 128 characters.')
@@ -518,6 +526,8 @@ function Assert-AvmBamiIdentityPlan {
         [string] $ModuleAddress = 'module.azure',
         [string] $IdentityName,
         [string] $WorkflowRef,
+        [AllowEmptyCollection()] [string[]] $PullRequestNumbers = @(),
+        [switch] $IncludeMainWorkflow = $true,
         [switch] $BicepRegistryFederation,
         [AllowNull()] [System.Collections.IDictionary] $ExistingIdentity,
         [ValidatePattern('^[a-z][a-z0-9-]*$')]
@@ -527,8 +537,18 @@ function Assert-AvmBamiIdentityPlan {
 
     $Settings = Get-AvmBamiSettings -Values $Settings
     $EntraGroupNames = ConvertTo-AvmEntraGroupNames -Names $EntraGroupNames
+    if ($null -eq $PullRequestNumbers) { $PullRequestNumbers = @() }
     if ($WorkflowRef -and -not $WorkflowRef.StartsWith("$Repository/.github/workflows/", [System.StringComparison]::Ordinal)) {
         throw [System.ArgumentException]::new('Caller federation must bind the configured repository.')
+    }
+    if ($PullRequestNumbers.Count -gt 0 -and (
+        -not $BicepRegistryFederation -or $Repository -cne 'Azure/bicep-registry-modules' -or
+        $Environments.Count -ne 1 -or $Environments[0] -cne 'avm-validation' -or
+        $WorkflowRef -cnotmatch '@refs/heads/main$' -or
+        @($PullRequestNumbers | Where-Object { $_ -isnot [string] -or $_ -cnotmatch '^[1-9][0-9]{0,9}$' } | Select-Object -Unique).Count -gt 0 -or
+        @($PullRequestNumbers | Select-Object -Unique).Count -ne $PullRequestNumbers.Count
+    )) {
+        throw [System.ArgumentException]::new('Pull request federation is restricted to exact Bicep module workflows and positive pull request numbers.')
     }
     if ($null -ne $ExistingIdentity) {
         Assert-AvmExternalBamiIdentityPlan -Plan $Plan -Settings $Settings -Repository $Repository `
@@ -566,8 +586,15 @@ function Assert-AvmBamiIdentityPlan {
     }
     $allowed = @($identityAddress, $validationCredentialAddress)
     if ($BicepRegistryFederation) { $allowed += $registryCredentialAddress }
-    foreach ($environment in $Environments) {
-        $allowed += "$ModuleAddress.azapi_resource.federated_credentials[`"module-$environment`"]"
+    if ($IncludeMainWorkflow) {
+        foreach ($environment in $Environments) {
+            $allowed += "$ModuleAddress.azapi_resource.federated_credentials[`"module-$environment`"]"
+        }
+    }
+    foreach ($number in $PullRequestNumbers) {
+        foreach ($environment in $Environments) {
+            $allowed += "$ModuleAddress.azapi_resource.federated_credentials[`"module-$environment-pr-$number`"]"
+        }
     }
     $allowed += @($membershipNames.Keys)
     $managed = @($resources | Where-Object { $_['mode'] -ceq 'managed' })
@@ -767,16 +794,33 @@ function Assert-AvmBamiIdentityPlan {
         }
     }
     $federation = [ordered]@{}
-    foreach ($environment in $Environments) {
-        $address = "$ModuleAddress.azapi_resource.federated_credentials[`"module-$environment`"]"
-        $federation[$address] = @{
-            Kind = 'module'
-            Name = "$name-fic-m-$environment"
-            LegacyName = if ($WorkflowRef) { "$name-module-$environment" } else { "$name-$environment" }
-            Expression = Get-AvmBamiModuleFederationExpression -RepositoryOwnerId $RepositoryOwnerId `
-                -RepositoryId $RepositoryId -Environment $environment -JobWorkflowPath $JobWorkflowPath -WorkflowRef $WorkflowRef
-            LegacySubjectPattern = Get-AvmBamiLegacyModuleSubjectPattern -RepositoryOwnerId $RepositoryOwnerId `
-                -RepositoryId $RepositoryId -Environment $environment -JobWorkflowPath $JobWorkflowPath -WorkflowRef $WorkflowRef
+    if ($IncludeMainWorkflow) {
+        foreach ($environment in $Environments) {
+            $address = "$ModuleAddress.azapi_resource.federated_credentials[`"module-$environment`"]"
+            $federation[$address] = @{
+                Kind = 'module'
+                Name = "$name-fic-m-$environment"
+                LegacyName = if ($WorkflowRef) { "$name-module-$environment" } else { "$name-$environment" }
+                Expression = Get-AvmBamiModuleFederationExpression -RepositoryOwnerId $RepositoryOwnerId `
+                    -RepositoryId $RepositoryId -Environment $environment -JobWorkflowPath $JobWorkflowPath -WorkflowRef $WorkflowRef
+                LegacySubjectPattern = Get-AvmBamiLegacyModuleSubjectPattern -RepositoryOwnerId $RepositoryOwnerId `
+                    -RepositoryId $RepositoryId -Environment $environment -JobWorkflowPath $JobWorkflowPath -WorkflowRef $WorkflowRef
+            }
+        }
+    }
+    foreach ($number in $PullRequestNumbers) {
+        $pullRequestWorkflowRef = [regex]::Replace($WorkflowRef, '@refs/heads/main$', "@refs/pull/$number/merge")
+        foreach ($environment in $Environments) {
+            $address = "$ModuleAddress.azapi_resource.federated_credentials[`"module-$environment-pr-$number`"]"
+            $federation[$address] = @{
+                Kind = 'module'
+                Name = "$name-fic-m-$environment-pr-$number"
+                LegacyName = "$name-fic-m-$environment-pr-$number"
+                Expression = Get-AvmBamiModuleFederationExpression -RepositoryOwnerId $RepositoryOwnerId `
+                    -RepositoryId $RepositoryId -Environment $environment -JobWorkflowPath $JobWorkflowPath -WorkflowRef $pullRequestWorkflowRef
+                LegacySubjectPattern = Get-AvmBamiLegacyModuleSubjectPattern -RepositoryOwnerId $RepositoryOwnerId `
+                    -RepositoryId $RepositoryId -Environment $environment -JobWorkflowPath $JobWorkflowPath -WorkflowRef $pullRequestWorkflowRef
+            }
         }
     }
     $federation[$validationCredentialAddress] = @{
@@ -804,9 +848,11 @@ function Assert-AvmBamiIdentityPlan {
         }
     }
     $legacyFederation = @{}
-    foreach ($environment in $Environments) {
-        $legacyFederation["$ModuleAddress.azapi_resource.identity_federated_credentials[`"$environment`"]"] =
-            "$ModuleAddress.azapi_resource.federated_credentials[`"module-$environment`"]"
+    if ($IncludeMainWorkflow) {
+        foreach ($environment in $Environments) {
+            $legacyFederation["$ModuleAddress.azapi_resource.identity_federated_credentials[`"$environment`"]"] =
+                "$ModuleAddress.azapi_resource.federated_credentials[`"module-$environment`"]"
+        }
     }
     $legacyFederation["$ModuleAddress.azapi_resource.validation_federated_credential[0]"] = $validationCredentialAddress
     $legacyFederation["$ModuleAddress.azapi_resource.validation_federated_credential"] = $validationCredentialAddress
@@ -868,6 +914,30 @@ function Assert-AvmBamiIdentityPlan {
     $ownerDeletions = 0
     foreach ($change in $changes.Values) {
         $actions = @($change['change']['actions'])
+        $before = $change['change']['before']
+        $retiredPullRequestMatch = [regex]::Match(
+            $change['address'],
+            ('^' + [regex]::Escape($ModuleAddress) + '\.azapi_resource\.federated_credentials\["module-avm-validation-pr-([1-9][0-9]{0,9})"\]$')
+        )
+        if ($retiredPullRequestMatch.Success -and
+            $retiredPullRequestMatch.Groups[1].Value -cnotin $PullRequestNumbers -and
+            ($actions -join ',') -ceq 'delete' -and $null -eq $change['change']['after'] -and
+            $change['mode'] -ceq 'managed' -and $change['type'] -ceq 'azapi_resource' -and
+            $change['provider_name'] -ceq 'registry.terraform.io/azure/azapi') {
+            $number = $retiredPullRequestMatch.Groups[1].Value
+            $workflowRef = [regex]::Replace($WorkflowRef, '@refs/heads/main$', "@refs/pull/$number/merge")
+            $credentialName = "$name-fic-m-avm-validation-pr-$number"
+            $expression = Get-AvmBamiModuleFederationExpression -RepositoryOwnerId $RepositoryOwnerId `
+                -RepositoryId $RepositoryId -Environment 'avm-validation' -JobWorkflowPath $JobWorkflowPath `
+                -WorkflowRef $workflowRef
+            if ($before -is [System.Collections.IDictionary] -and
+                $before['type'] -ceq 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2025-01-31-preview' -and
+                $before['name'] -ceq $credentialName -and $before['parent_id'] -ieq $identityId -and
+                $before['id'] -ieq "$identityId/federatedIdentityCredentials/$credentialName" -and
+                (Test-AvmBamiModuleFederation -Values $before -Expression $expression -WorkflowRef $workflowRef)) {
+                continue
+            }
+        }
         if ($change['address'] -cin $allowed -and $change['type'] -cne 'azuread_group_member') { continue }
         if ($change['address'] -cin $allowed -and $actions -notcontains 'delete' -and
             $null -eq $change['change']['before']) { continue }
@@ -875,7 +945,6 @@ function Assert-AvmBamiIdentityPlan {
         if ($Environments -cnotcontains 'examples-test' -and
             (Test-AvmRetiredExamplesTestFederationChange -Change $change -ModuleAddress $ModuleAddress `
                 -IdentityName ($renaming ? $previousName : $name) -IdentityId $previousIdentityId)) { continue }
-        $before = $change['change']['before']
         if ($legacyFederation.ContainsKey($change['address'])) {
             $currentAddress = $legacyFederation[$change['address']]
             $currentChange = $changes[$currentAddress]

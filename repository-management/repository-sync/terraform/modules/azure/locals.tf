@@ -14,16 +14,40 @@ locals {
     for environment in var.github_repository_environment_names :
     environment => "repository_owner_id:${var.github_organization_id}:repository_id:${var.github_repository_id}:environment:${environment}:*"
   }
-  module_federated_credentials = {
-    for environment, subject_pattern in local.module_subject_patterns :
-    "module-${environment}" => {
-      name                    = "${local.federation_identity_name}-fic-m-${environment}"
-      subject_pattern         = subject_pattern
-      job_workflow_pattern    = "${var.github_job_workflow_path}@*"
-      caller_subject_patterns = local.caller_subject_patterns
-      repository_id           = var.github_repository_id
+  module_federated_credentials = merge(
+    var.github_module_federation_enabled ? {
+      for environment, subject_pattern in local.module_subject_patterns :
+      "module-${environment}" => {
+        name                    = "${local.federation_identity_name}-fic-m-${environment}"
+        subject_pattern         = subject_pattern
+        job_workflow_pattern    = "${var.github_job_workflow_path}@*"
+        caller_subject_patterns = local.caller_subject_patterns
+        repository_id           = var.github_repository_id
+      }
+    } : {},
+    {
+      for item in flatten([
+        for environment, subject_pattern in local.module_subject_patterns : [
+          for number in var.github_pull_request_numbers : {
+            key         = "module-${environment}-pr-${number}"
+            name        = "${local.federation_identity_name}-fic-m-${environment}-pr-${number}"
+            subject     = subject_pattern
+            environment = environment
+            number      = number
+          }
+        ]
+        ]) : item.key => {
+        name                 = item.name
+        subject_pattern      = item.subject
+        job_workflow_pattern = "${var.github_job_workflow_path}@*"
+        caller_subject_patterns = [
+          "*:workflow_ref:${var.github_repository_owner}/${var.github_repository_name}/.github/workflows/*",
+          "*:workflow_ref:*/${replace(try(split("/.github/workflows/", var.github_workflow_ref)[1], ""), "@refs/heads/main", "@refs/pull/${item.number}/merge")}",
+        ]
+        repository_id = var.github_repository_id
+      }
     }
-  }
+  )
   validation_federated_credentials = var.existing_identity == null || var.existing_identity.manage_entra_groups ? {
     validation = {
       name            = "${local.federation_identity_name}-fic-v-avm-validation"
