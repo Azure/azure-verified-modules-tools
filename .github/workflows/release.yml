@@ -6,8 +6,8 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Published full release tag to publish (vMAJOR.MINOR.PATCH)
-        required: true
+        description: Published full release tag (vMAJOR.MINOR.PATCH); leave blank to publish all ready releases
+        required: false
         type: string
 
 permissions:
