@@ -79,7 +79,6 @@ run "preview_identity_trusts_only_its_open_pull_request_workflow" {
 
   variables {
     identity_name                       = "id-test-bicep-avm-res-preview"
-    identity_tags                       = { "avm-bicep-identity-scope" = "pull-request" }
     github_repository_owner             = "Azure"
     github_repository_name              = "bicep-registry-modules"
     github_repository_id                = "447791597"

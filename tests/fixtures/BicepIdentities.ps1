@@ -42,7 +42,6 @@ function New-AvmTestBicepIdentityPlan {
             -JobWorkflowPath $JobWorkflowPath `
             -WorkflowRef "Azure/bicep-registry-modules/.github/workflows/$($path.Replace('/', '.')).yml@refs/heads/main" `
             -PullRequestNumbers $modulePullRequestNumbers -IncludeMainWorkflow:(-not $isPreview) `
-            -IdentityTags $(if ($isPreview) { @{ 'avm-bicep-identity-scope' = 'pull-request' } } else { @{} }) `
             -BicepRegistryFederation
         $plan.resource_changes += $slice.resource_changes
         $plan.planned_values.root_module.child_modules += $slice.planned_values.root_module.child_modules

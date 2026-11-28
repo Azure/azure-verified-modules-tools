@@ -18,13 +18,17 @@ state-only identity and the existing eight-field BAMI bundle for provisioning.
 Only the identity job can request OpenID Connect (OIDC) tokens; the mapping
 publisher uses a separate, target-scoped Actions Variables token.
 
-Preview identities are tagged as pull-request-owned and receive federation
-only for the matching `refs/pull/<number>/merge` module workflow. Multiple open
+Preview identities receive federation only for the matching
+`refs/pull/<number>/merge` module workflow. Multiple open
 pull requests adding the same module share one identity. When the last
 qualifying pull request closes without merging, the next successful scheduled
 or manual sync removes its identity and federation, then removes only its
 verified client-ID mapping entry. A merged module keeps its identity and
 promotes it to the trusted `main` workflow.
+
+When a module is removed from `main`, sync verifies the checkout against the
+current Git tree, then removes its dedicated identity, federation and verified
+client-ID mapping entry. Re-adding the module creates a new identity and client ID.
 
 ## Identity names
 
@@ -107,8 +111,10 @@ part of this handoff.
 The plan guard rejects foreign state, unrelated identity deletion or replacement, direct
 role assignments, moved/imported identities, widened federation and incomplete
 group/provider evidence. Removing a configured membership is allowed only for
-that module's verified principal. Missing modules stop the run rather than
-destroying their identities. After verification, `terraform show -no-color`
+that module's verified principal. Removed modules require a complete checkout
+and verified identity and federation evidence. The bootstrap-owned subscription-vending
+identity is not deleted; its module removal currently requires manual intervention.
+After verification, `terraform show -no-color`
 displays the saved plan's resource actions and attribute differences in the
 job log, including plan-only runs. Apply streams resource progress as it
 happens. Both streams use the shared credential redactor; ordinary identity
