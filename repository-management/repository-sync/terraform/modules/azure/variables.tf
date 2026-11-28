@@ -70,12 +70,6 @@ variable "existing_identity" {
   }
 }
 
-variable "identity_tags" {
-  type        = map(string)
-  description = "Tags to set on a dedicated user-assigned identity."
-  default     = {}
-}
-
 variable "github_workflow_ref" {
   type        = string
   description = "Optional exact trusted-main caller in this repository, matched by bounded repository and complete workflow-path subject clauses."

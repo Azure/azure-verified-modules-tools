@@ -89,6 +89,15 @@ Describe 'Bicep module identity entry points with real files and mocked services
             Writes = [System.Collections.Generic.List[string]]::new()
             Variables = [ordered]@{}
             PullRequests = @()
+            PullRequestsAfterPlan = @()
+            PullRequestCalls = 0
+            PullRequestDetails = @{}
+            PullRequestFiles = @{}
+            SourceRoot = $script:sourceRoot
+            SourceHead = 'a' * 40
+            SourceTree = "avm/res/fabric/capacity/main.bicep`navm/res/storage/storage-account/main.bicep"
+            SourceRefCalls = 0
+            MoveSourceAfterPlan = $false
             RequestPaths = [System.Collections.Generic.List[string]]::new()
             FailOperation = ''
             BadRepository = $false
@@ -114,7 +123,7 @@ Describe 'Bicep module identity entry points with real files and mocked services
         Mock Import-Module {}
         Mock Get-Command ({
             param($Name)
-            if ($Name -cnotin @('gh', 'terraform')) { throw 'Unexpected executable lookup.' }
+            if ($Name -cnotin @('gh', 'git', 'terraform')) { throw 'Unexpected executable lookup.' }
             [pscustomobject]@{ Source = Join-Path $testDirectory "$Name.blocked" }
         }.GetNewClosure()) -ParameterFilter { $CommandType -eq 'Application' }
         Mock New-TemporaryFile ({
@@ -135,11 +144,21 @@ Describe 'Bicep module identity entry points with real files and mocked services
                 elseif ($ArgumentList[-1] -ceq 'repos/Azure/bicep-registry-modules') {
                     $body = @{ full_name = 'Azure/bicep-registry-modules'; fork = $state.BadRepository; id = 447791597; owner = @{ login = 'Azure'; id = 6844498 } }
                 }
-                elseif ($ArgumentList[-1] -like 'repos/Azure/bicep-registry-modules/pulls?*') {
+                elseif ($ArgumentList[-1] -ceq 'repos/Azure/bicep-registry-modules/git/ref/heads/main') {
+                    $state.SourceRefCalls++
+                    $sha = if ($state.MoveSourceAfterPlan -and $state.SourceRefCalls -gt 1) { 'b' * 40 } else { $state.SourceHead }
+                    $body = @{ ref = 'refs/heads/main'; object = @{ type = 'commit'; sha = $sha } }
+                }
+                elseif ($ArgumentList[-1].StartsWith('repos/Azure/bicep-registry-modules/pulls?', [StringComparison]::Ordinal)) {
+                    $state.PullRequestCalls++
                     $body = $state.PullRequests
+                    if ($state.PullRequestCalls -gt 1) { $body = $state.PullRequestsAfterPlan }
                 }
                 elseif ($ArgumentList[-1] -match '^repos/Azure/bicep-registry-modules/pulls/([0-9]+)/files\?') {
                     $body = $state.PullRequestFiles[[int]$Matches[1]]
+                }
+                elseif ($ArgumentList[-1] -match '^repos/Azure/bicep-registry-modules/pulls/([0-9]+)$') {
+                    $body = $state.PullRequestDetails[[int]$Matches[1]]
                 }
                 elseif ($ArgumentList[4] -ceq 'GET') {
                     $ArgumentList[11] | Should -BeLike 'repos/Azure/bicep-registry-modules/actions/variables?*'
@@ -169,6 +188,13 @@ Describe 'Bicep module identity entry points with real files and mocked services
                     $body = @{}
                 }
                 return [pscustomobject]@{ ExitCode = 0; StdOut = ConvertTo-Json -InputObject $body -Depth 10 -Compress; StdErr = '' }
+            }
+            if ($command -ceq 'git') {
+                $body = if ($ArgumentList -contains '--show-toplevel') { $state.SourceRoot }
+                elseif ($ArgumentList -contains 'rev-parse') { $state.SourceHead }
+                elseif ($ArgumentList -contains 'ls-tree') { $state.SourceTree }
+                else { throw 'Unexpected Git operation.' }
+                return [pscustomobject]@{ ExitCode = 0; StdOut = $body; StdErr = '' }
             }
             if ($command -cne 'terraform') { throw 'Only blocked Terraform and GitHub executables may be invoked.' }
             $EnvVars.ARM_TENANT_ID | Should -BeExactly '10000000-0000-4000-8000-000000000001'
@@ -332,6 +358,68 @@ Describe 'Bicep module identity entry points with real files and mocked services
         @($script:state.Calls | Where-Object Command -CEQ 'terraform' | ForEach-Object { $_.Arguments[0] }) |
             Should -Be @('init', 'plan', 'show', 'show', 'apply', 'output')
         $script:state.Writes | Should -HaveCount 0
+    }
+
+    It '<Case>' -TestCases @(
+        @{ Case = 'retires a removed main module and publishes its updated mapping'; Partial = $false; Moved = $false; Reopened = $false }
+        @{ Case = 'blocks retirement before apply when the source checkout is incomplete'; Partial = $true; Moved = $false; Reopened = $false }
+        @{ Case = 'blocks retirement when main moves after planning'; Partial = $false; Moved = $true; Reopened = $false }
+        @{ Case = 'blocks retirement when a PR adds the module after planning'; Partial = $false; Moved = $false; Reopened = $true }
+    ) {
+        param($Partial, $Moved, $Reopened)
+        $removedPath = 'avm/res/storage/storage-account'
+        $prefix = "module.bicep[`"$removedPath`"]"
+        $script:state.Plan = New-AvmTestBicepIdentityPlan -KnownClient
+        foreach ($change in $script:state.Plan.resource_changes | Where-Object { $_.address.StartsWith("$prefix.", [StringComparison]::Ordinal) }) {
+            $change.change.before = $change.change.after
+            $change.change.after = $null
+            $change.change.actions = @('delete')
+        }
+        $script:state.Plan.planned_values.root_module.child_modules = @(
+            $script:state.Plan.planned_values.root_module.child_modules | Where-Object address -CNE $prefix
+        )
+        $script:state.Outputs.Remove($removedPath)
+        $oldMapping = [ordered]@{
+            'avm/res/fabric/capacity' = '10000000-0000-4000-8000-000000000006'
+            $removedPath = '10000000-0000-4000-8000-000000000016'
+        }
+        $script:state.Variables.VALIDATE_MODULE_CLIENT_IDS = @{
+            name = 'VALIDATE_MODULE_CLIENT_IDS'; value = ConvertTo-AvmBicepModuleClientIdJson -ClientIds $oldMapping
+            created_at = '2026-10-01T00:00:00Z'; updated_at = '2026-10-01T00:00:00Z'
+        }
+        Remove-Item -LiteralPath (Join-Path $script:sourceRoot 'avm' 'res' 'storage' 'storage-account' 'main.bicep')
+        if (-not $Partial) { $script:state.SourceTree = 'avm/res/fabric/capacity/main.bicep' }
+        $script:state.MoveSourceAfterPlan = $Moved
+        if ($Reopened) {
+            $head = @{ repo = @{ full_name = 'Azure/bicep-registry-modules'; id = '447791597'; fork = $false }; sha = 'a' * 40; ref = 'add-module' }
+            $base = @{ repo = @{ full_name = 'Azure/bicep-registry-modules'; id = '447791597' }; sha = 'c' * 40 }
+            $script:state.PullRequestsAfterPlan = @(@{ number = 21; state = 'open'; base = $base; head = $head })
+            $script:state.PullRequestDetails[21] = @{ number = 21; state = 'open'; base = $base; head = $head; changed_files = 1 }
+            $script:state.PullRequestFiles[21] = @(@{ filename = "$removedPath/main.bicep"; status = 'added' })
+        }
+
+        if ($Partial -or $Moved -or $Reopened) {
+            $message = if ($Partial) { '*complete trusted Git tree*' }
+            elseif ($Moved) { '*current trusted main commit*' }
+            else { '*now present in an open pull request*' }
+            { & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath `
+                    -IdentityMigrationPath $script:migrationPath -Apply } | Should -Throw $message
+            @($script:state.Calls | Where-Object { $_.Command -ceq 'terraform' -and $_.Arguments[0] -ceq 'apply' }) |
+                Should -HaveCount 0
+            Test-Path -LiteralPath $script:mappingPath | Should -BeFalse
+            return
+        }
+        $result = & $script:entryPath -BicepRoot $script:sourceRoot -MappingPath $script:mappingPath `
+            -IdentityMigrationPath $script:migrationPath -Apply | ConvertFrom-Json -AsHashtable
+        $result.Status | Should -BeExactly 'Applied'
+        $evidence = Get-Content -LiteralPath $script:migrationPath -Raw | ConvertFrom-Json -AsHashtable
+        $evidence.retired[$removedPath] | Should -BeExactly $oldMapping[$removedPath]
+        $publication = & $script:publisherPath -ModuleClientIdPath $script:mappingPath `
+            -IdentityMigrationPath $script:migrationPath -Apply | ConvertFrom-Json -AsHashtable
+        $publication.Status | Should -BeExactly 'Published'
+        $published = $script:state.Variables.VALIDATE_MODULE_CLIENT_IDS.value | ConvertFrom-Json -AsHashtable
+        $published.Contains($removedPath) | Should -BeFalse
+        $published['avm/res/fabric/capacity'] | Should -BeExactly $oldMapping['avm/res/fabric/capacity']
     }
 
     It 'rejects a missing registry credential before apply or publication' {

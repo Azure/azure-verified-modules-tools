@@ -3,7 +3,6 @@ module "bicep" {
   source   = "../../repository-sync/terraform/modules/azure"
 
   identity_name                       = local.identity_names[each.key]
-  identity_tags                       = contains(keys(var.pull_request_numbers), each.key) ? { "avm-bicep-identity-scope" = "pull-request" } : {}
   existing_identity                   = try(var.existing_identities[each.key], null)
   bicep_registry_federation_enabled   = true
   github_module_federation_enabled    = !contains(keys(var.pull_request_numbers), each.key)

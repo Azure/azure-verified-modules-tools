@@ -51,6 +51,46 @@ function Get-AvmBicepModulePath {
     return ,([string[]]@($paths | Sort-Object -CaseSensitive))
 }
 
+function Assert-AvmBicepSourceInventory {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $BicepRoot,
+        [Parameter(Mandatory)] [string[]] $MainModulePaths
+    )
+
+    $root = (Get-Item -LiteralPath $BicepRoot -ErrorAction Stop).FullName
+    $gitRoot = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('rev-parse', '--show-toplevel') -ReadOnly
+    $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    if (-not [string]::Equals([IO.Path]::GetFullPath($gitRoot), [IO.Path]::GetFullPath($root), $comparison)) {
+        throw [System.InvalidOperationException]::new('Bicep source inventory must be the root of its own Git checkout.')
+    }
+    $head = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('rev-parse', 'HEAD') -ReadOnly
+    $branch = Invoke-RepositoryGitHubApi -Endpoint 'repos/Azure/bicep-registry-modules/git/ref/heads/main'
+    if ($head -cnotmatch '^[0-9a-f]{40}$' -or $branch.ref -cne 'refs/heads/main' -or
+        $branch.object.type -cne 'commit' -or $branch.object.sha -cne $head) {
+        throw [System.InvalidOperationException]::new('Bicep source inventory must match the current trusted main commit.')
+    }
+
+    $tree = Invoke-RepositoryGit -WorkingDirectory $root -Arguments @('ls-tree', '-r', '--name-only', 'HEAD', '--', 'avm') -ReadOnly
+    $tracked = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($file in ($tree -split '\r?\n')) {
+        $match = [regex]::Match($file, '\A(avm/(?:res|ptn|utl)/[^/]+/[^/]+)/main\.bicep\z')
+        if ($match.Success) {
+            $path = $match.Groups[1].Value
+            Assert-AvmBicepModulePath -Path $path
+            if (-not $tracked.Add($path)) {
+                throw [System.InvalidOperationException]::new('Bicep Git inventory contains duplicate module paths.')
+            }
+        }
+    }
+    $discovered = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($path in (Get-AvmBicepModulePath -BicepRoot $root)) { $null = $discovered.Add($path) }
+    if ($tracked.Count -eq 0 -or -not $tracked.SetEquals($discovered) -or
+        -not $tracked.SetEquals([string[]]$MainModulePaths)) {
+        throw [System.InvalidOperationException]::new('Bicep source inventory does not match the complete trusted Git tree.')
+    }
+}
+
 function Get-AvmBicepOpenPullRequestModuleNumbers {
     [CmdletBinding()]
     [OutputType([System.Collections.IDictionary])]
@@ -434,7 +474,7 @@ function ConvertFrom-AvmBicepIdentityMigration {
         $Migration['before'] -isnot [System.Collections.IDictionary] -or
         $Migration['after'] -isnot [System.Collections.IDictionary] -or $Migration['before'].Count -ne $Migration['after'].Count -or
         ($hasRetirements -and $Migration['retired'] -isnot [System.Collections.IDictionary])) {
-        throw [System.IO.InvalidDataException]::new('Identity evidence must contain complete current-run rename and optional preview-retirement records.')
+        throw [System.IO.InvalidDataException]::new('Identity evidence must contain complete current-run rename and optional retirement records.')
     }
     foreach ($key in $context.Keys) {
         if ($Migration['context'][$key] -isnot [string] -or $Migration['context'][$key] -cne $context[$key]) {
@@ -451,7 +491,7 @@ function ConvertFrom-AvmBicepIdentityMigration {
                 $clientId -eq [guid]::Empty -or $clientId.ToString() -in @(
                     $Settings.TEST_BAMI_CONTROLLER_CLIENT_ID, $Settings.TEST_BAMI_BICEP_CLIENT_ID
                 ) -or -not $retiredClients.Add($clientId.ToString()) -or $ClientIds.Contains($path)) {
-                throw [System.InvalidOperationException]::new('Preview retirement evidence must identify unique removed module clients absent from the proposed mapping.')
+                throw [System.InvalidOperationException]::new('Retirement evidence must identify unique removed module clients absent from the proposed mapping.')
             }
         }
     }
@@ -496,7 +536,7 @@ function Assert-AvmBicepModuleMappingExtension {
     else { @{} }
     foreach ($path in $retired.Keys) {
         if (-not $existing.Contains($path) -or $existing[$path] -ine $retired[$path]) {
-            throw [System.InvalidOperationException]::new("Preview retirement evidence does not match the previously published client ID for '$path'.")
+            throw [System.InvalidOperationException]::new("Retirement evidence does not match the previously published client ID for '$path'.")
         }
     }
     foreach ($path in $existing.Keys) {
